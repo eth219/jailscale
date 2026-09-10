@@ -229,7 +229,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     void visitorDone(MuxStream stream) {
         if (group != null) {
-            group.visitorDone(this, stream);
+            group.visitorDone(stream);
         }
     }
 

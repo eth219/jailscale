@@ -21,7 +21,9 @@ final class NodeGroup {
 
     private static final Log LOG = Log.get("group");
     static final int MAX_SIGNATURES_PER_STREAM = 4;
-    static final int MAX_SIGNATURES_PER_SECOND = 50;
+    /** Token bucket: a burst of 2,000 handshakes at once, 1,000/s sustained (an ECDSA signature is ~50 µs). */
+    static final int SIGN_BURST = 2000;
+    static final int SIGN_PER_SECOND = 1000;
     static final int CONN_SHIFT = 24;
     static final long LOCAL_MASK = (1L << CONN_SHIFT) - 1;
 
@@ -32,8 +34,10 @@ final class NodeGroup {
     private final String mkey;
     private final Map<Integer, NodeSession> sessions = new ConcurrentHashMap<>();
     private final Map<Long, VisitorStream> visitors = new ConcurrentHashMap<>();
-    private long signWindowStart;
-    private int signWindowCount;
+    /** Stream object -> full id, so a finished stream is removed under the id it was opened with (never a guess). */
+    private final Map<MuxStream, Long> streamIds = new ConcurrentHashMap<>();
+    private long signRefillAt = System.currentTimeMillis();
+    private double signTokens = SIGN_BURST;
 
     NodeGroup(Hub hub, String mkey) {
         this.hub = hub;
@@ -63,6 +67,7 @@ final class NodeGroup {
             sessions.clear();
         }
         visitors.keySet().removeIf(id -> (id >>> CONN_SHIFT) == s.conn());
+        streamIds.values().removeIf(id -> (id >>> CONN_SHIFT) == s.conn());
     }
 
     NodeSession primary() {
@@ -107,12 +112,22 @@ final class NodeGroup {
         JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("kind", link.kind()).put("sni", sni)
             .put("visitorAddr", visitorAddr).put("visitorPort", visitorPort).put("keyId", keyId).build();
         MuxStream stream = best.mux().open(meta, dgram);
-        visitors.put(fullId(best.conn(), stream.id()), new VisitorStream(link.linkId(), sni, 0));
+        long id = fullId(best.conn(), stream.id());
+        streamIds.put(stream, id);
+        visitors.put(id, new VisitorStream(link.linkId(), sni, 0));
         return stream;
     }
 
-    void visitorDone(NodeSession s, MuxStream stream) {
-        visitors.remove(fullId(s.conn(), stream.id()));
+    /**
+     * Forgets a visitor stream. Keyed by the stream object: every connection numbers its streams
+     * from the same range, so deriving the id from "whichever session still holds it" could hit
+     * a live stream on another connection (found by the M4 load test).
+     */
+    void visitorDone(MuxStream stream) {
+        Long id = streamIds.remove(stream);
+        if (id != null) {
+            visitors.remove(id);
+        }
     }
 
     static long fullId(int conn, long localId) {
@@ -139,13 +154,12 @@ final class NodeGroup {
         }
         synchronized (this) {
             long now = System.currentTimeMillis();
-            if (now - signWindowStart >= 1000) {
-                signWindowStart = now;
-                signWindowCount = 0;
-            }
-            if (++signWindowCount > MAX_SIGNATURES_PER_SECOND) {
+            signTokens = Math.min(SIGN_BURST, signTokens + (now - signRefillAt) * SIGN_PER_SECOND / 1000.0);
+            signRefillAt = now;
+            if (signTokens < 1) {
                 return reject(sr, "rate-limited");
             }
+            signTokens -= 1;
         }
         visitors.put(id, new VisitorStream(vs.linkId(), vs.sni(), vs.signatures() + 1));
         try {

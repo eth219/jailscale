@@ -148,7 +148,7 @@ public final class Hub implements AutoCloseable {
         }
         listener = new ServerSocket();
         listener.setReuseAddress(true);
-        listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 128);
+        listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 1024); // capped by somaxconn
         running = true;
         Thread.ofPlatform().name("accept").daemon(false).start(this::acceptLoop);
         if (config.hasHttp()) {

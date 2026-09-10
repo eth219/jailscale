@@ -39,6 +39,7 @@
     <native.skip>true</native.skip>
     <native.imageName>${project.artifactId}</native.imageName>
     <native.mainClass/>
+    <test.excludedGroups>load</test.excludedGroups>
   </properties>
 
   <dependencyManagement>
@@ -99,6 +100,10 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>${maven-surefire-plugin.version}</version>
+          <configuration>
+            <!-- Load tests (DESIGN.md §14 M4) run on demand: -Dgroups=load -DexcludedGroups= -->
+            <excludedGroups>${test.excludedGroups}</excludedGroups>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>

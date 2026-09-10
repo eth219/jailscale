@@ -108,7 +108,7 @@ final class RawPorts implements AutoCloseable {
                 Relay.closeQuietly(s);
             } finally {
                 if (stream != null) {
-                    group.visitorDone(SniRouter.streamOwner(group, stream), stream);
+                    group.visitorDone(stream);
                 }
             }
         }
@@ -209,7 +209,7 @@ final class RawPorts implements AutoCloseable {
         private void end(SocketAddress from, Flow f) {
             if (flows.remove(from, f)) {
                 f.stream().reset(0);
-                link.group().visitorDone(SniRouter.streamOwner(link.group(), f.stream()), f.stream());
+                link.group().visitorDone(f.stream());
             }
         }
 

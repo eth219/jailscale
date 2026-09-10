@@ -147,10 +147,9 @@ final class Visitors {
                 return;
             }
         }
-        Socket local = new Socket();
+        Socket local;
         try {
-            local.connect(new InetSocketAddress(target.host(), target.port()), LOCAL_CONNECT_TIMEOUT_MS);
-            local.setTcpNoDelay(true);
+            local = connectLocal(target);
         } catch (IOException e) {
             LOG.warn("{}: local target {}:{} unreachable: {}", sni, target.host(), target.port(), e.getMessage());
             badGateway(tls, target);
@@ -198,10 +197,9 @@ final class Visitors {
             serveUdp(stream, target);
             return;
         }
-        Socket local = new Socket();
+        Socket local;
         try {
-            local.connect(new InetSocketAddress(target.host(), target.port()), LOCAL_CONNECT_TIMEOUT_MS);
-            local.setTcpNoDelay(true);
+            local = connectLocal(target);
         } catch (IOException e) {
             LOG.warn("tcp: local target {}:{} unreachable: {}", target.host(), target.port(), e.getMessage());
             stream.reset(7);
@@ -274,6 +272,39 @@ final class Visitors {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * Connects to the local target. A burst of visitors can overflow a small listen backlog
+     * (macOS defaults to 128), which shows up as an immediate refusal or reset; a few short
+     * retries (up to ~1.5 s) turn that into a served request instead of a 502.
+     */
+    private static Socket connectLocal(NodeState.LinkRec target) throws IOException {
+        IOException last = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            Socket s = new Socket();
+            try {
+                s.connect(new InetSocketAddress(target.host(), target.port()), LOCAL_CONNECT_TIMEOUT_MS);
+                s.setTcpNoDelay(true);
+                return s;
+            } catch (java.net.SocketTimeoutException e) {
+                closeQuietly(s);
+                throw e;
+            } catch (java.net.SocketException e) { // refused or reset: the listener's backlog is full
+                last = e;
+                closeQuietly(s);
+                try {
+                    Thread.sleep(50L << attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            } catch (IOException e) {
+                closeQuietly(s);
+                throw e;
+            }
+        }
+        throw last;
     }
 
     private static void relay(TlsEndpoint tls, Socket local, MuxStream stream, byte[] replay) {

@@ -52,7 +52,8 @@ final class SniRouter {
             return;
         }
         AtomicInteger ipCount = perIp.computeIfAbsent(ip, k -> new AtomicInteger());
-        if (ipCount.incrementAndGet() > MAX_PER_IP) {
+        // Loopback is exempt: a local proxy without PROXY protocol would otherwise fold every visitor into one address.
+        if (ipCount.incrementAndGet() > MAX_PER_IP && !socket.getInetAddress().isLoopbackAddress()) {
             ipCount.decrementAndGet();
             Relay.closeQuietly(socket);
             return;
@@ -123,17 +124,8 @@ final class SniRouter {
         try {
             Relay.pump(socket, stream, peek.consumed());
         } finally {
-            group.visitorDone(streamOwner(group, stream), stream);
+            group.visitorDone(stream);
         }
-    }
-
-    static NodeSession streamOwner(NodeGroup group, MuxStream stream) {
-        for (NodeSession s : group.all()) {
-            if (s.mux() != null && s.mux().stream(stream.id()) == stream) {
-                return s;
-            }
-        }
-        return group.primary();
     }
 
     /** TLS with the wildcard certificate (the hub has the key) and a one-line answer. */
