@@ -33,7 +33,7 @@ public final class Main {
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "self", "tls-insecure", "foreground", "help", "gate", "new-link", "off");
+            a = Args.parse(argv, "debug", "self", "tls-insecure", "foreground", "help", "gate", "new-link", "off", "tcp", "udp", "acme-staging");
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);

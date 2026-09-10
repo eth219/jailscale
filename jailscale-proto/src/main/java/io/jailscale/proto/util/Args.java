@@ -33,12 +33,11 @@ public final class Args {
                 int eq = key.indexOf('=');
                 if (eq >= 0) {
                     a.options.put(key.substring(0, eq), key.substring(eq + 1));
-                } else if (flagList.contains(key)) {
+                } else if (flagList.contains(key) || i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+                    // Declared flags, and any option followed by another option (or nothing), take no value.
                     a.options.put(key, "true");
-                } else if (i + 1 < argv.length) {
-                    a.options.put(key, argv[++i]);
                 } else {
-                    throw new IllegalArgumentException("--" + key + " needs a value");
+                    a.options.put(key, argv[++i]);
                 }
             } else {
                 a.positional.add(s);
