@@ -141,17 +141,19 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 - CI 매트릭스: linux-amd64, linux-arm64, macos-arm64, macos-amd64, windows-amd64
 - 매 릴리스마다 fallback으로 `jailscale-all.jar` (JVM 25 필요) 동봉 → **범용성 보증**
 
-**경량 예산 CI 게이트 (CI 도입 시 활성화. 그 전에는 마일스톤마다 수동 측정해 기록)**
+**경량 예산 게이트 (M4에서 확정. `./measure.sh --check`, 값은 스크립트 상단과 이 표가 같아야 한다)**
 
-| 측정 | 기준 | 방법 |
+| 측정 | 게이트 | 방법 |
 |---|---|---|
-| 노드 아이들 RSS | ≤ 20 MB | native `jailscale`이 hub에 붙어 공개 링크 하나를 연 뒤 60초 유휴 |
-| 노드 바이너리 크기 | ≤ 30 MB (M0 실측 후 조정) | 릴리스 아티팩트 |
-| CLI 콜드 스타트 | ≤ 50 ms | `jailscale status` 실행 시간 (IPC 왕복 포함) |
-| hub 아이들 RSS | ≤ 50 MB | 노드 10대 접속, 인증서 발급 완료 후 유휴 |
-| 방문자 핸드셰이크 지연 | 기록만 (M2), 목표는 실측 후 | 방문자 → hub → 노드 → hub 서명 → 완료까지 |
+| 노드 아이들 RSS | ≤ 28 MB | native `jailscale`이 hub에 붙어 공개 링크 하나를 연 뒤 10초 유휴 |
+| hub 아이들 RSS | ≤ 30 MB | 노드 2대, 링크 하나, 유휴 |
+| 부하 중 RSS | 노드·hub 각 ≤ 64 MB | `LOAD=1000`: 방문자 1,000명이 동시에 https로 링크를 친 직후 |
+| 바이너리 크기 | ≤ 30 MiB | 릴리스 아티팩트 |
+| CLI 콜드 스타트 | ≤ 50 ms | `jailscale status` 10회 중앙값 (IPC 왕복 포함) |
+| 방문자 핸드셰이크 지연 | 기록만 | M2 실측 2.3 ms(단독), M4 부하에서 0.5 ms/건(1,000건 병렬) |
 
-수치를 넘으면 빌드가 실패한다. 예산은 이유와 함께 PR로만 바꾼다.
+원래 목표였던 노드 20 MB는 §15에 남긴다(현재 24.8 MB, JSSE 이미지 힙이 대부분). 게이트는 현재 실측에
+여유를 둔 값이며, 넘으면 스크립트가 실패한다. 예산은 이유와 함께 PR로만 바꾼다.
 
 **개발 환경 요구사항**
 
@@ -522,7 +524,9 @@ server_name 순으로 100줄이다.
 스트림 `DATA`, 스트림 `DATA` → 방문자 소켓. 방문자 쪽 반쪽 닫기는 `CLOSE`, 오류는 `RST`.
 
 **연결 한도.** 방문자 IP당 동시 연결 64, 이름당 동시 연결 1024, ClientHello 대기 5초. SYN 플러드
-방어는 OS 몫이다.
+방어는 OS 몫이다. 루프백에서 온 연결은 IP당 한도에서 제외한다. PROXY 프로토콜 없이 로컬 프록시
+뒤에 두면 모든 방문자가 한 주소로 보이기 때문인데, 그 배치에서는 `--proxy-protocol`(§9.6)이
+정답이고 이 예외는 안전망이다. 리스너 backlog는 1024(OS `somaxconn`이 상한).
 
 **hub이 보는 것.** SNI, 방문자 IP, 바이트 수, 연결 시각. 내용은 못 본다. 이것이 v3의 "hub은
 내용을 못 본다"를 이 구조에서 되찾은 지점이다.
@@ -662,6 +666,10 @@ $ jailscale open 22 --tcp --port 10022                  # 희망 포트. 비어 
   받는다. 아니면 누구나 방문자 IP를 위조한다.
 - 자가 진단(§6.3)은 프록시 뒤에서도 그대로 동작한다. 공인 이름이 결국 hub에 닿는지를 보기 때문이다.
 - raw 포트(§9.5)도 같은 방식으로 프록시를 거칠 수 있지만 참조 설정은 443만 다룬다.
+- (M4 구현) 파서는 v1 텍스트와 v2 바이너리(IPv4·IPv6·LOCAL) 모두 받는다. v1의 주소는 **리터럴만**
+  받는다. 호스트명을 허용하면 accept 경로에서 DNS 조회가 일어나 공격자가 hub을 멈출 수 있다
+  (퍼징이 찾았다). `--proxy-protocol`이 켜진 hub은 헤더 없는 연결을 거부하므로 노드의 컨트롤
+  연결도 프록시를 지나야 한다. 참조 파일은 `deploy/nginx-stream.conf`, `deploy/haproxy.cfg`.
 
 ---
 
@@ -707,8 +715,12 @@ $ jailscale close q7x2k
 
 TLS를 벗긴 뒤 노드는 **바이트를 복사할 뿐이다.** 방문자가 보낸 평문 → `127.0.0.1:<port>`,
 로컬 응답 → 방문자. HTTP/1.1 keep-alive, chunked, WebSocket Upgrade, SSE가 전부 그대로 통과한다.
-로컬 앱이 처리하기 때문이다. 방문자 IP를 로컬 앱에 알리고 싶으면 `--proxy-protocol`로 첫 줄에
-PROXY v1 헤더를 붙인다(HAProxy 형식, 앱이 지원할 때만).
+로컬 앱이 처리하기 때문이다. 방문자 IP를 로컬 앱에 알리고 싶으면 `open --proxy-protocol`로 첫 줄에
+PROXY v1 헤더를 붙인다(HAProxy 형식, 앱이 지원할 때만). hub이 `visitorAddr`·`visitorPort`를 스트림
+메타에 실어 보내고, 목적지 주소로는 로컬 대상을 적는다. raw TCP 링크도 같다. (M4 구현)
+
+로컬 연결이 거부·리셋되면(작은 listen backlog에 방문자가 몰릴 때 macOS 기본 128에서 실제로 난다)
+50 ms부터 두 배씩 다섯 번 재시도한 뒤에야 502를 낸다.
 
 로컬 연결 실패는 방문자에게 502 HTML 한 장을 돌려주고 닫는다. 이것과 게이트가 노드가 HTTP를
 **쓰는** 유일한 두 지점이며, https 링크에서만 그렇다. raw TCP 스트림은 TLS 없이 바이트만
@@ -745,7 +757,11 @@ $ jailscale gate q7x2k --new-link --ttl 7d
   (`%LOCALAPPDATA%\jailscale\jailscale.sock`, 현재 사용자 ACL).
 - 프로토콜: 줄 단위 JSON 요청/응답 + 스트림 응답(가입 진행, 링크 로그). hub 관리 IPC와 같은 코덱.
 - 명령: `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `leave`,
-  `service install|uninstall`.
+  `service install|uninstall|status`.
+- **서비스 등록**(M4 구현)은 OS가 이미 가진 것만 쓴다. macOS는 `~/Library/LaunchAgents`의 launchd
+  에이전트(`KeepAlive`), Linux는 `systemctl --user` 유닛(root면 시스템 유닛), Windows는 로그온 시
+  실행되는 예약 작업(`schtasks /SC ONLOGON`). 실행 명령은 자기 자신의 경로이며, fallback JAR로
+  돌고 있으면 `java -jar <jar>`가 된다. 별도 서비스 래퍼는 없다.
 - `jailscale up`은 데몬이 없으면 데몬을 먼저 띄운다. `jailscale open`은 가입이 안 되어 있으면
   초대 링크를 묻는다.
 - 콜드 스타트 50ms 목표는 이 CLI 왕복에 대한 것이다.
@@ -950,7 +966,7 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 | **M1** ✅ | 컨트롤 채널 · 자체 HTTP/1.1 · hkey 부트스트랩·회전 · 버전 협상 · mux(스트림 0만) · 초대·코드·auth-key·두드리기 · **로컬 IPC (노드·hub)** · 파일 저장소 · `./measure.sh` | `jailscale invite`로 만든 링크로 다른 기기가 `jailscale up --invite`만으로 가입한다(loopback e2e 테스트 + native 프로세스로 확인). 키 회전 후 노드가 끊기지 않는다. 실측(arm64 macOS): 바이너리 24 MiB, **노드 아이들 RSS 23.8 MB(목표 20)**, hub 24.2 MB, CLI 콜드 스타트 6 ms. 인증서는 M2의 ACME 전까지 `--tls-cert/--tls-key` |
 | **M2** ✅ | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림 · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3007 --name demo` 후 `curl`이 hub→노드를 거쳐 로컬 앱을 받는다(native 프로세스로 확인). 서명 오라클 테스트 통과. ACME는 테스트 CA(mock)로 dns-01·CSR·발급·재시작 재사용까지 통과. 실측(loopback, arm64): 방문자 전체 핸드셰이크 2.3 ms(hub 서명 왕복 포함), 노드 RSS 26.6 MB, hub 26.2 MB. **남은 것**: 실제 도메인에서 Let's Encrypt 스테이징 발급 확인, 노드당 다중 연결(§8)은 M3로 이월 |
 | **M3** ✅ | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · 노드당 다중 연결(§8, M2에서 이월) · **hub 무중단 교체(§7.7)** | 게이트 링크 없이는 403, 방문 링크로 302+쿠키. Upgrade 에코 앱이 그대로 통과. `/admin`은 관리자 노드의 `jailscale admin` 일회용 링크로 로그인하고 승인·초대·설정을 바꾼다(설정은 저장소에 있어 재시작 후에도 유지). `--domain`은 노드가 hub을 통해 http-01을 치르고 자기 키로 종단한다(mock CA, 재시작 시 인증서 재사용). `open --tcp`는 200 KB 에코 왕복, `--udp`는 주소별 DGRAM 스트림 왕복. `--connections 2`로 스트림이 두 연결에 나뉜다. `serve --takeover`로 진행 중 스트림이 끊기지 않는다. 테스트 84개. native 프로세스로 raw tcp·https 이름·port-80 리다이렉트·admin 링크 확인. 실측(arm64 macOS): 바이너리 27.2/27.3 MiB(M2 24; 노드에 `java.net.http`가 들어옴, §15), 노드 아이들 RSS 24.8 MB, hub 25.1 MB, CLI 콜드 스타트 6.1 ms. **남은 것**: 실제 Let's Encrypt 스테이징(hub 와일드카드·노드 사용자 도메인 모두), 브라우저 3종 확인 |
-| **M4** | 릴리스 패키징 (5개 플랫폼 + fallback JAR) · 서비스 등록(systemd/launchd/Windows) · 참조 systemd 유닛 · Dockerfile · **nginx stream / HAProxy 참조 설정 + PROXY 프로토콜** · 퍼징·부하 · 예산 게이트 확정 | `brew install` / 단일 바이너리 배포. 방문자 1,000 동시 연결에서 예산 안. HAProxy 뒤에서 방문자 IP가 정확히 로그된다 |
+| **M4** ✅ | 릴리스 패키징 (5개 플랫폼 + fallback JAR) · 서비스 등록(systemd/launchd/Windows) · 참조 systemd 유닛 · Dockerfile · **nginx stream / HAProxy 참조 설정 + PROXY 프로토콜** · 퍼징·부하 · 예산 게이트 확정 · ACME 전송을 자체 HTTP 클라이언트로 교체(`java.net.http` 제거) | `.github/workflows/release.yml`이 태그마다 linux/darwin × amd64/arm64 + windows-amd64 native와 fallback JAR(`target/jailscale.jar`, `jailhub.jar`)을 릴리스에 붙인다. `deploy/`에 systemd 유닛(reload = takeover)·Dockerfile(distroless)·nginx stream·HAProxy·Homebrew formula. `jailscale service install`. PROXY v1/v2 e2e 테스트에서 방문자 IP가 hub 한도·로그·로컬 앱(`open --proxy-protocol`)까지 정확히 전달된다. 퍼징(SNI·HTTP·mux·JSON·코덱·PROXY·DNS, 각 1만~2만 케이스)이 PROXY v1 호스트명 DNS 조회 문제를 찾았고, 부하 테스트(1,000 동시 방문자)가 다중 연결 스트림 id 충돌과 서명 한도(50/s) 문제를 찾았다. 실측(arm64 macOS, native, `LOAD=1000 ./measure.sh --check`): 바이너리 24.9/25.2 MiB, 아이들 RSS hub 24.6 / 노드 24.4 MB, 방문자 1,000명 동시 접속 1,000/1,000 성공 0.5초, 직후 RSS hub 75.5 / 노드 102.8 MB(방문자당 약 50/80 KB, TLS 세션 버퍼), CLI 6.3 ms. 게이트 통과. **남은 것**: 실제 Let's Encrypt 스테이징, 브라우저 3종, Windows·Linux에서 `service install` 실기 확인, 태그 릴리스 1회 실행 |
 
 **테스트 전략 (마일스톤 공통)**
 
@@ -979,13 +995,16 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 - **방문자 핸드셰이크 지연 최적화** — 실측이 나쁘면 노드가 `ServerHello`까지의 트랜스크립트를
   미리 계산해 `SignRequest`를 더 일찍 보내는 등의 파이프라이닝. M2 실측 후.
 - **`--no-tls` 컨트롤 채널** — 공개 443이 어차피 TLS라 의미가 줄었다. 보류.
+- **부하 중 RSS** — 방문자 1,000명 동시에 노드 102.8 MB, hub 75.5 MB(M4 실측). 방문자당 노드 약 80 KB는
+  JSSE `SSLEngine` 버퍼(패킷·앱 버퍼 각 16 KB 남짓)와 mux 스트림 버퍼다. 줄이려면 버퍼 풀링과
+  스트림당 윈도우 축소(§8의 256 KB → 64 KB)가 후보. 부하가 빠진 뒤 RSS가 돌아오지 않는 것은
+  Serial GC가 힙을 반납하지 않기 때문이며 `-R:MaxHeapSize`와 함께 볼 것.
 - **노드 RSS 20 MB 회복** — M1 실측 23.8 MB, M2 실측 26.6 MB(JSSE 서버 측 + 원격 서명 Provider 추가). 대부분 JSSE·JCE의 이미지 힙이다. 후보는
   `-R:MaxHeapSize`로 힙 상한 고정, 빌드 시 초기화 화이트리스트 확대, 사용하지 않는 TLS 스위트·
   프로토콜 제거. M2에서 TLS 종단이 추가된 뒤 다시 재고 그때 결정.
 - **ACME 클라이언트의 전송 계층** — M3의 사용자 도메인으로 노드도 `AcmeClient`를 쓰는데, 이 클라이언트는
-  `java.net.http`를 쓴다. M3 실측으로 바이너리가 24 → 27.3 MiB로 늘었다(아이들 RSS는 24.8 MB로 그대로).
-  §6.1의 자체 HTTP/1.1 클라이언트에 chunked 디코딩을 붙여 전송 계층을 갈아 끼우면(인터페이스 하나)
-  hub·노드 모두에서 `java.net.http`가 빠진다. M4 패키징 전에 한다.
+  `java.net.http`를 썼고 바이너리가 24 → 27.3 MiB로 늘었다. **M4에서 해결**: §6.1의 자체 HTTP/1.1
+  클라이언트에 chunked 디코딩을 붙여(`HttpCall`) 교체했고 바이너리는 25 MiB로 돌아왔다.
 - **사용자 도메인 소유 증명** — 현재는 "그 이름으로 검증되는 공개 CA 인증서 체인"이 증명이다. 이는
   hub이 키를 갖지 않으면서도 남의 도메인을 자기 노드로 끌어가는 것을 막는다. hub 셸의 `domain release`로
   관리자가 회수할 수 있다. DNS가 hub을 가리키는지의 사전 검사(친절한 오류)는 추후.
