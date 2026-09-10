@@ -918,8 +918,8 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 |---|---|---|
 | **M0** ✅ | 프로젝트 골격 · Maven wrapper · GraalVM native 빌드 파이프라인 · `jailscale-crypto`(BLAKE2s·HKDF·X25519·ChaCha·Noise IK) | RFC 7693/7748/8439 벡터와 noise-c IK 벡터 통과. `./native.sh`로 node·hub 바이너리 생성. 기준선: 4.9 MiB, RSS 8.4 MB, 콜드 스타트 5 ms (자리표시자 main) |
 | **M1** ✅ | 컨트롤 채널 · 자체 HTTP/1.1 · hkey 부트스트랩·회전 · 버전 협상 · mux(스트림 0만) · 초대·코드·auth-key·두드리기 · **로컬 IPC (노드·hub)** · 파일 저장소 · `./measure.sh` | `jailscale invite`로 만든 링크로 다른 기기가 `jailscale up --invite`만으로 가입한다(loopback e2e 테스트 + native 프로세스로 확인). 키 회전 후 노드가 끊기지 않는다. 실측(arm64 macOS): 바이너리 24 MiB, **노드 아이들 RSS 23.8 MB(목표 20)**, hub 24.2 MB, CLI 콜드 스타트 6 ms. 인증서는 M2의 ACME 전까지 `--tls-cert/--tls-key` |
-| **M2** | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림(다중 연결 포함) · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3000` 후 인터넷 브라우저에서 `https://<name>.hub.example.com`이 열린다. Let's Encrypt 스테이징에서 발급·갱신 통과. 서명 오라클 테스트(다른 이름의 스트림으로 요청 → 거부) 통과. 핸드셰이크 지연 실측 |
-| **M3** | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · `--registration open` | 게이트 링크 없이는 403. 로컬 WebSocket 앱이 그대로 동작. `--domain`으로 가져온 도메인이 노드 키로 열린다. `open 22 --tcp`로 SSH, `open 51820 --udp`로 WireGuard가 hub 포트를 통해 붙는다 |
+| **M2** ✅ | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림 · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3007 --name demo` 후 `curl`이 hub→노드를 거쳐 로컬 앱을 받는다(native 프로세스로 확인). 서명 오라클 테스트 통과. ACME는 테스트 CA(mock)로 dns-01·CSR·발급·재시작 재사용까지 통과. 실측(loopback, arm64): 방문자 전체 핸드셰이크 2.3 ms(hub 서명 왕복 포함), 노드 RSS 26.6 MB, hub 26.2 MB. **남은 것**: 실제 도메인에서 Let's Encrypt 스테이징 발급 확인, 노드당 다중 연결(§8)은 M3로 이월 |
+| **M3** | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · 노드당 다중 연결(§8, M2에서 이월) | 게이트 링크 없이는 403. 로컬 WebSocket 앱이 그대로 동작. `--domain`으로 가져온 도메인이 노드 키로 열린다. `open 22 --tcp`로 SSH, `open 51820 --udp`로 WireGuard가 hub 포트를 통해 붙는다 |
 | **M4** | 릴리스 패키징 (5개 플랫폼 + fallback JAR) · 서비스 등록(systemd/launchd/Windows) · 참조 systemd 유닛 · Dockerfile · **nginx stream / HAProxy 참조 설정 + PROXY 프로토콜** · 퍼징·부하 · 예산 게이트 확정 | `brew install` / 단일 바이너리 배포. 방문자 1,000 동시 연결에서 예산 안. HAProxy 뒤에서 방문자 IP가 정확히 로그된다 |
 
 **테스트 전략 (마일스톤 공통)**
@@ -949,6 +949,6 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 - **방문자 핸드셰이크 지연 최적화** — 실측이 나쁘면 노드가 `ServerHello`까지의 트랜스크립트를
   미리 계산해 `SignRequest`를 더 일찍 보내는 등의 파이프라이닝. M2 실측 후.
 - **`--no-tls` 컨트롤 채널** — 공개 443이 어차피 TLS라 의미가 줄었다. 보류.
-- **노드 RSS 20 MB 회복** — M1 실측 23.8 MB. 대부분 JSSE·JCE의 이미지 힙이다. 후보는
+- **노드 RSS 20 MB 회복** — M1 실측 23.8 MB, M2 실측 26.6 MB(JSSE 서버 측 + 원격 서명 Provider 추가). 대부분 JSSE·JCE의 이미지 힙이다. 후보는
   `-R:MaxHeapSize`로 힙 상한 고정, 빌드 시 초기화 화이트리스트 확대, 사용하지 않는 TLS 스위트·
   프로토콜 제거. M2에서 TLS 종단이 추가된 뒤 다시 재고 그때 결정.

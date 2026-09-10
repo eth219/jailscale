@@ -136,7 +136,6 @@
               <enabled>false</enabled>
             </metadataRepository>
             <buildArgs>
-              <buildArg>--no-fallback</buildArg>
               <buildArg>-O2</buildArg>
               <buildArg>-H:+ReportExceptionStackTraces</buildArg>
             </buildArgs>
