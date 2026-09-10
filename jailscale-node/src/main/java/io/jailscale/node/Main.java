@@ -158,8 +158,8 @@ public final class Main {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(cfg.daemonLog().toFile()));
-        pb.redirectInput(ProcessBuilder.Redirect.DISCARD);
-        pb.start();
+        Process p = pb.start();
+        p.getOutputStream().close(); // the daemon never reads stdin
         long deadline = System.currentTimeMillis() + 5000;
         while (System.currentTimeMillis() < deadline) {
             if (Ipc.isAlive(cfg.socketPath())) {

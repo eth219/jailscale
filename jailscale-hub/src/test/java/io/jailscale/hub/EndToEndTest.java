@@ -135,6 +135,14 @@ class EndToEndTest {
         assertEquals("dave", cli("dave", JsonObject.builder().put("cmd", "status").build()).string("user"));
         assertEquals(4, hub.store().nodes().size());
 
+        // 5b. an auth-key registers a headless node with no browser and no name prompt.
+        JsonObject ak = admin(JsonObject.builder().put("cmd", "authkey-create").put("tag", "ci").put("uses", 1).build());
+        node("ci");
+        JsonObject ciUp = up("ci", JsonObject.builder().put("hub", "localhost").put("port", port).put("authKey", ak.string("key")));
+        assertEquals("approved", ciUp.string("status"));
+        assertEquals("tag:ci", ciUp.string("user"));
+        assertEquals(5, hub.store().nodes().size());
+
         // 6. netcheck round trip.
         JsonObject nc = cli("alice", JsonObject.builder().put("cmd", "netcheck").build());
         assertTrue(nc.optBool("ok", false));
@@ -149,8 +157,8 @@ class EndToEndTest {
         String newKey = hub.keys().publicText();
         assertNotEquals(oldKey, newKey);
         hub.registry().closeAll("shutdown");
-        waitFor(() -> hub.registry().size() == 4);
-        for (String n : new String[] {"alice", "bob", "carol", "dave"}) {
+        waitFor(() -> hub.registry().size() == 5);
+        for (String n : new String[] {"alice", "bob", "carol", "dave", "ci"}) {
             JsonObject st = cli(n, JsonObject.builder().put("cmd", "status").build());
             assertTrue(st.optBool("connected", false), st.toString());
             assertEquals(newKey, st.string("hubKey"), n);
@@ -160,7 +168,7 @@ class EndToEndTest {
         admin(JsonObject.builder().put("cmd", "node-remove").put("mkey", daveKey).build());
         waitFor(() -> !cli("dave", JsonObject.builder().put("cmd", "status").build()).optBool("connected", true));
         assertNotNull(cli("dave", JsonObject.builder().put("cmd", "status").build()).optString("lastError", null));
-        assertEquals(3, hub.store().nodes().size());
+        assertEquals(4, hub.store().nodes().size());
     }
 
     @Test
