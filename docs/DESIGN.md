@@ -155,8 +155,11 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 
 **개발 환경 요구사항**
 
-- `brew install graalvm` → GraalVM for JDK 25 계열. native-image 포함. (정확한 버전 표기는
-  M0에서 고정한다.)
+- `brew install graalvm` → GraalVM CE 25.3.x (JDK 25.0.x, GPL+CPE, native-image 포함). keg-only라
+  PATH에 오르지 않으므로 native 빌드 시 `JAVA_HOME=/opt/homebrew/opt/graalvm/libexec/graalvm.jdk/Contents/Home`
+  으로 실행한다 (`./native.sh` 참조). 일반 빌드와 테스트는 어떤 JDK 25든 된다.
+- native-maven-plugin의 reachability metadata 저장소는 끈다. 외부 의존성이 없고 리플렉션도
+  없으므로 가져올 것이 없다.
 - Linux에서는 `gcc`, `zlib` 개발 헤더 필요
 - Maven은 설치하지 않는다. 레포의 `./mvnw`(Maven Wrapper 3.3.4, only-script)가 3.9.16을 받아
   쓴다. 버전은 junit-bom 6.1.3, maven-compiler-plugin 3.16.0(`-Xlint:all -Werror`), surefire 3.6.0,

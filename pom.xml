@@ -128,9 +128,13 @@
           <version>${native-maven-plugin.version}</version>
           <extensions>true</extensions>
           <configuration>
-            <skipNativeBuild>${native.skip}</skipNativeBuild>
+            <skip>${native.skip}</skip>
             <imageName>${native.imageName}</imageName>
             <mainClass>${native.mainClass}</mainClass>
+            <!-- No third-party dependencies, no reflection (DESIGN.md §4): nothing to fetch. -->
+            <metadataRepository>
+              <enabled>false</enabled>
+            </metadataRepository>
             <buildArgs>
               <buildArg>--no-fallback</buildArg>
               <buildArg>-O2</buildArg>
