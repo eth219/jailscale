@@ -37,6 +37,9 @@ final class Store implements AutoCloseable {
 
     record PendingRec(String mkey, String hostname, String os, String ip, String user, long at) {}
 
+    /** A claimed name: who owns it and which node/local target last used it (DESIGN.md §9.2). */
+    record NameRec(String name, String user, String mkey, String local, long at) {}
+
     private final Path dir;
     private final Path logPath;
     private final Path snapshotPath;
@@ -49,6 +52,7 @@ final class Store implements AutoCloseable {
     private final Map<String, AuthKeyRec> authKeys = new LinkedHashMap<>();
     private final Set<String> admins = new LinkedHashSet<>();
     private final Map<String, PendingRec> pending = new LinkedHashMap<>();
+    private final Map<String, NameRec> names = new LinkedHashMap<>();
     private String nextHubKey; // hkey: text of the next public key during rotation, or null
     private long hubKeyActivatesAt;
 
@@ -109,6 +113,44 @@ final class Store implements AutoCloseable {
 
     synchronized String nextHubKey() {
         return nextHubKey;
+    }
+
+    synchronized String nameOwner(String name) {
+        NameRec r = names.get(name);
+        return r == null ? null : r.user();
+    }
+
+    /** The random name previously given to this node for this local target, or null. */
+    synchronized String nameFor(String mkey, String local) {
+        for (NameRec r : names.values()) {
+            if (mkey.equals(r.mkey()) && local != null && local.equals(r.local())) {
+                return r.name();
+            }
+        }
+        return null;
+    }
+
+    synchronized List<NameRec> names() {
+        return new ArrayList<>(names.values());
+    }
+
+    synchronized void claimName(String name, String user, String mkey, String local) throws IOException {
+        append(JsonObject.builder().put("e", "name-claimed").put("name", name).put("user", user).put("mkey", mkey)
+            .put("local", local).put("at", System.currentTimeMillis()));
+    }
+
+    synchronized void releaseName(String name) throws IOException {
+        if (names.containsKey(name)) {
+            append(JsonObject.builder().put("e", "name-released").put("name", name));
+        }
+    }
+
+    synchronized void reassignName(String name, String user) throws IOException {
+        NameRec r = names.get(name);
+        if (r != null) {
+            append(JsonObject.builder().put("e", "name-claimed").put("name", name).put("user", user).put("mkey", r.mkey())
+                .put("local", r.local()).put("at", System.currentTimeMillis()));
+        }
     }
 
     synchronized long hubKeyActivatesAt() {
@@ -322,6 +364,9 @@ final class Store implements AutoCloseable {
             case "pending-added" -> pending.put(ev.string("mkey"), new PendingRec(ev.string("mkey"), ev.optString("hostname", ""),
                 ev.optString("os", ""), ev.optString("ip", null), ev.optString("user", null), ev.lng("at")));
             case "pending-cleared" -> pending.remove(ev.string("mkey"));
+            case "name-claimed" -> names.put(ev.string("name"), new NameRec(ev.string("name"), ev.string("user"),
+                ev.optString("mkey", null), ev.optString("local", null), ev.lng("at")));
+            case "name-released" -> names.remove(ev.string("name"));
             case "hubkey-rotation" -> {
                 nextHubKey = ev.string("next");
                 hubKeyActivatesAt = ev.lng("activatesAt");
@@ -359,8 +404,8 @@ final class Store implements AutoCloseable {
             }
             eventsSinceSnapshot = n;
         }
-        LOG.info("loaded {} nodes, {} invites, {} auth-keys, {} admins, {} pending",
-            nodesByKey.size(), invites.size(), authKeys.size(), admins.size(), pending.size());
+        LOG.info("loaded {} nodes, {} names, {} invites, {} auth-keys, {} admins, {} pending",
+            nodesByKey.size(), names.size(), invites.size(), authKeys.size(), admins.size(), pending.size());
     }
 
     /**
@@ -388,6 +433,10 @@ final class Store implements AutoCloseable {
         for (PendingRec p : pending.values()) {
             events.add(JsonObject.builder().put("e", "pending-added").put("mkey", p.mkey()).put("hostname", p.hostname())
                 .put("os", p.os()).put("ip", p.ip()).put("user", p.user()).put("at", p.at()).build().asMap());
+        }
+        for (NameRec r : names.values()) {
+            events.add(JsonObject.builder().put("e", "name-claimed").put("name", r.name()).put("user", r.user())
+                .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
         }
         if (nextHubKey != null) {
             events.add(JsonObject.builder().put("e", "hubkey-rotation").put("next", nextHubKey).put("activatesAt", hubKeyActivatesAt).build().asMap());

@@ -100,7 +100,8 @@ public sealed interface Message {
         @Override public String type() { return "CertUpdate"; }
     }
 
-    record LinkOpen(String kind, String name, String domain, Integer port) implements Message {
+    /** {@code local} is the node-side target ("host:port"); it keys the stable random name. */
+    record LinkOpen(String kind, String name, String domain, Integer port, String local) implements Message {
         public static final String HTTPS = "https";
         public static final String TCP = "tcp";
         public static final String UDP = "udp";

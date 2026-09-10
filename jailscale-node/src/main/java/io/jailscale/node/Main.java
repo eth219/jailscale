@@ -16,8 +16,10 @@ public final class Main {
     private static final String USAGE = """
         jailscale up --invite https://hub.example.com/join/TOKEN [--user NAME]
         jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
-                     [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443]
-        jailscale status | down | leave | netcheck | daemon [--foreground]
+                     [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP]
+        jailscale open PORT [--name NAME] [--host 127.0.0.1]
+        jailscale ls | close NAME
+        jailscale status | down | leave | netcheck | daemon
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
         jailscale version
         """;
@@ -51,6 +53,16 @@ public final class Main {
                 case "status" -> print(call(cfg, JsonObject.builder().put("cmd", "status").build(), false));
                 case "down", "leave", "netcheck" -> print(call(cfg, JsonObject.builder().put("cmd", cmd).build(), false));
                 case "invite" -> invite(cfg, a);
+                case "open" -> open(cfg, a);
+                case "ls" -> ls(cfg);
+                case "close" -> {
+                    String name = a.positional(1);
+                    if (name == null) {
+                        throw new IllegalArgumentException("close needs a link name");
+                    }
+                    call(cfg, JsonObject.builder().put("cmd", "close").put("name", name).build(), false);
+                    System.out.println("closed " + name);
+                }
                 default -> {
                     System.err.println("unknown command " + cmd);
                     System.err.print(USAGE);
@@ -83,7 +95,8 @@ public final class Main {
         JsonObject.Builder b = JsonObject.builder().put("cmd", "up")
             .put("invite", a.get("invite")).put("hub", a.get("hub")).put("port", a.integer("port", 443))
             .put("code", a.get("code")).put("authKey", a.get("auth-key")).put("user", a.get("user"))
-            .put("hubKey", a.get("hub-key")).put("tlsInsecure", a.flag("tls-insecure")).put("caFile", a.get("ca-file"));
+            .put("hubKey", a.get("hub-key")).put("tlsInsecure", a.flag("tls-insecure")).put("caFile", a.get("ca-file"))
+            .put("addr", a.get("hub-addr"));
         JsonObject r = call(cfg, b.build(), true);
         String status = r.optString("status", "");
         switch (status) {
@@ -92,6 +105,32 @@ public final class Main {
             case "pending" -> System.out.println("waiting for admin approval. Ask the hub admin to run:\n"
                 + "  jailhub node approve " + r.string("machineKey"));
             default -> System.out.println(r);
+        }
+    }
+
+    private static void open(NodeConfig cfg, Args a) throws Exception {
+        String port = a.positional(1);
+        if (port == null) {
+            throw new IllegalArgumentException("open needs a local port");
+        }
+        JsonObject r = call(cfg, JsonObject.builder().put("cmd", "open").put("port", Integer.parseInt(port))
+            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", "https").build(), false);
+        String url = r.string("url");
+        System.out.println(url + "  ->  " + r.string("local") + (copyToClipboard(url) ? "        (링크가 클립보드에 복사됨)" : ""));
+    }
+
+    private static void ls(NodeConfig cfg) throws Exception {
+        JsonObject r = call(cfg, JsonObject.builder().put("cmd", "ls").build(), false);
+        java.util.List<Object> links = r.array("links");
+        if (links.isEmpty()) {
+            System.out.println("열린 링크가 없습니다. jailscale open <port> 로 여세요.");
+            return;
+        }
+        for (Object o : links) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
+            System.out.printf("%-8s %-40s -> %-22s %s%n", m.get("name"), m.get("url"), m.get("local"),
+                Boolean.TRUE.equals(m.get("open")) ? "open" : "offline");
         }
     }
 

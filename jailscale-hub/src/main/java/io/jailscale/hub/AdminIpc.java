@@ -27,6 +27,8 @@ final class AdminIpc implements Ipc.Handler {
                 .put("hubKey", hub.keys().publicText())
                 .put("nextHubKey", hub.keys().nextPublicText())
                 .put("nodes", store.nodes().size())
+                .put("links", hub.links().all().size())
+                .put("certKeyId", hub.tls().isLoaded() ? hub.tls().keyId() : null)
                 .put("online", hub.registry().size())
                 .put("pending", store.pending().size())
                 .put("invites", store.invites().size())
@@ -72,6 +74,23 @@ final class AdminIpc implements Ipc.Handler {
             }
             case "node-rename" -> {
                 store.renameNode(resolveMkey(req.string("mkey")), req.string("user"));
+                reply.ok();
+            }
+            case "name-list" -> {
+                List<Object> rows = new ArrayList<>();
+                for (Store.NameRec n : store.names()) {
+                    Links.Link l = hub.links().byName(n.name());
+                    rows.add(JsonObject.builder().put("name", n.name()).put("user", n.user()).put("mkey", n.mkey())
+                        .put("local", n.local()).put("online", l != null).build().asMap());
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("names", rows));
+            }
+            case "name-reassign" -> {
+                store.reassignName(req.string("name"), req.string("user"));
+                reply.ok();
+            }
+            case "name-release" -> {
+                store.releaseName(req.string("name"));
                 reply.ok();
             }
             case "user-list" -> reply.done(JsonObject.builder().put("ok", true).put("users", new ArrayList<>(store.users())));
@@ -183,6 +202,8 @@ final class AdminIpc implements Ipc.Handler {
         switch (cmd) {
             case "node-approve", "node-deny", "node-remove", "node-rename" -> b.put("mkey", need(a.positional(2), "<node>")).put("user", a.get("user"));
             case "user-remove" -> b.put("user", need(a.positional(2), "<user>"));
+            case "name-reassign" -> b.put("name", need(a.positional(2), "<name>")).put("user", a.require("user"));
+            case "name-release" -> b.put("name", need(a.positional(2), "<name>"));
             case "invite-create" -> b.put("user", a.get("user")).put("uses", a.integer("uses", 0))
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null).put("admin", a.flag("admin"));
             case "invite-revoke", "authkey-revoke" -> b.put("id", need(a.positional(2), "<id>"));

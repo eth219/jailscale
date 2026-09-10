@@ -14,8 +14,8 @@ import java.net.Socket;
 
 /**
  * The hub's own HTTP endpoints on its name (DESIGN.md §6.1): {@code /v1/key}, {@code /v1/noise}
- * (Upgrade), {@code /join/<token>}, and a root page. In M1 this sits directly on the TLS
- * listener; the SNI router (§9.1) is added in M2.
+ * (Upgrade), {@code /join/<token>}, and a root page. {@link SniRouter} hands over connections
+ * whose SNI is the hub's own name, already wrapped in TLS.
  */
 final class HttpFront {
 
@@ -30,10 +30,13 @@ final class HttpFront {
         this.hub = hub;
     }
 
-    /** Serves one accepted connection to completion. */
+    /** Serves one TLS connection to completion. */
     void serve(Socket socket) {
         try (socket) {
             socket.setSoTimeout(HTTP_TIMEOUT_MS);
+            if (socket instanceof javax.net.ssl.SSLSocket ssl) {
+                ssl.startHandshake();
+            }
             InputStream in = socket.getInputStream();
             OutputStream out = socket.getOutputStream();
             HttpRequest req;

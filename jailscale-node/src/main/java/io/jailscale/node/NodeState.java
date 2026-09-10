@@ -21,6 +21,7 @@ final class NodeState {
 
     X25519.Keypair machineKey;
     String hubHost;
+    String hubAddr;       // connect here instead of resolving hubHost (tests, split horizon); null = resolve
     int hubPort = 443;
     String hubKey;        // pinned hkey: text
     String nextHubKey;    // announced rotation, or null
@@ -31,6 +32,57 @@ final class NodeState {
     long nodeId;
     String user;
     String dnsSuffix;
+    final java.util.List<LinkRec> links = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** A link this node keeps open (DESIGN.md §10.1). {@code linkId}/{@code url} are per hub session. */
+    static final class LinkRec {
+        final String kind;
+        final String host;
+        final int port;
+        volatile String name;   // assigned by the hub; requested on reopen so it stays stable
+        volatile String linkId;
+        volatile String url;
+
+        LinkRec(String kind, String host, int port, String name) {
+            this.kind = kind;
+            this.host = host;
+            this.port = port;
+            this.name = name;
+        }
+
+        String host() {
+            return host;
+        }
+
+        int port() {
+            return port;
+        }
+
+        String local() {
+            return host + ":" + port;
+        }
+    }
+
+    LinkRec linkById(String linkId) {
+        if (linkId == null) {
+            return null;
+        }
+        for (LinkRec l : links) {
+            if (linkId.equals(l.linkId)) {
+                return l;
+            }
+        }
+        return null;
+    }
+
+    LinkRec linkByName(String name) {
+        for (LinkRec l : links) {
+            if (name.equals(l.name)) {
+                return l;
+            }
+        }
+        return null;
+    }
 
     private NodeState(Path file) {
         this.file = file;
@@ -45,6 +97,7 @@ final class NodeState {
             if (o.has("hub")) {
                 JsonObject h = o.object("hub");
                 s.hubHost = h.optString("host", null);
+                s.hubAddr = h.optString("addr", null);
                 s.hubPort = h.optInt("port", 443);
                 s.hubKey = h.optString("hubKey", null);
                 s.nextHubKey = h.optString("nextHubKey", null);
@@ -56,6 +109,13 @@ final class NodeState {
             s.registered = o.optBool("registered", false);
             s.nodeId = o.has("nodeId") ? o.lng("nodeId") : 0;
             s.user = o.optString("user", null);
+            if (o.has("links")) {
+                for (Object l : o.array("links")) {
+                    @SuppressWarnings("unchecked")
+                    JsonObject lo = Json.parseObject(Json.write((java.util.Map<String, Object>) l));
+                    s.links.add(new LinkRec(lo.optString("kind", "https"), lo.string("host"), lo.integer("port"), lo.optString("name", null)));
+                }
+            }
         } else {
             s.machineKey = X25519.generate();
             s.save();
@@ -64,10 +124,14 @@ final class NodeState {
     }
 
     synchronized void save() throws IOException {
-        JsonObject.Builder hub = JsonObject.builder().put("host", hubHost).put("port", hubPort).put("hubKey", hubKey)
+        JsonObject.Builder hub = JsonObject.builder().put("host", hubHost).put("addr", hubAddr).put("port", hubPort).put("hubKey", hubKey)
             .put("nextHubKey", nextHubKey).put("caFile", caFile).put("tlsInsecure", tlsInsecure).put("dnsSuffix", dnsSuffix);
         if (hubKeyActivatesAt > 0) {
             hub.put("activatesAt", hubKeyActivatesAt);
+        }
+        java.util.List<Object> ls = new java.util.ArrayList<>();
+        for (LinkRec l : links) {
+            ls.add(JsonObject.builder().put("kind", l.kind).put("host", l.host).put("port", l.port).put("name", l.name).build().asMap());
         }
         String json = JsonObject.builder()
             .put("machineKey", KeyText.format(PRIVATE_PREFIX, machineKey.privateKey()))
@@ -75,6 +139,7 @@ final class NodeState {
             .put("registered", registered)
             .put("nodeId", nodeId > 0 ? Long.valueOf(nodeId) : null)
             .put("user", user)
+            .put("links", ls)
             .toJson();
         Files.createDirectories(file.getParent());
         Path tmp = file.resolveSibling("node.json.tmp");

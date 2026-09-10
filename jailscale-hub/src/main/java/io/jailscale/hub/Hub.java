@@ -2,7 +2,6 @@ package io.jailscale.hub;
 
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.ipc.Ipc;
-import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -15,8 +14,7 @@ import java.security.GeneralSecurityException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLServerSocket;
+import java.net.ServerSocket;
 
 /** The jailhub process: keys, store, TLS listener, node sessions, admin IPC (DESIGN.md §2). */
 public final class Hub implements AutoCloseable {
@@ -31,9 +29,12 @@ public final class Hub implements AutoCloseable {
     private final Registrar registrar;
     private final Invites invites;
     private final HttpFront front;
+    private final HubTls tls;
+    private final Links links;
+    private final SniRouter router;
     private final FileChannel lockChannel;
     private final FileLock lock;
-    private SSLServerSocket listener;
+    private ServerSocket listener;
     private Ipc.Server ipc;
     private ScheduledExecutorService timer;
     private volatile boolean running;
@@ -53,15 +54,17 @@ public final class Hub implements AutoCloseable {
         this.registrar = new Registrar(config, store);
         this.invites = new Invites(config, store);
         this.front = new HttpFront(this);
+        this.tls = new HubTls(config.hostname());
+        this.links = new Links(config, store);
+        this.router = new SniRouter(this);
     }
 
     public void start() throws IOException, GeneralSecurityException {
         promoteRotationIfDue();
-        SSLContext ctx = Tls.serverContext(config.tlsCert(), config.tlsKey());
-        listener = (SSLServerSocket) ctx.getServerSocketFactory().createServerSocket();
+        tls.load(config.tlsCert(), config.tlsKey());
+        listener = new ServerSocket();
         listener.setReuseAddress(true);
         listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 128);
-        Tls.configureServer(listener);
         running = true;
         Thread.ofPlatform().name("accept").daemon(false).start(this::acceptLoop);
 
@@ -101,15 +104,12 @@ public final class Hub implements AutoCloseable {
                 }
                 continue;
             }
-            Thread.ofVirtual().name("conn-" + s.getInetAddress().getHostAddress()).start(() -> front.serve(s));
+            Thread.ofVirtual().name("conn-" + s.getInetAddress().getHostAddress()).start(() -> router.serve(s));
         }
     }
 
     private void tick() {
         try {
-            for (NodeSession s : registry.all()) {
-                s.sendKeepalive();
-            }
             promoteRotationIfDue();
         } catch (RuntimeException | IOException e) {
             LOG.warn("timer", e);
@@ -163,6 +163,18 @@ public final class Hub implements AutoCloseable {
 
     Invites invites() {
         return invites;
+    }
+
+    HubTls tls() {
+        return tls;
+    }
+
+    Links links() {
+        return links;
+    }
+
+    HttpFront front() {
+        return front;
     }
 
     static String version() {

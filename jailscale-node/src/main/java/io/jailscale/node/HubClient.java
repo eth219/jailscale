@@ -36,8 +36,8 @@ final class HubClient {
     record HubKeyInfo(String hubKey, String nextHubKey, Long notAfter) {}
 
     /** {@code GET /v1/key} over web-PKI TLS: the first-contact trust bootstrap (§6.2). */
-    static HubKeyInfo fetchHubKey(String host, int port, SSLContext ctx, boolean verifyHostname) throws IOException {
-        try (SSLSocket s = Tls.connect(ctx, host, port, verifyHostname, CONNECT_TIMEOUT_MS)) {
+    static HubKeyInfo fetchHubKey(String host, String addr, int port, SSLContext ctx, boolean verifyHostname) throws IOException {
+        try (SSLSocket s = Tls.connect(ctx, host, addr, port, verifyHostname, CONNECT_TIMEOUT_MS)) {
             Http.writeRequest(s.getOutputStream(), "GET", host, "/v1/key", new Headers().add("Accept", "application/json"), null);
             HttpResponse r = Http.readResponse(s.getInputStream(), 64 * 1024);
             if (r.status() != 200) {
@@ -58,12 +58,12 @@ final class HubClient {
      * Opens TLS, upgrades, and runs the Noise handshake with Hello in message 1. Tries each
      * pinned hub key in order (current, then next during a rotation).
      */
-    static Connected connect(String host, int port, SSLContext ctx, boolean verifyHostname, X25519.Keypair machineKey,
+    static Connected connect(String host, String addr, int port, SSLContext ctx, boolean verifyHostname, X25519.Keypair machineKey,
         List<String> hubKeys, Message.Hello hello) throws IOException, NoiseException {
         IOException lastIo = null;
         NoiseException lastNoise = null;
         for (String hk : hubKeys) {
-            SSLSocket s = Tls.connect(ctx, host, port, verifyHostname, CONNECT_TIMEOUT_MS);
+            SSLSocket s = Tls.connect(ctx, host, addr, port, verifyHostname, CONNECT_TIMEOUT_MS);
             try {
                 Http.writeRequest(s.getOutputStream(), "POST", host, "/v1/noise",
                     new Headers().add("Connection", "Upgrade").add("Upgrade", UPGRADE_PROTOCOL), new byte[0]);

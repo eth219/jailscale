@@ -89,8 +89,24 @@ public final class Tls {
     /** Opens a TLS client connection with SNI, ALPN http/1.1 and hostname verification (unless insecure). */
     public static SSLSocket connect(SSLContext ctx, String host, int port, boolean verifyHostname, int timeoutMillis)
         throws IOException {
+        return connect(ctx, host, null, port, verifyHostname, timeoutMillis);
+    }
+
+    /**
+     * Same, connecting to {@code addr} (an IP or another host) while presenting and verifying
+     * {@code host}. The peer address is built without a DNS lookup so verification still sees
+     * {@code host}.
+     */
+    public static SSLSocket connect(SSLContext ctx, String host, String addr, int port, boolean verifyHostname, int timeoutMillis)
+        throws IOException {
         SSLSocket s = (SSLSocket) ctx.getSocketFactory().createSocket();
-        s.connect(new InetSocketAddress(host, port), timeoutMillis);
+        java.net.InetAddress target;
+        if (addr == null) {
+            target = java.net.InetAddress.getByName(host);
+        } else {
+            target = java.net.InetAddress.getByAddress(host, java.net.InetAddress.getByName(addr).getAddress());
+        }
+        s.connect(new InetSocketAddress(target, port), timeoutMillis);
         s.setSoTimeout(timeoutMillis);
         s.setTcpNoDelay(true);
         SSLParameters p = s.getSSLParameters();

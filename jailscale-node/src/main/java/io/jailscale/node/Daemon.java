@@ -4,29 +4,36 @@ import io.jailscale.crypto.KeyText;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
 
-/** The resident node process: owns the state file, the hub link and the local IPC (DESIGN.md §10.5). */
-public final class Daemon implements AutoCloseable, Ipc.Handler {
+/** The resident node process: owns the state file, the hub link, links and the local IPC (DESIGN.md §10). */
+public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events {
 
     private static final Log LOG = Log.get("daemon");
     private static final long REGISTER_TIMEOUT_MS = 30_000;
+    private static final long REPLY_TIMEOUT_MS = 10_000;
 
     private final NodeConfig config;
     private final NodeState state;
     private final HubLink link;
+    private final Visitors visitors;
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
         this.config = config;
         this.state = NodeState.load(config.stateFile());
-        this.link = new HubLink(state, Version.string());
+        this.link = new HubLink(state, Version.string(), this);
+        this.visitors = new Visitors(state);
     }
 
     public void start() throws IOException {
@@ -36,6 +43,44 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
             link.start(null);
         }
     }
+
+    // --- HubLink.Events --------------------------------------------------------------------------
+
+    @Override
+    public void onConnected(HubLink l) {
+        for (NodeState.LinkRec rec : state.links) {
+            try {
+                reopen(rec);
+            } catch (IOException | TimeoutException e) {
+                LOG.warn("could not reopen link {}: {}", rec.name, e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void onCert(Message.CertUpdate cert) {
+        visitors.onCert(cert);
+    }
+
+    @Override
+    public void onVisitor(HubLink l, MuxStream stream) {
+        visitors.serve(l, stream);
+    }
+
+    private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
+        Message r = link.request(new Message.LinkOpen(rec.kind, rec.name, null, null, rec.local()), "LinkOpened", REPLY_TIMEOUT_MS);
+        if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
+            rec.linkId = lo.linkId();
+            rec.name = lo.name();
+            rec.url = lo.url();
+            LOG.info("link {} -> {} open at {}", lo.name(), rec.local(), lo.url());
+            return lo;
+        }
+        String reason = r instanceof Message.LinkOpened lo ? lo.reason() : r instanceof Message.Error e ? e.reason() : r.type();
+        throw new IOException(reason);
+    }
+
+    // --- IPC -------------------------------------------------------------------------------------
 
     @Override
     public void handle(JsonObject req, Ipc.Reply reply) throws Exception {
@@ -48,7 +93,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
             }
             case "invite" -> {
                 Message r = link.request(new Message.InviteCreate(req.optString("user", null), req.optInt("uses", 0),
-                    req.has("ttl") ? req.lng("ttl") : 0, req.optBool("self", false)), "InviteCreated", 10_000);
+                    req.has("ttl") ? req.lng("ttl") : 0, req.optBool("self", false)), "InviteCreated", REPLY_TIMEOUT_MS);
                 if (r instanceof Message.InviteCreated ic) {
                     reply.done(JsonObject.builder().put("ok", true).put("url", ic.url()).put("code", ic.code()).put("expiresAt", ic.expiresAt()));
                 } else if (r instanceof Message.Error e) {
@@ -57,9 +102,25 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
                     reply.error("unexpected " + r.type());
                 }
             }
+            case "open" -> open(req, reply);
+            case "ls" -> reply.done(JsonObject.builder().put("ok", true).put("links", linkRows()));
+            case "close" -> {
+                String name = req.string("name");
+                NodeState.LinkRec rec = state.linkByName(name);
+                if (rec == null) {
+                    reply.error("no link named " + name);
+                    return;
+                }
+                if (rec.linkId != null && link.isConnected()) {
+                    link.send(new Message.LinkClose(rec.linkId));
+                }
+                state.links.remove(rec);
+                state.save();
+                reply.ok();
+            }
             case "netcheck" -> {
                 long t = System.nanoTime();
-                Message r = link.request(new Message.Ping(t), "Pong", 10_000);
+                Message r = link.request(new Message.Ping(t), "Pong", REPLY_TIMEOUT_MS);
                 if (r instanceof Message.Pong) {
                     reply.done(JsonObject.builder().put("ok", true).put("rttMicros", (System.nanoTime() - t) / 1000));
                 } else {
@@ -74,6 +135,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
                 state.hubHost = null;
                 state.hubKey = null;
                 state.nextHubKey = null;
+                state.links.clear();
                 state.save();
                 reply.ok();
             }
@@ -92,6 +154,15 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
         }
     }
 
+    private List<Object> linkRows() {
+        List<Object> rows = new ArrayList<>();
+        for (NodeState.LinkRec l : state.links) {
+            rows.add(JsonObject.builder().put("name", l.name).put("kind", l.kind).put("local", l.local())
+                .put("url", l.url).put("open", l.linkId != null && link.isConnected()).build().asMap());
+        }
+        return rows;
+    }
+
     private JsonObject.Builder status() {
         JsonObject.Builder b = JsonObject.builder().put("ok", true)
             .put("machineKey", state.machineKeyText())
@@ -102,12 +173,53 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
             .put("nodeId", state.nodeId > 0 ? Long.valueOf(state.nodeId) : null)
             .put("user", state.user)
             .put("dnsSuffix", state.dnsSuffix)
+            .put("links", linkRows())
             .put("lastError", link.lastError());
         Message.RegisterResponse r = link.lastRegister();
         if (r != null) {
             b.put("registration", r.status());
         }
         return b;
+    }
+
+    /** {@code jailscale open <port>}: ask the hub for a name and remember the link. */
+    private void open(JsonObject req, Ipc.Reply reply) throws Exception {
+        if (!state.registered) {
+            reply.error("not joined to a hub yet; run 'jailscale up' first");
+            return;
+        }
+        if (!link.isConnected()) {
+            reply.error(link.lastError() != null ? "not connected: " + link.lastError() : "not connected to the hub");
+            return;
+        }
+        int port = req.integer("port");
+        String host = req.optString("host", "127.0.0.1");
+        String kind = req.optString("kind", Message.LinkOpen.HTTPS);
+        String name = req.optString("name", null);
+        NodeState.LinkRec rec = null;
+        for (NodeState.LinkRec l : state.links) {
+            if (l.host.equals(host) && l.port == port && l.kind.equals(kind) && (name == null || name.equals(l.name))) {
+                rec = l;
+            }
+        }
+        boolean fresh = rec == null;
+        if (fresh) {
+            rec = new NodeState.LinkRec(kind, host, port, name);
+        } else if (name != null) {
+            rec.name = name;
+        }
+        Message.LinkOpened lo;
+        try {
+            lo = reopen(rec);
+        } catch (IOException e) {
+            reply.error(e.getMessage());
+            return;
+        }
+        if (fresh) {
+            state.links.add(rec);
+        }
+        state.save();
+        reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local()));
     }
 
     /**
@@ -136,6 +248,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
             host = state.hubHost;
             port = state.hubPort;
         }
+        String addr = req.optString("addr", null);
         String hubKey = req.optString("hubKey", null);
         boolean insecure = req.optBool("tlsInsecure", false);
         String caFile = req.optString("caFile", null);
@@ -152,6 +265,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
             return;
         }
         state.hubHost = host;
+        state.hubAddr = addr;
         state.hubPort = port;
         state.caFile = caFile;
         state.tlsInsecure = insecure;
@@ -167,7 +281,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
                 reply.error("TLS setup: " + e.getMessage());
                 return;
             }
-            HubClient.HubKeyInfo info = HubClient.fetchHubKey(host, port, ctx, true);
+            HubClient.HubKeyInfo info = HubClient.fetchHubKey(host, addr, port, ctx, true);
             state.hubKey = info.hubKey();
             state.nextHubKey = info.nextHubKey();
             reply.progress("pinned hub key " + info.hubKey());
@@ -179,7 +293,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
             req.optString("authKey", null), req.optString("user", null));
         link.start(creds);
         if (state.registered) {
-            waitConnected(reply);
+            waitConnected();
             reply.done(JsonObject.builder().put("ok", true).put("status", "connected").put("nodeId", state.nodeId).put("user", state.user));
             return;
         }
@@ -197,7 +311,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
         }
     }
 
-    private void waitConnected(Ipc.Reply reply) throws IOException, InterruptedException {
+    private void waitConnected() throws IOException, InterruptedException {
         long deadline = System.currentTimeMillis() + 15_000;
         while (!link.isConnected() && System.currentTimeMillis() < deadline) {
             if (link.lastError() != null && link.lastError().startsWith("hub key mismatch")) {
@@ -210,13 +324,14 @@ public final class Daemon implements AutoCloseable, Ipc.Handler {
         }
     }
 
-    /** Test hook. */
-    HubLink link() {
-        return link;
+    /** Test hook: sends any control message and waits for the reply registered under {@code replyKey}. */
+    public Message debugRequest(Message m, String replyKey) throws IOException, TimeoutException {
+        return link.request(m, replyKey, REPLY_TIMEOUT_MS);
     }
 
-    NodeState state() {
-        return state;
+    /** Test hook: whether the certificate with {@code keyId} has been installed. */
+    public boolean hasCert(String keyId) {
+        return visitors.hasCert(keyId);
     }
 
     @Override

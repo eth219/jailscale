@@ -35,7 +35,8 @@ public final class Codec {
             case Message.AdminLink x -> b.put("url", x.url()).put("expiresAt", x.expiresAt());
             case Message.Error x -> b.put("inReplyTo", x.inReplyTo()).put("reason", x.reason());
             case Message.CertUpdate x -> b.put("chainPem", x.chainPem()).put("keyId", x.keyId());
-            case Message.LinkOpen x -> b.put("kind", x.kind()).put("name", x.name()).put("domain", x.domain()).put("port", x.port());
+            case Message.LinkOpen x -> b.put("kind", x.kind()).put("name", x.name()).put("domain", x.domain()).put("port", x.port())
+                .put("local", x.local());
             case Message.LinkOpened x -> b.put("linkId", x.linkId()).put("name", x.name()).put("url", x.url())
                 .put("hubPort", x.hubPort()).put("reason", x.reason());
             case Message.LinkClose x -> b.put("linkId", x.linkId());
@@ -76,7 +77,7 @@ public final class Codec {
                 case "Error" -> new Message.Error(o.optString("inReplyTo", null), o.string("reason"));
                 case "CertUpdate" -> new Message.CertUpdate(o.stringArray("chainPem"), o.string("keyId"));
                 case "LinkOpen" -> new Message.LinkOpen(o.string("kind"), o.optString("name", null), o.optString("domain", null),
-                    o.has("port") ? o.integer("port") : null);
+                    o.has("port") ? o.integer("port") : null, o.optString("local", null));
                 case "LinkOpened" -> new Message.LinkOpened(o.optString("linkId", null), o.optString("name", null),
                     o.optString("url", null), o.has("hubPort") ? o.integer("hubPort") : null, o.optString("reason", null));
                 case "LinkClose" -> new Message.LinkClose(o.string("linkId"));
