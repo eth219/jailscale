@@ -11,9 +11,12 @@ import java.nio.file.Path;
 public final class Main {
 
     private static final String USAGE = """
-        jailhub serve --base-url https://hub.example.com --tls-cert FILE --tls-key FILE
+        jailhub serve --base-url https://hub.example.com
                       [--listen 0.0.0.0:443] [--state DIR] [--registration invite|open]
                       [--invite-policy members|admins] [--knock on|off] [--dns-suffix HOST] [--debug]
+                      certificate: built-in ACME (dns-01 via the hub's own DNS on --dns-listen 0.0.0.0:53)
+                        [--acme-email you@example.com] [--acme-staging | --acme-directory URL] [--no-selfcheck]
+                      or your own files: --tls-cert FILE --tls-key FILE
         jailhub status
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
@@ -29,7 +32,7 @@ public final class Main {
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "admin", "help");
+            a = Args.parse(argv, "debug", "admin", "help", "acme-staging", "no-selfcheck");
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);

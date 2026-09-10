@@ -56,7 +56,7 @@ class LinkEndToEndTest {
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();
         }
-        HubConfig cfg = new HubConfig(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
+        HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test");
         hub = new Hub(cfg);
         hub.start();

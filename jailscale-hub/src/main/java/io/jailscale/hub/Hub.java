@@ -32,6 +32,8 @@ public final class Hub implements AutoCloseable {
     private final HubTls tls;
     private final Links links;
     private final SniRouter router;
+    private io.jailscale.hub.dns.DnsResponder dns;
+    private AcmeManager acme;
     private final FileChannel lockChannel;
     private final FileLock lock;
     private ServerSocket listener;
@@ -61,7 +63,23 @@ public final class Hub implements AutoCloseable {
 
     public void start() throws IOException, GeneralSecurityException {
         promoteRotationIfDue();
-        tls.load(config.tlsCert(), config.tlsKey());
+        if (config.acme()) {
+            dns = new io.jailscale.hub.dns.DnsResponder(config.hostname());
+            dns.start(config.dnsListenHost(), config.dnsListenPort());
+            acme = new AcmeManager(config, tls, dns, () -> {
+                for (NodeSession s : registry.all()) {
+                    s.certChanged();
+                }
+            });
+            try {
+                acme.start(); // blocks until a certificate is installed
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted while obtaining a certificate");
+            }
+        } else {
+            tls.load(config.tlsCert(), config.tlsKey());
+        }
         listener = new ServerSocket();
         listener.setReuseAddress(true);
         listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 128);
@@ -182,11 +200,22 @@ public final class Hub implements AutoCloseable {
         return v == null ? "dev" : v;
     }
 
+    /** Test hook: the DNS responder's port (0 if certificates come from files). */
+    public int dnsPort() {
+        return dns == null ? 0 : dns.port();
+    }
+
     @Override
     public void close() throws IOException {
         running = false;
         if (timer != null) {
             timer.shutdownNow();
+        }
+        if (acme != null) {
+            acme.close();
+        }
+        if (dns != null) {
+            dns.close();
         }
         registry.closeAll(Message.Goodbye.SHUTDOWN);
         if (listener != null) {

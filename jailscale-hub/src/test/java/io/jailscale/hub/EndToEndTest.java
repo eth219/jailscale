@@ -48,7 +48,7 @@ class EndToEndTest {
         }
         Path cert = Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath();
         Path key = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
-        HubConfig cfg = new HubConfig(URI.create("https://localhost:" + port), root.resolve("hub"), "127.0.0.1", port,
+        HubConfig cfg = HubConfig.withCert(URI.create("https://localhost:" + port), root.resolve("hub"), "127.0.0.1", port,
             cert, key, false, HubConfig.POLICY_MEMBERS, true, "localhost");
         hub = new Hub(cfg);
         hub.start();

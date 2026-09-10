@@ -16,10 +16,29 @@ public record HubConfig(
     boolean registrationOpen,
     String invitePolicy,
     boolean knock,
-    String dnsSuffix) {
+    String dnsSuffix,
+    URI acmeDirectory,
+    String acmeEmail,
+    String dnsListenHost,
+    int dnsListenPort,
+    boolean selfCheck) {
 
     public static final String POLICY_MEMBERS = "members";
     public static final String POLICY_ADMINS = "admins";
+    public static final URI LETS_ENCRYPT = URI.create("https://acme-v02.api.letsencrypt.org/directory");
+    public static final URI LETS_ENCRYPT_STAGING = URI.create("https://acme-staging-v02.api.letsencrypt.org/directory");
+
+    /** True when the hub obtains its own certificate (no --tls-cert). */
+    public boolean acme() {
+        return tlsCert == null;
+    }
+
+    /** Test/simple constructor: files, no ACME. */
+    public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
+        boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
+            dnsSuffix, null, null, "127.0.0.1", 0, false);
+    }
 
     public String hostname() {
         return baseUrl.getHost();
@@ -41,21 +60,32 @@ public record HubConfig(
         }
         String cert = a.get("tls-cert");
         String key = a.get("tls-key");
-        if (cert == null || key == null) {
-            // Built-in ACME arrives in M2 (DESIGN.md §6.3); until then a certificate is required.
-            throw new IllegalArgumentException("--tls-cert and --tls-key are required (built-in ACME is not implemented yet)");
+        if ((cert == null) != (key == null)) {
+            throw new IllegalArgumentException("--tls-cert and --tls-key go together");
+        }
+        URI acme = a.has("acme-directory") ? URI.create(a.get("acme-directory"))
+            : a.flag("acme-staging") ? LETS_ENCRYPT_STAGING : LETS_ENCRYPT;
+        String dnsListen = a.get("dns-listen", "0.0.0.0:53");
+        int dc = dnsListen.lastIndexOf(':');
+        if (dc < 0) {
+            throw new IllegalArgumentException("--dns-listen must be host:port");
         }
         return new HubConfig(
             base,
             stateDir(a.get("state")),
             listen.substring(0, colon),
             Integer.parseInt(listen.substring(colon + 1)),
-            Path.of(cert),
-            Path.of(key),
+            cert == null ? null : Path.of(cert),
+            key == null ? null : Path.of(key),
             "open".equals(a.get("registration", "invite")),
             policy,
             !"off".equals(a.get("knock", "on")),
-            a.get("dns-suffix", base.getHost()));
+            a.get("dns-suffix", base.getHost()),
+            acme,
+            a.get("acme-email"),
+            dnsListen.substring(0, dc),
+            Integer.parseInt(dnsListen.substring(dc + 1)),
+            !a.flag("no-selfcheck"));
     }
 
     /** {@code --state}, else {@code $JAILHUB_STATE}, else /var/lib/jailhub if writable, else ~/.local/share/jailhub. */
