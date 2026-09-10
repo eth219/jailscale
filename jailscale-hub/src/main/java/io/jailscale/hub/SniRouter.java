@@ -96,7 +96,7 @@ final class SniRouter {
         NodeGroup group = link.group();
         socket.setSoTimeout(0);
         MuxStream stream = group.openVisitor(link, peek.serverName(), socket.getInetAddress().getHostAddress(),
-            hub.tls().keyId());
+            hub.tls().keyId(), false);
         try {
             Relay.pump(socket, stream, peek.consumed());
         } finally {
@@ -104,7 +104,7 @@ final class SniRouter {
         }
     }
 
-    private static NodeSession streamOwner(NodeGroup group, MuxStream stream) {
+    static NodeSession streamOwner(NodeGroup group, MuxStream stream) {
         for (NodeSession s : group.all()) {
             if (s.mux() != null && s.mux().stream(stream.id()) == stream) {
                 return s;

@@ -24,16 +24,30 @@ final class Links {
     static final int MAX_LINKS_PER_NODE = 20;
 
     /** An active link: a name served by a node (all of its connections). */
-    record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local) {}
+    record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port) {
+        boolean raw() {
+            return port > 0;
+        }
+    }
+
+    static final String TCP = Message.LinkOpen.TCP;
+    static final String UDP = Message.LinkOpen.UDP;
 
     private final HubConfig config;
     private final Store store;
+    private final RawPorts raw;
     private final Map<String, Link> byName = new ConcurrentHashMap<>();
+    private final Map<Integer, Link> byPort = new ConcurrentHashMap<>();
     private final Map<String, Link> byId = new ConcurrentHashMap<>();
 
-    Links(HubConfig config, Store store) {
+    Links(HubConfig config, Store store, RawPorts raw) {
         this.config = config;
         this.store = store;
+        this.raw = raw;
+    }
+
+    Link byPort(int port) {
+        return byPort.get(port);
     }
 
     Link byName(String name) {
@@ -45,7 +59,9 @@ final class Links {
     }
 
     List<Link> all() {
-        return new ArrayList<>(byName.values());
+        List<Link> all = new ArrayList<>(byName.values());
+        all.addAll(byPort.values());
+        return all;
     }
 
     /** True if {@code host} is {@code <name>.<hub>}; returns the name part or null. */
@@ -64,8 +80,11 @@ final class Links {
         if (node == null) {
             return new Message.LinkOpened(null, null, null, null, "not-registered");
         }
+        if (TCP.equals(req.kind()) || UDP.equals(req.kind())) {
+            return openRaw(s, node, req);
+        }
         if (!Message.LinkOpen.HTTPS.equals(req.kind())) {
-            return new Message.LinkOpened(null, null, null, null, "kind-not-supported-yet");
+            return new Message.LinkOpened(null, null, null, null, "bad-kind");
         }
         if (req.domain() != null) {
             return new Message.LinkOpened(null, null, null, null, "domain-not-supported-yet");
@@ -109,26 +128,100 @@ final class Links {
             // Same owner from another (or restarted) node: the newest opener wins.
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local());
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0);
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
         return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null, null);
     }
 
+    /** DESIGN.md §9.5: a port instead of a name. Stable per node, kind and local target. */
+    private Message openRaw(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
+        if (!config.hasPortRange()) {
+            return new Message.LinkOpened(null, null, null, null, "raw-ports-disabled");
+        }
+        if (req.local() == null) {
+            return new Message.LinkOpened(null, null, null, null, "local-required");
+        }
+        boolean explicit = req.port() != null && req.port() > 0;
+        List<Integer> candidates = new ArrayList<>();
+        if (explicit) {
+            if (req.port() < config.portRangeLo() || req.port() > config.portRangeHi()) {
+                return new Message.LinkOpened(null, null, null, null, "port-out-of-range");
+            }
+            candidates.add(req.port());
+        } else {
+            int remembered = store.portFor(node.mkey(), req.kind(), req.local());
+            if (remembered > 0) {
+                candidates.add(remembered);
+            }
+            for (int p = config.portRangeLo(); p <= config.portRangeHi(); p++) {
+                if (p != remembered && store.port(p) == null && !byPort.containsKey(p)) {
+                    candidates.add(p);
+                }
+            }
+            if (candidates.isEmpty()) {
+                return new Message.LinkOpened(null, null, null, null, "no-free-port");
+            }
+        }
+        for (int port : candidates) {
+            Store.PortRec rec = store.port(port);
+            if (rec != null && !rec.mkey().equals(node.mkey()) && !rec.user().equals(node.user())) {
+                return new Message.LinkOpened(null, null, null, null, "port-taken");
+            }
+            Link existing = byPort.get(port);
+            if (existing != null) {
+                if (existing.group() != s.group() && !existing.mkey().equals(node.mkey()) && !existing.user().equals(node.user())) {
+                    return new Message.LinkOpened(null, null, null, null, "port-taken");
+                }
+                // The newest opener wins, as with names.
+                raw.stop(existing);
+                byId.remove(existing.linkId());
+                byPort.remove(port);
+            }
+            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port);
+            try {
+                raw.start(link);
+            } catch (IOException e) {
+                LOG.warn("cannot bind {} port {}: {}", req.kind(), port, e.getMessage());
+                if (explicit) {
+                    return new Message.LinkOpened(null, null, null, null, "port-bind-failed");
+                }
+                continue;
+            }
+            if (rec == null || !rec.mkey().equals(node.mkey()) || !rec.kind().equals(req.kind()) || !rec.local().equals(req.local())) {
+                store.assignPort(port, req.kind(), node.user(), node.mkey(), req.local());
+            }
+            byPort.put(port, link);
+            byId.put(link.linkId(), link);
+            return new Message.LinkOpened(link.linkId(), link.name(), req.kind() + "://" + config.hostname() + ":" + port, port, null);
+        }
+        return new Message.LinkOpened(null, null, null, null, "no-free-port");
+    }
+
     void close(NodeGroup g, String linkId) {
         Link l = byId.remove(linkId);
         if (l != null && l.group() == g) {
-            byName.remove(l.name(), l);
+            if (l.raw()) {
+                raw.stop(l);
+                byPort.remove(l.port(), l);
+            } else {
+                byName.remove(l.name(), l);
+            }
             LOG.info("link {} closed", l.name());
         }
     }
 
-    /** Called when a node's last connection ends: its links go offline (names stay claimed). */
+    /** Called when a node's last connection ends: its links go offline (names and ports stay assigned). */
     void groupEnded(NodeGroup g) {
-        for (Link l : new ArrayList<>(byName.values())) {
+        for (Link l : all()) {
             if (l.group() == g) {
-                byName.remove(l.name(), l);
+                if (l.raw()) {
+                    raw.stop(l);
+                    byPort.remove(l.port(), l);
+                } else {
+                    byName.remove(l.name(), l);
+                }
                 byId.remove(l.linkId(), l);
             }
         }

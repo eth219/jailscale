@@ -45,6 +45,7 @@ final class NodeState {
         volatile String url;
         volatile String gateHash;      // visitor gate (DESIGN.md §10.4): SHA-256 of the visit token, or null
         volatile long gateExpiresAt;   // ms epoch; 0 = never
+        volatile int hubPort;          // raw tcp/udp: the hub port assigned last time (requested again on reopen)
 
         LinkRec(String kind, String host, int port, String name) {
             this.kind = kind;
@@ -120,6 +121,7 @@ final class NodeState {
                     LinkRec rec = new LinkRec(lo.optString("kind", "https"), lo.string("host"), lo.integer("port"), lo.optString("name", null));
                     rec.gateHash = lo.optString("gateHash", null);
                     rec.gateExpiresAt = lo.has("gateExpiresAt") ? lo.lng("gateExpiresAt") : 0;
+                    rec.hubPort = lo.optInt("hubPort", 0);
                     s.links.add(rec);
                 }
             }
@@ -140,7 +142,8 @@ final class NodeState {
         java.util.List<Object> ls = new java.util.ArrayList<>();
         for (LinkRec l : links) {
             ls.add(JsonObject.builder().put("kind", l.kind).put("host", l.host).put("port", l.port).put("name", l.name)
-                .put("gateHash", l.gateHash).put("gateExpiresAt", l.gateExpiresAt > 0 ? Long.valueOf(l.gateExpiresAt) : null).build().asMap());
+                .put("gateHash", l.gateHash).put("gateExpiresAt", l.gateExpiresAt > 0 ? Long.valueOf(l.gateExpiresAt) : null)
+                .put("hubPort", l.hubPort > 0 ? Integer.valueOf(l.hubPort) : null).build().asMap());
         }
         String json = JsonObject.builder()
             .put("machineKey", KeyText.format(PRIVATE_PREFIX, machineKey.privateKey()))

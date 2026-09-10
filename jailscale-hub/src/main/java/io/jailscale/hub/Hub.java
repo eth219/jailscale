@@ -33,6 +33,7 @@ public final class Hub implements AutoCloseable {
     private final HttpFront front;
     private final HubTls tls;
     private final Links links;
+    private final RawPorts rawPorts;
     private final SniRouter router;
     private final AdminWeb adminWeb;
     private io.jailscale.hub.dns.DnsResponder dns;
@@ -86,7 +87,8 @@ public final class Hub implements AutoCloseable {
         this.invites = new Invites(config, store);
         this.front = new HttpFront(this);
         this.tls = new HubTls(config.hostname());
-        this.links = new Links(config, store);
+        this.rawPorts = new RawPorts(this);
+        this.links = new Links(config, store, rawPorts);
         this.router = new SniRouter(this);
         this.adminWeb = new AdminWeb(this);
         // Flags seed the runtime settings once; afterwards /admin and `jailhub setting` own them.
@@ -275,6 +277,7 @@ public final class Hub implements AutoCloseable {
         if (listener != null) {
             listener.close();
         }
+        rawPorts.close();
         if (acme != null) {
             acme.close();
         }
@@ -340,6 +343,7 @@ public final class Hub implements AutoCloseable {
             dns.close();
         }
         registry.closeAll(Message.Goodbye.SHUTDOWN);
+        rawPorts.close();
         if (listener != null) {
             listener.close();
         }

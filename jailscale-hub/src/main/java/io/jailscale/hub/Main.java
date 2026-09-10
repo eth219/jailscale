@@ -17,6 +17,7 @@ public final class Main {
                       certificate: built-in ACME (dns-01 via the hub's own DNS on --dns-listen 0.0.0.0:53)
                         [--acme-email you@example.com] [--acme-staging | --acme-directory URL] [--no-selfcheck]
                       or your own files: --tls-cert FILE --tls-key FILE
+                      [--port-range 10000-10999 | none]  ports for raw tcp/udp links (DESIGN.md §9.5)
                       [--takeover]  replace a running jailhub without dropping nodes (DESIGN.md §7.7)
         jailhub status
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME

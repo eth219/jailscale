@@ -18,6 +18,7 @@ public final class Main {
         jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate]
+        jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (DESIGN.md §9.5)
         jailscale gate NAME [--new-link [--ttl 24h] | --off]
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | admin | daemon
@@ -137,9 +138,23 @@ public final class Main {
         if (port == null) {
             throw new IllegalArgumentException("open needs a local port");
         }
-        JsonObject r = call(cfg, JsonObject.builder().put("cmd", "open").put("port", Integer.parseInt(port))
-            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", "https").put("gate", a.flag("gate")).build(), false);
+        if (a.flag("tcp") && a.flag("udp")) {
+            throw new IllegalArgumentException("--tcp and --udp are exclusive");
+        }
+        String kind = a.flag("tcp") ? "tcp" : a.flag("udp") ? "udp" : "https";
+        JsonObject.Builder b = JsonObject.builder().put("cmd", "open").put("port", Integer.parseInt(port))
+            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", kind).put("gate", a.flag("gate"));
+        if (a.has("port")) {
+            b.put("hubPort", a.integer("port", 0));
+        }
+        JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
+        if (!kind.equals("https")) {
+            System.out.println(url + "  ->  " + r.string("local"));
+            System.out.println("(hub 포트 " + r.integer("hubPort") + ". 앱이 스스로 암호화하지 않는 평문 프로토콜은 hub이 볼 수 있습니다; "
+                + "SSH·WireGuard·TLS를 켠 DB는 hub이 암호문만 봅니다)");
+            return;
+        }
         String visit = r.optString("visitUrl", null);
         String copied = visit != null ? visit : url;
         System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (게이트 켜짐)" : ""));

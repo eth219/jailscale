@@ -40,6 +40,9 @@ final class Store implements AutoCloseable {
     /** A claimed name: who owns it and which node/local target last used it (DESIGN.md §9.2). */
     record NameRec(String name, String user, String mkey, String local, long at) {}
 
+    /** A raw port assigned to a node's local target (DESIGN.md §9.5); stable across restarts. */
+    record PortRec(int port, String kind, String user, String mkey, String local, long at) {}
+
     private final Path dir;
     private final Path logPath;
     private final Path snapshotPath;
@@ -54,6 +57,7 @@ final class Store implements AutoCloseable {
     private final Map<String, PendingRec> pending = new LinkedHashMap<>();
     private final Map<String, NameRec> names = new LinkedHashMap<>();
     private final Map<String, String> settings = new LinkedHashMap<>();
+    private final Map<Integer, PortRec> ports = new LinkedHashMap<>();
 
     static final String SETTING_INVITE_POLICY = "invitePolicy";
     static final String SETTING_REGISTRATION = "registration";
@@ -137,6 +141,35 @@ final class Store implements AutoCloseable {
 
     synchronized List<NameRec> names() {
         return new ArrayList<>(names.values());
+    }
+
+    synchronized PortRec port(int port) {
+        return ports.get(port);
+    }
+
+    synchronized List<PortRec> ports() {
+        return new ArrayList<>(ports.values());
+    }
+
+    /** The port previously assigned to this node for this kind and local target, or 0. */
+    synchronized int portFor(String mkey, String kind, String local) {
+        for (PortRec r : ports.values()) {
+            if (r.mkey().equals(mkey) && r.kind().equals(kind) && r.local().equals(local)) {
+                return r.port();
+            }
+        }
+        return 0;
+    }
+
+    synchronized void assignPort(int port, String kind, String user, String mkey, String local) throws IOException {
+        append(JsonObject.builder().put("e", "port-assigned").put("port", port).put("kind", kind).put("user", user)
+            .put("mkey", mkey).put("local", local).put("at", System.currentTimeMillis()));
+    }
+
+    synchronized void releasePort(int port) throws IOException {
+        if (ports.containsKey(port)) {
+            append(JsonObject.builder().put("e", "port-released").put("port", port));
+        }
     }
 
     synchronized void claimName(String name, String user, String mkey, String local) throws IOException {
@@ -387,6 +420,9 @@ final class Store implements AutoCloseable {
                 ev.optString("mkey", null), ev.optString("local", null), ev.lng("at")));
             case "name-released" -> names.remove(ev.string("name"));
             case "setting" -> settings.put(ev.string("key"), ev.string("value"));
+            case "port-assigned" -> ports.put(ev.integer("port"), new PortRec(ev.integer("port"), ev.string("kind"),
+                ev.string("user"), ev.string("mkey"), ev.string("local"), ev.lng("at")));
+            case "port-released" -> ports.remove(ev.integer("port"));
             case "hubkey-rotation" -> {
                 nextHubKey = ev.string("next");
                 hubKeyActivatesAt = ev.lng("activatesAt");
@@ -456,6 +492,10 @@ final class Store implements AutoCloseable {
         }
         for (NameRec r : names.values()) {
             events.add(JsonObject.builder().put("e", "name-claimed").put("name", r.name()).put("user", r.user())
+                .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
+        }
+        for (PortRec r : ports.values()) {
+            events.add(JsonObject.builder().put("e", "port-assigned").put("port", r.port()).put("kind", r.kind()).put("user", r.user())
                 .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
         }
         for (Map.Entry<String, String> e : settings.entrySet()) {

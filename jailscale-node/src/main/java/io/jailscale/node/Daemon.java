@@ -68,8 +68,12 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
-        Message r = link.request(new Message.LinkOpen(rec.kind, rec.name, null, null, rec.local()), "LinkOpened", REPLY_TIMEOUT_MS);
+        Message r = link.request(new Message.LinkOpen(rec.kind, rec.name, null, rec.hubPort > 0 ? rec.hubPort : null, rec.local()),
+            "LinkOpened", REPLY_TIMEOUT_MS);
         if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
+            if (lo.hubPort() != null) {
+                rec.hubPort = lo.hubPort();
+            }
             rec.linkId = lo.linkId();
             rec.name = lo.name();
             rec.url = lo.url();
@@ -228,7 +232,12 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         int port = req.integer("port");
         String host = req.optString("host", "127.0.0.1");
         String kind = req.optString("kind", Message.LinkOpen.HTTPS);
-        String name = req.optString("name", null);
+        boolean raw = !kind.equals(Message.LinkOpen.HTTPS);
+        String name = raw ? null : req.optString("name", null);
+        if (raw && req.optBool("gate", false)) {
+            reply.error("--gate is for https links; raw tcp/udp links have no HTTP to gate");
+            return;
+        }
         NodeState.LinkRec rec = null;
         for (NodeState.LinkRec l : state.links) {
             if (l.host.equals(host) && l.port == port && l.kind.equals(kind) && (name == null || name.equals(l.name))) {
@@ -240,6 +249,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             rec = new NodeState.LinkRec(kind, host, port, name);
         } else if (name != null) {
             rec.name = name;
+        }
+        if (raw && req.has("hubPort")) {
+            rec.hubPort = req.integer("hubPort");
         }
         Message.LinkOpened lo;
         try {
@@ -260,7 +272,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         state.save();
         reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local())
-            .put("visitUrl", visitUrl));
+            .put("kind", kind).put("hubPort", lo.hubPort()).put("visitUrl", visitUrl));
     }
 
     private static String visitUrl(NodeState.LinkRec rec, String token) {
@@ -375,6 +387,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     /** Test hook: sends any control message and waits for the reply registered under {@code replyKey}. */
     public Message debugRequest(Message m, String replyKey) throws IOException, TimeoutException {
         return link.request(m, replyKey, REPLY_TIMEOUT_MS);
+    }
+
+    /** The node's MachineKey text (tests). */
+    public String machineKey() {
+        return state.machineKeyText();
     }
 
     /** Test hook: whether the certificate with {@code keyId} has been installed. */

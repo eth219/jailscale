@@ -21,7 +21,22 @@ public record HubConfig(
     String acmeEmail,
     String dnsListenHost,
     int dnsListenPort,
-    boolean selfCheck) {
+    boolean selfCheck,
+    int portRangeLo,
+    int portRangeHi) {
+
+    public static final int DEFAULT_PORT_LO = 10000;
+    public static final int DEFAULT_PORT_HI = 10999;
+
+    /** True when raw TCP/UDP publishing is enabled (DESIGN.md §9.5). */
+    public boolean hasPortRange() {
+        return portRangeLo > 0 && portRangeHi >= portRangeLo;
+    }
+
+    public HubConfig withPortRange(int lo, int hi) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, lo, hi);
+    }
 
     public static final String POLICY_MEMBERS = "members";
     public static final String POLICY_ADMINS = "admins";
@@ -37,7 +52,7 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false);
+            dnsSuffix, null, null, "127.0.0.1", 0, false, 0, 0);
     }
 
     public String hostname() {
@@ -65,6 +80,20 @@ public record HubConfig(
         }
         URI acme = a.has("acme-directory") ? URI.create(a.get("acme-directory"))
             : a.flag("acme-staging") ? LETS_ENCRYPT_STAGING : LETS_ENCRYPT;
+        String range = a.get("port-range", DEFAULT_PORT_LO + "-" + DEFAULT_PORT_HI);
+        int lo = 0;
+        int hi = 0;
+        if (!range.equals("none")) {
+            int dash = range.indexOf('-');
+            if (dash < 0) {
+                throw new IllegalArgumentException("--port-range must be lo-hi or none");
+            }
+            lo = Integer.parseInt(range.substring(0, dash));
+            hi = Integer.parseInt(range.substring(dash + 1));
+            if (lo < 1024 || hi > 65535 || hi < lo) {
+                throw new IllegalArgumentException("--port-range must be within 1024-65535 and lo <= hi");
+            }
+        }
         String dnsListen = a.get("dns-listen", "0.0.0.0:53");
         int dc = dnsListen.lastIndexOf(':');
         if (dc < 0) {
@@ -85,7 +114,9 @@ public record HubConfig(
             a.get("acme-email"),
             dnsListen.substring(0, dc),
             Integer.parseInt(dnsListen.substring(dc + 1)),
-            !a.flag("no-selfcheck"));
+            !a.flag("no-selfcheck"),
+            lo,
+            hi);
     }
 
     /** {@code --state}, else {@code $JAILHUB_STATE}, else /var/lib/jailhub if writable, else ~/.local/share/jailhub. */
