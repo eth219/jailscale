@@ -23,6 +23,13 @@
       <groupId>io.jailscale</groupId>
       <artifactId>jailscale-proto</artifactId>
     </dependency>
+    <!-- The end-to-end test (hub + two nodes on loopback) drives the real node daemon. -->
+    <dependency>
+      <groupId>io.jailscale</groupId>
+      <artifactId>jailscale-node</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

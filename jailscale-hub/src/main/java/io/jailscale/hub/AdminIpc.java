@@ -1,0 +1,211 @@
+package io.jailscale.hub;
+
+import io.jailscale.proto.ipc.Ipc;
+import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Args;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+/** Admin commands over the state-directory socket (DESIGN.md §7.6). Socket permissions are the auth. */
+final class AdminIpc implements Ipc.Handler {
+
+    private final Hub hub;
+
+    AdminIpc(Hub hub) {
+        this.hub = hub;
+    }
+
+    @Override
+    public void handle(JsonObject req, Ipc.Reply reply) throws Exception {
+        String cmd = req.string("cmd");
+        Store store = hub.store();
+        switch (cmd) {
+            case "status" -> reply.done(JsonObject.builder()
+                .put("ok", true)
+                .put("hostname", hub.config().hostname())
+                .put("hubKey", hub.keys().publicText())
+                .put("nextHubKey", hub.keys().nextPublicText())
+                .put("nodes", store.nodes().size())
+                .put("online", hub.registry().size())
+                .put("pending", store.pending().size())
+                .put("invites", store.invites().size())
+                .put("admins", new ArrayList<>(store.admins()))
+                .put("registration", hub.config().registrationOpen() ? "open" : "invite")
+                .put("invitePolicy", hub.config().invitePolicy()));
+
+            case "node-list" -> {
+                List<Object> rows = new ArrayList<>();
+                for (Store.NodeRec n : store.nodes()) {
+                    rows.add(JsonObject.builder().put("id", n.id()).put("mkey", n.mkey()).put("user", n.user())
+                        .put("hostname", n.hostname()).put("os", n.os())
+                        .put("online", hub.registry().get(n.mkey()) != null).build().asMap());
+                }
+                List<Object> pend = new ArrayList<>();
+                for (Store.PendingRec p : store.pending()) {
+                    pend.add(JsonObject.builder().put("mkey", p.mkey()).put("hostname", p.hostname()).put("os", p.os())
+                        .put("ip", p.ip()).put("user", p.user()).put("at", p.at()).build().asMap());
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("nodes", rows).put("pending", pend));
+            }
+            case "node-approve" -> {
+                String mkey = resolveMkey(req.string("mkey"));
+                Store.NodeRec n = hub.registrar().approvePending(mkey, req.optString("user", null));
+                NodeSession s = hub.registry().get(mkey);
+                if (s != null) {
+                    s.approved(n);
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("id", n.id()).put("user", n.user()));
+            }
+            case "node-deny" -> {
+                store.clearPending(resolveMkey(req.string("mkey")));
+                reply.ok();
+            }
+            case "node-remove" -> {
+                String mkey = resolveMkey(req.string("mkey"));
+                store.removeNode(mkey);
+                NodeSession s = hub.registry().get(mkey);
+                if (s != null) {
+                    s.goodbye("revoked");
+                }
+                reply.ok();
+            }
+            case "node-rename" -> {
+                store.renameNode(resolveMkey(req.string("mkey")), req.string("user"));
+                reply.ok();
+            }
+            case "user-list" -> reply.done(JsonObject.builder().put("ok", true).put("users", new ArrayList<>(store.users())));
+            case "user-remove" -> {
+                String user = req.string("user");
+                for (Store.NodeRec n : store.nodes()) {
+                    if (n.user().equals(user)) {
+                        store.removeNode(n.mkey());
+                        NodeSession s = hub.registry().get(n.mkey());
+                        if (s != null) {
+                            s.goodbye("revoked");
+                        }
+                    }
+                }
+                store.removeAdmin(user);
+                reply.ok();
+            }
+            case "invite-create" -> {
+                Invites.Created c = hub.invites().create(req.optString("user", null), req.optInt("uses", 0),
+                    req.has("ttl") ? req.lng("ttl") : 0, "admin-cli", req.optBool("admin", false));
+                reply.done(JsonObject.builder().put("ok", true).put("id", c.rec().id()).put("url", c.url())
+                    .put("code", c.code()).put("expiresAt", c.rec().expiresAt()));
+            }
+            case "invite-list" -> {
+                List<Object> rows = new ArrayList<>();
+                for (Store.InviteRec r : store.invites()) {
+                    rows.add(JsonObject.builder().put("id", r.id()).put("user", r.user()).put("usesLeft", r.usesLeft())
+                        .put("expiresAt", r.expiresAt()).put("createdBy", r.createdBy()).put("admin", r.admin()).build().asMap());
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("invites", rows));
+            }
+            case "invite-revoke" -> {
+                store.revokeInvite(req.string("id"));
+                reply.ok();
+            }
+            case "authkey-create" -> {
+                String owner = req.optString("owner", null);
+                String tag = req.optString("tag", null);
+                if ((owner == null) == (tag == null)) {
+                    throw new IllegalArgumentException("exactly one of --owner or --tag");
+                }
+                String secret = Tokens.authKey();
+                Store.AuthKeyRec r = store.createAuthKey(secret, owner, tag, req.optInt("uses", 1),
+                    req.has("ttl") ? req.lng("ttl") : 7 * 86400);
+                reply.done(JsonObject.builder().put("ok", true).put("id", r.id()).put("key", secret).put("expiresAt", r.expiresAt()));
+            }
+            case "authkey-list" -> {
+                List<Object> rows = new ArrayList<>();
+                for (Store.AuthKeyRec r : store.authKeys()) {
+                    rows.add(JsonObject.builder().put("id", r.id()).put("owner", r.owner()).put("tag", r.tag())
+                        .put("usesLeft", r.usesLeft()).put("expiresAt", r.expiresAt()).build().asMap());
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("authKeys", rows));
+            }
+            case "authkey-revoke" -> {
+                store.revokeAuthKey(req.string("id"));
+                reply.ok();
+            }
+            case "admin-add" -> {
+                store.addAdmin(req.string("user"));
+                reply.ok();
+            }
+            case "admin-remove" -> {
+                store.removeAdmin(req.string("user"));
+                reply.ok();
+            }
+            case "admin-login-link" -> reply.error("not implemented until M3 (/admin web)");
+            case "key-rotate" -> {
+                long grace = req.has("grace") ? req.lng("grace") : 30 * 86400;
+                long activatesAt = hub.rotateKey(grace);
+                reply.done(JsonObject.builder().put("ok", true).put("nextHubKey", hub.keys().nextPublicText())
+                    .put("activatesAt", activatesAt));
+            }
+            default -> reply.error("unknown command " + cmd);
+        }
+    }
+
+    /** Accepts a full mkey: text, a unique prefix of one, or a node id. */
+    private String resolveMkey(String ref) {
+        List<String> candidates = new ArrayList<>();
+        for (Store.NodeRec n : hub.store().nodes()) {
+            if (n.mkey().equals(ref) || Long.toString(n.id()).equals(ref)) {
+                return n.mkey();
+            }
+            if (n.mkey().startsWith(ref) || n.mkey().substring(5).startsWith(ref)) {
+                candidates.add(n.mkey());
+            }
+        }
+        for (Store.PendingRec p : hub.store().pending()) {
+            if (p.mkey().equals(ref)) {
+                return p.mkey();
+            }
+            if (p.mkey().startsWith(ref) || p.mkey().substring(5).startsWith(ref)) {
+                candidates.add(p.mkey());
+            }
+        }
+        if (candidates.size() == 1) {
+            return candidates.get(0);
+        }
+        throw new IllegalArgumentException(candidates.isEmpty() ? "no node matches " + ref : "ambiguous: " + ref);
+    }
+
+    /** Client side: translates {@code jailhub <words>} into an IPC request. */
+    static JsonObject requestFor(Args a) {
+        String w0 = a.positional(0);
+        String w1 = a.positional(1);
+        String cmd = w1 == null ? w0 : w0 + "-" + w1;
+        JsonObject.Builder b = JsonObject.builder().put("cmd", cmd);
+        switch (cmd) {
+            case "node-approve", "node-deny", "node-remove", "node-rename" -> b.put("mkey", need(a.positional(2), "<node>")).put("user", a.get("user"));
+            case "user-remove" -> b.put("user", need(a.positional(2), "<user>"));
+            case "invite-create" -> b.put("user", a.get("user")).put("uses", a.integer("uses", 0))
+                .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null).put("admin", a.flag("admin"));
+            case "invite-revoke", "authkey-revoke" -> b.put("id", need(a.positional(2), "<id>"));
+            case "authkey-create" -> b.put("owner", a.get("owner")).put("tag", a.get("tag")).put("uses", a.integer("uses", 1))
+                .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null);
+            case "admin-add", "admin-remove" -> b.put("user", need(a.positional(2), "<user>"));
+            case "key-rotate" -> b.put("grace", a.has("grace") ? a.seconds("grace", 0) : null);
+            default -> { }
+        }
+        return b.build();
+    }
+
+    private static String need(String v, String what) {
+        if (v == null) {
+            throw new IllegalArgumentException("missing " + what);
+        }
+        return v;
+    }
+
+    static void printReply(JsonObject r) throws IOException {
+        if (!r.optBool("ok", false)) {
+            throw new IOException(r.optString("error", "failed"));
+        }
+        System.out.println(r);
+    }
+}

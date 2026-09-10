@@ -35,12 +35,29 @@ public final class NoiseChannel implements AutoCloseable {
     /** Runs the initiator side of the handshake over the stream and returns the channel. */
     public static NoiseChannel initiate(InputStream in, OutputStream out, NoiseIk hs, byte[] payload)
         throws IOException, NoiseException {
+        return initiate(in, out, hs, payload, null);
+    }
+
+    /** Same, and stores the responder's message-2 payload in {@code payload2Out[0]} if non-null. */
+    public static NoiseChannel initiate(InputStream in, OutputStream out, NoiseIk hs, byte[] payload, byte[][] payload2Out)
+        throws IOException, NoiseException {
         if (!hs.isInitiator()) {
             throw new IllegalArgumentException("handshake state is not an initiator");
         }
         writeRaw(new DataOutputStream(out), hs.writeMessage(payload));
         byte[] m2 = readRaw(new DataInputStream(in));
-        hs.readMessage(m2);
+        byte[] p2 = hs.readMessage(m2);
+        if (payload2Out != null) {
+            payload2Out[0] = p2;
+        }
+        return new NoiseChannel(in, out, hs.transport());
+    }
+
+    /** Wraps streams around an already finished handshake. */
+    public static NoiseChannel fromFinished(InputStream in, OutputStream out, NoiseIk hs) {
+        if (!hs.isFinished()) {
+            throw new IllegalArgumentException("handshake not finished");
+        }
         return new NoiseChannel(in, out, hs.transport());
     }
 
@@ -50,14 +67,35 @@ public final class NoiseChannel implements AutoCloseable {
      */
     public static NoiseChannel respond(InputStream in, OutputStream out, NoiseIk hs, PayloadHandler onMessage1)
         throws IOException, NoiseException {
-        if (hs.isInitiator()) {
-            throw new IllegalArgumentException("handshake state is not a responder");
-        }
+        return respond(in, out, java.util.List.of(hs), onMessage1);
+    }
+
+    /**
+     * Responder that accepts message 1 under any of {@code candidates} (each built with a
+     * different static key), for the hub key rotation grace period (DESIGN.md §6.2). Message 1
+     * encrypts the initiator's static key under the responder's static key, so only the matching
+     * candidate decrypts it; the others fail authentication without side effects.
+     */
+    public static NoiseChannel respond(InputStream in, OutputStream out, java.util.List<NoiseIk> candidates,
+        PayloadHandler onMessage1) throws IOException, NoiseException {
         byte[] m1 = readRaw(new DataInputStream(in));
-        byte[] p1 = hs.readMessage(m1);
-        byte[] p2 = onMessage1.handle(p1, hs);
-        writeRaw(new DataOutputStream(out), hs.writeMessage(p2));
-        return new NoiseChannel(in, out, hs.transport());
+        NoiseException last = null;
+        for (NoiseIk hs : candidates) {
+            if (hs.isInitiator()) {
+                throw new IllegalArgumentException("handshake state is not a responder");
+            }
+            byte[] p1;
+            try {
+                p1 = hs.readMessage(m1);
+            } catch (NoiseException e) {
+                last = e;
+                continue;
+            }
+            byte[] p2 = onMessage1.handle(p1, hs);
+            writeRaw(new DataOutputStream(out), hs.writeMessage(p2));
+            return new NoiseChannel(in, out, hs.transport());
+        }
+        throw last == null ? new NoiseException("no responder keys") : last;
     }
 
     /** Callback between handshake messages on the responder side. */
@@ -83,8 +121,10 @@ public final class NoiseChannel implements AutoCloseable {
     }
 
     public void write(Frame frame) throws IOException, NoiseException {
-        byte[] ct = transport.encrypt(frame.encode());
+        byte[] pt = frame.encode();
+        // Encrypt inside the lock: the nonce counter must advance in wire order.
         synchronized (writeLock) {
+            byte[] ct = transport.encrypt(pt);
             writeRaw(out, ct);
         }
     }
