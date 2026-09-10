@@ -19,6 +19,7 @@ public final class Main {
                       or your own files: --tls-cert FILE --tls-key FILE
                       [--port-range 10000-10999 | none]  ports for raw tcp/udp links (DESIGN.md §9.5)
                       [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (DESIGN.md §9.4)
+                      [--proxy-protocol [--trusted-proxy CIDR,...]]  behind nginx stream / HAProxy (DESIGN.md §9.6)
                       [--takeover]  replace a running jailhub without dropping nodes (DESIGN.md §7.7)
         jailhub status
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME

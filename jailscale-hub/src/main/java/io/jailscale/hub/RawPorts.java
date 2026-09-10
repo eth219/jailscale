@@ -92,7 +92,16 @@ final class RawPorts implements AutoCloseable {
             MuxStream stream = null;
             try {
                 s.setTcpNoDelay(true);
-                stream = group.openVisitor(link, null, s.getInetAddress().getHostAddress(), null, false);
+                String ip = s.getInetAddress().getHostAddress();
+                int port = s.getPort();
+                s.setSoTimeout(SniRouter.HELLO_TIMEOUT_MS);
+                io.jailscale.proto.net.ProxyProtocol.Header ph = hub.readProxyHeader(s);
+                if (ph != null && ph.known()) {
+                    ip = ph.srcIp();
+                    port = ph.srcPort();
+                }
+                s.setSoTimeout(0);
+                stream = group.openVisitor(link, null, ip, port, null, false);
                 Relay.pump(s, stream, new byte[0]);
             } catch (IOException e) {
                 LOG.debug("tcp {} visitor {} refused: {}", link.port(), s.getInetAddress(), e.getMessage());
@@ -173,7 +182,8 @@ final class RawPorts implements AutoCloseable {
             NodeGroup group = link.group();
             MuxStream stream;
             try {
-                stream = group.openVisitor(link, null, ((InetSocketAddress) from).getAddress().getHostAddress(), null, true);
+                stream = group.openVisitor(link, null, ((InetSocketAddress) from).getAddress().getHostAddress(),
+                    ((InetSocketAddress) from).getPort(), null, true);
             } catch (IOException e) {
                 LOG.debug("udp {} visitor {} refused: {}", link.port(), from, e.getMessage());
                 return null;

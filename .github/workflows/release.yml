@@ -1,0 +1,63 @@
+# Release build (DESIGN.md §14 M4): native binaries for five platforms plus the fallback JARs,
+# attached to the GitHub release of the pushed tag. Triggered by tags like v0.1.0.
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     target: linux-amd64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: macos-15,         target: darwin-arm64 }
+          - { os: macos-15-intel,   target: darwin-amd64 }
+          - { os: windows-2025,     target: windows-amd64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          native-image-job-reports: 'true'
+      - name: Build (tests + native)
+        run: ./mvnw -B -ntp -Pnative package
+        shell: bash
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p dist
+          ext=""; [ "${{ matrix.target }}" = windows-amd64 ] && ext=.exe
+          cp jailscale-node/target/jailscale$ext dist/jailscale-${{ matrix.target }}$ext
+          cp jailscale-hub/target/jailhub$ext   dist/jailhub-${{ matrix.target }}$ext
+          if [ "${{ matrix.target }}" = linux-amd64 ]; then
+            cp jailscale-node/target/jailscale.jar dist/jailscale.jar
+            cp jailscale-hub/target/jailhub.jar   dist/jailhub.jar
+          fi
+          (cd dist && shasum -a 256 * > SHA256SUMS-${{ matrix.target }}.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: native
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Merge checksums
+        run: cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -325,6 +325,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         } else if (name != null) {
             rec.name = name;
         }
+        if (req.has("proxyProtocol")) {
+            rec.proxyProtocol = req.optBool("proxyProtocol", false);
+        }
         if (domain != null) {
             if (req.has("acmeDirectory")) {
                 rec.acmeDirectory = req.string("acmeDirectory");

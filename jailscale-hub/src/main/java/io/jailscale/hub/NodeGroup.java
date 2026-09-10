@@ -87,7 +87,7 @@ final class NodeGroup {
     }
 
     /** Opens a visitor stream on the least loaded connection. */
-    MuxStream openVisitor(Links.Link link, String sni, String visitorAddr, String keyId, boolean dgram) throws IOException {
+    MuxStream openVisitor(Links.Link link, String sni, String visitorAddr, int visitorPort, String keyId, boolean dgram) throws IOException {
         NodeSession best = null;
         int bestLoad = Integer.MAX_VALUE;
         for (NodeSession s : sessions.values()) {
@@ -105,7 +105,7 @@ final class NodeGroup {
             throw new IOException("node has no usable connection");
         }
         JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("kind", link.kind()).put("sni", sni)
-            .put("visitorAddr", visitorAddr).put("keyId", keyId).build();
+            .put("visitorAddr", visitorAddr).put("visitorPort", visitorPort).put("keyId", keyId).build();
         MuxStream stream = best.mux().open(meta, dgram);
         visitors.put(fullId(best.conn(), stream.id()), new VisitorStream(link.linkId(), sni, 0));
         return stream;

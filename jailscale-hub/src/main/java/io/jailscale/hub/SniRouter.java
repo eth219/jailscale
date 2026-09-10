@@ -38,6 +38,19 @@ final class SniRouter {
     /** Serves one accepted raw connection to completion. */
     void serve(Socket socket) {
         String ip = socket.getInetAddress().getHostAddress();
+        int visitorPort = socket.getPort();
+        try {
+            socket.setSoTimeout(HELLO_TIMEOUT_MS);
+            io.jailscale.proto.net.ProxyProtocol.Header ph = hub.readProxyHeader(socket);
+            if (ph != null && ph.known()) {
+                ip = ph.srcIp();
+                visitorPort = ph.srcPort();
+            }
+        } catch (IOException e) {
+            LOG.debug("{}: {}", ip, e.getMessage());
+            Relay.closeQuietly(socket);
+            return;
+        }
         AtomicInteger ipCount = perIp.computeIfAbsent(ip, k -> new AtomicInteger());
         if (ipCount.incrementAndGet() > MAX_PER_IP) {
             ipCount.decrementAndGet();
@@ -90,7 +103,7 @@ final class SniRouter {
                 return;
             }
             try {
-                relay(socket, peek, link);
+                relay(socket, peek, link, ip, visitorPort);
             } finally {
                 nameCount.decrementAndGet();
             }
@@ -102,10 +115,10 @@ final class SniRouter {
         }
     }
 
-    private void relay(Socket socket, Sni.Peek peek, Links.Link link) throws IOException {
+    private void relay(Socket socket, Sni.Peek peek, Links.Link link, String visitorIp, int visitorPort) throws IOException {
         NodeGroup group = link.group();
         socket.setSoTimeout(0);
-        MuxStream stream = group.openVisitor(link, peek.serverName(), socket.getInetAddress().getHostAddress(),
+        MuxStream stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
             link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
         try {
             Relay.pump(socket, stream, peek.consumed());

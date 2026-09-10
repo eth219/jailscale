@@ -1,7 +1,11 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.net.Cidr;
 import io.jailscale.proto.util.Args;
+import java.net.InetAddress;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -26,7 +30,16 @@ public record HubConfig(
     int portRangeHi,
     String httpListenHost,
     int httpListenPort,
-    Path userDomainCa) {
+    Path userDomainCa,
+    boolean proxyProtocol,
+    List<String> trustedProxies) {
+
+    /** DESIGN.md §9.6: behind nginx stream / HAProxy sending PROXY headers. */
+    public HubConfig withProxyProtocol(boolean on, List<String> trusted) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, httpListenHost,
+            httpListenPort, userDomainCa, on, trusted);
+    }
 
     /** True when port 80 is served, the precondition for user domains (DESIGN.md §9.4). */
     public boolean hasHttp() {
@@ -35,14 +48,15 @@ public record HubConfig(
 
     public HubConfig withHttp(String host, int port) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, host, port, userDomainCa);
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, host, port, userDomainCa,
+            proxyProtocol, trustedProxies);
     }
 
     /** Tests and private CAs: trust this PEM instead of the platform roots when verifying user-domain certificates. */
     public HubConfig withUserDomainCa(Path caPem) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, caPem);
+            httpListenPort, caPem, proxyProtocol, trustedProxies);
     }
 
     public static final int DEFAULT_PORT_LO = 10000;
@@ -55,7 +69,8 @@ public record HubConfig(
 
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa);
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa,
+            proxyProtocol, trustedProxies);
     }
 
     public static final String POLICY_MEMBERS = "members";
@@ -72,7 +87,7 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, 0, 0, null, -1, null);
+            dnsSuffix, null, null, "127.0.0.1", 0, false, 0, 0, null, -1, null, false, List.of());
     }
 
     public String hostname() {
@@ -125,6 +140,28 @@ public record HubConfig(
             httpHost = httpListen.substring(0, hc);
             httpPort = Integer.parseInt(httpListen.substring(hc + 1));
         }
+        boolean proxyProtocol = a.flag("proxy-protocol");
+        List<String> trusted = new ArrayList<>();
+        if (a.has("trusted-proxy")) {
+            for (String c : a.get("trusted-proxy").split(",")) {
+                if (!c.isBlank()) {
+                    Cidr.parse(c.trim());
+                    trusted.add(c.trim());
+                }
+            }
+        }
+        if (proxyProtocol && trusted.isEmpty()) {
+            boolean loopback;
+            try {
+                loopback = InetAddress.getByName(listen.substring(0, colon)).isLoopbackAddress();
+            } catch (java.net.UnknownHostException e) {
+                loopback = false;
+            }
+            if (!loopback) {
+                throw new IllegalArgumentException("--proxy-protocol needs --listen on loopback or --trusted-proxy <cidr>[,<cidr>]; "
+                    + "otherwise anyone could forge visitor addresses");
+            }
+        }
         String dnsListen = a.get("dns-listen", "0.0.0.0:53");
         int dc = dnsListen.lastIndexOf(':');
         if (dc < 0) {
@@ -150,7 +187,9 @@ public record HubConfig(
             hi,
             httpHost,
             httpPort,
-            null);
+            null,
+            proxyProtocol,
+            List.copyOf(trusted));
     }
 
     /** {@code --state}, else {@code $JAILHUB_STATE}, else /var/lib/jailhub if writable, else ~/.local/share/jailhub. */

@@ -17,13 +17,14 @@ public final class Main {
         jailscale up --invite https://hub.example.com/join/TOKEN [--user NAME]
         jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
-        jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate]
+        jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate] [--proxy-protocol]
         jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (DESIGN.md §9.5)
         jailscale open PORT --domain app.example.com [--acme-email E] [--acme-staging | --acme-directory URL]
                                                               your own domain, CNAME'd to the hub (DESIGN.md §9.4)
         jailscale gate NAME [--new-link [--ttl 24h] | --off]
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | admin | daemon
+        jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
         jailscale version
         """;
@@ -33,7 +34,7 @@ public final class Main {
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "self", "tls-insecure", "foreground", "help", "gate", "new-link", "off", "tcp", "udp", "acme-staging");
+            a = Args.parse(argv, "debug", "self", "tls-insecure", "foreground", "help", "gate", "new-link", "off", "tcp", "udp", "acme-staging", "proxy-protocol");
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);
@@ -52,6 +53,7 @@ public final class Main {
         try {
             switch (cmd) {
                 case "version" -> System.out.println("jailscale " + Version.string());
+                case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
                 case "status" -> print(call(cfg, JsonObject.builder().put("cmd", "status").build(), false));
@@ -148,6 +150,9 @@ public final class Main {
             .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", kind).put("gate", a.flag("gate"));
         if (a.has("port")) {
             b.put("hubPort", a.integer("port", 0));
+        }
+        if (a.has("proxy-protocol")) {
+            b.put("proxyProtocol", a.flag("proxy-protocol"));
         }
         if (a.has("domain")) {
             b.put("domain", a.get("domain"));

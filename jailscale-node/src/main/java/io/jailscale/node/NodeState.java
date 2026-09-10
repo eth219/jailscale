@@ -50,6 +50,7 @@ final class NodeState {
         volatile String acmeDirectory; // ACME directory used for the domain, or null for Let's Encrypt
         volatile String acmeEmail;
         volatile long certExpiresAt;   // not persisted: from the loaded certificate
+        volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (DESIGN.md §10.3)
 
         LinkRec(String kind, String host, int port, String name) {
             this.kind = kind;
@@ -129,6 +130,7 @@ final class NodeState {
                     rec.domain = lo.optString("domain", null);
                     rec.acmeDirectory = lo.optString("acmeDirectory", null);
                     rec.acmeEmail = lo.optString("acmeEmail", null);
+                    rec.proxyProtocol = lo.optBool("proxyProtocol", false);
                     s.links.add(rec);
                 }
             }
@@ -151,7 +153,8 @@ final class NodeState {
             ls.add(JsonObject.builder().put("kind", l.kind).put("host", l.host).put("port", l.port).put("name", l.name)
                 .put("gateHash", l.gateHash).put("gateExpiresAt", l.gateExpiresAt > 0 ? Long.valueOf(l.gateExpiresAt) : null)
                 .put("hubPort", l.hubPort > 0 ? Integer.valueOf(l.hubPort) : null)
-                .put("domain", l.domain).put("acmeDirectory", l.acmeDirectory).put("acmeEmail", l.acmeEmail).build().asMap());
+                .put("domain", l.domain).put("acmeDirectory", l.acmeDirectory).put("acmeEmail", l.acmeEmail)
+                .put("proxyProtocol", l.proxyProtocol).build().asMap());
         }
         String json = JsonObject.builder()
             .put("machineKey", KeyText.format(PRIVATE_PREFIX, machineKey.privateKey()))

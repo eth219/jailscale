@@ -3,6 +3,7 @@ package io.jailscale.node;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.net.ProxyProtocol;
 import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
@@ -14,6 +15,7 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.cert.X509Certificate;
 import java.util.List;
@@ -94,6 +96,7 @@ final class Visitors {
             serveRaw(kind, stream, state.linkById(linkId));
             return;
         }
+        byte[] proxyLine = proxyLine(stream, state.linkById(linkId));
         String keyId = stream.meta().optString("keyId", null);
         String sni = stream.meta().optString("sni", "?");
         NodeState.LinkRec target = state.linkById(linkId);
@@ -158,7 +161,30 @@ final class Visitors {
             }
             return;
         }
-        relay(tls, local, stream, replay);
+        relay(tls, local, stream, concat(proxyLine, replay));
+    }
+
+    /** DESIGN.md §10.3: {@code --proxy-protocol} tells the local app who the visitor is, HAProxy style. */
+    private static byte[] proxyLine(MuxStream stream, NodeState.LinkRec target) {
+        if (target == null || !target.proxyProtocol) {
+            return null;
+        }
+        String ip = stream.meta().optString("visitorAddr", "0.0.0.0");
+        int port = stream.meta().optInt("visitorPort", 0);
+        return ProxyProtocol.v1Line(ip, port, target.host(), target.port()).getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        if (a == null) {
+            return b;
+        }
+        if (b == null) {
+            return a;
+        }
+        byte[] out = new byte[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
     }
 
     /** DESIGN.md §9.5 / §10.3: raw TCP copies bytes; raw UDP maps one DGRAM stream to one local socket. */
@@ -181,8 +207,12 @@ final class Visitors {
             stream.reset(7);
             return;
         }
+        byte[] proxyLine = proxyLine(stream, target);
         Thread toLocal = Thread.ofVirtual().name("raw-in").start(() -> {
             try {
+                if (proxyLine != null) {
+                    local.getOutputStream().write(proxyLine);
+                }
                 copy(stream.in(), local.getOutputStream());
                 local.shutdownOutput();
             } catch (IOException e) {

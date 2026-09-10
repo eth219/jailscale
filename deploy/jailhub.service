@@ -1,0 +1,38 @@
+# systemd unit for jailhub (DESIGN.md §6.3, §7.7).
+#   install -m 0755 jailhub /usr/local/bin/jailhub
+#   useradd --system --home /var/lib/jailhub --create-home --shell /usr/sbin/nologin jailhub
+#   install -m 0644 jailhub.service /etc/systemd/system/
+#   systemctl enable --now jailhub
+#
+# Updates without dropping nodes: replace the binary, then `jailhub serve --takeover` as the
+# jailhub user (or `systemctl reload jailhub`, wired to ExecReload below). The old process
+# hands off and exits on its own; systemd keeps tracking the new one through the PID file.
+
+[Unit]
+Description=jailhub — jailscale hub (SNI router, control channel, ACME)
+Documentation=https://github.com/jailscale/jailscale
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jailhub
+Group=jailhub
+Environment=JAILHUB_STATE=/var/lib/jailhub
+# Edit: your public name, and an e-mail for Let's Encrypt expiry notices.
+ExecStart=/usr/local/bin/jailhub serve --base-url https://hub.example.com --acme-email ops@example.com
+ExecReload=/usr/local/bin/jailhub serve --takeover --base-url https://hub.example.com --acme-email ops@example.com
+Restart=on-failure
+RestartSec=2s
+# jailhub binds 443, 80 and 53 as a non-root user:
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jailhub
+PrivateTmp=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

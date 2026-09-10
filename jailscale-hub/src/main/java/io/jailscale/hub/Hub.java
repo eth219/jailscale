@@ -14,7 +14,12 @@ import java.security.GeneralSecurityException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import io.jailscale.proto.net.Cidr;
+import io.jailscale.proto.net.ProxyProtocol;
+import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.util.ArrayList;
+import java.util.List;
 
 /** The jailhub process: keys, store, TLS listener, node sessions, admin IPC (DESIGN.md §2). */
 public final class Hub implements AutoCloseable {
@@ -269,6 +274,32 @@ public final class Hub implements AutoCloseable {
 
     Challenges challenges() {
         return challenges;
+    }
+
+    private volatile List<Cidr> trustedProxies;
+
+    /**
+     * DESIGN.md §9.6: with --proxy-protocol, connections from a trusted proxy start with a PROXY
+     * header naming the real visitor. Returns it, or null when the feature is off. Untrusted
+     * peers are refused outright (they must not be able to forge addresses).
+     */
+    ProxyProtocol.Header readProxyHeader(Socket s) throws IOException {
+        if (!config.proxyProtocol()) {
+            return null;
+        }
+        List<Cidr> trusted = trustedProxies;
+        if (trusted == null) {
+            trusted = new ArrayList<>();
+            for (String c : config.trustedProxies()) {
+                trusted.add(Cidr.parse(c));
+            }
+            trustedProxies = trusted;
+        }
+        InetAddress peer = s.getInetAddress();
+        if (!peer.isLoopbackAddress() && !Cidr.anyContains(trusted, peer)) {
+            throw new IOException("PROXY protocol from untrusted peer " + peer.getHostAddress());
+        }
+        return ProxyProtocol.read(s.getInputStream());
     }
 
     /** The plain HTTP port, or -1 when port 80 is not served. */
