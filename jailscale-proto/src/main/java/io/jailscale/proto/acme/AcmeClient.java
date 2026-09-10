@@ -1,4 +1,4 @@
-package io.jailscale.hub.acme;
+package io.jailscale.proto.acme;
 
 import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonException;
@@ -56,10 +56,14 @@ public final class AcmeClient {
         return Jws.thumbprint((ECPublicKey) account.getPublic());
     }
 
+    /** The http-01 response body: {@code token.thumbprint}. */
+    public String keyAuthorization(String token) throws GeneralSecurityException {
+        return token + "." + thumbprint();
+    }
+
     /** TXT value for a dns-01 challenge token: base64url(SHA-256(keyAuthorization)). */
     public String dns01Value(String token) throws GeneralSecurityException {
-        String keyAuth = token + "." + thumbprint();
-        return Jws.b64(MessageDigest.getInstance("SHA-256").digest(keyAuth.getBytes(StandardCharsets.US_ASCII)));
+        return Jws.b64(MessageDigest.getInstance("SHA-256").digest(keyAuthorization(token).getBytes(StandardCharsets.US_ASCII)));
     }
 
     public Directory directory() throws AcmeException {
@@ -111,16 +115,25 @@ public final class AcmeClient {
 
     /** The dns-01 challenge of an authorization. */
     public Challenge dns01(String authzUrl) throws AcmeException {
+        return challenge(authzUrl, "dns-01");
+    }
+
+    /** The http-01 challenge of an authorization (user domains, DESIGN.md §9.4). */
+    public Challenge http01(String authzUrl) throws AcmeException {
+        return challenge(authzUrl, "http-01");
+    }
+
+    private Challenge challenge(String authzUrl, String type) throws AcmeException {
         JsonObject a = Json.parseObject(postAsGet(authzUrl).body());
         String identifier = a.object("identifier").string("value");
         for (Object c : a.array("challenges")) {
             @SuppressWarnings("unchecked")
             JsonObject ch = Json.parseObject(Json.write((Map<String, Object>) c));
-            if ("dns-01".equals(ch.string("type"))) {
+            if (type.equals(ch.string("type"))) {
                 return new Challenge(authzUrl, identifier, ch.string("url"), ch.string("token"), ch.string("status"));
             }
         }
-        throw new AcmeException("unsupported", 0, "authorization for " + identifier + " offers no dns-01 challenge");
+        throw new AcmeException("unsupported", 0, "authorization for " + identifier + " offers no " + type + " challenge");
     }
 
     /** Tells the CA the challenge is ready to be validated. */

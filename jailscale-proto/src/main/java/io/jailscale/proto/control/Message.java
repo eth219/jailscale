@@ -102,8 +102,11 @@ public sealed interface Message {
         @Override public String type() { return "CertUpdate"; }
     }
 
-    /** {@code local} is the node-side target ("host:port"); it keys the stable random name. */
-    record LinkOpen(String kind, String name, String domain, Integer port, String local) implements Message {
+    /**
+     * {@code local} is the node-side target ("host:port"); it keys the stable random name.
+     * {@code chainPem}: for user domains, the node's own certificate chain proving the name (§9.4).
+     */
+    record LinkOpen(String kind, String name, String domain, Integer port, String local, List<String> chainPem) implements Message {
         public static final String HTTPS = "https";
         public static final String TCP = "tcp";
         public static final String UDP = "udp";
@@ -132,5 +135,10 @@ public sealed interface Message {
 
     record ChallengeClear(String token) implements Message {
         @Override public String type() { return "ChallengeClear"; }
+    }
+
+    /** Positive reply to a request that has no result of its own (ChallengeSet/Clear). */
+    record Ack(String inReplyTo) implements Message {
+        @Override public String type() { return "Ack"; }
     }
 }

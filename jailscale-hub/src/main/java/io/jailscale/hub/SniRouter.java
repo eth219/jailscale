@@ -60,18 +60,28 @@ final class SniRouter {
                 return;
             }
             name = hub.links().nameOf(sni);
-            if (name == null) {
-                LOG.debug("{}: unknown SNI {}, closing", ip, sni);
-                Relay.closeQuietly(socket);
-                return;
-            }
-            Links.Link link = hub.links().byName(name);
-            if (link == null && hub.store().nameOwner(name) != null) {
-                link = hub.links().awaitOnline(name, HOLD_MS); // node reconnecting (hand-off, restart)
-            }
-            if (link == null) {
-                fallback(socket, peek.consumed(), name);
-                return;
+            Links.Link link;
+            if (name != null) {
+                link = hub.links().byName(name);
+                if (link == null && hub.store().nameOwner(name) != null) {
+                    link = hub.links().awaitOnline(name, false, HOLD_MS); // node reconnecting (hand-off, restart)
+                }
+                if (link == null) {
+                    fallback(socket, peek.consumed(), name);
+                    return;
+                }
+            } else {
+                // A user domain (DESIGN.md §9.4): passthrough only, the hub has no certificate to answer with.
+                name = sni.toLowerCase(java.util.Locale.ROOT);
+                link = hub.links().byDomain(name);
+                if (link == null && hub.store().domain(name) != null) {
+                    link = hub.links().awaitOnline(name, true, HOLD_MS);
+                }
+                if (link == null) {
+                    LOG.debug("{}: unknown SNI {}, closing", ip, sni);
+                    Relay.closeQuietly(socket);
+                    return;
+                }
             }
             AtomicInteger nameCount = perName.computeIfAbsent(name, k -> new AtomicInteger());
             if (nameCount.incrementAndGet() > MAX_PER_NAME) {
@@ -96,7 +106,7 @@ final class SniRouter {
         NodeGroup group = link.group();
         socket.setSoTimeout(0);
         MuxStream stream = group.openVisitor(link, peek.serverName(), socket.getInetAddress().getHostAddress(),
-            hub.tls().keyId(), false);
+            link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
         try {
             Relay.pump(socket, stream, peek.consumed());
         } finally {

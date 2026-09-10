@@ -1,4 +1,4 @@
-package io.jailscale.hub.acme;
+package io.jailscale.proto.acme;
 
 /** An ACME problem document (RFC 7807) or a transport failure talking to the CA. */
 public final class AcmeException extends Exception {

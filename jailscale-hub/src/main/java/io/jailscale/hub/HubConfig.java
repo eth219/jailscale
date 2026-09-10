@@ -23,7 +23,27 @@ public record HubConfig(
     int dnsListenPort,
     boolean selfCheck,
     int portRangeLo,
-    int portRangeHi) {
+    int portRangeHi,
+    String httpListenHost,
+    int httpListenPort,
+    Path userDomainCa) {
+
+    /** True when port 80 is served, the precondition for user domains (DESIGN.md §9.4). */
+    public boolean hasHttp() {
+        return httpListenHost != null && httpListenPort >= 0;
+    }
+
+    public HubConfig withHttp(String host, int port) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, host, port, userDomainCa);
+    }
+
+    /** Tests and private CAs: trust this PEM instead of the platform roots when verifying user-domain certificates. */
+    public HubConfig withUserDomainCa(Path caPem) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, httpListenHost,
+            httpListenPort, caPem);
+    }
 
     public static final int DEFAULT_PORT_LO = 10000;
     public static final int DEFAULT_PORT_HI = 10999;
@@ -35,7 +55,7 @@ public record HubConfig(
 
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, lo, hi);
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa);
     }
 
     public static final String POLICY_MEMBERS = "members";
@@ -52,7 +72,7 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, 0, 0);
+            dnsSuffix, null, null, "127.0.0.1", 0, false, 0, 0, null, -1, null);
     }
 
     public String hostname() {
@@ -94,6 +114,17 @@ public record HubConfig(
                 throw new IllegalArgumentException("--port-range must be within 1024-65535 and lo <= hi");
             }
         }
+        String httpListen = a.get("http-listen", "0.0.0.0:80");
+        String httpHost = null;
+        int httpPort = -1;
+        if (!httpListen.equals("none")) {
+            int hc = httpListen.lastIndexOf(':');
+            if (hc < 0) {
+                throw new IllegalArgumentException("--http-listen must be host:port or none");
+            }
+            httpHost = httpListen.substring(0, hc);
+            httpPort = Integer.parseInt(httpListen.substring(hc + 1));
+        }
         String dnsListen = a.get("dns-listen", "0.0.0.0:53");
         int dc = dnsListen.lastIndexOf(':');
         if (dc < 0) {
@@ -116,7 +147,10 @@ public record HubConfig(
             Integer.parseInt(dnsListen.substring(dc + 1)),
             !a.flag("no-selfcheck"),
             lo,
-            hi);
+            hi,
+            httpHost,
+            httpPort,
+            null);
     }
 
     /** {@code --state}, else {@code $JAILHUB_STATE}, else /var/lib/jailhub if writable, else ~/.local/share/jailhub. */

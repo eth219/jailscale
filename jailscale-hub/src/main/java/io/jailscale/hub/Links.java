@@ -24,9 +24,15 @@ final class Links {
     static final int MAX_LINKS_PER_NODE = 20;
 
     /** An active link: a name served by a node (all of its connections). */
-    record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port) {
+    record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port,
+        String domain) {
         boolean raw() {
             return port > 0;
+        }
+
+        /** The SNI visitors use: the hub sub-name or the user domain. */
+        String host(HubConfig config) {
+            return domain != null ? domain : name + "." + config.hostname();
         }
     }
 
@@ -36,14 +42,21 @@ final class Links {
     private final HubConfig config;
     private final Store store;
     private final RawPorts raw;
+    private final DomainVerifier domains;
     private final Map<String, Link> byName = new ConcurrentHashMap<>();
+    private final Map<String, Link> byDomain = new ConcurrentHashMap<>();
     private final Map<Integer, Link> byPort = new ConcurrentHashMap<>();
     private final Map<String, Link> byId = new ConcurrentHashMap<>();
 
-    Links(HubConfig config, Store store, RawPorts raw) {
+    Links(HubConfig config, Store store, RawPorts raw, DomainVerifier domains) {
         this.config = config;
         this.store = store;
         this.raw = raw;
+        this.domains = domains;
+    }
+
+    Link byDomain(String domain) {
+        return byDomain.get(domain);
     }
 
     Link byPort(int port) {
@@ -60,6 +73,7 @@ final class Links {
 
     List<Link> all() {
         List<Link> all = new ArrayList<>(byName.values());
+        all.addAll(byDomain.values());
         all.addAll(byPort.values());
         return all;
     }
@@ -86,17 +100,17 @@ final class Links {
         if (!Message.LinkOpen.HTTPS.equals(req.kind())) {
             return new Message.LinkOpened(null, null, null, null, "bad-kind");
         }
-        if (req.domain() != null) {
-            return new Message.LinkOpened(null, null, null, null, "domain-not-supported-yet");
-        }
         int mine = 0;
-        for (Link l : byName.values()) {
+        for (Link l : all()) {
             if (l.mkey().equals(node.mkey())) {
                 mine++;
             }
         }
         if (mine >= MAX_LINKS_PER_NODE) {
             return new Message.LinkOpened(null, null, null, null, "too-many-links");
+        }
+        if (req.domain() != null) {
+            return openDomain(s, node, req);
         }
         String name;
         if (req.name() != null) {
@@ -128,11 +142,36 @@ final class Links {
             // Same owner from another (or restarted) node: the newest opener wins.
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0);
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
         return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null, null);
+    }
+
+    /**
+     * DESIGN.md §9.4: the node brings its own certificate for its own domain; a chain that
+     * validates is the proof of ownership. Pure SNI passthrough afterwards, no signing.
+     */
+    private Message openDomain(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
+        String domain = req.domain().toLowerCase(Locale.ROOT);
+        if (!DomainVerifier.validName(domain) || domain.equals(config.hostname()) || domain.endsWith("." + config.hostname())) {
+            return new Message.LinkOpened(null, null, null, null, "bad-domain");
+        }
+        String problem = domains.verify(domain, req.chainPem());
+        if (problem != null) {
+            return new Message.LinkOpened(null, null, null, null, problem);
+        }
+        Link existing = byDomain.get(domain);
+        if (existing != null && existing.group() != s.group()) {
+            byId.remove(existing.linkId());
+        }
+        store.claimDomain(domain, node.user(), node.mkey());
+        Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
+        byDomain.put(domain, link);
+        byId.put(link.linkId(), link);
+        LOG.info("domain {} opened by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
+        return new Message.LinkOpened(link.linkId(), domain, "https://" + domain + portSuffix(), null, null);
     }
 
     /** DESIGN.md §9.5: a port instead of a name. Stable per node, kind and local target. */
@@ -179,7 +218,7 @@ final class Links {
                 byId.remove(existing.linkId());
                 byPort.remove(port);
             }
-            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port);
+            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port, null);
             try {
                 raw.start(link);
             } catch (IOException e) {
@@ -205,6 +244,8 @@ final class Links {
             if (l.raw()) {
                 raw.stop(l);
                 byPort.remove(l.port(), l);
+            } else if (l.domain() != null) {
+                byDomain.remove(l.domain(), l);
             } else {
                 byName.remove(l.name(), l);
             }
@@ -219,6 +260,8 @@ final class Links {
                 if (l.raw()) {
                     raw.stop(l);
                     byPort.remove(l.port(), l);
+                } else if (l.domain() != null) {
+                    byDomain.remove(l.domain(), l);
                 } else {
                     byName.remove(l.name(), l);
                 }
@@ -227,11 +270,12 @@ final class Links {
         }
     }
 
-    /** Waits up to {@code ms} for a claimed name to come online (hand-off, node restarts). */
-    Link awaitOnline(String name, long ms) {
+    /** Waits up to {@code ms} for a claimed name or domain to come online (hand-off, node restarts). */
+    Link awaitOnline(String name, boolean domain, long ms) {
         long deadline = System.currentTimeMillis() + ms;
+        Map<String, Link> map = domain ? byDomain : byName;
         Link l;
-        while ((l = byName.get(name)) == null && System.currentTimeMillis() < deadline) {
+        while ((l = map.get(name)) == null && System.currentTimeMillis() < deadline) {
             try {
                 Thread.sleep(100);
             } catch (InterruptedException e) {

@@ -98,6 +98,18 @@ final class AdminIpc implements Ipc.Handler {
                 store.releaseName(req.string("name"));
                 reply.ok();
             }
+            case "domain-list" -> {
+                List<Object> rows = new ArrayList<>();
+                for (Store.DomainRec d : store.domains()) {
+                    rows.add(JsonObject.builder().put("domain", d.domain()).put("user", d.user()).put("mkey", d.mkey())
+                        .put("open", hub.links().byDomain(d.domain()) != null).build().asMap());
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("domains", rows));
+            }
+            case "domain-release" -> {
+                store.releaseDomain(req.string("domain"));
+                reply.ok();
+            }
             case "user-list" -> reply.done(JsonObject.builder().put("ok", true).put("users", new ArrayList<>(store.users())));
             case "user-remove" -> {
                 String user = req.string("user");
@@ -214,6 +226,7 @@ final class AdminIpc implements Ipc.Handler {
             case "user-remove" -> b.put("user", need(a.positional(2), "<user>"));
             case "name-reassign" -> b.put("name", need(a.positional(2), "<name>")).put("user", a.require("user"));
             case "name-release" -> b.put("name", need(a.positional(2), "<name>"));
+            case "domain-release" -> b.put("domain", need(a.positional(2), "<domain>"));
             case "invite-create" -> b.put("user", a.get("user")).put("uses", a.integer("uses", 0))
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null).put("admin", a.flag("admin"));
             case "invite-revoke", "authkey-revoke" -> b.put("id", need(a.positional(2), "<id>"));

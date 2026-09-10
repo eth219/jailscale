@@ -1,4 +1,4 @@
-package io.jailscale.hub.acme;
+package io.jailscale.proto.acme;
 
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;

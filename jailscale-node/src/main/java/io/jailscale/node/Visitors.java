@@ -19,7 +19,9 @@ import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.security.KeyStore;
 import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 
 /**
@@ -34,6 +36,7 @@ final class Visitors {
 
     private final NodeState state;
     private final Map<String, SSLContext> contexts = new ConcurrentHashMap<>();
+    private final Map<String, SSLContext> domainContexts = new ConcurrentHashMap<>();
 
     Visitors(NodeState state) {
         this.state = state;
@@ -65,6 +68,23 @@ final class Visitors {
         return contexts.containsKey(keyId);
     }
 
+    /** DESIGN.md §10.2: a user domain terminates with the node's real key under keyId {@code domain:<name>}. */
+    void installDomain(DomainCerts.Material m) throws GeneralSecurityException, IOException {
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        ks.load(null, null);
+        char[] pw = new char[0];
+        ks.setKeyEntry("domain", m.key(), pw, m.chain().toArray(new X509Certificate[0]));
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(ks, pw);
+        SSLContext ctx = SSLContext.getInstance("TLS");
+        ctx.init(kmf.getKeyManagers(), null, null);
+        domainContexts.put("domain:" + m.domain(), ctx);
+    }
+
+    void removeDomain(String domain) {
+        domainContexts.remove("domain:" + domain);
+    }
+
     /** Serves one visitor stream to completion on the calling (virtual) thread. */
     void serve(HubLink link, HubLink.Session session, MuxStream stream) {
         int conn = session.conn;
@@ -77,7 +97,7 @@ final class Visitors {
         String keyId = stream.meta().optString("keyId", null);
         String sni = stream.meta().optString("sni", "?");
         NodeState.LinkRec target = state.linkById(linkId);
-        SSLContext ctx = keyId == null ? null : contexts.get(keyId);
+        SSLContext ctx = keyId == null ? null : keyId.startsWith("domain:") ? domainContexts.get(keyId) : contexts.get(keyId);
         if (target == null || ctx == null) {
             LOG.warn("visitor for {} refused: {}", sni, target == null ? "unknown link" : "no certificate " + keyId);
             stream.reset(4);

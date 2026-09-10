@@ -40,6 +40,9 @@ final class Store implements AutoCloseable {
     /** A claimed name: who owns it and which node/local target last used it (DESIGN.md §9.2). */
     record NameRec(String name, String user, String mkey, String local, long at) {}
 
+    /** A user domain proven by a node's own certificate (DESIGN.md §9.4). */
+    record DomainRec(String domain, String user, String mkey, long at) {}
+
     /** A raw port assigned to a node's local target (DESIGN.md §9.5); stable across restarts. */
     record PortRec(int port, String kind, String user, String mkey, String local, long at) {}
 
@@ -58,6 +61,7 @@ final class Store implements AutoCloseable {
     private final Map<String, NameRec> names = new LinkedHashMap<>();
     private final Map<String, String> settings = new LinkedHashMap<>();
     private final Map<Integer, PortRec> ports = new LinkedHashMap<>();
+    private final Map<String, DomainRec> domains = new LinkedHashMap<>();
 
     static final String SETTING_INVITE_POLICY = "invitePolicy";
     static final String SETTING_REGISTRATION = "registration";
@@ -141,6 +145,28 @@ final class Store implements AutoCloseable {
 
     synchronized List<NameRec> names() {
         return new ArrayList<>(names.values());
+    }
+
+    synchronized DomainRec domain(String domain) {
+        return domains.get(domain);
+    }
+
+    synchronized List<DomainRec> domains() {
+        return new ArrayList<>(domains.values());
+    }
+
+    synchronized void claimDomain(String domain, String user, String mkey) throws IOException {
+        DomainRec r = domains.get(domain);
+        if (r == null || !r.user().equals(user) || !r.mkey().equals(mkey)) {
+            append(JsonObject.builder().put("e", "domain-claimed").put("domain", domain).put("user", user).put("mkey", mkey)
+                .put("at", System.currentTimeMillis()));
+        }
+    }
+
+    synchronized void releaseDomain(String domain) throws IOException {
+        if (domains.containsKey(domain)) {
+            append(JsonObject.builder().put("e", "domain-released").put("domain", domain));
+        }
     }
 
     synchronized PortRec port(int port) {
@@ -423,6 +449,9 @@ final class Store implements AutoCloseable {
             case "port-assigned" -> ports.put(ev.integer("port"), new PortRec(ev.integer("port"), ev.string("kind"),
                 ev.string("user"), ev.string("mkey"), ev.string("local"), ev.lng("at")));
             case "port-released" -> ports.remove(ev.integer("port"));
+            case "domain-claimed" -> domains.put(ev.string("domain"), new DomainRec(ev.string("domain"), ev.string("user"),
+                ev.string("mkey"), ev.lng("at")));
+            case "domain-released" -> domains.remove(ev.string("domain"));
             case "hubkey-rotation" -> {
                 nextHubKey = ev.string("next");
                 hubKeyActivatesAt = ev.lng("activatesAt");
@@ -493,6 +522,10 @@ final class Store implements AutoCloseable {
         for (NameRec r : names.values()) {
             events.add(JsonObject.builder().put("e", "name-claimed").put("name", r.name()).put("user", r.user())
                 .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
+        }
+        for (DomainRec r : domains.values()) {
+            events.add(JsonObject.builder().put("e", "domain-claimed").put("domain", r.domain()).put("user", r.user())
+                .put("mkey", r.mkey()).put("at", r.at()).build().asMap());
         }
         for (PortRec r : ports.values()) {
             events.add(JsonObject.builder().put("e", "port-assigned").put("port", r.port()).put("kind", r.kind()).put("user", r.user())

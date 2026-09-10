@@ -1,4 +1,4 @@
-package io.jailscale.hub.acme;
+package io.jailscale.proto.acme;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;

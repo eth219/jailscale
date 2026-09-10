@@ -18,10 +18,12 @@ public final class Main {
                         [--acme-email you@example.com] [--acme-staging | --acme-directory URL] [--no-selfcheck]
                       or your own files: --tls-cert FILE --tls-key FILE
                       [--port-range 10000-10999 | none]  ports for raw tcp/udp links (DESIGN.md §9.5)
+                      [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (DESIGN.md §9.4)
                       [--takeover]  replace a running jailhub without dropping nodes (DESIGN.md §7.7)
         jailhub status
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
+        jailhub domain list | release <domain>
         jailhub invite create [--user NAME] [--uses N] [--ttl 24h] [--admin] | list | revoke <id>
         jailhub authkey create (--owner USER | --tag TAG) [--uses N] [--ttl 7d] | list | revoke <id>
         jailhub admin add <user> | remove <user> | login-link

@@ -130,6 +130,7 @@ final class AdminWeb {
             }
             case "/admin/authkey/revoke" -> store.revokeAuthKey(need(f, "id"));
             case "/admin/name/release" -> store.releaseName(need(f, "name"));
+            case "/admin/domain/release" -> store.releaseDomain(need(f, "domain"));
             case "/admin/settings" -> {
                 store.setSetting(Store.SETTING_INVITE_POLICY, "admins".equals(f.get("invitePolicy")) ? "admins" : "members");
                 store.setSetting(Store.SETTING_REGISTRATION, "open".equals(f.get("registration")) ? "open" : "invite");
@@ -184,6 +185,17 @@ final class AdminWeb {
                 .append("<input type=hidden name=name value=\"").append(HttpFront.escape(n.name())).append("\"><button>해제</button></form></td></tr>");
         }
         b.append("</table>");
+
+        if (!store.domains().isEmpty()) {
+            b.append("<h2>사용자 도메인</h2><table><tr><th>도메인</th><th>소유자</th><th>상태</th><th></th></tr>");
+            for (Store.DomainRec d : store.domains()) {
+                b.append("<tr><td>").append(HttpFront.escape(d.domain())).append("</td><td>").append(HttpFront.escape(d.user()))
+                    .append("</td><td>").append(hub.links().byDomain(d.domain()) != null ? "열림" : "닫힘").append("</td><td>")
+                    .append("<form method=post action=/admin/domain/release>").append(csrf)
+                    .append("<input type=hidden name=domain value=\"").append(HttpFront.escape(d.domain())).append("\"><button>해제</button></form></td></tr>");
+            }
+            b.append("</table>");
+        }
 
         b.append("<h2>초대</h2>");
         if (lastInvite != null) {

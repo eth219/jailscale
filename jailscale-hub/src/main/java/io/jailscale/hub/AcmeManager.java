@@ -1,8 +1,9 @@
 package io.jailscale.hub;
 
-import io.jailscale.hub.acme.AcmeClient;
-import io.jailscale.hub.acme.AcmeException;
-import io.jailscale.hub.acme.Csr;
+import io.jailscale.proto.acme.AcmeClient;
+import io.jailscale.proto.acme.AcmeException;
+import io.jailscale.proto.acme.AcmeKeys;
+import io.jailscale.proto.acme.Csr;
 import io.jailscale.hub.dns.DnsQuery;
 import io.jailscale.hub.dns.DnsResponder;
 import io.jailscale.proto.tls.Pem;
@@ -12,17 +13,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.PosixFilePermission;
 import java.security.GeneralSecurityException;
-import java.security.KeyFactory;
 import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
-import java.security.spec.ECGenParameterSpec;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 
 /**
@@ -60,7 +55,7 @@ final class AcmeManager implements AutoCloseable {
      */
     void start() throws IOException, GeneralSecurityException, InterruptedException {
         Files.createDirectories(dir);
-        account = loadOrCreateKey(dir.resolve("account.key"));
+        account = AcmeKeys.loadOrCreate(dir.resolve("account.key"));
         boolean installed = false;
         if (Files.exists(dir.resolve("wildcard.pem")) && Files.exists(dir.resolve("wildcard.key"))) {
             try {
@@ -164,7 +159,7 @@ final class AcmeManager implements AutoCloseable {
                 client.awaitAuthorization(c.authzUrl(), VALIDATION_TIMEOUT_MS);
                 LOG.info("validated {}", c.identifier());
             }
-            KeyPair certKey = generate();
+            KeyPair certKey = AcmeKeys.generate();
             AcmeClient.Order finalized = client.finalizeOrder(order, Csr.build(certKey, names));
             AcmeClient.Order valid = client.awaitOrder(finalized, VALIDATION_TIMEOUT_MS);
             String pem = client.certificate(valid.certificate());
@@ -180,7 +175,7 @@ final class AcmeManager implements AutoCloseable {
 
     private void store(List<X509Certificate> chain, PrivateKey key, String pem) throws IOException {
         Path keyTmp = dir.resolve("wildcard.key.tmp");
-        writePrivate(keyTmp, Pem.encodeBlock("PRIVATE KEY", key.getEncoded()));
+        AcmeKeys.writePrivate(keyTmp, Pem.encodeBlock("PRIVATE KEY", key.getEncoded()));
         Path pemTmp = dir.resolve("wildcard.pem.tmp");
         Files.writeString(pemTmp, pem, StandardCharsets.UTF_8);
         Path oldKey = dir.resolve("wildcard.key.prev");
@@ -206,46 +201,6 @@ final class AcmeManager implements AutoCloseable {
                 return;
             }
         }
-    }
-
-    private static KeyPair generate() throws GeneralSecurityException {
-        KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
-        g.initialize(new ECGenParameterSpec("secp256r1"));
-        return g.generateKeyPair();
-    }
-
-    private static KeyPair loadOrCreateKey(Path p) throws IOException, GeneralSecurityException {
-        if (Files.exists(p)) {
-            PrivateKey priv = Pem.privateKey(Files.readString(p));
-            // Derive the public key: JDK EC private keys carry the parameters; use them to
-            // regenerate via KeyFactory from the encoded PKCS#8 which includes the public key
-            // when present. Simplest: keep a companion .pub file.
-            Path pub = p.resolveSibling(p.getFileName() + ".pub");
-            if (Files.exists(pub)) {
-                byte[] der = java.util.Base64.getMimeDecoder().decode(Files.readString(pub)
-                    .replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", ""));
-                return new KeyPair(KeyFactory.getInstance("EC").generatePublic(new java.security.spec.X509EncodedKeySpec(der)), priv);
-            }
-            LOG.warn("account key has no .pub companion; creating a new account key");
-        }
-        KeyPair kp = generate();
-        writePrivate(p, Pem.encodeBlock("PRIVATE KEY", kp.getPrivate().getEncoded()));
-        Files.writeString(p.resolveSibling(p.getFileName() + ".pub"), Pem.encodeBlock("PUBLIC KEY", kp.getPublic().getEncoded()));
-        LOG.info("created ACME account key");
-        return kp;
-    }
-
-    private static void writePrivate(Path p, String pem) throws IOException {
-        Files.writeString(p, pem, StandardCharsets.UTF_8);
-        try {
-            Files.setPosixFilePermissions(p, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
-        } catch (UnsupportedOperationException ignored) {
-            // Windows
-        }
-    }
-
-    static PrivateKey pkcs8(byte[] der) throws GeneralSecurityException {
-        return KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(der));
     }
 
     @Override

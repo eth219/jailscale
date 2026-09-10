@@ -19,6 +19,8 @@ public final class Main {
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate]
         jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (DESIGN.md §9.5)
+        jailscale open PORT --domain app.example.com [--acme-email E] [--acme-staging | --acme-directory URL]
+                                                              your own domain, CNAME'd to the hub (DESIGN.md §9.4)
         jailscale gate NAME [--new-link [--ttl 24h] | --off]
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | admin | daemon
@@ -147,6 +149,18 @@ public final class Main {
         if (a.has("port")) {
             b.put("hubPort", a.integer("port", 0));
         }
+        if (a.has("domain")) {
+            b.put("domain", a.get("domain"));
+            if (a.has("acme-directory")) {
+                b.put("acmeDirectory", a.get("acme-directory"));
+            } else if (a.flag("acme-staging")) {
+                b.put("acmeDirectory", "https://acme-staging-v02.api.letsencrypt.org/directory");
+            }
+            if (a.has("acme-email")) {
+                b.put("acmeEmail", a.get("acme-email"));
+            }
+            System.out.println(a.get("domain") + " 의 인증서를 확인하는 중… (처음이면 ACME 발급에 수십 초가 걸립니다)");
+        }
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
         if (!kind.equals("https")) {
@@ -176,8 +190,12 @@ public final class Main {
         for (Object o : links) {
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
-            System.out.printf("%-8s %-40s -> %-22s %s%n", m.get("name"), m.get("url"), m.get("local"),
-                Boolean.TRUE.equals(m.get("open")) ? "open" : "offline");
+            String warn = "";
+            if (m.get("certExpiresAt") instanceof Long exp && exp - System.currentTimeMillis() < 7 * 86400_000L) {
+                warn = "  (인증서 만료 " + new java.util.Date(exp) + ")";
+            }
+            System.out.printf("%-8s %-40s -> %-22s %s%s%n", m.get("name"), m.get("url"), m.get("local"),
+                Boolean.TRUE.equals(m.get("open")) ? "open" : "offline", warn);
         }
     }
 

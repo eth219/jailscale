@@ -124,6 +124,9 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             if (group != null) {
                 hub.registry().detach(this);
             }
+            if (conn == 0 && mkey != null) {
+                hub.challenges().clearNode(mkey);
+            }
             close();
         }
     }
@@ -200,6 +203,21 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 }
             }
             case Message.LinkOpen lo -> send(hub.links().open(this, lo));
+            case Message.ChallengeSet cs -> {
+                if (node == null) {
+                    send(new Message.Error(cs.type(), "not-registered"));
+                } else if (!hub.config().hasHttp()) {
+                    send(new Message.Error(cs.type(), "hub-has-no-port-80"));
+                } else if (!hub.challenges().set(mkey, cs.token(), cs.keyAuthorization())) {
+                    send(new Message.Error(cs.type(), "too-many-challenges"));
+                } else {
+                    send(new Message.Ack(cs.type()));
+                }
+            }
+            case Message.ChallengeClear cc -> {
+                hub.challenges().clear(mkey, cc.token());
+                send(new Message.Ack(cc.type()));
+            }
             case Message.LinkClose lc -> hub.links().close(group, lc.linkId());
             default -> {
                 LOG.warn("node {}: unexpected {} from node", mkey, m.type());

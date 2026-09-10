@@ -1,6 +1,7 @@
 package io.jailscale.node;
 
 import io.jailscale.crypto.KeyText;
+import io.jailscale.proto.acme.AcmeException;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
@@ -27,6 +28,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private final NodeState state;
     private final HubLink link;
     private final Visitors visitors;
+    private final DomainCerts domainCerts;
+    private volatile boolean closed;
+    static final URI LETS_ENCRYPT = URI.create("https://acme-v02.api.letsencrypt.org/directory");
+    static final long RENEW_CHECK_MS = 3600_000;
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
@@ -34,6 +39,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         this.state = NodeState.load(config.stateFile());
         this.link = new HubLink(state, Version.string(), this);
         this.visitors = new Visitors(state);
+        this.domainCerts = new DomainCerts(config.configDir());
     }
 
     public void start() throws IOException {
@@ -42,6 +48,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (state.hasHub()) {
             link.start(null);
         }
+        Thread.ofVirtual().name("domain-renew").start(this::renewLoop);
     }
 
     // --- HubLink.Events --------------------------------------------------------------------------
@@ -68,7 +75,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
-        Message r = link.request(new Message.LinkOpen(rec.kind, rec.name, null, rec.hubPort > 0 ? rec.hubPort : null, rec.local()),
+        List<String> chain = null;
+        if (rec.domain != null) {
+            chain = domainMaterial(rec, false).chainPem();
+        }
+        Message r = link.request(new Message.LinkOpen(rec.kind, rec.name, rec.domain, rec.hubPort > 0 ? rec.hubPort : null, rec.local(), chain),
             "LinkOpened", REPLY_TIMEOUT_MS);
         if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
             if (lo.hubPort() != null) {
@@ -149,6 +160,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 if (rec.linkId != null && link.isConnected()) {
                     link.send(new Message.LinkClose(rec.linkId));
                 }
+                if (rec.domain != null) {
+                    visitors.removeDomain(rec.domain);
+                }
                 state.links.remove(rec);
                 state.save();
                 reply.ok();
@@ -193,7 +207,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         List<Object> rows = new ArrayList<>();
         for (NodeState.LinkRec l : state.links) {
             rows.add(JsonObject.builder().put("name", l.name).put("kind", l.kind).put("local", l.local())
-                .put("url", l.url).put("gate", l.gateHash != null).put("open", l.linkId != null && link.isConnected()).build().asMap());
+                .put("url", l.url).put("gate", l.gateHash != null).put("open", l.linkId != null && link.isConnected())
+                .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null).build().asMap());
         }
         return rows;
     }
@@ -219,6 +234,60 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return b;
     }
 
+    /**
+     * The certificate for a domain link: from disk, or freshly issued when missing, due for
+     * renewal, or {@code force}. Installs it for TLS termination either way.
+     */
+    private DomainCerts.Material domainMaterial(NodeState.LinkRec rec, boolean force) throws IOException {
+        DomainCerts.Material m = domainCerts.load(rec.domain);
+        if (m == null || force || m.dueForRenewal()) {
+            if (!link.isConnected()) {
+                throw new IOException("not connected to the hub; cannot run the ACME challenge");
+            }
+            URI directory = rec.acmeDirectory != null ? URI.create(rec.acmeDirectory) : LETS_ENCRYPT;
+            try {
+                m = domainCerts.issue(rec.domain, directory, rec.acmeEmail, link);
+            } catch (AcmeException | GeneralSecurityException e) {
+                throw new IOException("certificate for " + rec.domain + ": " + e.getMessage(), e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted");
+            }
+        }
+        try {
+            visitors.installDomain(m);
+        } catch (GeneralSecurityException e) {
+            throw new IOException("cannot use certificate for " + rec.domain + ": " + e.getMessage(), e);
+        }
+        rec.certExpiresAt = m.notAfter();
+        return m;
+    }
+
+    /** Hourly: renew domain certificates that have a third of their lifetime left (DESIGN.md §9.4). */
+    private void renewLoop() {
+        while (!closed) {
+            try {
+                Thread.sleep(RENEW_CHECK_MS);
+            } catch (InterruptedException e) {
+                return;
+            }
+            for (NodeState.LinkRec rec : state.links) {
+                if (rec.domain == null || !link.isConnected()) {
+                    continue;
+                }
+                DomainCerts.Material m = domainCerts.load(rec.domain);
+                if (m == null || m.dueForRenewal()) {
+                    try {
+                        LOG.info("renewing certificate for {}", rec.domain);
+                        reopen(rec);
+                    } catch (IOException | TimeoutException e) {
+                        LOG.warn("renewal of {} failed: {}", rec.domain, e.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
     /** {@code jailscale open <port>}: ask the hub for a name and remember the link. */
     private void open(JsonObject req, Ipc.Reply reply) throws Exception {
         if (!state.registered) {
@@ -233,22 +302,36 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         String host = req.optString("host", "127.0.0.1");
         String kind = req.optString("kind", Message.LinkOpen.HTTPS);
         boolean raw = !kind.equals(Message.LinkOpen.HTTPS);
-        String name = raw ? null : req.optString("name", null);
+        String domain = raw ? null : req.optString("domain", null);
+        if (domain != null) {
+            domain = domain.toLowerCase(java.util.Locale.ROOT);
+        }
+        String name = raw || domain != null ? null : req.optString("name", null);
         if (raw && req.optBool("gate", false)) {
             reply.error("--gate is for https links; raw tcp/udp links have no HTTP to gate");
             return;
         }
         NodeState.LinkRec rec = null;
         for (NodeState.LinkRec l : state.links) {
-            if (l.host.equals(host) && l.port == port && l.kind.equals(kind) && (name == null || name.equals(l.name))) {
+            if (l.host.equals(host) && l.port == port && l.kind.equals(kind) && (name == null || name.equals(l.name))
+                && java.util.Objects.equals(domain, l.domain)) {
                 rec = l;
             }
         }
         boolean fresh = rec == null;
         if (fresh) {
             rec = new NodeState.LinkRec(kind, host, port, name);
+            rec.domain = domain;
         } else if (name != null) {
             rec.name = name;
+        }
+        if (domain != null) {
+            if (req.has("acmeDirectory")) {
+                rec.acmeDirectory = req.string("acmeDirectory");
+            }
+            if (req.has("acmeEmail")) {
+                rec.acmeEmail = req.string("acmeEmail");
+            }
         }
         if (raw && req.has("hubPort")) {
             rec.hubPort = req.integer("hubPort");
@@ -272,7 +355,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         state.save();
         reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local())
-            .put("kind", kind).put("hubPort", lo.hubPort()).put("visitUrl", visitUrl));
+            .put("kind", kind).put("hubPort", lo.hubPort()).put("visitUrl", visitUrl)
+            .put("certExpiresAt", rec.certExpiresAt > 0 ? Long.valueOf(rec.certExpiresAt) : null));
     }
 
     private static String visitUrl(NodeState.LinkRec rec, String token) {
@@ -401,6 +485,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     @Override
     public void close() throws IOException {
+        closed = true;
         link.close();
         if (ipc != null) {
             ipc.close();

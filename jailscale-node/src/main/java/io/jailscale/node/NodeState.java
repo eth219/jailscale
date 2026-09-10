@@ -46,6 +46,10 @@ final class NodeState {
         volatile String gateHash;      // visitor gate (DESIGN.md §10.4): SHA-256 of the visit token, or null
         volatile long gateExpiresAt;   // ms epoch; 0 = never
         volatile int hubPort;          // raw tcp/udp: the hub port assigned last time (requested again on reopen)
+        volatile String domain;        // user domain (DESIGN.md §9.4), or null
+        volatile String acmeDirectory; // ACME directory used for the domain, or null for Let's Encrypt
+        volatile String acmeEmail;
+        volatile long certExpiresAt;   // not persisted: from the loaded certificate
 
         LinkRec(String kind, String host, int port, String name) {
             this.kind = kind;
@@ -122,6 +126,9 @@ final class NodeState {
                     rec.gateHash = lo.optString("gateHash", null);
                     rec.gateExpiresAt = lo.has("gateExpiresAt") ? lo.lng("gateExpiresAt") : 0;
                     rec.hubPort = lo.optInt("hubPort", 0);
+                    rec.domain = lo.optString("domain", null);
+                    rec.acmeDirectory = lo.optString("acmeDirectory", null);
+                    rec.acmeEmail = lo.optString("acmeEmail", null);
                     s.links.add(rec);
                 }
             }
@@ -143,7 +150,8 @@ final class NodeState {
         for (LinkRec l : links) {
             ls.add(JsonObject.builder().put("kind", l.kind).put("host", l.host).put("port", l.port).put("name", l.name)
                 .put("gateHash", l.gateHash).put("gateExpiresAt", l.gateExpiresAt > 0 ? Long.valueOf(l.gateExpiresAt) : null)
-                .put("hubPort", l.hubPort > 0 ? Integer.valueOf(l.hubPort) : null).build().asMap());
+                .put("hubPort", l.hubPort > 0 ? Integer.valueOf(l.hubPort) : null)
+                .put("domain", l.domain).put("acmeDirectory", l.acmeDirectory).put("acmeEmail", l.acmeEmail).build().asMap());
         }
         String json = JsonObject.builder()
             .put("machineKey", KeyText.format(PRIVATE_PREFIX, machineKey.privateKey()))

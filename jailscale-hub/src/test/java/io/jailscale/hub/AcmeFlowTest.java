@@ -5,8 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import io.jailscale.hub.acme.Der;
-import io.jailscale.hub.acme.Jws;
+import io.jailscale.proto.acme.Der;
+import io.jailscale.proto.acme.Jws;
 import io.jailscale.hub.dns.DnsQuery;
 import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
@@ -101,7 +101,7 @@ class AcmeFlowTest {
         ca = new MockCa(() -> hubRef[0].dnsPort());
         HubConfig cfg = new HubConfig(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             null, null, true, HubConfig.POLICY_MEMBERS, true, "hub.test",
-            URI.create("http://127.0.0.1:" + ca.port() + "/directory"), "ops@hub.test", "127.0.0.1", 0, false, 0, 0);
+            URI.create("http://127.0.0.1:" + ca.port() + "/directory"), "ops@hub.test", "127.0.0.1", 0, false, 0, 0, null, -1, null);
         hub = new Hub(cfg);
         hubRef[0] = hub;
         hub.start(); // issues the certificate through the mock CA before listening
@@ -159,10 +159,14 @@ class AcmeFlowTest {
 
     // ---------------------------------------------------------------------------------------------
 
-    /** Just enough of an ACME v2 CA: JWS verified, dns-01 checked against the hub's DNS, real X.509 issued. */
+    /**
+     * Just enough of an ACME v2 CA: JWS verified, dns-01 checked against the hub's DNS or http-01
+     * fetched from the hub's port 80, real X.509 issued for the order's names.
+     */
     static final class MockCa implements AutoCloseable {
         final HttpServer server;
         final IntSupplier dnsPort;
+        volatile IntSupplier httpPort = () -> -1;
         final Map<String, PublicKey> accounts = new ConcurrentHashMap<>();
         final Map<String, String> tokens = new ConcurrentHashMap<>();       // authz id -> token
         final Map<String, String> authzStatus = new ConcurrentHashMap<>();
@@ -253,9 +257,35 @@ class AcmeFlowTest {
                             reply(ex, 200, JsonObject.builder()
                                 .put("status", authzStatus.get(aid))
                                 .put("identifier", JsonObject.builder().put("type", "dns").put("value", authzName.get(aid)).build())
-                                .put("challenges", List.of(JsonObject.builder().put("type", "dns-01").put("url", base + "/chall/" + aid)
-                                    .put("token", tokens.get(aid)).put("status", authzStatus.get(aid)).build().asMap()))
+                                .put("challenges", List.of(
+                                    JsonObject.builder().put("type", "dns-01").put("url", base + "/chall/" + aid)
+                                        .put("token", tokens.get(aid)).put("status", authzStatus.get(aid)).build().asMap(),
+                                    JsonObject.builder().put("type", "http-01").put("url", base + "/httpchall/" + aid)
+                                        .put("token", tokens.get(aid)).put("status", authzStatus.get(aid)).build().asMap()))
                                 .toJson());
+                        } else if (path.startsWith("/httpchall/")) {
+                            String aid = path.substring("/httpchall/".length());
+                            // http-01 validation: GET http://<name>/.well-known/acme-challenge/<token>, served by the hub's port 80
+                            String keyAuth = tokens.get(aid) + "." + Jws.thumbprint((java.security.interfaces.ECPublicKey) key);
+                            String got = null;
+                            try (Socket c = new Socket("127.0.0.1", httpPort.getAsInt())) {
+                                c.setSoTimeout(3000);
+                                Http.writeRequest(c.getOutputStream(), "GET", authzName.get(aid), "/.well-known/acme-challenge/" + tokens.get(aid),
+                                    new io.jailscale.proto.http.Headers(), null);
+                                HttpResponse r = Http.readResponse(c.getInputStream(), 4096);
+                                if (r.status() == 200) {
+                                    got = r.bodyText();
+                                }
+                            } catch (IOException e) {
+                                got = null;
+                            }
+                            if (keyAuth.equals(got)) {
+                                authzStatus.put(aid, "valid");
+                                validatedNames.add(authzName.get(aid));
+                            } else {
+                                authzStatus.put(aid, "invalid");
+                            }
+                            reply(ex, 200, "{\"status\":\"" + authzStatus.get(aid) + "\"}");
                         } else if (path.startsWith("/chall/")) {
                             String aid = path.substring("/chall/".length());
                             // dns-01 validation against the hub's DNS responder
@@ -314,9 +344,14 @@ class AcmeFlowTest {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC).minusMinutes(5);
             byte[] validity = Der.sequence(Der.tlv(0x17, utc.format(now).getBytes(StandardCharsets.US_ASCII)),
                 Der.tlv(0x17, utc.format(now.plusDays(90)).getBytes(StandardCharsets.US_ASCII)));
-            byte[] subject = Der.sequence(Der.set(Der.sequence(Der.oid("2.5.4.3"), Der.utf8("hub.test"))));
-            byte[] san = Der.sequence(Der.context(2, false, "hub.test".getBytes(StandardCharsets.US_ASCII)),
-                Der.context(2, false, "*.hub.test".getBytes(StandardCharsets.US_ASCII)));
+            List<String> names = new ArrayList<>(new java.util.TreeSet<>(authzName.values()));
+            names.sort(java.util.Comparator.comparing((String n) -> n.startsWith("*")).thenComparing(n -> n)); // CN = the plain name
+            byte[] subject = Der.sequence(Der.set(Der.sequence(Der.oid("2.5.4.3"), Der.utf8(names.get(0)))));
+            byte[][] sanEntries = new byte[names.size()][];
+            for (int i = 0; i < names.size(); i++) {
+                sanEntries[i] = Der.context(2, false, names.get(i).getBytes(StandardCharsets.US_ASCII));
+            }
+            byte[] san = Der.sequence(sanEntries);
             byte[] extensions = Der.context(3, true, Der.sequence(Der.sequence(Der.oid("2.5.29.17"), Der.octetString(san))));
             byte[] sigAlg = Der.sequence(Der.oid("1.2.840.10045.4.3.2"));
             byte[] tbs = Der.sequence(

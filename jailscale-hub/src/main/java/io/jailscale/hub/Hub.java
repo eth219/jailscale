@@ -34,6 +34,8 @@ public final class Hub implements AutoCloseable {
     private final HubTls tls;
     private final Links links;
     private final RawPorts rawPorts;
+    private final Challenges challenges;
+    private HttpChallengeFront http;
     private final SniRouter router;
     private final AdminWeb adminWeb;
     private io.jailscale.hub.dns.DnsResponder dns;
@@ -88,7 +90,12 @@ public final class Hub implements AutoCloseable {
         this.front = new HttpFront(this);
         this.tls = new HubTls(config.hostname());
         this.rawPorts = new RawPorts(this);
-        this.links = new Links(config, store, rawPorts);
+        this.challenges = new Challenges();
+        try {
+            this.links = new Links(config, store, rawPorts, new DomainVerifier(config.userDomainCa()));
+        } catch (GeneralSecurityException e) {
+            throw new IOException("trust store: " + e.getMessage(), e);
+        }
         this.router = new SniRouter(this);
         this.adminWeb = new AdminWeb(this);
         // Flags seed the runtime settings once; afterwards /admin and `jailhub setting` own them.
@@ -139,6 +146,13 @@ public final class Hub implements AutoCloseable {
         listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 128);
         running = true;
         Thread.ofPlatform().name("accept").daemon(false).start(this::acceptLoop);
+        if (config.hasHttp()) {
+            try {
+                http = new HttpChallengeFront(this, config.httpListenHost(), config.httpListenPort());
+            } catch (IOException e) {
+                LOG.warn("port {} unavailable ({}); user domains are disabled until it is", config.httpListenPort(), e.getMessage());
+            }
+        }
 
         ipc = Ipc.serve(config.socketPath(), new AdminIpc(this));
         timer = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -253,6 +267,15 @@ public final class Hub implements AutoCloseable {
         return adminWeb;
     }
 
+    Challenges challenges() {
+        return challenges;
+    }
+
+    /** The plain HTTP port, or -1 when port 80 is not served. */
+    int httpPort() {
+        return http == null ? -1 : http.port();
+    }
+
     static String version() {
         String v = Hub.class.getPackage() == null ? null : Hub.class.getPackage().getImplementationVersion();
         return v == null ? "dev" : v;
@@ -278,6 +301,9 @@ public final class Hub implements AutoCloseable {
             listener.close();
         }
         rawPorts.close();
+        if (http != null) {
+            http.close();
+        }
         if (acme != null) {
             acme.close();
         }
@@ -344,6 +370,9 @@ public final class Hub implements AutoCloseable {
         }
         registry.closeAll(Message.Goodbye.SHUTDOWN);
         rawPorts.close();
+        if (http != null) {
+            http.close();
+        }
         if (listener != null) {
             listener.close();
         }

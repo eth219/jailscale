@@ -1,4 +1,4 @@
-package io.jailscale.hub.acme;
+package io.jailscale.proto.acme;
 
 import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonObject;
