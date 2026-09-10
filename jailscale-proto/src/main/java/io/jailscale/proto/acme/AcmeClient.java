@@ -4,17 +4,17 @@ import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonException;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Log;
+import io.jailscale.proto.http.Headers;
+import io.jailscale.proto.http.HttpCall;
+import io.jailscale.proto.http.HttpException;
+import io.jailscale.proto.http.HttpResponse;
 import java.io.IOException;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.security.interfaces.ECPublicKey;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -27,7 +27,8 @@ import java.util.Map;
 public final class AcmeClient {
 
     private static final Log LOG = Log.get("acme");
-    private static final Duration TIMEOUT = Duration.ofSeconds(30);
+    private static final int TIMEOUT_MS = 30_000;
+    private static final int MAX_BODY = 1 << 20;
 
     public record Directory(String newNonce, String newAccount, String newOrder) {}
 
@@ -35,7 +36,6 @@ public final class AcmeClient {
 
     public record Challenge(String authzUrl, String identifier, String url, String token, String status) {}
 
-    private final HttpClient http;
     private final URI directoryUrl;
     private final KeyPair account;
     private final String email;
@@ -45,7 +45,6 @@ public final class AcmeClient {
     private String nonce;
 
     public AcmeClient(URI directoryUrl, KeyPair account, String email, String userAgent) {
-        this.http = HttpClient.newBuilder().connectTimeout(TIMEOUT).followRedirects(HttpClient.Redirect.NEVER).build();
         this.directoryUrl = directoryUrl;
         this.account = account;
         this.email = email;
@@ -83,8 +82,11 @@ public final class AcmeClient {
         if (email != null && !email.isBlank()) {
             body.put("contact", List.of("mailto:" + email));
         }
-        HttpResponse<String> r = post(directory().newAccount(), body.toJson(), true);
-        kid = r.headers().firstValue("Location").orElseThrow(() -> new AcmeException("missing", r.statusCode(), "newAccount without Location"));
+        HttpResponse r = post(directory().newAccount(), body.toJson(), true);
+        kid = r.headers().get("Location");
+        if (kid == null) {
+            throw new AcmeException("missing", r.status(), "newAccount without Location");
+        }
         LOG.info("ACME account {}", kid);
         return kid;
     }
@@ -94,13 +96,16 @@ public final class AcmeClient {
         for (String n : dnsNames) {
             ids.add(JsonObject.builder().put("type", "dns").put("value", n).build().asMap());
         }
-        HttpResponse<String> r = post(directory().newOrder(), JsonObject.builder().put("identifiers", ids).toJson(), false);
-        String url = r.headers().firstValue("Location").orElseThrow(() -> new AcmeException("missing", r.statusCode(), "newOrder without Location"));
-        return order(url, r.body());
+        HttpResponse r = post(directory().newOrder(), JsonObject.builder().put("identifiers", ids).toJson(), false);
+        String url = r.headers().get("Location");
+        if (url == null) {
+            throw new AcmeException("missing", r.status(), "newOrder without Location");
+        }
+        return order(url, r.bodyText());
     }
 
     public Order order(String url) throws AcmeException {
-        return order(url, postAsGet(url).body());
+        return order(url, postAsGet(url).bodyText());
     }
 
     private static Order order(String url, String body) throws AcmeException {
@@ -174,8 +179,8 @@ public final class AcmeClient {
     }
 
     public Order finalizeOrder(Order o, byte[] csrDer) throws AcmeException {
-        HttpResponse<String> r = post(o.finalizeUrl(), JsonObject.builder().put("csr", Jws.b64(csrDer)).toJson(), false);
-        return order(o.url(), r.body());
+        HttpResponse r = post(o.finalizeUrl(), JsonObject.builder().put("csr", Jws.b64(csrDer)).toJson(), false);
+        return order(o.url(), r.bodyText());
     }
 
     /** Polls the order until valid; returns it with the certificate URL. */
@@ -197,23 +202,27 @@ public final class AcmeClient {
 
     /** Downloads the certificate chain as PEM. */
     public String certificate(String url) throws AcmeException {
-        HttpResponse<String> r = signed(url, "", false, "application/pem-certificate-chain");
-        return r.body();
+        HttpResponse r = signed(url, "", false, "application/pem-certificate-chain");
+        return r.bodyText();
     }
 
     // --- transport ---------------------------------------------------------------------------
 
-    private HttpResponse<String> get(URI uri) throws AcmeException {
+    private HttpResponse get(URI uri) throws AcmeException {
+        HttpResponse r = call("GET", uri, new Headers(), null);
+        takeNonce(r);
+        if (r.status() >= 400) {
+            throw problem(r);
+        }
+        return r;
+    }
+
+    private HttpResponse call(String method, URI uri, Headers headers, byte[] body) throws AcmeException {
+        headers.add("User-Agent", userAgent);
         try {
-            HttpResponse<String> r = http.send(HttpRequest.newBuilder(uri).timeout(TIMEOUT).header("User-Agent", userAgent).GET().build(),
-                HttpResponse.BodyHandlers.ofString());
-            takeNonce(r);
-            if (r.statusCode() >= 400) {
-                throw problem(r);
-            }
-            return r;
-        } catch (IOException | InterruptedException e) {
-            throw new AcmeException("GET " + uri + " failed: " + e.getMessage(), e);
+            return HttpCall.send(method, uri, headers, body, TIMEOUT_MS, MAX_BODY);
+        } catch (IOException | HttpException e) {
+            throw new AcmeException(method + " " + uri + " failed: " + e.getMessage(), e);
         }
     }
 
@@ -223,29 +232,30 @@ public final class AcmeClient {
             nonce = null;
             return n;
         }
-        try {
-            HttpResponse<Void> r = http.send(HttpRequest.newBuilder(URI.create(directory().newNonce())).timeout(TIMEOUT)
-                .header("User-Agent", userAgent).method("HEAD", HttpRequest.BodyPublishers.noBody()).build(),
-                HttpResponse.BodyHandlers.discarding());
-            return r.headers().firstValue("Replay-Nonce").orElseThrow(() -> new AcmeException("nonce", r.statusCode(), "no Replay-Nonce"));
-        } catch (IOException | InterruptedException e) {
-            throw new AcmeException("newNonce failed: " + e.getMessage(), e);
+        HttpResponse r = call("HEAD", URI.create(directory().newNonce()), new Headers(), null);
+        String n = r.headers().get("Replay-Nonce");
+        if (n == null) {
+            throw new AcmeException("nonce", r.status(), "no Replay-Nonce");
+        }
+        return n;
+    }
+
+    private void takeNonce(HttpResponse r) {
+        String n = r.headers().get("Replay-Nonce");
+        if (n != null) {
+            nonce = n;
         }
     }
 
-    private void takeNonce(HttpResponse<?> r) {
-        r.headers().firstValue("Replay-Nonce").ifPresent(n -> nonce = n);
-    }
-
-    private HttpResponse<String> postAsGet(String url) throws AcmeException {
+    private HttpResponse postAsGet(String url) throws AcmeException {
         return signed(url, "", false, "application/json");
     }
 
-    private HttpResponse<String> post(String url, String payload, boolean withJwk) throws AcmeException {
+    private HttpResponse post(String url, String payload, boolean withJwk) throws AcmeException {
         return signed(url, payload, withJwk, "application/json");
     }
 
-    private HttpResponse<String> signed(String url, String payload, boolean withJwk, String accept) throws AcmeException {
+    private HttpResponse signed(String url, String payload, boolean withJwk, String accept) throws AcmeException {
         for (int attempt = 0; ; attempt++) {
             String n = freshNonce();
             String body;
@@ -254,16 +264,10 @@ public final class AcmeClient {
             } catch (GeneralSecurityException e) {
                 throw new AcmeException("signing failed", e);
             }
-            HttpResponse<String> r;
-            try {
-                r = http.send(HttpRequest.newBuilder(URI.create(url)).timeout(TIMEOUT)
-                    .header("Content-Type", "application/jose+json").header("Accept", accept).header("User-Agent", userAgent)
-                    .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
-            } catch (IOException | InterruptedException e) {
-                throw new AcmeException("POST " + url + " failed: " + e.getMessage(), e);
-            }
+            HttpResponse r = call("POST", URI.create(url), new Headers().add("Content-Type", "application/jose+json").add("Accept", accept),
+                body.getBytes(StandardCharsets.UTF_8));
             takeNonce(r);
-            if (r.statusCode() >= 400) {
+            if (r.status() >= 400) {
                 AcmeException p = problem(r);
                 if (p.isBadNonce() && attempt == 0) {
                     LOG.debug("bad nonce, retrying");
@@ -275,12 +279,12 @@ public final class AcmeClient {
         }
     }
 
-    private static AcmeException problem(HttpResponse<String> r) {
+    private static AcmeException problem(HttpResponse r) {
         try {
-            JsonObject p = Json.parseObject(r.body());
-            return new AcmeException(p.optString("type", "unknown"), r.statusCode(), p.optString("detail", r.body()));
+            JsonObject p = Json.parseObject(r.bodyText());
+            return new AcmeException(p.optString("type", "unknown"), r.status(), p.optString("detail", r.bodyText()));
         } catch (RuntimeException e) {
-            return new AcmeException("http", r.statusCode(), "HTTP " + r.statusCode() + ": " + r.body());
+            return new AcmeException("http", r.status(), "HTTP " + r.status() + ": " + r.bodyText());
         }
     }
 }

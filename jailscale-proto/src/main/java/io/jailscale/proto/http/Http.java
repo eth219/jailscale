@@ -73,8 +73,13 @@ public final class Http {
         out.flush();
     }
 
-    /** Reads a response; body by Content-Length or, if absent and not 101/204, until EOF. */
+    /** Reads a response; body by Content-Length, chunked, or (if neither and not 101/204) until EOF. */
     public static HttpResponse readResponse(InputStream in, int maxBody) throws IOException, HttpException {
+        return readResponse(in, maxBody, false);
+    }
+
+    /** {@code headOnly}: the request was HEAD, so the response has headers but no body. */
+    public static HttpResponse readResponse(InputStream in, int maxBody, boolean headOnly) throws IOException, HttpException {
         String line = readLine(in, MAX_LINE, 502);
         if (line == null) {
             throw new EOFException("no response");
@@ -94,10 +99,13 @@ public final class Http {
         for (String[] h : headers.entries()) {
             resp.header(h[0], h[1]);
         }
-        if (status == 101 || status == 204) {
+        if (status == 101 || status == 204 || status == 304 || headOnly) {
             return resp;
         }
-        if (headers.contains("Content-Length")) {
+        String te = headers.get("Transfer-Encoding");
+        if (te != null && te.toLowerCase(Locale.ROOT).contains("chunked")) {
+            resp.body(readChunked(in, maxBody));
+        } else if (headers.contains("Content-Length")) {
             resp.body(readBody(in, headers, maxBody));
         } else {
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
@@ -112,6 +120,51 @@ public final class Http {
             resp.body(buf.toByteArray());
         }
         return resp;
+    }
+
+    /** Responses only (RFC 9112 §7.1): chunk-size [;ext] CRLF data CRLF ... 0 CRLF trailers CRLF. */
+    static byte[] readChunked(InputStream in, int maxBody) throws IOException, HttpException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        while (true) {
+            String line = readLine(in, MAX_LINE, 502);
+            if (line == null) {
+                throw new EOFException("truncated chunked body");
+            }
+            int semi = line.indexOf(';');
+            String hex = (semi >= 0 ? line.substring(0, semi) : line).trim();
+            int size;
+            try {
+                size = Integer.parseInt(hex, 16);
+            } catch (NumberFormatException e) {
+                throw new HttpException(502, "bad chunk size");
+            }
+            if (size < 0 || buf.size() + size > maxBody) {
+                throw new HttpException(502, "response too large");
+            }
+            if (size == 0) {
+                while (true) { // trailers up to the empty line
+                    String t = readLine(in, MAX_LINE, 502);
+                    if (t == null || t.isEmpty()) {
+                        break;
+                    }
+                }
+                return buf.toByteArray();
+            }
+            byte[] chunk = new byte[size];
+            int off = 0;
+            while (off < size) {
+                int n = in.read(chunk, off, size - off);
+                if (n < 0) {
+                    throw new EOFException("truncated chunk");
+                }
+                off += n;
+            }
+            buf.write(chunk, 0, size);
+            String crlf = readLine(in, 2, 502);
+            if (crlf == null || !crlf.isEmpty()) {
+                throw new HttpException(502, "bad chunk terminator");
+            }
+        }
     }
 
     // --- shared -----------------------------------------------------------------------------

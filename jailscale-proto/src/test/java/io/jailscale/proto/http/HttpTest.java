@@ -93,6 +93,18 @@ class HttpTest {
 
         HttpResponse up = Http.readResponse(in("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\n\r\nRAWBYTES"), 1024);
         assertEquals(101, up.status());
+
+        // Chunked (as Let's Encrypt and most CDNs send), with an extension and a trailer.
+        HttpResponse chunked = Http.readResponse(in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            + "4;ext=1\r\nWiki\r\n5\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\nX-Trailer: t\r\n\r\n"), 1024);
+        assertEquals("Wikipedia in\r\n\r\nchunks.", chunked.bodyText());
+        assertThrows(HttpException.class, () -> Http.readResponse(in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"), 1024));
+        assertThrows(HttpException.class, () -> Http.readResponse(in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1000\r\n"), 16));
+
+        // HEAD: headers only, even with a Content-Length.
+        HttpResponse head = Http.readResponse(in("HTTP/1.1 200 OK\r\nContent-Length: 99\r\nReplay-Nonce: n1\r\n\r\n"), 1024, true);
+        assertEquals("n1", head.headers().get("Replay-Nonce"));
+        assertEquals(0, head.body().length);
         assertEquals(0, up.body().length); // the raw bytes stay in the stream for the next layer
 
         assertThrows(HttpException.class, () -> Http.readResponse(in("NOPE\r\n\r\n"), 1024));
