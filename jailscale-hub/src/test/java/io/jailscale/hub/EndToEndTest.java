@@ -157,12 +157,13 @@ class EndToEndTest {
         String newKey = hub.keys().publicText();
         assertNotEquals(oldKey, newKey);
         hub.registry().closeAll("shutdown");
-        waitFor(() -> hub.registry().size() == 5);
         for (String n : new String[] {"alice", "bob", "carol", "dave", "ci"}) {
-            JsonObject st = cli(n, JsonObject.builder().put("cmd", "status").build());
-            assertTrue(st.optBool("connected", false), st.toString());
-            assertEquals(newKey, st.string("hubKey"), n);
+            waitFor(() -> {
+                JsonObject st = cli(n, JsonObject.builder().put("cmd", "status").build());
+                return st.optBool("connected", false) && newKey.equals(st.optString("hubKey", null));
+            });
         }
+        assertEquals(5, hub.registry().size());
 
         // 8. revocation pushes a goodbye and the node stops reconnecting.
         admin(JsonObject.builder().put("cmd", "node-remove").put("mkey", daveKey).build());
