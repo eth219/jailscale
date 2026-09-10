@@ -25,6 +25,7 @@ final class SniRouter {
     static final int HELLO_TIMEOUT_MS = 5_000;
     static final int MAX_PER_IP = 64;
     static final int MAX_PER_NAME = 1024;
+    static final long HOLD_MS = 3_000;
 
     private final Hub hub;
     private final Map<String, AtomicInteger> perIp = new ConcurrentHashMap<>();
@@ -65,6 +66,9 @@ final class SniRouter {
                 return;
             }
             Links.Link link = hub.links().byName(name);
+            if (link == null && hub.store().nameOwner(name) != null) {
+                link = hub.links().awaitOnline(name, HOLD_MS); // node reconnecting (hand-off, restart)
+            }
             if (link == null) {
                 fallback(socket, peek.consumed(), name);
                 return;
@@ -89,15 +93,24 @@ final class SniRouter {
     }
 
     private void relay(Socket socket, Sni.Peek peek, Links.Link link) throws IOException {
-        NodeSession session = link.session();
+        NodeGroup group = link.group();
         socket.setSoTimeout(0);
-        MuxStream stream = session.openVisitor(link, peek.serverName(), socket.getInetAddress().getHostAddress(),
+        MuxStream stream = group.openVisitor(link, peek.serverName(), socket.getInetAddress().getHostAddress(),
             hub.tls().keyId());
         try {
             Relay.pump(socket, stream, peek.consumed());
         } finally {
-            session.visitorDone(stream);
+            group.visitorDone(streamOwner(group, stream), stream);
         }
+    }
+
+    private static NodeSession streamOwner(NodeGroup group, MuxStream stream) {
+        for (NodeSession s : group.all()) {
+            if (s.mux() != null && s.mux().stream(stream.id()) == stream) {
+                return s;
+            }
+        }
+        return group.primary();
     }
 
     /** TLS with the wildcard certificate (the hub has the key) and a one-line answer. */

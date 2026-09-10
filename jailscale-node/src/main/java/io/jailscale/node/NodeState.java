@@ -28,6 +28,7 @@ final class NodeState {
     long hubKeyActivatesAt;
     String caFile;        // trust exactly this PEM instead of system roots (tests, private CAs)
     boolean tlsInsecure;  // only with a pinned hub key
+    int connections = 1;  // connections to the hub (DESIGN.md §8), 1..4
     boolean registered;
     long nodeId;
     String user;
@@ -42,6 +43,8 @@ final class NodeState {
         volatile String name;   // assigned by the hub; requested on reopen so it stays stable
         volatile String linkId;
         volatile String url;
+        volatile String gateHash;      // visitor gate (DESIGN.md §10.4): SHA-256 of the visit token, or null
+        volatile long gateExpiresAt;   // ms epoch; 0 = never
 
         LinkRec(String kind, String host, int port, String name) {
             this.kind = kind;
@@ -104,6 +107,7 @@ final class NodeState {
                 s.hubKeyActivatesAt = h.has("activatesAt") ? h.lng("activatesAt") : 0;
                 s.caFile = h.optString("caFile", null);
                 s.tlsInsecure = h.optBool("tlsInsecure", false);
+                s.connections = h.optInt("connections", 1);
                 s.dnsSuffix = h.optString("dnsSuffix", null);
             }
             s.registered = o.optBool("registered", false);
@@ -113,7 +117,10 @@ final class NodeState {
                 for (Object l : o.array("links")) {
                     @SuppressWarnings("unchecked")
                     JsonObject lo = Json.parseObject(Json.write((java.util.Map<String, Object>) l));
-                    s.links.add(new LinkRec(lo.optString("kind", "https"), lo.string("host"), lo.integer("port"), lo.optString("name", null)));
+                    LinkRec rec = new LinkRec(lo.optString("kind", "https"), lo.string("host"), lo.integer("port"), lo.optString("name", null));
+                    rec.gateHash = lo.optString("gateHash", null);
+                    rec.gateExpiresAt = lo.has("gateExpiresAt") ? lo.lng("gateExpiresAt") : 0;
+                    s.links.add(rec);
                 }
             }
         } else {
@@ -125,13 +132,15 @@ final class NodeState {
 
     synchronized void save() throws IOException {
         JsonObject.Builder hub = JsonObject.builder().put("host", hubHost).put("addr", hubAddr).put("port", hubPort).put("hubKey", hubKey)
-            .put("nextHubKey", nextHubKey).put("caFile", caFile).put("tlsInsecure", tlsInsecure).put("dnsSuffix", dnsSuffix);
+            .put("nextHubKey", nextHubKey).put("caFile", caFile).put("tlsInsecure", tlsInsecure).put("connections", connections)
+            .put("dnsSuffix", dnsSuffix);
         if (hubKeyActivatesAt > 0) {
             hub.put("activatesAt", hubKeyActivatesAt);
         }
         java.util.List<Object> ls = new java.util.ArrayList<>();
         for (LinkRec l : links) {
-            ls.add(JsonObject.builder().put("kind", l.kind).put("host", l.host).put("port", l.port).put("name", l.name).build().asMap());
+            ls.add(JsonObject.builder().put("kind", l.kind).put("host", l.host).put("port", l.port).put("name", l.name)
+                .put("gateHash", l.gateHash).put("gateExpiresAt", l.gateExpiresAt > 0 ? Long.valueOf(l.gateExpiresAt) : null).build().asMap());
         }
         String json = JsonObject.builder()
             .put("machineKey", KeyText.format(PRIVATE_PREFIX, machineKey.privateKey()))

@@ -16,8 +16,9 @@ public final class Main {
     private static final String USAGE = """
         jailscale up --invite https://hub.example.com/join/TOKEN [--user NAME]
         jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
-                     [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP]
-        jailscale open PORT [--name NAME] [--host 127.0.0.1]
+                     [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
+        jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate]
+        jailscale gate NAME [--new-link [--ttl 24h] | --off]
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | daemon
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
@@ -29,7 +30,7 @@ public final class Main {
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "self", "tls-insecure", "foreground", "help");
+            a = Args.parse(argv, "debug", "self", "tls-insecure", "foreground", "help", "gate", "new-link", "off");
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);
@@ -55,6 +56,23 @@ public final class Main {
                 case "invite" -> invite(cfg, a);
                 case "open" -> open(cfg, a);
                 case "ls" -> ls(cfg);
+                case "gate" -> {
+                    String name = a.positional(1);
+                    if (name == null) {
+                        throw new IllegalArgumentException("gate needs a link name");
+                    }
+                    JsonObject.Builder b = JsonObject.builder().put("cmd", "gate").put("name", name).put("off", a.flag("off"));
+                    if (a.has("ttl")) {
+                        b.put("ttl", a.seconds("ttl", 0));
+                    }
+                    JsonObject r = call(cfg, b.build(), false);
+                    if (r.optBool("gate", false)) {
+                        String v = r.string("visitUrl");
+                        System.out.println("방문 링크: " + v + (copyToClipboard(v) ? "        (클립보드에 복사됨)" : ""));
+                    } else {
+                        System.out.println("게이트를 껐습니다. 누구나 " + name + " 에 접근할 수 있습니다.");
+                    }
+                }
                 case "close" -> {
                     String name = a.positional(1);
                     if (name == null) {
@@ -96,7 +114,7 @@ public final class Main {
             .put("invite", a.get("invite")).put("hub", a.get("hub")).put("port", a.integer("port", 443))
             .put("code", a.get("code")).put("authKey", a.get("auth-key")).put("user", a.get("user"))
             .put("hubKey", a.get("hub-key")).put("tlsInsecure", a.flag("tls-insecure")).put("caFile", a.get("ca-file"))
-            .put("addr", a.get("hub-addr"));
+            .put("addr", a.get("hub-addr")).put("connections", a.has("connections") ? Integer.valueOf(a.integer("connections", 1)) : null);
         JsonObject r = call(cfg, b.build(), true);
         String status = r.optString("status", "");
         switch (status) {
@@ -114,9 +132,17 @@ public final class Main {
             throw new IllegalArgumentException("open needs a local port");
         }
         JsonObject r = call(cfg, JsonObject.builder().put("cmd", "open").put("port", Integer.parseInt(port))
-            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", "https").build(), false);
+            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", "https").put("gate", a.flag("gate")).build(), false);
         String url = r.string("url");
-        System.out.println(url + "  ->  " + r.string("local") + (copyToClipboard(url) ? "        (링크가 클립보드에 복사됨)" : ""));
+        String visit = r.optString("visitUrl", null);
+        String copied = visit != null ? visit : url;
+        System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (게이트 켜짐)" : ""));
+        if (visit != null) {
+            System.out.println("방문 링크: " + visit);
+        }
+        if (copyToClipboard(copied)) {
+            System.out.println("(" + (visit != null ? "방문 링크가" : "링크가") + " 클립보드에 복사됨)");
+        }
     }
 
     private static void ls(NodeConfig cfg) throws Exception {

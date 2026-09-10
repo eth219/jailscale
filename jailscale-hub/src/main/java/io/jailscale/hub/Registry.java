@@ -1,34 +1,42 @@
 package io.jailscale.hub;
 
-import io.jailscale.proto.control.Message;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Live sessions by MachineKey. A second connection with the same key replaces the first (DESIGN.md §8). */
+/** Live node groups by MachineKey (DESIGN.md §8). */
 final class Registry {
 
-    private final Map<String, NodeSession> byKey = new ConcurrentHashMap<>();
+    private final Hub hub;
+    private final Map<String, NodeGroup> byKey = new ConcurrentHashMap<>();
 
-    void attach(NodeSession s) {
-        NodeSession old = byKey.put(s.machineKey(), s);
-        if (old != null && old != s) {
-            old.goodbye(Message.Goodbye.SHUTDOWN);
-        }
+    Registry(Hub hub) {
+        this.hub = hub;
+    }
+
+    NodeGroup attach(NodeSession s) {
+        NodeGroup g = byKey.computeIfAbsent(s.machineKey(), k -> new NodeGroup(hub, k));
+        g.attach(s);
+        return g;
     }
 
     void detach(NodeSession s) {
-        if (s.machineKey() != null) {
-            byKey.remove(s.machineKey(), s);
+        NodeGroup g = byKey.get(s.machineKey());
+        if (g != null) {
+            g.detach(s);
+            if (g.isEmpty()) {
+                byKey.remove(s.machineKey(), g);
+                hub.links().groupEnded(g);
+            }
         }
     }
 
-    NodeSession get(String mkey) {
+    NodeGroup get(String mkey) {
         return byKey.get(mkey);
     }
 
-    List<NodeSession> all() {
+    List<NodeGroup> all() {
         return new ArrayList<>(byKey.values());
     }
 
@@ -37,8 +45,22 @@ final class Registry {
     }
 
     void closeAll(String reason) {
-        for (NodeSession s : all()) {
-            s.goodbye(reason);
+        for (NodeGroup g : all()) {
+            g.goodbyeAll(reason);
         }
+    }
+
+    void drainAll() {
+        for (NodeGroup g : all()) {
+            g.drain();
+        }
+    }
+
+    int liveSessions() {
+        int n = 0;
+        for (NodeGroup g : all()) {
+            n += g.connections();
+        }
+        return n;
     }
 }

@@ -23,8 +23,8 @@ final class Links {
     private static final SecureRandom RNG = new SecureRandom();
     static final int MAX_LINKS_PER_NODE = 20;
 
-    /** An active link: a name served by a node session. */
-    record Link(String linkId, String name, String kind, String user, String mkey, NodeSession session, String local) {}
+    /** An active link: a name served by a node (all of its connections). */
+    record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local) {}
 
     private final HubConfig config;
     private final Store store;
@@ -102,36 +102,51 @@ final class Links {
             }
         }
         Link existing = byName.get(name);
-        if (existing != null && existing.session() != s) {
+        if (existing != null && existing.group() != s.group()) {
             if (!existing.mkey().equals(node.mkey()) && !existing.user().equals(node.user())) {
                 return new Message.LinkOpened(null, null, null, null, "taken");
             }
             // Same owner from another (or restarted) node: the newest opener wins.
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s, req.local());
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local());
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
         return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null, null);
     }
 
-    void close(NodeSession s, String linkId) {
+    void close(NodeGroup g, String linkId) {
         Link l = byId.remove(linkId);
-        if (l != null && l.session() == s) {
+        if (l != null && l.group() == g) {
             byName.remove(l.name(), l);
             LOG.info("link {} closed", l.name());
         }
     }
 
-    /** Called when a session ends: its links go offline (names stay claimed). */
-    void sessionEnded(NodeSession s) {
+    /** Called when a node's last connection ends: its links go offline (names stay claimed). */
+    void groupEnded(NodeGroup g) {
         for (Link l : new ArrayList<>(byName.values())) {
-            if (l.session() == s) {
+            if (l.group() == g) {
                 byName.remove(l.name(), l);
                 byId.remove(l.linkId(), l);
             }
         }
+    }
+
+    /** Waits up to {@code ms} for a claimed name to come online (hand-off, node restarts). */
+    Link awaitOnline(String name, long ms) {
+        long deadline = System.currentTimeMillis() + ms;
+        Link l;
+        while ((l = byName.get(name)) == null && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return l;
     }
 
     private String portSuffix() {

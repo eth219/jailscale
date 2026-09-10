@@ -17,6 +17,7 @@ public final class Main {
                       certificate: built-in ACME (dns-01 via the hub's own DNS on --dns-listen 0.0.0.0:53)
                         [--acme-email you@example.com] [--acme-staging | --acme-directory URL] [--no-selfcheck]
                       or your own files: --tls-cert FILE --tls-key FILE
+                      [--takeover]  replace a running jailhub without dropping nodes (DESIGN.md §7.7)
         jailhub status
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
@@ -32,7 +33,7 @@ public final class Main {
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "admin", "help", "acme-staging", "no-selfcheck");
+            a = Args.parse(argv, "debug", "admin", "help", "acme-staging", "no-selfcheck", "takeover");
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);
@@ -67,7 +68,7 @@ public final class Main {
 
     private static void serve(Args a) throws Exception {
         HubConfig cfg = HubConfig.fromArgs(a);
-        Hub hub = new Hub(cfg);
+        Hub hub = new Hub(cfg, a.flag("takeover"));
         hub.start();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {

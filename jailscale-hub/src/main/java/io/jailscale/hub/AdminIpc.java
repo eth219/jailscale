@@ -50,12 +50,16 @@ final class AdminIpc implements Ipc.Handler {
                 }
                 reply.done(JsonObject.builder().put("ok", true).put("nodes", rows).put("pending", pend));
             }
+            case "handoff" -> {
+                hub.handoff();
+                reply.ok();
+            }
             case "node-approve" -> {
                 String mkey = resolveMkey(req.string("mkey"));
                 Store.NodeRec n = hub.registrar().approvePending(mkey, req.optString("user", null));
-                NodeSession s = hub.registry().get(mkey);
-                if (s != null) {
-                    s.approved(n);
+                NodeGroup g = hub.registry().get(mkey);
+                if (g != null && g.primary() != null) {
+                    g.primary().approved(n);
                 }
                 reply.done(JsonObject.builder().put("ok", true).put("id", n.id()).put("user", n.user()));
             }
@@ -66,9 +70,9 @@ final class AdminIpc implements Ipc.Handler {
             case "node-remove" -> {
                 String mkey = resolveMkey(req.string("mkey"));
                 store.removeNode(mkey);
-                NodeSession s = hub.registry().get(mkey);
-                if (s != null) {
-                    s.goodbye("revoked");
+                NodeGroup g = hub.registry().get(mkey);
+                if (g != null) {
+                    g.goodbyeAll("revoked");
                 }
                 reply.ok();
             }
@@ -99,9 +103,9 @@ final class AdminIpc implements Ipc.Handler {
                 for (Store.NodeRec n : store.nodes()) {
                     if (n.user().equals(user)) {
                         store.removeNode(n.mkey());
-                        NodeSession s = hub.registry().get(n.mkey());
-                        if (s != null) {
-                            s.goodbye("revoked");
+                        NodeGroup g = hub.registry().get(n.mkey());
+                        if (g != null) {
+                            g.goodbyeAll("revoked");
                         }
                     }
                 }

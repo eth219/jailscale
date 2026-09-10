@@ -34,8 +34,8 @@ final class RemoteSigning {
     static final String ALGORITHM = "SHA256withECDSA";
     static final long SIGN_TIMEOUT_MS = 10_000;
 
-    /** Who signs for the current thread. */
-    record Context(HubLink link, long streamId, String keyId) {}
+    /** Who signs for the current thread: the stream's full id and the connection it arrived on. */
+    record Context(HubLink link, HubLink.Session session, long streamId, String keyId) {}
 
     private static final ThreadLocal<Context> CONTEXT = new ThreadLocal<>();
 
@@ -155,7 +155,7 @@ final class RemoteSigning {
             byte[] digest = sha256.digest();
             Message reply;
             try {
-                reply = ctx.link().request(new Message.SignRequest(ctx.streamId(), key.keyId(), "ECDSA-P256-SHA256", digest),
+                reply = ctx.link().requestOn(ctx.session(), new Message.SignRequest(ctx.streamId(), key.keyId(), "ECDSA-P256-SHA256", digest),
                     "SignResponse:" + ctx.streamId(), SIGN_TIMEOUT_MS);
             } catch (IOException | TimeoutException e) {
                 throw new SignatureException("hub did not sign: " + e.getMessage(), e);

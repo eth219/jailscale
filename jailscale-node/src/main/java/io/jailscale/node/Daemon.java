@@ -63,8 +63,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     @Override
-    public void onVisitor(HubLink l, MuxStream stream) {
-        visitors.serve(l, stream);
+    public void onVisitor(HubLink l, HubLink.Session session, MuxStream stream) {
+        visitors.serve(l, session, stream);
     }
 
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
@@ -103,6 +103,27 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 }
             }
             case "open" -> open(req, reply);
+            case "gate" -> {
+                NodeState.LinkRec rec = state.linkByName(req.string("name"));
+                if (rec == null) {
+                    reply.error("no link named " + req.string("name"));
+                    return;
+                }
+                if (req.optBool("off", false)) {
+                    rec.gateHash = null;
+                    rec.gateExpiresAt = 0;
+                    state.save();
+                    reply.done(JsonObject.builder().put("ok", true).put("gate", false));
+                    return;
+                }
+                String token = Gate.newToken();
+                rec.gateHash = Gate.hash(token);
+                long ttl = req.has("ttl") ? req.lng("ttl") : 24 * 3600;
+                rec.gateExpiresAt = ttl <= 0 ? 0 : System.currentTimeMillis() + ttl * 1000;
+                state.save();
+                reply.done(JsonObject.builder().put("ok", true).put("gate", true).put("visitUrl", visitUrl(rec, token))
+                    .put("expiresAt", rec.gateExpiresAt));
+            }
             case "ls" -> reply.done(JsonObject.builder().put("ok", true).put("links", linkRows()));
             case "close" -> {
                 String name = req.string("name");
@@ -158,7 +179,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         List<Object> rows = new ArrayList<>();
         for (NodeState.LinkRec l : state.links) {
             rows.add(JsonObject.builder().put("name", l.name).put("kind", l.kind).put("local", l.local())
-                .put("url", l.url).put("open", l.linkId != null && link.isConnected()).build().asMap());
+                .put("url", l.url).put("gate", l.gateHash != null).put("open", l.linkId != null && link.isConnected()).build().asMap());
         }
         return rows;
     }
@@ -169,6 +190,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("hub", state.hubHost)
             .put("hubKey", state.hubKey)
             .put("connected", link.isConnected())
+            .put("connections", link.connectionCount())
+            .put("draining", link.drainingCount())
             .put("registered", state.registered)
             .put("nodeId", state.nodeId > 0 ? Long.valueOf(state.nodeId) : null)
             .put("user", state.user)
@@ -218,8 +241,20 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (fresh) {
             state.links.add(rec);
         }
+        String visitUrl = null;
+        if (req.optBool("gate", false)) {
+            String token = Gate.newToken();
+            rec.gateHash = Gate.hash(token);
+            rec.gateExpiresAt = System.currentTimeMillis() + 24 * 3600 * 1000L;
+            visitUrl = visitUrl(rec, token);
+        }
         state.save();
-        reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local()));
+        reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local())
+            .put("visitUrl", visitUrl));
+    }
+
+    private static String visitUrl(NodeState.LinkRec rec, String token) {
+        return rec.url + "/?" + Gate.COOKIE + "=" + token;
     }
 
     /**
@@ -267,6 +302,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         state.hubHost = host;
         state.hubAddr = addr;
         state.hubPort = port;
+        if (req.has("connections")) {
+            state.connections = Math.max(1, Math.min(4, req.integer("connections")));
+        }
         state.caFile = caFile;
         state.tlsInsecure = insecure;
         if (hubKey != null) {

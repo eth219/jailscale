@@ -25,7 +25,9 @@ public final class Hub implements AutoCloseable {
     private final HubConfig config;
     private final Store store;
     private final HubKeys keys;
-    private final Registry registry = new Registry();
+    private final Registry registry = new Registry(this);
+    static final long DRAIN_TIMEOUT_MS = 60_000;
+    private volatile boolean handingOff;
     private final Registrar registrar;
     private final Invites invites;
     private final HttpFront front;
@@ -42,14 +44,40 @@ public final class Hub implements AutoCloseable {
     private volatile boolean running;
 
     public Hub(HubConfig config) throws IOException, GeneralSecurityException {
+        this(config, false);
+    }
+
+    /**
+     * With {@code takeover}, a running server in the same state directory is asked to hand off
+     * first (DESIGN.md §7.7); without it, a held lock is an error.
+     */
+    public Hub(HubConfig config, boolean takeover) throws IOException, GeneralSecurityException {
         this.config = config;
         java.nio.file.Files.createDirectories(config.stateDir());
         this.lockChannel = FileChannel.open(config.stateDir().resolve("jailhub.lock"),
             StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-        this.lock = lockChannel.tryLock();
+        FileLock l = tryLock(lockChannel);
+        if (l == null && takeover && Ipc.isAlive(config.socketPath())) {
+            LOG.info("asking the running jailhub to hand off");
+            io.jailscale.proto.json.JsonObject r = Ipc.call(config.socketPath(), io.jailscale.proto.json.JsonObject.builder().put("cmd", "handoff").build());
+            if (!r.optBool("ok", false)) {
+                lockChannel.close();
+                throw new IOException("hand-off refused: " + r.optString("error", "?"));
+            }
+            long deadline = System.currentTimeMillis() + 10_000;
+            while (l == null && System.currentTimeMillis() < deadline) {
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    break;
+                }
+                l = tryLock(lockChannel);
+            }
+        }
+        this.lock = l;
         if (lock == null) {
             lockChannel.close();
-            throw new IOException("another jailhub serve holds " + config.stateDir());
+            throw new IOException("another jailhub serve holds " + config.stateDir() + (takeover ? "" : " (use --takeover)"));
         }
         this.store = new Store(config.stateDir());
         this.keys = new HubKeys(config.stateDir());
@@ -61,14 +89,26 @@ public final class Hub implements AutoCloseable {
         this.router = new SniRouter(this);
     }
 
+    /** Like tryLock, but a lock held by this same JVM (tests) also reads as "held". */
+    private static FileLock tryLock(FileChannel ch) throws IOException {
+        try {
+            return ch.tryLock();
+        } catch (java.nio.channels.OverlappingFileLockException e) {
+            return null;
+        }
+    }
+
     public void start() throws IOException, GeneralSecurityException {
         promoteRotationIfDue();
         if (config.acme()) {
             dns = new io.jailscale.hub.dns.DnsResponder(config.hostname());
             dns.start(config.dnsListenHost(), config.dnsListenPort());
             acme = new AcmeManager(config, tls, dns, () -> {
-                for (NodeSession s : registry.all()) {
-                    s.certChanged();
+                for (NodeGroup g : registry.all()) {
+                    NodeSession p = g.primary();
+                    if (p != null) {
+                        p.certChanged();
+                    }
                 }
             });
             try {
@@ -140,11 +180,11 @@ public final class Hub implements AutoCloseable {
         long activatesAt = System.currentTimeMillis() + graceSeconds * 1000;
         store.setHubKeyRotation(next, activatesAt);
         Message.HubKeyRotation m = new Message.HubKeyRotation(next, activatesAt / 1000);
-        for (NodeSession s : registry.all()) {
+        for (NodeGroup g : registry.all()) {
             try {
-                s.send(m);
+                g.send(m);
             } catch (IOException e) {
-                s.close();
+                g.goodbyeAll(Message.Goodbye.SHUTDOWN);
             }
         }
         LOG.info("hub key rotation announced to {} nodes, activates at {}", registry.size(), activatesAt);
@@ -200,6 +240,68 @@ public final class Hub implements AutoCloseable {
         return v == null ? "dev" : v;
     }
 
+    boolean isHandingOff() {
+        return handingOff;
+    }
+
+    /**
+     * Hand-off to a new process (DESIGN.md §7.7): stop accepting, persist and release the state,
+     * then ask nodes to reconnect while keeping their current streams. Returns once the new
+     * process may take the lock; this process exits when drained (or after a minute).
+     */
+    synchronized void handoff() throws IOException {
+        if (handingOff) {
+            return;
+        }
+        handingOff = true;
+        running = false;
+        LOG.info("hand-off requested: releasing listener and state");
+        if (listener != null) {
+            listener.close();
+        }
+        if (acme != null) {
+            acme.close();
+        }
+        if (dns != null) {
+            dns.close();
+        }
+        if (timer != null) {
+            timer.shutdownNow();
+        }
+        store.close();
+        lock.release();
+        lockChannel.close();
+        registry.drainAll();
+        Thread.ofVirtual().name("handoff-ipc").start(() -> {
+            try {
+                Thread.sleep(300); // let the hand-off reply go out first
+                if (ipc != null) {
+                    ipc.close();
+                    ipc = null;
+                }
+            } catch (IOException | InterruptedException ignored) {
+                // exiting
+            }
+        });
+        Thread.ofVirtual().name("handoff-exit").start(() -> {
+            long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
+            while (registry.liveSessions() > 0 && System.currentTimeMillis() < deadline) {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+            LOG.info("drained, exiting");
+            if (exitOnDrain) {
+                System.exit(0);
+            }
+        });
+    }
+
+    /** Whether hand-off should end the process (true for the binary, false in tests). */
+    volatile boolean exitOnDrain = true;
+
     /** Test hook: the DNS responder's port (0 if certificates come from files). */
     public int dnsPort() {
         return dns == null ? 0 : dns.port();
@@ -210,6 +312,10 @@ public final class Hub implements AutoCloseable {
         running = false;
         if (timer != null) {
             timer.shutdownNow();
+        }
+        if (handingOff) {
+            registry.closeAll(Message.Goodbye.SHUTDOWN);
+            return;
         }
         if (acme != null) {
             acme.close();

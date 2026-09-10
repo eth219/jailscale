@@ -61,7 +61,8 @@ final class Visitors {
     }
 
     /** Serves one visitor stream to completion on the calling (virtual) thread. */
-    void serve(HubLink link, MuxStream stream) {
+    void serve(HubLink link, HubLink.Session session, MuxStream stream) {
+        int conn = session.conn;
         String linkId = stream.meta().optString("linkId", null);
         String keyId = stream.meta().optString("keyId", null);
         String sni = stream.meta().optString("sni", "?");
@@ -74,7 +75,7 @@ final class Visitors {
         }
         TlsEndpoint tls = new TlsEndpoint(ctx, stream.in(), stream.out());
         try {
-            RemoteSigning.enter(new RemoteSigning.Context(link, stream.id(), keyId));
+            RemoteSigning.enter(new RemoteSigning.Context(link, session, HubLink.fullStreamId(conn, stream.id()), keyId));
             try {
                 tls.handshake();
             } finally {
@@ -84,6 +85,34 @@ final class Visitors {
             LOG.debug("TLS handshake for {} failed: {}", sni, e.getMessage());
             stream.reset(5);
             return;
+        }
+        byte[] replay = null;
+        if (target.gateHash != null) {
+            try {
+                boolean expired = target.gateExpiresAt > 0 && System.currentTimeMillis() > target.gateExpiresAt;
+                Gate.Decision d = Gate.decide(tls.plainIn(), target.gateHash, expired);
+                switch (d) {
+                    case Gate.Decision.Pass p -> replay = p.head();
+                    case Gate.Decision.SetCookie sc -> {
+                        HttpResponse.redirect(sc.location())
+                            .header("Set-Cookie", Gate.COOKIE + "=" + sc.token() + "; Path=/; Secure; HttpOnly; SameSite=Lax")
+                            .writeTo(tls.plainOut());
+                        tls.close();
+                        stream.close();
+                        return;
+                    }
+                    case Gate.Decision.Refuse r -> {
+                        HttpResponse.html(403, "<!doctype html><meta charset=utf-8><title>jailscale</title>"
+                            + "<p>이 링크는 방문 링크가 있어야 열립니다.</p>").writeTo(tls.plainOut());
+                        tls.close();
+                        stream.close();
+                        return;
+                    }
+                }
+            } catch (IOException e) {
+                stream.reset(6);
+                return;
+            }
         }
         Socket local = new Socket();
         try {
@@ -99,12 +128,16 @@ final class Visitors {
             }
             return;
         }
-        relay(tls, local, stream);
+        relay(tls, local, stream, replay);
     }
 
-    private static void relay(TlsEndpoint tls, Socket local, MuxStream stream) {
+    private static void relay(TlsEndpoint tls, Socket local, MuxStream stream, byte[] replay) {
         Thread toLocal = Thread.ofVirtual().name("visitor-in").start(() -> {
             try {
+                if (replay != null) {
+                    local.getOutputStream().write(replay);
+                    local.getOutputStream().flush();
+                }
                 copy(tls.plainIn(), local.getOutputStream());
                 local.shutdownOutput();
             } catch (IOException e) {

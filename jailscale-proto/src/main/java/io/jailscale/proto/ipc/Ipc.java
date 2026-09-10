@@ -79,11 +79,21 @@ public final class Ipc {
         private final ServerSocketChannel ch;
         private final Path path;
         private final Handler handler;
+        private final Object fileKey;
 
         Server(ServerSocketChannel ch, Path path, Handler handler) {
             this.ch = ch;
             this.path = path;
             this.handler = handler;
+            this.fileKey = fileKey(path);
+        }
+
+        private static Object fileKey(Path p) {
+            try {
+                return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class).fileKey();
+            } catch (IOException e) {
+                return null;
+            }
         }
 
         private void acceptLoop() {
@@ -126,10 +136,14 @@ public final class Ipc {
             }
         }
 
+        /** Closes the listener and removes the socket file only if it is still ours (a successor may have rebound the path). */
         @Override
         public void close() throws IOException {
             ch.close();
-            Files.deleteIfExists(path);
+            Object now = fileKey(path);
+            if (now == null || fileKey == null || now.equals(fileKey)) {
+                Files.deleteIfExists(path);
+            }
         }
     }
 

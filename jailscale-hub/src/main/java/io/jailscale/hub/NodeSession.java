@@ -5,7 +5,6 @@ import io.jailscale.crypto.NoiseException;
 import io.jailscale.proto.control.Codec;
 import io.jailscale.proto.control.CodecException;
 import io.jailscale.proto.control.Message;
-import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.mux.MuxSession;
 import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.mux.NoiseChannel;
@@ -15,35 +14,29 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * One node's control connection after the HTTP 101 (DESIGN.md §6, §7, §8, §9.3). The
- * Hello/HelloResponse exchange rides in the Noise handshake payloads; after that a
- * {@link MuxSession} carries stream-0 control messages and visitor streams.
+ * One connection from a node after the HTTP 101 (DESIGN.md §6, §7, §8). The Hello carries the
+ * connection index; index 0 is the control connection and handles registration, links,
+ * invites and signing on stream 0. Every connection carries visitor streams.
  */
 final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     private static final Log LOG = Log.get("session");
     static final int MIN_PROTO = 1;
     static final int IDLE_TIMEOUT_MS = 60_000;
-    static final int MAX_SIGNATURES_PER_STREAM = 4;
-    static final int MAX_SIGNATURES_PER_SECOND = 50;
-
-    /** What the hub remembers about a visitor stream it opened, for the signing checks. */
-    record VisitorStream(String linkId, String sni, int signatures) {}
+    static final int MAX_CONNECTIONS = 4;
 
     private final Hub hub;
     private final Socket socket;
     private final String remoteIp;
     private MuxSession mux;
     private String mkey;
+    private int conn;
+    private NodeGroup group;
     private volatile Store.NodeRec node;
     private volatile boolean closed;
-    private final Map<Long, VisitorStream> visitors = new ConcurrentHashMap<>();
-    private long signWindowStart;
-    private int signWindowCount;
+    private volatile boolean draining;
 
     NodeSession(Hub hub, Socket socket) {
         this.hub = hub;
@@ -55,8 +48,24 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         return mkey;
     }
 
+    int conn() {
+        return conn;
+    }
+
     Store.NodeRec node() {
         return node;
+    }
+
+    NodeGroup group() {
+        return group;
+    }
+
+    MuxSession mux() {
+        return mux;
+    }
+
+    boolean isDraining() {
+        return draining;
     }
 
     String remoteIp() {
@@ -83,16 +92,25 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                     rejected[0] = true;
                     return Codec.encode(new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED));
                 }
-                LOG.info("node {} connected from {} (v{}, {})", mkey, remoteIp, hello.version(), hello.os());
+                conn = hello.conn();
+                if (conn < 0 || conn >= MAX_CONNECTIONS || (conn > 0 && hub.store().node(mkey) == null)) {
+                    rejected[0] = true;
+                    return Codec.encode(new Message.Goodbye("bad-connection-index"));
+                }
+                LOG.info("node {} conn {} from {} (v{}, {})", mkey, conn, remoteIp, hello.version(), hello.os());
                 return Codec.encode(new Message.HelloResponse(Message.PROTO, MIN_PROTO, Hub.version(), hub.config().dnsSuffix()));
             });
             if (rejected[0]) {
                 return;
             }
+            if (hub.isHandingOff()) {
+                LOG.info("node {} arrived during hand-off; asking it to retry", mkey);
+                return;
+            }
             node = hub.store().node(mkey);
-            hub.registry().attach(this);
             mux = new MuxSession(ch, true, this);
-            if (node != null && hub.tls().isLoaded()) {
+            group = hub.registry().attach(this);
+            if (conn == 0 && node != null && hub.tls().isLoaded()) {
                 send(hub.tls().certUpdate());
             }
             mux.run();
@@ -103,8 +121,9 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 LOG.debug("session {} ended: {}", mkey, e.toString());
             }
         } finally {
-            hub.links().sessionEnded(this);
-            hub.registry().detach(this);
+            if (group != null) {
+                hub.registry().detach(this);
+            }
             close();
         }
     }
@@ -133,7 +152,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     @Override
     public void onClosed(MuxSession session, Throwable cause) {
         if (!closed) {
-            LOG.info("node {} disconnected{}", mkey, cause == null ? "" : ": " + cause.getMessage());
+            LOG.info("node {} conn {} disconnected{}", mkey, conn, cause == null ? "" : ": " + cause.getMessage());
         }
         close();
     }
@@ -143,9 +162,24 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         switch (m) {
             case Message.Ping p -> send(new Message.Pong(p.id()));
             case Message.Goodbye g -> {
-                LOG.info("node {} said goodbye: {}", mkey, g.reason());
+                LOG.info("node {} conn {} said goodbye: {}", mkey, conn, g.reason());
                 return false;
             }
+            case Message.SignRequest sr -> send(group.sign(sr));
+            default -> {
+                if (conn != 0) {
+                    LOG.warn("node {} conn {}: {} is only valid on the control connection", mkey, conn, m.type());
+                    send(new Message.Error(m.type(), "control-connection-only"));
+                    return true;
+                }
+                return handleControl(m);
+            }
+        }
+        return true;
+    }
+
+    private boolean handleControl(Message m) throws IOException {
+        switch (m) {
             case Message.RegisterRequest r -> {
                 Registrar.Decision d = hub.registrar().decide(mkey, r, remoteIp);
                 if (d.node() != null) {
@@ -159,8 +193,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             case Message.InviteCreate ic -> send(hub.invites().createForNode(this, ic));
             case Message.AdminLinkRequest a -> send(new Message.Error(a.type(), "not-implemented"));
             case Message.LinkOpen lo -> send(hub.links().open(this, lo));
-            case Message.LinkClose lc -> hub.links().close(this, lc.linkId());
-            case Message.SignRequest sr -> send(sign(sr));
+            case Message.LinkClose lc -> hub.links().close(group, lc.linkId());
             default -> {
                 LOG.warn("node {}: unexpected {} from node", mkey, m.type());
                 send(new Message.Error(m.type(), "unexpected"));
@@ -169,62 +202,10 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         return true;
     }
 
-    /** The four conditions of DESIGN.md §9.3, then the signature. */
-    private Message sign(Message.SignRequest sr) {
-        VisitorStream vs = visitors.get(sr.streamId());
-        MuxStream stream = mux.stream(sr.streamId());
-        if (vs == null || stream == null) {
-            return reject(sr, "not-your-stream");
-        }
-        Links.Link link = hub.links().byId(vs.linkId());
-        if (link == null || link.session() != this || !link.name().equals(hub.links().nameOf(vs.sni()))) {
-            return reject(sr, "name-not-yours");
-        }
-        if (vs.signatures() >= MAX_SIGNATURES_PER_STREAM) {
-            return reject(sr, "too-many-signatures");
-        }
-        synchronized (this) {
-            long now = System.currentTimeMillis();
-            if (now - signWindowStart >= 1000) {
-                signWindowStart = now;
-                signWindowCount = 0;
-            }
-            if (++signWindowCount > MAX_SIGNATURES_PER_SECOND) {
-                return reject(sr, "rate-limited");
-            }
-        }
-        visitors.put(sr.streamId(), new VisitorStream(vs.linkId(), vs.sni(), vs.signatures() + 1));
-        try {
-            byte[] sig = hub.tls().sign(sr.keyId(), sr.digest());
-            if (sig == null) {
-                return reject(sr, "unknown-key");
-            }
-            return new Message.SignResponse(sr.streamId(), sig, null);
-        } catch (GeneralSecurityException e) {
-            return reject(sr, "sign-failed");
-        }
-    }
-
-    private Message reject(Message.SignRequest sr, String reason) {
-        LOG.warn("node {}: signature refused for stream {}: {}", mkey, sr.streamId(), reason);
-        return new Message.SignResponse(sr.streamId(), null, reason);
-    }
-
-    /** Opens a visitor stream toward this node for {@code link}; the SNI router relays into it. */
-    MuxStream openVisitor(Links.Link link, String sni, String visitorAddr, String keyId) throws IOException {
-        MuxSession s = mux;
-        if (s == null || closed) {
-            throw new IOException("node session not ready");
-        }
-        JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("sni", sni)
-            .put("visitorAddr", visitorAddr).put("keyId", keyId).build();
-        MuxStream stream = s.open(meta, false);
-        visitors.put(stream.id(), new VisitorStream(link.linkId(), sni, 0));
-        return stream;
-    }
-
     void visitorDone(MuxStream stream) {
-        visitors.remove(stream.id());
+        if (group != null) {
+            group.visitorDone(this, stream);
+        }
     }
 
     void send(Message m) throws IOException {
@@ -258,7 +239,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     /** Pushes a certificate change to a registered node. */
     void certChanged() {
-        if (node != null) {
+        if (node != null && conn == 0) {
             try {
                 sendCert();
             } catch (IOException e) {
@@ -274,6 +255,35 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             // closing anyway
         }
         close();
+    }
+
+    /**
+     * Hand-off (DESIGN.md §7.7): the node is asked to reconnect elsewhere; this connection stays
+     * open only for the streams already on it and closes once they are gone.
+     */
+    void drain() {
+        draining = true;
+        try {
+            send(new Message.Goodbye(Message.Goodbye.DRAINING));
+        } catch (IOException e) {
+            close();
+            return;
+        }
+        Thread.ofVirtual().name("drain-" + mkey).start(() -> {
+            long deadline = System.currentTimeMillis() + Hub.DRAIN_TIMEOUT_MS;
+            try {
+                while (!closed && System.currentTimeMillis() < deadline) {
+                    MuxSession s = mux;
+                    if (s == null || s.isClosed() || s.streamCount() == 0) {
+                        break;
+                    }
+                    Thread.sleep(200);
+                }
+            } catch (InterruptedException ignored) {
+                // fall through
+            }
+            close();
+        });
     }
 
     @Override

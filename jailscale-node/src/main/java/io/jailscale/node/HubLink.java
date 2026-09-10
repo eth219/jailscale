@@ -13,18 +13,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
 
 /**
- * The node's long-lived control connection (DESIGN.md §6, §7, §8): connect, Hello, register if
- * needed, then run the multiplexer; reconnect with backoff when it drops.
+ * The node's connections to the hub (DESIGN.md §6, §7, §8): connection 0 carries control and
+ * registration; {@code --connections N} adds N-1 more that only carry visitor streams. On a hub
+ * hand-off ({@code Goodbye(draining)}) the current sessions are kept for their streams while a
+ * fresh set is opened, so nothing in flight is cut (§7.7).
  */
-final class HubLink implements AutoCloseable, MuxSession.Listener {
+final class HubLink implements AutoCloseable {
 
     private static final Log LOG = Log.get("link");
     private static final long[] BACKOFF_MS = {1000, 2000, 4000, 8000, 16000, 30000};
+    static final long DRAIN_TIMEOUT_MS = 60_000;
+    static final int CONN_SHIFT = 24;
 
     /** Credentials for the next RegisterRequest; cleared once registered. */
     record Credentials(String invite, String code, String authKey, String user) {}
@@ -35,7 +41,58 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
 
         void onCert(Message.CertUpdate cert);
 
-        void onVisitor(HubLink link, MuxStream stream);
+        void onVisitor(HubLink link, Session session, MuxStream stream);
+    }
+
+    /** One connection to the hub. */
+    final class Session implements MuxSession.Listener {
+        final int conn;
+        final MuxSession mux;
+        final HubClient.Connected connected;
+        final CountDownLatch done = new CountDownLatch(1);
+        volatile boolean draining;
+
+        Session(int conn, HubClient.Connected c) {
+            this.conn = conn;
+            this.connected = c;
+            this.mux = new MuxSession(c.channel(), false, this);
+        }
+
+        @Override
+        public void onControl(MuxSession session, byte[] json) throws IOException {
+            Message m;
+            try {
+                m = Codec.decode(json);
+            } catch (CodecException e) {
+                throw new IOException("bad control message: " + e.getMessage());
+            }
+            if (!handle(this, m)) {
+                session.close();
+            }
+        }
+
+        @Override
+        public void onOpen(MuxSession session, MuxStream stream) {
+            Thread.ofVirtual().name("visitor-" + conn + "-" + stream.id()).start(() -> events.onVisitor(HubLink.this, this, stream));
+        }
+
+        @Override
+        public void onClosed(MuxSession session, Throwable cause) {
+            if (cause != null && running && !draining) {
+                lastError = cause.getMessage();
+            }
+            sessionEnded(this);
+            done.countDown();
+        }
+
+        void close() {
+            mux.close();
+            try {
+                connected.socket().close();
+            } catch (IOException ignored) {
+                // closing
+            }
+        }
     }
 
     private final NodeState state;
@@ -44,8 +101,9 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
     private volatile Credentials credentials;
     private volatile boolean running;
     private volatile boolean stopReconnecting;
-    private volatile MuxSession mux;
-    private volatile HubClient.Connected connected;
+    private volatile Session primary;
+    private final Map<Integer, Session> extras = new ConcurrentHashMap<>();
+    private final List<Session> draining = new CopyOnWriteArrayList<>();
     private volatile String lastError;
     private volatile Message.RegisterResponse lastRegister;
     private final Map<String, CompletableFuture<Message>> waiting = new ConcurrentHashMap<>();
@@ -61,7 +119,10 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
         this.credentials = creds;
         this.stopReconnecting = false;
         if (running) {
-            disconnect(); // reconnect with the new credentials
+            Session p = primary;
+            if (p != null) {
+                p.close(); // reconnect with the new credentials
+            }
             return;
         }
         running = true;
@@ -69,8 +130,16 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
     }
 
     boolean isConnected() {
-        MuxSession m = mux;
-        return m != null && !m.isClosed();
+        Session p = primary;
+        return p != null && !p.mux.isClosed();
+    }
+
+    int connectionCount() {
+        return (isConnected() ? 1 : 0) + extras.size();
+    }
+
+    int drainingCount() {
+        return draining.size();
     }
 
     String lastError() {
@@ -93,13 +162,19 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
         return lastRegister;
     }
 
+    // --- connection loop ---------------------------------------------------------------------
+
     private void loop() {
         int attempt = 0;
         while (running && !stopReconnecting) {
+            Session p = null;
             try {
-                connectOnce();
+                p = connectOnce(0);
+                primary = p;
                 attempt = 0;
-                mux.run(); // returns when the session ends
+                p.mux.start();
+                afterPrimaryConnected(p);
+                p.done.await(); // ends on disconnect or when the session moves to draining
             } catch (NoiseException e) {
                 lastError = "hub key mismatch: the hub's key is not the pinned one (" + e.getMessage() + ")";
                 LOG.error(lastError);
@@ -109,11 +184,20 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
                 if (running && !stopReconnecting) {
                     LOG.warn("connection lost: {}", lastError);
                 }
+            } catch (InterruptedException e) {
+                return;
             } finally {
-                disconnect();
+                if (p != null && primary == p) {
+                    primary = null;
+                    p.close();
+                    closeExtras();
+                }
             }
             if (!running || stopReconnecting) {
                 break;
+            }
+            if (p != null && p.draining) {
+                continue; // hand-off: reconnect right away
             }
             long wait = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
             try {
@@ -125,7 +209,7 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
         running = false;
     }
 
-    private void connectOnce() throws IOException, NoiseException {
+    private Session connectOnce(int conn) throws IOException, NoiseException {
         SSLContext ctx;
         try {
             ctx = HubClient.clientContext(state);
@@ -138,60 +222,128 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
         if (state.nextHubKey != null) {
             keys.add(state.nextHubKey);
         }
-        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), 0);
+        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn);
         HubClient.Connected c = HubClient.connect(state.hubHost, state.hubAddr, state.hubPort, ctx, verify, state.machineKey, keys, hello);
-        if (!c.usedHubKey().equals(state.hubKey)) {
-            LOG.info("hub key rotation complete; pinning the new key");
-            state.hubKey = c.usedHubKey();
-            state.nextHubKey = null;
-            state.hubKeyActivatesAt = 0;
-            state.save();
+        if (conn == 0) {
+            if (!c.usedHubKey().equals(state.hubKey)) {
+                LOG.info("hub key rotation complete; pinning the new key");
+                state.hubKey = c.usedHubKey();
+                state.nextHubKey = null;
+                state.hubKeyActivatesAt = 0;
+                state.save();
+            }
+            if (c.hello().dnsSuffix() != null && !c.hello().dnsSuffix().equals(state.dnsSuffix)) {
+                state.dnsSuffix = c.hello().dnsSuffix();
+                state.save();
+            }
+            lastError = null;
+            LOG.info("connected to {} (hub v{})", state.hubHost, c.hello().version());
         }
-        if (c.hello().dnsSuffix() != null && !c.hello().dnsSuffix().equals(state.dnsSuffix)) {
-            state.dnsSuffix = c.hello().dnsSuffix();
-            state.save();
-        }
-        connected = c;
-        mux = new MuxSession(c.channel(), false, this);
-        lastError = null;
-        LOG.info("connected to {} (hub v{})", state.hubHost, c.hello().version());
+        return new Session(conn, c);
+    }
+
+    private void afterPrimaryConnected(Session p) throws IOException {
         if (!state.registered) {
             Credentials cr = credentials;
             send(new Message.RegisterRequest(hostname(), osName(), cr == null ? null : cr.user(),
                 cr == null ? null : cr.invite(), cr == null ? null : cr.code(), cr == null ? null : cr.authKey()));
         } else {
-            Thread.ofVirtual().name("link-connected").start(() -> events.onConnected(this));
+            onRegistered();
         }
     }
 
-    // --- MuxSession.Listener -----------------------------------------------------------------
+    /** Registered (now or earlier): reopen links and bring up the extra connections. */
+    private void onRegistered() {
+        Thread.ofVirtual().name("link-connected").start(() -> {
+            events.onConnected(this);
+            openExtras();
+        });
+    }
 
-    @Override
-    public void onControl(MuxSession session, byte[] json) throws IOException {
-        Message m;
+    private void openExtras() {
+        int want = Math.max(1, Math.min(state.connections, 4));
+        for (int i = 1; i < want; i++) {
+            if (extras.containsKey(i) || primary == null) {
+                continue;
+            }
+            try {
+                Session s = connectOnce(i);
+                extras.put(i, s);
+                s.mux.start();
+                LOG.info("extra connection {} up", i);
+            } catch (IOException | NoiseException e) {
+                LOG.warn("extra connection {} failed: {}", i, e.getMessage());
+            }
+        }
+    }
+
+    private void closeExtras() {
+        for (Session s : new ArrayList<>(extras.values())) {
+            s.close();
+        }
+        extras.clear();
+    }
+
+    private void sessionEnded(Session s) {
+        if (draining.remove(s)) {
+            LOG.info("drained connection {} closed", s.conn);
+            return;
+        }
+        if (s.conn > 0) {
+            extras.remove(s.conn, s);
+            if (running && primary != null && !primary.mux.isClosed()) {
+                Thread.ofVirtual().start(() -> {
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ignored) {
+                        return;
+                    }
+                    openExtras();
+                });
+            }
+        }
+    }
+
+    /** Hand-off: keep every current session for its streams, reconnect the whole set now. */
+    private void beginDraining() {
+        Session p = primary;
+        List<Session> all = new ArrayList<>();
+        if (p != null) {
+            all.add(p);
+        }
+        all.addAll(extras.values());
+        extras.clear();
+        for (Session s : all) {
+            s.draining = true;
+            draining.add(s);
+            Thread.ofVirtual().name("drain-" + s.conn).start(() -> drainWatch(s));
+        }
+        for (CompletableFuture<Message> f : waiting.values()) {
+            f.completeExceptionally(new IOException("hub is handing off"));
+        }
+        waiting.clear();
+        primary = null;
+        LOG.info("hub is handing off: keeping {} connection(s) for in-flight streams, reconnecting", all.size());
+        if (p != null) {
+            p.done.countDown(); // the loop reconnects immediately without closing p
+        }
+    }
+
+    private void drainWatch(Session s) {
+        long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
         try {
-            m = Codec.decode(json);
-        } catch (CodecException e) {
-            throw new IOException("bad control message: " + e.getMessage());
+            while (!s.mux.isClosed() && s.mux.streamCount() > 0 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(200);
+            }
+        } catch (InterruptedException ignored) {
+            // fall through
         }
-        if (!handle(m)) {
-            session.close();
-        }
+        s.close();
     }
 
-    @Override
-    public void onOpen(MuxSession session, MuxStream stream) {
-        Thread.ofVirtual().name("visitor-" + stream.id()).start(() -> events.onVisitor(this, stream));
-    }
+    // --- control messages --------------------------------------------------------------------
 
-    @Override
-    public void onClosed(MuxSession session, Throwable cause) {
-        if (cause != null && running) {
-            lastError = cause.getMessage();
-        }
-    }
-
-    private boolean handle(Message m) throws IOException {
+    private boolean handle(Session s, Message m) throws IOException {
         switch (m) {
             case Message.RegisterResponse r -> {
                 lastRegister = r;
@@ -203,7 +355,7 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
                         state.save();
                         credentials = null;
                         LOG.info("registered as node {} for {}", r.nodeId(), r.user());
-                        Thread.ofVirtual().name("link-connected").start(() -> events.onConnected(this));
+                        onRegistered();
                     }
                     case Message.RegisterResponse.PENDING -> LOG.info("waiting for admin approval");
                     default -> {
@@ -221,6 +373,12 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
                 LOG.info("hub announced key rotation, activates at {}", k.activatesAt());
             }
             case Message.Goodbye g -> {
+                if (g.reason().equals(Message.Goodbye.DRAINING)) {
+                    if (s == primary) {
+                        beginDraining();
+                    }
+                    return true; // keep the session open for its streams
+                }
                 lastError = "hub said goodbye: " + g.reason();
                 if (g.reason().equals(Message.Goodbye.REVOKED) || g.reason().equals(Message.Goodbye.UPGRADE_REQUIRED)) {
                     stopReconnecting = true;
@@ -267,7 +425,12 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
         return false;
     }
 
-    /** Sends a request and waits for the reply registered under {@code replyKey} (or an Error). */
+    /** Full stream id as the hub sees it: {@code (conn << 24) | localId}. */
+    static long fullStreamId(int conn, long localId) {
+        return ((long) conn << CONN_SHIFT) | (localId & ((1L << CONN_SHIFT) - 1));
+    }
+
+    /** Sends a request on the control connection and waits for the reply registered under {@code replyKey}. */
     Message request(Message m, String replyKey, long timeoutMs) throws IOException, TimeoutException {
         if (!isConnected()) {
             throw new IOException(lastError != null ? "not connected: " + lastError : "not connected");
@@ -289,40 +452,57 @@ final class HubLink implements AutoCloseable, MuxSession.Listener {
         }
     }
 
-    void send(Message m) throws IOException {
-        MuxSession s = mux;
-        if (s == null || s.isClosed()) {
-            throw new IOException("not connected");
+    /**
+     * Sends a request on the session that owns the stream and waits for its reply. Signing
+     * requests must reach the hub process that delivered the stream (it may be a draining one),
+     * and the hub accepts them on any connection.
+     */
+    Message requestOn(Session s, Message m, String replyKey, long timeoutMs) throws IOException, TimeoutException {
+        if (s.mux.isClosed()) {
+            throw new IOException("session closed");
         }
-        s.control(Codec.encode(m));
+        CompletableFuture<Message> f = new CompletableFuture<>();
+        if (waiting.putIfAbsent(replyKey, f) != null) {
+            throw new IOException("another " + m.type() + " is in flight");
+        }
+        try {
+            s.mux.control(Codec.encode(m));
+            return f.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted");
+        } catch (java.util.concurrent.ExecutionException e) {
+            throw new IOException(e.getCause());
+        } finally {
+            waiting.remove(replyKey, f);
+        }
     }
 
-    private void disconnect() {
-        MuxSession m = mux;
-        HubClient.Connected c = connected;
-        mux = null;
-        connected = null;
-        for (CompletableFuture<Message> f : waiting.values()) {
-            f.completeExceptionally(new IOException("disconnected"));
+    void send(Message m) throws IOException {
+        Session p = primary;
+        if (p == null || p.mux.isClosed()) {
+            throw new IOException("not connected");
         }
-        waiting.clear();
-        if (m != null) {
-            m.close();
-        }
-        if (c != null) {
-            try {
-                c.socket().close();
-            } catch (IOException ignored) {
-                // closing
-            }
-        }
+        p.mux.control(Codec.encode(m));
     }
 
     @Override
     public synchronized void close() {
         running = false;
         stopReconnecting = true;
-        disconnect();
+        Session p = primary;
+        primary = null;
+        if (p != null) {
+            p.close();
+        }
+        closeExtras();
+        for (Session s : draining) {
+            s.close();
+        }
+        for (CompletableFuture<Message> f : waiting.values()) {
+            f.completeExceptionally(new IOException("closed"));
+        }
+        waiting.clear();
         if (thread != null) {
             thread.interrupt();
         }

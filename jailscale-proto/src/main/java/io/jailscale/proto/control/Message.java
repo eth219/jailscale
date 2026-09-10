@@ -27,6 +27,8 @@ public sealed interface Message {
         public static final String UPGRADE_REQUIRED = "upgrade-required";
         public static final String REVOKED = "revoked";
         public static final String SHUTDOWN = "shutdown";
+        /** Hand-off: reconnect now, keep this connection only for streams already on it. */
+        public static final String DRAINING = "draining";
         @Override public String type() { return "Goodbye"; }
     }
 
