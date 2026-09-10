@@ -34,6 +34,7 @@ public final class Hub implements AutoCloseable {
     private final HubTls tls;
     private final Links links;
     private final SniRouter router;
+    private final AdminWeb adminWeb;
     private io.jailscale.hub.dns.DnsResponder dns;
     private AcmeManager acme;
     private final FileChannel lockChannel;
@@ -87,6 +88,17 @@ public final class Hub implements AutoCloseable {
         this.tls = new HubTls(config.hostname());
         this.links = new Links(config, store);
         this.router = new SniRouter(this);
+        this.adminWeb = new AdminWeb(this);
+        // Flags seed the runtime settings once; afterwards /admin and `jailhub setting` own them.
+        if (!store.hasSetting(Store.SETTING_INVITE_POLICY)) {
+            store.setSetting(Store.SETTING_INVITE_POLICY, config.invitePolicy());
+        }
+        if (!store.hasSetting(Store.SETTING_REGISTRATION)) {
+            store.setSetting(Store.SETTING_REGISTRATION, config.registrationOpen() ? "open" : "invite");
+        }
+        if (!store.hasSetting(Store.SETTING_KNOCK)) {
+            store.setSetting(Store.SETTING_KNOCK, config.knock() ? "on" : "off");
+        }
     }
 
     /** Like tryLock, but a lock held by this same JVM (tests) also reads as "held". */
@@ -233,6 +245,10 @@ public final class Hub implements AutoCloseable {
 
     HttpFront front() {
         return front;
+    }
+
+    AdminWeb adminWeb() {
+        return adminWeb;
     }
 
     static String version() {

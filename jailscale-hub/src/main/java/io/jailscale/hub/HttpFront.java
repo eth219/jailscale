@@ -65,8 +65,11 @@ final class HttpFront {
         }
     }
 
-    HttpResponse route(HttpRequest req) {
+    HttpResponse route(HttpRequest req) throws IOException {
         String path = req.path();
+        if (path.equals("/admin") || path.startsWith("/admin/")) {
+            return hub.adminWeb().handle(req);
+        }
         if (!req.method().equals("GET") && !req.method().equals("HEAD")) {
             return HttpResponse.text(405, "method not allowed");
         }

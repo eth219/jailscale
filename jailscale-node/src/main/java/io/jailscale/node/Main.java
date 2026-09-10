@@ -20,7 +20,7 @@ public final class Main {
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate]
         jailscale gate NAME [--new-link [--ttl 24h] | --off]
         jailscale ls | close NAME
-        jailscale status | down | leave | netcheck | daemon
+        jailscale status | down | leave | netcheck | admin | daemon
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
         jailscale version
         """;
@@ -56,6 +56,12 @@ public final class Main {
                 case "invite" -> invite(cfg, a);
                 case "open" -> open(cfg, a);
                 case "ls" -> ls(cfg);
+                case "admin" -> {
+                    JsonObject r = call(cfg, JsonObject.builder().put("cmd", "admin").build(), false);
+                    String url = r.string("url");
+                    System.out.println("관리 페이지 (60초 안에 열어야 합니다): " + url);
+                    openBrowser(url);
+                }
                 case "gate" -> {
                     String name = a.positional(1);
                     if (name == null) {
@@ -233,6 +239,20 @@ public final class Main {
             Thread.sleep(100);
         }
         throw new IOException("daemon did not start; see " + cfg.daemonLog());
+    }
+
+    /** Opens a URL in the user's browser without AWT (DESIGN.md §4). */
+    static void openBrowser(String url) {
+        List<String> cmd = switch (HubLink.osName()) {
+            case "macos" -> List.of("open", url);
+            case "windows" -> List.of("rundll32", "url.dll,FileProtocolHandler", url);
+            default -> List.of("xdg-open", url);
+        };
+        try {
+            new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+        } catch (IOException e) {
+            // headless: the URL is printed anyway
+        }
     }
 
     private static boolean copyToClipboard(String text) {

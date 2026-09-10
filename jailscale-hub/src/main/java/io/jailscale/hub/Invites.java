@@ -37,7 +37,7 @@ final class Invites {
             return new Message.Error(ic.type(), "not-registered");
         }
         boolean admin = store.isAdmin(node.user());
-        if (HubConfig.POLICY_ADMINS.equals(config.invitePolicy()) && !admin && !ic.self()) {
+        if (HubConfig.POLICY_ADMINS.equals(store.setting(Store.SETTING_INVITE_POLICY, HubConfig.POLICY_MEMBERS)) && !admin && !ic.self()) {
             return new Message.Error(ic.type(), "policy: only admins may invite new users");
         }
         String user = ic.self() ? node.user() : ic.user();

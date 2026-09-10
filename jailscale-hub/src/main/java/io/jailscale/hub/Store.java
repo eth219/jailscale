@@ -53,6 +53,11 @@ final class Store implements AutoCloseable {
     private final Set<String> admins = new LinkedHashSet<>();
     private final Map<String, PendingRec> pending = new LinkedHashMap<>();
     private final Map<String, NameRec> names = new LinkedHashMap<>();
+    private final Map<String, String> settings = new LinkedHashMap<>();
+
+    static final String SETTING_INVITE_POLICY = "invitePolicy";
+    static final String SETTING_REGISTRATION = "registration";
+    static final String SETTING_KNOCK = "knock";
     private String nextHubKey; // hkey: text of the next public key during rotation, or null
     private long hubKeyActivatesAt;
 
@@ -155,6 +160,20 @@ final class Store implements AutoCloseable {
 
     synchronized long hubKeyActivatesAt() {
         return hubKeyActivatesAt;
+    }
+
+    synchronized String setting(String key, String dflt) {
+        return settings.getOrDefault(key, dflt);
+    }
+
+    synchronized boolean hasSetting(String key) {
+        return settings.containsKey(key);
+    }
+
+    synchronized void setSetting(String key, String value) throws IOException {
+        if (!value.equals(settings.get(key))) {
+            append(JsonObject.builder().put("e", "setting").put("key", key).put("value", value));
+        }
     }
 
     // --- mutations (each appends one event) --------------------------------------------------
@@ -367,6 +386,7 @@ final class Store implements AutoCloseable {
             case "name-claimed" -> names.put(ev.string("name"), new NameRec(ev.string("name"), ev.string("user"),
                 ev.optString("mkey", null), ev.optString("local", null), ev.lng("at")));
             case "name-released" -> names.remove(ev.string("name"));
+            case "setting" -> settings.put(ev.string("key"), ev.string("value"));
             case "hubkey-rotation" -> {
                 nextHubKey = ev.string("next");
                 hubKeyActivatesAt = ev.lng("activatesAt");
@@ -437,6 +457,9 @@ final class Store implements AutoCloseable {
         for (NameRec r : names.values()) {
             events.add(JsonObject.builder().put("e", "name-claimed").put("name", r.name()).put("user", r.user())
                 .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
+        }
+        for (Map.Entry<String, String> e : settings.entrySet()) {
+            events.add(JsonObject.builder().put("e", "setting").put("key", e.getKey()).put("value", e.getValue()).build().asMap());
         }
         if (nextHubKey != null) {
             events.add(JsonObject.builder().put("e", "hubkey-rotation").put("next", nextHubKey).put("activatesAt", hubKeyActivatesAt).build().asMap());

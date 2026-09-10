@@ -33,8 +33,9 @@ final class AdminIpc implements Ipc.Handler {
                 .put("pending", store.pending().size())
                 .put("invites", store.invites().size())
                 .put("admins", new ArrayList<>(store.admins()))
-                .put("registration", hub.config().registrationOpen() ? "open" : "invite")
-                .put("invitePolicy", hub.config().invitePolicy()));
+                .put("registration", store.setting(Store.SETTING_REGISTRATION, "invite"))
+                .put("invitePolicy", store.setting(Store.SETTING_INVITE_POLICY, "members"))
+                .put("knock", store.setting(Store.SETTING_KNOCK, "on")));
 
             case "node-list" -> {
                 List<Object> rows = new ArrayList<>();
@@ -161,7 +162,12 @@ final class AdminIpc implements Ipc.Handler {
                 store.removeAdmin(req.string("user"));
                 reply.ok();
             }
-            case "admin-login-link" -> reply.error("not implemented until M3 (/admin web)");
+            case "admin-login-link" -> reply.done(JsonObject.builder().put("ok", true).put("url", hub.adminWeb().loginLink("shell"))
+                .put("expiresAt", System.currentTimeMillis() + AdminWeb.LOGIN_LINK_TTL_MS));
+            case "setting" -> {
+                store.setSetting(req.string("key"), req.string("value"));
+                reply.ok();
+            }
             case "key-rotate" -> {
                 long grace = req.has("grace") ? req.lng("grace") : 30 * 86400;
                 long activatesAt = hub.rotateKey(grace);
@@ -201,7 +207,7 @@ final class AdminIpc implements Ipc.Handler {
     static JsonObject requestFor(Args a) {
         String w0 = a.positional(0);
         String w1 = a.positional(1);
-        String cmd = w1 == null ? w0 : w0 + "-" + w1;
+        String cmd = w1 == null || w0.equals("setting") ? w0 : w0 + "-" + w1;
         JsonObject.Builder b = JsonObject.builder().put("cmd", cmd);
         switch (cmd) {
             case "node-approve", "node-deny", "node-remove", "node-rename" -> b.put("mkey", need(a.positional(2), "<node>")).put("user", a.get("user"));
@@ -215,6 +221,7 @@ final class AdminIpc implements Ipc.Handler {
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null);
             case "admin-add", "admin-remove" -> b.put("user", need(a.positional(2), "<user>"));
             case "key-rotate" -> b.put("grace", a.has("grace") ? a.seconds("grace", 0) : null);
+            case "setting" -> b.put("key", need(a.positional(1), "<key>")).put("value", need(a.positional(2), "<value>"));
             default -> { }
         }
         return b.build();

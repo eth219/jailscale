@@ -47,10 +47,10 @@ final class Registrar {
             return register(mkey, owner, hostname, os, false);
         }
         // knock
-        if (!config.knock()) {
+        if ("off".equals(store.setting(Store.SETTING_KNOCK, "on"))) {
             return rejected("knock-disabled");
         }
-        if (config.registrationOpen()) {
+        if ("open".equals(store.setting(Store.SETTING_REGISTRATION, "invite"))) {
             return register(mkey, self != null ? self : hostname, hostname, os, false);
         }
         if (store.pending(mkey) == null) {
