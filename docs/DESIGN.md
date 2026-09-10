@@ -141,7 +141,7 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 - CI 매트릭스: linux-amd64, linux-arm64, macos-arm64, macos-amd64, windows-amd64
 - 매 릴리스마다 fallback으로 `jailscale-all.jar` (JVM 25 필요) 동봉 → **범용성 보증**
 
-**경량 예산 CI 게이트 (M0부터)**
+**경량 예산 CI 게이트 (CI 도입 시 활성화. 그 전에는 마일스톤마다 수동 측정해 기록)**
 
 | 측정 | 기준 | 방법 |
 |---|---|---|
@@ -916,8 +916,8 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 
 | # | 범위 | 완료 기준 |
 |---|---|---|
-| **M0** | 프로젝트 골격 · GraalVM 빌드 파이프라인 · `jailscale-crypto`(BLAKE2s·HKDF·X25519·ChaCha·Noise IK) · **경량 예산 측정 하네스** | RFC 7693/7748/8439 테스트 벡터 통과. `-Pnative`로 TLS 연결 + Noise 핸드셰이크를 도는 바이너리 생성, RSS·크기를 CI에 기록하고 §4 게이트 활성화 |
-| **M1** | 컨트롤 채널 · 자체 HTTP/1.1 · hkey 부트스트랩·회전 · 버전 협상 · mux(스트림 0만) · 초대·코드·auth-key·두드리기 · **로컬 IPC (노드·hub)** · 파일 저장소 | `jailscale invite`로 만든 링크로 다른 기기가 `jailscale up --invite`만으로 가입한다. 키 회전 후 노드가 끊기지 않는다 |
+| **M0** ✅ | 프로젝트 골격 · Maven wrapper · GraalVM native 빌드 파이프라인 · `jailscale-crypto`(BLAKE2s·HKDF·X25519·ChaCha·Noise IK) | RFC 7693/7748/8439 벡터와 noise-c IK 벡터 통과. `./native.sh`로 node·hub 바이너리 생성. 기준선: 4.9 MiB, RSS 8.4 MB, 콜드 스타트 5 ms (자리표시자 main) |
+| **M1** | 컨트롤 채널 · 자체 HTTP/1.1 · hkey 부트스트랩·회전 · 버전 협상 · mux(스트림 0만) · 초대·코드·auth-key·두드리기 · **로컬 IPC (노드·hub)** · 파일 저장소 · **경량 예산 측정 스크립트** | `jailscale invite`로 만든 링크로 다른 기기가 `jailscale up --invite`만으로 가입한다. 키 회전 후 노드가 끊기지 않는다. TLS+Noise가 들어간 바이너리의 크기·RSS·콜드 스타트를 M0 기준선과 비교해 기록 (CI 게이트는 CI 도입 시) |
 | **M2** | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림(다중 연결 포함) · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3000` 후 인터넷 브라우저에서 `https://<name>.hub.example.com`이 열린다. Let's Encrypt 스테이징에서 발급·갱신 통과. 서명 오라클 테스트(다른 이름의 스트림으로 요청 → 거부) 통과. 핸드셰이크 지연 실측 |
 | **M3** | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · `--registration open` | 게이트 링크 없이는 403. 로컬 WebSocket 앱이 그대로 동작. `--domain`으로 가져온 도메인이 노드 키로 열린다. `open 22 --tcp`로 SSH, `open 51820 --udp`로 WireGuard가 hub 포트를 통해 붙는다 |
 | **M4** | 릴리스 패키징 (5개 플랫폼 + fallback JAR) · 서비스 등록(systemd/launchd/Windows) · 참조 systemd 유닛 · Dockerfile · **nginx stream / HAProxy 참조 설정 + PROXY 프로토콜** · 퍼징·부하 · 예산 게이트 확정 | `brew install` / 단일 바이너리 배포. 방문자 1,000 동시 연결에서 예산 안. HAProxy 뒤에서 방문자 IP가 정확히 로그된다 |
