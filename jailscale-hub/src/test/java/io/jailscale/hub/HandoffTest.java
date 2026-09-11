@@ -11,7 +11,9 @@ import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
+import java.io.FilterInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -133,9 +135,10 @@ class HandoffTest {
         assertEquals(2, old.registry().get(Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).string("machineKey")).connections());
 
         // A visitor whose response is still streaming when the hand-off happens.
+        Progress progress = new Progress();
         CompletableFuture<HttpResponse> inFlight = CompletableFuture.supplyAsync(() -> {
             try {
-                return visit(port, "slow.hub.test");
+                return visitTracking(port, "slow.hub.test", progress);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -153,7 +156,8 @@ class HandoffTest {
         try {
             r = inFlight.get(20, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            throw new AssertionError(state("in-flight response never finished through the draining connection"), e);
+            throw new AssertionError(state("in-flight response never finished through the draining connection ["
+                + progress + "]"), e);
         }
         assertEquals(200, r.status());
         assertEquals("chunkchunkchunkchunkchunkchunk", r.bodyText());
@@ -177,6 +181,58 @@ class HandoffTest {
         // Admin IPC now reaches the new hub.
         JsonObject status = Ipc.call(root.resolve("hub/jailhub.sock"), JsonObject.builder().put("cmd", "status").build());
         assertEquals(1, status.integer("online"));
+    }
+
+    /** How far the in-flight visitor got, for a stall that has to say where it stopped. */
+    private static final class Progress {
+        private volatile String stage = "not started";
+        private volatile int bytes;
+        private volatile long lastByteAt;
+
+        @Override
+        public String toString() {
+            return stage + ", " + bytes + " byte(s) read"
+                + (lastByteAt == 0 ? ", none ever arrived"
+                    : ", last " + (System.currentTimeMillis() - lastByteAt) + " ms ago");
+        }
+    }
+
+    /** {@link #visit} with a running tally of what came back. */
+    private HttpResponse visitTracking(int port, String host, Progress p) throws Exception {
+        SSLContext ctx = Tls.clientContext(CERT, false);
+        try (SSLSocket s = Tls.connect(ctx, host, "127.0.0.1", port, true, 30_000)) {
+            p.stage = "TLS established";
+            Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
+            p.stage = "request sent, nothing back yet";
+            InputStream counted = new FilterInputStream(s.getInputStream()) {
+                @Override
+                public int read() throws IOException {
+                    int c = super.read();
+                    if (c >= 0) {
+                        record(1);
+                    }
+                    return c;
+                }
+
+                @Override
+                public int read(byte[] b, int off, int len) throws IOException {
+                    int n = super.read(b, off, len);
+                    if (n > 0) {
+                        record(n);
+                    }
+                    return n;
+                }
+
+                private void record(int n) {
+                    p.bytes += n;
+                    p.lastByteAt = System.currentTimeMillis();
+                    p.stage = "reading response";
+                }
+            };
+            HttpResponse r = Http.readResponse(counted, 65536);
+            p.stage = "complete";
+            return r;
+        }
     }
 
     private interface Check {

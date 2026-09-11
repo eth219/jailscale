@@ -221,6 +221,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("connected", link.isConnected())
             .put("connections", link.connectionCount())
             .put("draining", link.drainingCount())
+            .put("drainingDetail", link.drainingDetail())
             .put("registered", state.registered)
             .put("nodeId", state.nodeId > 0 ? Long.valueOf(state.nodeId) : null)
             .put("user", state.user)

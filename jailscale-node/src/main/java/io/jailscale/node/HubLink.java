@@ -142,6 +142,21 @@ final class HubLink implements AutoCloseable {
         return draining.size();
     }
 
+    /** Why each draining connection is still held, for diagnosing a hand-off that will not finish. */
+    public String drainingDetail() {
+        StringBuilder b = new StringBuilder();
+        for (Session s : draining) {
+            if (b.length() > 0) {
+                b.append("; ");
+            }
+            b.append("conn ").append(s.conn)
+                .append(" muxClosed=").append(s.mux.isClosed())
+                .append(" streams=").append(s.mux.streamCount())
+                .append(" socketClosed=").append(s.connected.socket().isClosed());
+        }
+        return b.length() == 0 ? "none" : b.toString();
+    }
+
     String lastError() {
         return lastError;
     }
@@ -339,6 +354,14 @@ final class HubLink implements AutoCloseable {
             // fall through
         }
         s.close();
+        // Only onClosed takes a session off this list, and it does not fire again for one the hub
+        // already closed. That happens two ways: the hub drops the connection before this watch
+        // starts, or an extra's own read loop reaches onClosed before beginDraining has added it,
+        // so the remove there finds nothing. Either way the entry outlives the connection and
+        // drainingCount() never returns to zero. Removing here covers both.
+        if (draining.remove(s)) {
+            LOG.info("drained connection {} closed", s.conn);
+        }
     }
 
     // --- control messages --------------------------------------------------------------------
