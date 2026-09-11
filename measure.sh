@@ -18,12 +18,23 @@ PORT=${PORT:-18443}
 CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 
 # Budget (ARCHITECTURE.md §14). Change only with a reason, in the same commit as the design table.
-B_BINARY_MIB=30
-B_NODE_IDLE_MB=28
-B_HUB_IDLE_MB=30
+# Per platform, because the same code measures differently on each and one shared number would have
+# to be the loosest: an amd64 binary is about 6.5 MiB bigger than the arm64 one, and Linux counts the
+# binary's own mapped pages in RSS where macOS largely does not -- on linux-amd64 about 25 MB of a
+# 40 MB idle RSS is the binary itself, clean and reclaimable, against 15 MB of anonymous memory.
 B_NODE_LOAD_MB=192
 B_HUB_LOAD_MB=160
 B_CLI_MS=50
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)
+    B_BINARY_MIB=30; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=30 ;;
+  Linux-x86_64)
+    B_BINARY_MIB=36; B_NODE_IDLE_MB=46; B_HUB_IDLE_MB=46 ;;
+  *)
+    # An unmeasured platform gets the loosest of the measured ones rather than a guess of its own.
+    echo "note: no budget measured for $(uname -s)-$(uname -m); using the widest known"
+    B_BINARY_MIB=36; B_NODE_IDLE_MB=46; B_HUB_IDLE_MB=46 ;;
+esac
 
 mkdir -p "$W/hub" "$W/app"
 cleanup() {
@@ -41,6 +52,13 @@ gate() { # gate <label> <value> <budget>
   fi
 }
 rss_mb() { echo "$(ps -o rss= -p "$1" | tr -d ' ') / 1024" | bc -l; }
+# On Linux most of RSS is the binary's own mapped pages, which are clean and reclaimable; the
+# anonymous share is what the process actually costs. Reported, not gated -- the budget stays on the
+# number `ps` reports, so the two platforms are compared on the same measurement.
+anon_note() {
+  [ -r "/proc/$1/status" ] || return 0
+  printf '   (%.1f anonymous)' "$(echo "$(awk '/^RssAnon:/{print $2}' "/proc/$1/status") / 1024" | bc -l)"
+}
 
 "$HUB" serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
   --state "$W/hub" --port-range none --http-listen none > "$W/hub.log" 2>&1 &
@@ -74,8 +92,10 @@ for b in "$HUB" "$NODE"; do
   printf '  %-10s %6.1f\n' "$(basename "$b")" "$mib"; gate "$(basename "$b") size" "$mib" "$B_BINARY_MIB"
 done
 echo "idle RSS after ${IDLE:-10}s, one link open (MB)"
-printf '  %-10s %6.1f\n' jailhub "$(rss_mb "$HUBPID")";  gate "hub idle RSS" "$(rss_mb "$HUBPID")" "$B_HUB_IDLE_MB"
-printf '  %-10s %6.1f\n' jailscale "$(rss_mb "$NODEPID")"; gate "node idle RSS" "$(rss_mb "$NODEPID")" "$B_NODE_IDLE_MB"
+printf '  %-10s %6.1f%s\n' jailhub "$(rss_mb "$HUBPID")" "$(anon_note "$HUBPID")"
+gate "hub idle RSS" "$(rss_mb "$HUBPID")" "$B_HUB_IDLE_MB"
+printf '  %-10s %6.1f%s\n' jailscale "$(rss_mb "$NODEPID")" "$(anon_note "$NODEPID")"
+gate "node idle RSS" "$(rss_mb "$NODEPID")" "$B_NODE_IDLE_MB"
 
 if [ -n "${LOAD:-}" ]; then
   # Visitors are held open at the same time, not fired and forgotten. curl --parallel churns

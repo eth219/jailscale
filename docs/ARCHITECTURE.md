@@ -964,21 +964,32 @@ rather than rebind them, which is not implemented.
 
 ## 14. Current characteristics
 
-Measured on arm64 macOS with the native binaries by `./measure.sh`, which starts a real hub and two
-node daemons on loopback, joins them with the real CLI and opens a link.
+Measured with the native binaries by `./measure.sh`, which starts a real hub and two node daemons on
+loopback, joins them with the real CLI and opens a link. Both columns are measured, on the two
+platforms CI can run the gate on; the budgets differ per platform for the reason below the table.
 
-| Measurement | Current | Budget |
-|---|---|---|
-| Binary size | 25.0 MiB (`jailhub`), 25.3 MiB (`jailscale`) | 30 MiB |
-| Node idle RSS | about 24.7 MB | 28 MB |
-| Hub idle RSS | about 24.7 MB | 30 MB |
-| RSS with 1,000 visitor sessions held open | node 87 MB, hub 77 MB | node 192 MB, hub 160 MB |
-| CLI cold start | about 6 ms (`jailscale status`, median of 10, IPC round trip included) | 50 ms |
+| Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
+|---|---|---|---|
+| Binary size | 25.0 MiB (`jailhub`), 25.3 MiB (`jailscale`) | 31.6 MiB, 31.9 MiB | 30 / 36 MiB |
+| Node idle RSS | about 24.7 MB | about 39.7 MB | 28 / 46 MB |
+| Hub idle RSS | about 24.7 MB | about 40.0 MB | 30 / 46 MB |
+| RSS with 1,000 visitor sessions held open | node 93 MB, hub 80 MB | node 90 MB, hub 90 MB | node 192 MB, hub 160 MB |
+| CLI cold start | about 7 ms (`jailscale status`, median of 10, IPC round trip included) | about 4.5 ms | 50 ms |
+
+**Linux is not 15 MB heavier; it counts differently.** The live hub, a GCP e2-micro with 969 MB of
+RAM, reports 41.1 MB of RSS, and its `smaps_rollup` splits that into **15.0 MB anonymous** —
+the heap, the stacks, everything the process actually owns — and 26.2 MB of file-backed pages, of
+which 25.7 MB is the `jailhub` binary's own mapped text and rodata: clean, shared with the page
+cache and reclaimable under pressure. macOS's `ps` attributes far fewer of those pages to the
+process, and the amd64 binary is 6.5 MiB larger than the arm64 one to begin with. The same figure
+came off a 16 GB CI runner as off the 969 MB instance, so this is the accounting, not heap sizing.
+`measure.sh` prints the anonymous share on Linux next to RSS, and still gates on RSS so that the
+two platforms are gated on the same measurement.
 
 `./measure.sh --check` fails when a number exceeds its budget. The budget values live at the top of
 the script and must match this table; they change only by a PR that states a reason. The `budget` job
-of the `ci` workflow runs it with `LOAD=1000` on every push to main and once a night, on
-linux-amd64 rather than the arm64 macOS of the table, so the budgets have to hold on both.
+of the `ci` workflow runs it with `LOAD=1000` on linux-amd64 for every push to main and once a
+night; the macOS column is what `./measure.sh` reports on the machine this is developed on.
 
 **Load is measured with the connections held open.** An earlier gate fired 1,000 short requests with
 `curl --parallel` and finished, which means 1,000 were never alive at once and the figure was roughly
@@ -1022,7 +1033,8 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   here; the keepalive and read timeout turn it into a reconnect. In CI it shows up as a
   Windows-only timeout with no assertion failure, seen in both `MuxSessionTest` and `RawPortTest`,
   and any end-to-end test that moves bytes both ways is exposed.
-- **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at.** Roughly 7.6 MB is JSSE
+- **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at**, and about 39.7 MB as
+  Linux counts it (§14: mostly the mapped binary, 15 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), so the remaining levers are a wider build-time
   initialisation whitelist and removing unused TLS suites and protocols.
 - **Per-visitor memory is about 60 KB on the node**, mostly the three `ByteBuffer`s a `TlsEndpoint`
