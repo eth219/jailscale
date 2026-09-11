@@ -1,8 +1,6 @@
 package io.jailscale.hub;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
+import com.sun.management.HotSpotDiagnosticMXBean;
 import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.http.Http;
@@ -15,6 +13,7 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -31,6 +30,8 @@ import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * DESIGN.md §7.7 hand-off and §8 multi-connection: a second hub takes over the same state
@@ -281,22 +282,27 @@ class HandoffTest {
     }
 
     /**
-     * Where the threads that carry a visitor stream currently are. The status line can say the
-     * stream is still open without saying who is sitting on it; this names the frame.
+     * Every thread whose stack touches jailscale code, virtual ones included.
+     * {@code Thread.getAllStackTraces()} lists platform threads only, and everything carrying a
+     * stream here is virtual, so the first version of this reported "none" and taught us nothing.
      */
     private static String stacks() {
-        StringBuilder b = new StringBuilder();
-        for (Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
-            String name = e.getKey().getName();
-            if (!name.startsWith("visitor") && !name.startsWith("drain") && !name.startsWith("mux")) {
-                continue;
+        try {
+            Path dir = Files.createTempDirectory("threaddump");
+            Path out = dir.resolve("threads.txt");
+            ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)
+                .dumpThreads(out.toString(), HotSpotDiagnosticMXBean.ThreadDumpFormat.TEXT_PLAIN);
+            StringBuilder b = new StringBuilder();
+            for (String block : Files.readString(out).split("\n\n")) {
+                if (block.contains("io.jailscale")) {
+                    b.append("\n    ").append(block.strip().replace("\n", "\n    "));
+                }
             }
-            b.append("\n    ").append(name).append(' ').append(e.getKey().getState());
-            StackTraceElement[] frames = e.getValue();
-            for (int i = 0; i < Math.min(6, frames.length); i++) {
-                b.append("\n      at ").append(frames[i]);
-            }
+            Files.deleteIfExists(out);
+            Files.deleteIfExists(dir);
+            return b.length() == 0 ? "none" : b.toString();
+        } catch (Exception e) {
+            return "unavailable: " + e;
         }
-        return b.length() == 0 ? "none" : b.toString();
     }
 }

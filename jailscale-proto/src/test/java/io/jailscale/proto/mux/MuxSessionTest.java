@@ -1,20 +1,18 @@
 package io.jailscale.proto.mux;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
+import com.sun.management.HotSpotDiagnosticMXBean;
 import io.jailscale.crypto.NoiseIk;
 import io.jailscale.crypto.X25519;
 import io.jailscale.proto.json.JsonObject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -24,6 +22,11 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Timeout(30)
 class MuxSessionTest {
@@ -35,27 +38,29 @@ class MuxSessionTest {
         LinkedBlockingQueue<MuxStream> nodeOpened, LinkedBlockingQueue<byte[]> hubCtrl, LinkedBlockingQueue<byte[]> nodeCtrl,
         CompletableFuture<Throwable> hubClosed, CompletableFuture<Throwable> nodeClosed) {}
 
-    /** Where every mux thread is parked, for the watchdog above. */
+    /**
+     * Every thread whose stack touches jailscale code, virtual ones included.
+     * {@code Thread.getAllStackTraces()} lists platform threads only, and everything carrying a
+     * stream here is virtual, so the first version of this reported "none" and taught us nothing.
+     */
     private static String stacks() {
-        StringBuilder b = new StringBuilder();
-        for (java.util.Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
-            StackTraceElement[] frames = e.getValue();
-            boolean ours = false;
-            for (StackTraceElement fr : frames) {
-                if (fr.getClassName().startsWith("io.jailscale")) {
-                    ours = true;
-                    break;
+        try {
+            Path dir = Files.createTempDirectory("threaddump");
+            Path out = dir.resolve("threads.txt");
+            ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)
+                .dumpThreads(out.toString(), HotSpotDiagnosticMXBean.ThreadDumpFormat.TEXT_PLAIN);
+            StringBuilder b = new StringBuilder();
+            for (String block : Files.readString(out).split("\n\n")) {
+                if (block.contains("io.jailscale")) {
+                    b.append("\n    ").append(block.strip().replace("\n", "\n    "));
                 }
             }
-            if (!ours) {
-                continue;
-            }
-            b.append("\n    ").append(e.getKey().getName()).append(' ').append(e.getKey().getState());
-            for (int i = 0; i < Math.min(8, frames.length); i++) {
-                b.append("\n      at ").append(frames[i]);
-            }
+            Files.deleteIfExists(out);
+            Files.deleteIfExists(dir);
+            return b.length() == 0 ? "none" : b.toString();
+        } catch (Exception e) {
+            return "unavailable: " + e;
         }
-        return b.length() == 0 ? " none" : b.toString();
     }
 
     private static Pair pair() throws Exception {
