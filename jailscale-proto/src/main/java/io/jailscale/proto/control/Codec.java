@@ -20,7 +20,7 @@ public final class Codec {
             case Message.Hello x -> b.put("proto", x.proto()).put("version", x.version()).put("os", x.os()).put("conn", x.conn());
             case Message.HelloResponse x -> b.put("proto", x.proto()).put("minProto", x.minProto())
                 .put("version", x.version()).put("dnsSuffix", x.dnsSuffix());
-            case Message.Goodbye x -> b.put("reason", x.reason());
+            case Message.Goodbye x -> b.put("reason", x.reason()).put("detail", x.detail());
             case Message.Ping x -> b.put("id", x.id());
             case Message.Pong x -> b.put("id", x.id());
             case Message.RegisterRequest x -> b.put("hostname", x.hostname()).put("os", x.os()).put("user", x.user())
@@ -62,7 +62,7 @@ public final class Codec {
                 case "Hello" -> new Message.Hello(o.integer("proto"), o.string("version"), o.optString("os", ""), o.optInt("conn", 0));
                 case "HelloResponse" -> new Message.HelloResponse(o.integer("proto"), o.integer("minProto"),
                     o.string("version"), o.optString("dnsSuffix", null));
-                case "Goodbye" -> new Message.Goodbye(o.string("reason"));
+                case "Goodbye" -> new Message.Goodbye(o.string("reason"), o.optString("detail", null));
                 case "Ping" -> new Message.Ping(o.lng("id"));
                 case "Pong" -> new Message.Pong(o.lng("id"));
                 case "RegisterRequest" -> new Message.RegisterRequest(o.string("hostname"), o.optString("os", ""),

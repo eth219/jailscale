@@ -194,6 +194,23 @@ final class HubLink implements AutoCloseable {
                 lastError = "hub key mismatch: the hub's key is not the pinned one (" + e.getMessage() + ")";
                 LOG.error(lastError);
                 stopReconnecting = true;
+            } catch (HubClient.Rejected e) {
+                // The hub turned us away during the handshake. Retrying an upgrade-required or a
+                // revoked node just loops; print what the hub said and stop.
+                lastError = e.getMessage();
+                LOG.error("{}", lastError);
+                if (Message.Goodbye.UPGRADE_REQUIRED.equals(e.reason()) || Message.Goodbye.REVOKED.equals(e.reason())) {
+                    LOG.error("not reconnecting. `jailscale status` repeats this.");
+                    stopReconnecting = true;
+                    if (Message.Goodbye.REVOKED.equals(e.reason())) {
+                        state.registered = false;
+                        try {
+                            state.save();
+                        } catch (IOException ignored) {
+                            // the in-memory flag is what stops the loop
+                        }
+                    }
+                }
             } catch (IOException | RuntimeException e) {
                 lastError = e.getMessage() == null ? e.toString() : e.getMessage();
                 if (running && !stopReconnecting) {
@@ -402,9 +419,13 @@ final class HubLink implements AutoCloseable {
                     }
                     return true; // keep the session open for its streams
                 }
-                lastError = "hub said goodbye: " + g.reason();
+                lastError = g.detail() != null ? g.detail() : "hub said goodbye: " + g.reason();
                 if (g.reason().equals(Message.Goodbye.REVOKED) || g.reason().equals(Message.Goodbye.UPGRADE_REQUIRED)) {
                     stopReconnecting = true;
+                    // This is where the node gives up for good, so say why in full rather than
+                    // leaving one reason word in a log the user is unlikely to be reading.
+                    LOG.error("{}", lastError);
+                    LOG.error("not reconnecting. `jailscale status` repeats this.");
                     if (g.reason().equals(Message.Goodbye.REVOKED)) {
                         state.registered = false;
                         state.save();

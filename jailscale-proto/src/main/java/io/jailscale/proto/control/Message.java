@@ -23,7 +23,11 @@ public sealed interface Message {
         @Override public String type() { return "HelloResponse"; }
     }
 
-    record Goodbye(String reason) implements Message {
+    record Goodbye(String reason, String detail) implements Message {
+        public Goodbye(String reason) {
+            this(reason, null);
+        }
+
         public static final String UPGRADE_REQUIRED = "upgrade-required";
         public static final String REVOKED = "revoked";
         public static final String SHUTDOWN = "shutdown";

@@ -388,7 +388,7 @@ jailhub serve --base-url https://hub.example.com
 |---|---|---|
 | `Hello` | N→H | **핸드셰이크 직후 첫 메시지.** `proto`(정수), `version`, `os`, `conn`(연결 번호, §8) |
 | `HelloResponse` | H→N | `proto`, `minProto`, `version`, `dnsSuffix`. 노드의 `proto < minProto`면 `Goodbye` |
-| `Goodbye` | 양방향 | `reason`: `upgrade-required`, `revoked`, `shutdown` |
+| `Goodbye` | 양방향 | `reason`: `upgrade-required`, `revoked`, `shutdown`, `draining`. `detail?`은 사람이 읽을 설명이며 선택이다 |
 | `RegisterRequest` | N→H | hostname·os 제출. `invite`, `code`, `authKey` 중 하나를 동봉하거나 없음(두드리기) |
 | `RegisterResponse` | H→N | `approved{nodeId, user}` 또는 `pending` 또는 `rejected{reason}` |
 | `CertUpdate` | H→N | 와일드카드 인증서 체인(공개 부분)과 `keyId`. 접속 직후와 갱신 시 |
@@ -404,12 +404,23 @@ jailhub serve --base-url https://hub.example.com
 | `Ping` / `Pong` | 양방향 | 요청 시 왕복 측정 (`jailscale netcheck`). 생존 확인은 §8의 `KEEPALIVE` |
 
 **버전 정책.** `proto`는 메시지 스키마와 mux 프레임 집합의 버전이다. hub은 `minProto` 이상을
-받는다. 노드가 hub보다 새 `proto`를 말하면 hub의 `proto`로 낮춰 동작한다. 프롤로그 문자열의
+받는다. 너무 낮으면 `Goodbye{upgrade-required}`를 **핸드셰이크 응답으로** 보낸다. 이때 노드는
+`HelloResponse`를 못 받으므로 `minProto`도 hub 버전도 알 수 없다. 그래서 `detail`에 필요한
+프로토콜 번호와 hub 버전, 다음에 할 일을 담아 보내고, 노드는 그것을 그대로 출력하고
+`jailscale status`의 `lastError`에 남긴 뒤 재접속을 멈춘다. 이유 한 단어만 로그에 남기면
+사용자가 무엇을 해야 하는지 알 수 없다. 노드가 hub보다 새 `proto`를 말하면 hub의 `proto`로 낮춰 동작한다. 프롤로그 문자열의
 숫자는 Noise 파라미터가 바뀔 때만 올린다.
 
 ### 7.5 저장소
 
 **파일 기반.** append-only JSON Lines 이벤트 로그 + 인메모리 상태. 재시작 시 리플레이.
+
+**포맷 버전.** 스냅샷은 `v`를 담고, hub은 읽을 때 그 값을 확인해 **자기가 아는 버전보다 높으면
+기동을 거부한다.** 예전에는 쓰기만 하고 읽지 않아, 옛 바이너리가 새 스냅샷을 자기 것으로 여겨
+모르는 것을 조용히 버리고 시작했다. 상태를 못 읽는 hub은 일부만 들고 뜨는 것보다 멈추는 게 낫다.
+같은 버전 안에서 필드나 이벤트를 **추가**하는 것은 양방향 호환이다. 모르는 이벤트는 경고를 남기고
+넘어가므로 옛 바이너리로의 롤백도 그 범위에서는 안전하다. `v`는 옛 바이너리가 **기존 데이터의
+의미를 잘못 해석**하게 되는 변경에만 올린다.
 
 ```
 $JAILHUB_STATE/          (기본 /var/lib/jailhub 또는 ~/.local/share/jailhub)

@@ -464,9 +464,26 @@ final class Store implements AutoCloseable {
         }
     }
 
+    /**
+     * The state format this binary understands. Snapshots have always carried it; nothing read it
+     * back, so an older binary would have replayed a newer snapshot as if it were its own and
+     * quietly dropped whatever it did not recognise. Refuse instead: a hub that cannot read its
+     * state should say so, not start with a subset of it.
+     *
+     * <p>Adding a field or a new event within a version stays compatible in both directions --
+     * {@link #apply} already ignores an unknown event with a warning. Bump this only when an old
+     * binary would get the meaning of existing data wrong.
+     */
+    static final long STATE_VERSION = 1;
+
     private void load() throws IOException {
         if (Files.exists(snapshotPath)) {
             JsonObject s = Json.parseObject(Files.readString(snapshotPath, StandardCharsets.UTF_8));
+            long v = s.has("v") ? s.lng("v") : STATE_VERSION;
+            if (v > STATE_VERSION) {
+                throw new IOException(snapshotPath + " is state version " + v + ", this jailhub understands "
+                    + STATE_VERSION + ". Run a newer jailhub, or restore the state directory from before the upgrade.");
+            }
             nextNodeId = s.lng("nextNodeId");
             for (Object o : s.array("events")) {
                 @SuppressWarnings("unchecked")
@@ -537,7 +554,7 @@ final class Store implements AutoCloseable {
         if (nextHubKey != null) {
             events.add(JsonObject.builder().put("e", "hubkey-rotation").put("next", nextHubKey).put("activatesAt", hubKeyActivatesAt).build().asMap());
         }
-        String json = JsonObject.builder().put("v", 1).put("nextNodeId", nextNodeId).put("events", events).toJson();
+        String json = JsonObject.builder().put("v", STATE_VERSION).put("nextNodeId", nextNodeId).put("events", events).toJson();
         Path tmp = dir.resolve("state.snapshot.tmp");
         Files.writeString(tmp, json, StandardCharsets.UTF_8);
         try (FileOutputStream fo = new FileOutputStream(tmp.toFile(), true)) {

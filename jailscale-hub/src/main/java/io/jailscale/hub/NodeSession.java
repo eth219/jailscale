@@ -90,7 +90,14 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 }
                 if (hello.proto() < MIN_PROTO) {
                     rejected[0] = true;
-                    return Codec.encode(new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED));
+                    // Say what is needed. The node cannot work it out: it never gets a
+                    // HelloResponse, so minProto and the hub's version never reach it otherwise.
+                    LOG.info("refused a node speaking proto {} from {} (need {}); told it to upgrade",
+                        hello.proto(), remoteIp, MIN_PROTO);
+                    return Codec.encode(new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED,
+                        "this hub speaks protocol " + MIN_PROTO + " and newer; your jailscale speaks "
+                            + hello.proto() + ". The hub runs jailhub " + Hub.version()
+                            + ". Update jailscale and run `jailscale up` again."));
                 }
                 conn = hello.conn();
                 if (conn < 0 || conn >= MAX_CONNECTIONS || (conn > 0 && hub.store().node(mkey) == null)) {

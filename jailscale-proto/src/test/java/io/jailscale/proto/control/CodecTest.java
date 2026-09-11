@@ -3,6 +3,7 @@ package io.jailscale.proto.control;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ class CodecTest {
             new Message.Hello(1, "0.1.0", "macos", 2),
             new Message.HelloResponse(1, 1, "0.1.0", "hub.example.com"),
             new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED),
+            new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED, "this hub speaks protocol 2 and newer"),
             new Message.Ping(7), new Message.Pong(7),
             new Message.RegisterRequest("wq-macbook", "macos", "wq", "9f1c", null, null),
             new Message.RegisterRequest("ci-1", "linux", null, null, null, "jk_abc"),
@@ -73,5 +75,13 @@ class CodecTest {
         assertThrows(CodecException.class, () -> Codec.decode("{\"t\":\"Hello\",\"proto\":\"one\",\"version\":\"v\"}"));
         assertThrows(CodecException.class, () -> Codec.decode("not json"));
         assertThrows(CodecException.class, () -> Codec.decode("{\"t\":\"SignRequest\",\"streamId\":1,\"keyId\":\"k\",\"alg\":\"a\",\"digest\":\"***\"}"));
+    }
+
+    @Test
+    void goodbyeDetailIsOptionalOnTheWire() throws Exception {
+        // A hub that predates the field, or any Goodbye that has nothing to add, sends only the
+        // reason; decoding must not fail or invent one.
+        Message m = Codec.decode("{\"t\":\"Goodbye\",\"reason\":\"shutdown\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertTrue(m instanceof Message.Goodbye g && "shutdown".equals(g.reason()) && g.detail() == null, m.toString());
     }
 }

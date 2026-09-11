@@ -54,6 +54,21 @@ final class HubClient {
     /** An established control connection. */
     record Connected(SSLSocket socket, NoiseChannel channel, Message.HelloResponse hello, String usedHubKey) {}
 
+    /** The hub turned this node away during the handshake, with its reason and any explanation. */
+    static final class Rejected extends IOException {
+        private static final long serialVersionUID = 1L;
+        private final transient String reason;
+
+        Rejected(String reason, String detail) {
+            super(detail != null ? detail : "hub rejected us: " + reason);
+            this.reason = reason;
+        }
+
+        String reason() {
+            return reason;
+        }
+    }
+
     /**
      * Opens TLS, upgrades, and runs the Noise handshake with Hello in message 1. Tries each
      * pinned hub key in order (current, then next during a rotation).
@@ -77,7 +92,9 @@ final class HubClient {
                 Message m = Codec.decode(payload2[0]);
                 if (m instanceof Message.Goodbye g) {
                     ch.close();
-                    throw new IOException("hub rejected us: " + g.reason());
+                    // A rejection at this point never reaches the session loop, so whatever the
+                    // hub took the trouble to explain has to be carried out from here.
+                    throw new Rejected(g.reason(), g.detail());
                 }
                 if (!(m instanceof Message.HelloResponse hr)) {
                     ch.close();
