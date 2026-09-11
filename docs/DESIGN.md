@@ -170,6 +170,12 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
   Liberica NIK(`setup-graalvm`의 `distribution: liberica`, JDK 25.0.4+)를 쓴다: 그 액션의
   `graalvm-community`는 `jdk-25.0.2` 태그 줄기만 보고(Innovation 빌드는 못 고른다) macOS x64는
   25.0.1 이후 빌드가 없다. Homebrew의 graalvm(25.3.x)은 JDK 25.0.3 이상이라 로컬은 무관하다.
+- **Windows에서 가상 스레드가 양방향 루프백 읽기를 놓친다.** Windows·가상 스레드·양방향 트래픽
+  셋이 겹치면 읽기 쪽이 park된 채 깨어나지 않는다. 의존성 없는 재현기와 측정은
+  `docs/windows-virtual-thread-stall/`에 있다. 25.0.4에서도 나므로 앞의 두 회귀와는 별건이고,
+  jailscale 코드 없이도 나온다(재현기 39.5% 대 `MuxSession` 경유 1.8%). 고칠 수 있는 것이
+  아니라서 감지·복구로 둔다. mux 소켓의 60초 읽기 타임아웃(§7)과 25초 KEEPALIVE(§8)가 그 역할을
+  하며, 실제로 발생하면 `peer idle too long`으로 세션이 닫히고 노드가 재접속한다.
 - native-maven-plugin의 reachability metadata 저장소는 끈다. 외부 의존성이 없고 리플렉션도
   없으므로 가져올 것이 없다.
 - Linux에서는 `gcc`, `zlib` 개발 헤더 필요
