@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * All connections of one node (DESIGN.md §8 "노드당 다중 연결"): connection 0 carries control,
+ * All connections of one node (multiple connections per node): connection 0 carries control,
  * every connection carries visitor streams. Visitor bookkeeping for the signing checks lives
  * here, keyed by the full stream id {@code (conn << 24) | localId}.
  */

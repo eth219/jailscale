@@ -357,7 +357,7 @@ final class Visitors {
                 return;
             }
             HttpResponse.html(502, "<!doctype html><meta charset=utf-8><title>jailscale</title>"
-                + "<p>노드가 <b>" + target.host() + ":" + target.port() + "</b> 에 연결할 수 없습니다.</p>")
+                + "<p>The node cannot reach <b>" + target.host() + ":" + target.port() + "</b>.</p>")
                 .writeTo(tls.plainOut());
             tls.close();
         } catch (IOException ignored) {
