@@ -4,6 +4,7 @@ import io.jailscale.proto.control.Message;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.mux.MuxSession;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.tls.Tls13;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -27,8 +28,12 @@ final class NodeGroup {
     static final int CONN_SHIFT = 24;
     static final long LOCAL_MASK = (1L << CONN_SHIFT) - 1;
 
-    /** What the hub remembers about a visitor stream it opened. */
-    record VisitorStream(String linkId, String sni, int signatures) {}
+    /**
+     * A visitor stream while it is open: which link, which SNI, how many signatures it has used,
+     * and the plaintext handshake messages the visitor sent (its ClientHello, or two of them
+     * around a HelloRetryRequest), which are what a signature gets bound to.
+     */
+    record VisitorStream(String linkId, String sni, int signatures, Tls13.Tap clientSide) {}
 
     private final Hub hub;
     private final String mkey;
@@ -120,8 +125,20 @@ final class NodeGroup {
         MuxStream stream = best.mux().open(meta, dgram);
         long id = fullId(best.conn(), stream.id());
         streamIds.put(stream, id);
-        visitors.put(id, new VisitorStream(link.linkId(), sni, 0));
+        visitors.put(id, new VisitorStream(link.linkId(), sni, 0, new Tls13.Tap()));
         return stream;
+    }
+
+    /** The ids of the visitor streams open right now (tests). */
+    java.util.Set<Long> visitorIds() {
+        return java.util.Set.copyOf(visitors.keySet());
+    }
+
+    /** Where the relay hands the visitor's first bytes so the hub can see the ClientHello it delivered. */
+    Tls13.Tap clientSide(MuxStream stream) {
+        Long id = streamIds.get(stream);
+        VisitorStream vs = id == null ? null : visitors.get(id);
+        return vs == null ? new Tls13.Tap() : vs.clientSide();
     }
 
     /**
@@ -158,6 +175,28 @@ final class NodeGroup {
         if (vs.signatures() >= MAX_SIGNATURES_PER_STREAM) {
             return reject(sr, "too-many-signatures");
         }
+        // The hash the node wants signed must be the transcript of the handshake on this very
+        // stream: the ClientHello the hub delivered, the ServerHello and EncryptedExtensions the
+        // node says it answered with, and the hub's own certificate. A member that is on-path
+        // for another name cannot get its forged handshake signed, because that handshake's
+        // ClientHello never came through here.
+        String hashAlg = Tls13.hashAlgorithmOf(sr.content());
+        if (hashAlg == null) {
+            return reject(sr, "not-a-certificate-verify");
+        }
+        byte[] certificate = hub.tls().certificateMessage(sr.keyId());
+        if (certificate == null) {
+            return reject(sr, "unknown-key");
+        }
+        try {
+            byte[] expected = Tls13.transcriptHash(hashAlg, vs.clientSide().messages(), sr.helloRetryRequest(), sr.serverHello(),
+                sr.encryptedExtensions(), certificate);
+            if (!java.util.Arrays.equals(expected, Tls13.transcriptHashIn(sr.content()))) {
+                return reject(sr, "transcript-mismatch");
+            }
+        } catch (IllegalArgumentException | GeneralSecurityException e) {
+            return reject(sr, "transcript-mismatch: " + e.getMessage());
+        }
         synchronized (this) {
             long now = System.currentTimeMillis();
             signTokens = Math.min(SIGN_BURST, signTokens + (now - signRefillAt) * SIGN_PER_SECOND / 1000.0);
@@ -167,7 +206,7 @@ final class NodeGroup {
             }
             signTokens -= 1;
         }
-        visitors.put(id, new VisitorStream(vs.linkId(), vs.sni(), vs.signatures() + 1));
+        visitors.put(id, new VisitorStream(vs.linkId(), vs.sni(), vs.signatures() + 1, vs.clientSide()));
         try {
             byte[] sig = hub.tls().sign(sr.keyId(), sr.content());
             if (sig == null) {

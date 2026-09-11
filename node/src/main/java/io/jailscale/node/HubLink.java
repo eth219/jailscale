@@ -48,7 +48,7 @@ final class HubLink implements AutoCloseable {
     }
 
     /** The oldest hub protocol this node can talk to; below it the hub cannot decode what we send. */
-    static final int MIN_HUB_PROTO = 2;
+    static final int MIN_HUB_PROTO = 1;
 
     /** One connection to the hub. */
     final class Session implements MuxSession.Listener {

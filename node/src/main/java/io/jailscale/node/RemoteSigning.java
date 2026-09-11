@@ -1,21 +1,27 @@
 package io.jailscale.node;
 
 import io.jailscale.proto.control.Message;
+import io.jailscale.proto.tls.Tls13;
+import io.jailscale.proto.util.Log;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.security.GeneralSecurityException;
 import java.security.InvalidKeyException;
 import java.security.Principal;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.SecureRandom;
 import java.security.Security;
 import java.security.SignatureException;
 import java.security.SignatureSpi;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLSession;
 import javax.net.ssl.X509ExtendedKeyManager;
 
 /**
@@ -29,22 +35,65 @@ import javax.net.ssl.X509ExtendedKeyManager;
  */
 final class RemoteSigning {
 
+    private static final Log LOG = Log.get("signing");
     static final String PROVIDER_NAME = "JailscaleRemote";
     static final String ALGORITHM = "SHA256withECDSA";
     static final long SIGN_TIMEOUT_MS = 10_000;
 
-    /** Who signs for the current thread: the stream's full id and the connection it arrived on. */
-    record Context(HubLink link, HubLink.Session session, long streamId, String keyId) {}
+    /**
+     * Who signs for the current thread: the stream's full id, the connection it arrived on, and
+     * the endpoint whose handshake it is, which holds the wire bytes the transcript is rebuilt from.
+     */
+    record Context(HubLink link, HubLink.Session session, long streamId, String keyId, TlsEndpoint tls) {}
 
     private static final ThreadLocal<Context> CONTEXT = new ThreadLocal<>();
+
+    /**
+     * The randomness JSSE draws from for the visitor contexts. It records, per handshake thread,
+     * what it handed out: the ServerHello random and the X25519 scalar are in there, and they
+     * are the only parts of the ServerHello the node cannot otherwise know when JSSE asks for the
+     * signature ({@link Transcript}). Recording only happens between {@link #enter} and
+     * {@link #exit}, and the record is dropped at exit.
+     */
+    static final RecordingRandom RANDOM = new RecordingRandom();
+
+    static final class RecordingRandom extends SecureRandom {
+        private static final long serialVersionUID = 1L;
+        private final transient SecureRandom inner = new SecureRandom();
+        private final transient ThreadLocal<List<byte[]>> draws = new ThreadLocal<>();
+
+        @Override
+        public void nextBytes(byte[] bytes) {
+            inner.nextBytes(bytes);
+            List<byte[]> l = draws.get();
+            if (l != null && l.size() < 64) {
+                l.add(bytes.clone());
+            }
+        }
+
+        void begin() {
+            draws.set(new ArrayList<>(4));
+        }
+
+        List<byte[]> draws() {
+            List<byte[]> l = draws.get();
+            return l == null ? List.of() : List.copyOf(l);
+        }
+
+        void end() {
+            draws.remove();
+        }
+    }
 
     private RemoteSigning() {}
 
     static void enter(Context c) {
         CONTEXT.set(c);
+        RANDOM.begin();
     }
 
     static void exit() {
+        RANDOM.end();
         CONTEXT.remove();
     }
 
@@ -55,17 +104,26 @@ final class RemoteSigning {
         }
     }
 
-    /** A private key that only knows which hub key it stands for. Not an ECPrivateKey on purpose. */
+    /**
+     * A private key that only knows which hub key it stands for, and the Certificate message of
+     * the chain it goes with (part of the transcript). Not an ECPrivateKey on purpose.
+     */
     static final class RemotePrivateKey implements PrivateKey {
         private static final long serialVersionUID = 1L;
         private final String keyId;
+        private final transient byte[] certificateMessage;
 
-        RemotePrivateKey(String keyId) {
+        RemotePrivateKey(String keyId, byte[] certificateMessage) {
             this.keyId = keyId;
+            this.certificateMessage = certificateMessage;
         }
 
         String keyId() {
             return keyId;
+        }
+
+        byte[] certificateMessage() {
+            return certificateMessage;
         }
 
         @Override
@@ -157,10 +215,23 @@ final class RemoteSigning {
             if (bytes.length > MAX_CONTENT) {
                 throw new SignatureException("too much to sign remotely: " + bytes.length + " bytes");
             }
+            // The hub signs only a hash it can recompute from the ClientHello it delivered on this
+            // stream, so the messages that hash covers go with the request (§9.2). They are rebuilt
+            // here and checked against the hash first: a JDK that writes them differently fails
+            // the handshake with this message rather than with a refusal from the hub.
+            Transcript.Reconstructed t;
+            try {
+                SSLSession hs = ctx.tls().handshakeSession();
+                t = Transcript.reconstruct(ctx.tls().clientMessages(), ctx.tls().serverMessages(), RANDOM.draws(),
+                    hs == null ? null : hs.getCipherSuite(), key.certificateMessage(), bytes);
+            } catch (GeneralSecurityException e) {
+                LOG.warn("{}", e.getMessage());
+                throw new SignatureException(e.getMessage(), e);
+            }
             Message reply;
             try {
-                reply = ctx.link().requestOn(ctx.session(), new Message.SignRequest(ctx.streamId(), key.keyId(), ALGORITHM, bytes),
-                    "SignResponse:" + ctx.streamId(), SIGN_TIMEOUT_MS);
+                reply = ctx.link().requestOn(ctx.session(), new Message.SignRequest(ctx.streamId(), key.keyId(), ALGORITHM, bytes,
+                    t.serverHello(), t.encryptedExtensions(), t.helloRetryRequest()), "SignResponse:" + ctx.streamId(), SIGN_TIMEOUT_MS);
             } catch (IOException | TimeoutException e) {
                 throw new SignatureException("hub did not sign: " + e.getMessage(), e);
             }
@@ -195,9 +266,9 @@ final class RemoteSigning {
         private final X509Certificate[] chain;
         private final RemotePrivateKey key;
 
-        RemoteKeyManager(List<X509Certificate> chain, String keyId) {
+        RemoteKeyManager(List<X509Certificate> chain, String keyId) throws java.security.cert.CertificateEncodingException {
             this.chain = chain.toArray(new X509Certificate[0]);
-            this.key = new RemotePrivateKey(keyId);
+            this.key = new RemotePrivateKey(keyId, Tls13.certificateMessage(chain));
         }
 
         @Override

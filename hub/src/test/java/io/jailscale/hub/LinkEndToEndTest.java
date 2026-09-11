@@ -26,6 +26,8 @@ import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -241,7 +243,8 @@ class LinkEndToEndTest {
         byte[] digest = new byte[32];
 
         // A stream the hub never opened.
-        Message r = alice.debugRequest(new Message.SignRequest(4242, hub.tls().keyId(), "ECDSA-P256-SHA256", digest), "SignResponse:4242");
+        Message r = alice.debugRequest(new Message.SignRequest(4242, hub.tls().keyId(), "ECDSA-P256-SHA256", digest, null, null, null),
+            "SignResponse:4242");
         assertTrue(r instanceof Message.SignResponse sr && sr.sig() == null && "not-your-stream".equals(sr.reason()), r.toString());
 
         // Bob owns "bobapp"; a visitor stream for it is delivered to bob, so alice cannot sign for it.
@@ -259,6 +262,41 @@ class LinkEndToEndTest {
         // A real handshake on bob's own stream needed exactly one signature; further ones are capped at 4.
         // (Exercised implicitly: the 200 above proves the positive path.)
         assertNotNull(hub.links().byName("bobapp"));
+
+        // The signature is bound to the handshake on the stream, not just to the stream. A visitor
+        // sends its ClientHello for bobapp and then stalls, so the stream stays open; bob's node
+        // asks the hub to sign a CertificateVerify whose transcript does not end in that ClientHello
+        // (an on-path member forging another name's handshake would look exactly like this), and
+        // the hub refuses even though the stream and the name are bob's own.
+        NodeGroup bobGroup = hub.links().byName("bobapp").group();
+        try (Socket stalled = new Socket("127.0.0.1", port)) {
+            SSLEngine hello = Tls.clientContext(CERT, false).createSSLEngine("bobapp.hub.test", port);
+            hello.setUseClientMode(true);
+            SSLParameters hp = hello.getSSLParameters();
+            hp.setServerNames(List.of(new javax.net.ssl.SNIHostName("bobapp.hub.test")));
+            hp.setProtocols(new String[] {"TLSv1.3"});
+            hello.setSSLParameters(hp);
+            hello.beginHandshake();
+            java.nio.ByteBuffer out = java.nio.ByteBuffer.allocate(hello.getSession().getPacketBufferSize());
+            hello.wrap(java.nio.ByteBuffer.allocate(0), out);
+            out.flip();
+            stalled.getOutputStream().write(out.array(), 0, out.remaining());
+            stalled.getOutputStream().flush();
+            waitFor(() -> !bobGroup.visitorIds().isEmpty());
+            long streamId = bobGroup.visitorIds().iterator().next();
+
+            byte[] content = java.util.Arrays.copyOf(HubTls.CERT_VERIFY_CONTEXT, HubTls.CERT_VERIFY_CONTEXT.length + 32);
+            java.util.Arrays.fill(content, HubTls.CERT_VERIFY_CONTEXT.length, content.length, (byte) 0x5a);
+            byte[] sh = io.jailscale.proto.tls.Tls13.serverHello(new byte[32], new byte[0], 0x1301, new byte[32]);
+            byte[] ee = io.jailscale.proto.tls.Tls13.encryptedExtensions(true, new int[] {0x001d}, "http/1.1", true);
+            Message forged = bob.debugRequest(new Message.SignRequest(streamId, hub.tls().keyId(), "ECDSA-P256-SHA256", content, sh, ee, null),
+                "SignResponse:" + streamId);
+            assertTrue(forged instanceof Message.SignResponse fr && fr.sig() == null && "transcript-mismatch".equals(fr.reason()), forged.toString());
+            // and one that cannot even be rebuilt (no ServerHello) is refused the same way
+            Message bare = bob.debugRequest(new Message.SignRequest(streamId, hub.tls().keyId(), "ECDSA-P256-SHA256", content, null, null, null),
+                "SignResponse:" + streamId);
+            assertTrue(bare instanceof Message.SignResponse br && br.sig() == null && br.reason().startsWith("transcript-mismatch"), bare.toString());
+        }
 
         // The hub signs what it can recognise, not whatever it is handed. A bare digest, or any
         // other 130 bytes, would make the wildcard key sign a handshake for a name that is not the

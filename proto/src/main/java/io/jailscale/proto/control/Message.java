@@ -9,12 +9,13 @@ import java.util.List;
 public sealed interface Message {
 
     /**
-     * Current control protocol version (message schema + frame set). 2 carries what is to be signed
-     * instead of its hash, a proof of key possession on a domain claim, and the domain an ACME
-     * challenge belongs to. A node speaking 1 cannot express any of the three, so the hub refuses
-     * it rather than accept a request it can no longer check.
+     * Current control protocol version (message schema + frame set). A signing request carries
+     * what is to be signed with the node's ServerHello and EncryptedExtensions, a domain claim
+     * carries a proof of key possession, and an ACME challenge names its domain; a hub that could
+     * not check a request would have to refuse it, so a node speaking an older version is told to
+     * upgrade rather than served unchecked.
      */
-    int PROTO = 2;
+    int PROTO = 1;
 
     String type();
 
@@ -153,9 +154,13 @@ public sealed interface Message {
     /**
      * {@code content} is the bytes to be signed, not their hash: the hub hashes them itself so it
      * can check what it is signing (ARCHITECTURE.md §9.2). Carrying a bare digest would make the
-     * hub a general-purpose signing oracle for its own wildcard key.
+     * hub a general-purpose signing oracle for its own wildcard key. {@code serverHello},
+     * {@code encryptedExtensions} and, after a retry, {@code helloRetryRequest} are the node's
+     * own handshake messages, so the hub can rebuild the transcript from the ClientHello it
+     * delivered on {@code streamId} and check that the hash in {@code content} is that handshake's.
      */
-    record SignRequest(long streamId, String keyId, String alg, byte[] content) implements Message {
+    record SignRequest(long streamId, String keyId, String alg, byte[] content, byte[] serverHello, byte[] encryptedExtensions,
+        byte[] helloRetryRequest) implements Message {
         @Override public String type() { return "SignRequest"; }
     }
 

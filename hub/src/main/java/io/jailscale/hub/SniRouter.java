@@ -122,7 +122,7 @@ final class SniRouter {
         MuxStream stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
             link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
         try {
-            Relay.pump(socket, stream, peek.consumed());
+            Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream));
         } finally {
             group.visitorDone(stream);
         }

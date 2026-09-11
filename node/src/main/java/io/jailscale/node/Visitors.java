@@ -55,7 +55,7 @@ final class Visitors {
             }
             List<X509Certificate> chain = Pem.certificates(pem.toString());
             SSLContext ctx = SSLContext.getInstance("TLS");
-            ctx.init(new KeyManager[] {new RemoteSigning.RemoteKeyManager(chain, cert.keyId())}, null, null);
+            ctx.init(new KeyManager[] {new RemoteSigning.RemoteKeyManager(chain, cert.keyId())}, null, RemoteSigning.RANDOM);
             contexts.put(cert.keyId(), ctx);
             if (contexts.size() > 3) {
                 contexts.keySet().stream().filter(k -> !k.equals(cert.keyId())).findFirst().ifPresent(contexts::remove);
@@ -119,7 +119,7 @@ final class Visitors {
             // when the handshake loop returns. Recording nothing would later read as a compromised
             // hub, so this waits for the first application bytes instead.
             tls.onFirstApplicationRead(() -> probe.record(SelfProbe.material(tls.session())));
-            RemoteSigning.enter(new RemoteSigning.Context(link, session, HubLink.fullStreamId(conn, stream.id()), keyId));
+            RemoteSigning.enter(new RemoteSigning.Context(link, session, HubLink.fullStreamId(conn, stream.id()), keyId, tls));
             try {
                 tls.handshake();
             } finally {

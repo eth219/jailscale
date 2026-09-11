@@ -39,7 +39,9 @@ class CodecTest {
             new Message.LinkOpened("l1", "myapp", "https://myapp.hub.example.com", null, null),
             new Message.LinkOpened(null, null, null, null, "taken"),
             new Message.LinkClose("l1"),
-            new Message.SignRequest((2L << 24) | 40, "sha256:ab", "ECDSA-P256-SHA256", new byte[] {1, 2, 3}),
+            new Message.SignRequest((2L << 24) | 40, "sha256:ab", "ECDSA-P256-SHA256", new byte[] {1, 2, 3}, new byte[] {2, 0, 0, 0},
+                new byte[] {8, 0, 0, 0}, null),
+            new Message.SignRequest(41, "sha256:ab", "ECDSA-P256-SHA256", new byte[] {1}, new byte[] {2}, new byte[] {8}, new byte[] {2, 9}),
             new Message.SignResponse(40, new byte[] {4, 5}, null),
             new Message.SignResponse(40, null, "not-your-stream"),
             new Message.ChallengeSet("app.example.com", "tok", "tok.thumb"),
@@ -52,6 +54,9 @@ class CodecTest {
             if (m instanceof Message.SignRequest a && dec instanceof Message.SignRequest b) {
                 assertEquals(a.streamId(), b.streamId());
                 assertArrayEquals(a.content(), b.content());
+                assertArrayEquals(a.serverHello(), b.serverHello());
+                assertArrayEquals(a.encryptedExtensions(), b.encryptedExtensions());
+                assertArrayEquals(a.helloRetryRequest(), b.helloRetryRequest());
             } else if (m instanceof Message.LinkOpen a && dec instanceof Message.LinkOpen b) {
                 assertEquals(a.domain(), b.domain());
                 assertEquals(a.chainPem(), b.chainPem());

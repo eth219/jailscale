@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.tls.Tls13;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,6 +32,14 @@ final class Relay {
      * the stream first (the peeked ClientHello).
      */
     static void pump(Socket visitor, MuxStream stream, byte[] consumed) {
+        pump(visitor, stream, consumed, new Tls13.Tap());
+    }
+
+    /**
+     * As above, with {@code clientSide} seeing every byte the visitor sends until its plaintext
+     * handshake is over: the ClientHello the hub delivered is what a signature is bound to (§9.2).
+     */
+    static void pump(Socket visitor, MuxStream stream, byte[] consumed, Tls13.Tap clientSide) {
         CountDownLatch visitorDone = new CountDownLatch(1);
         Thread toVisitor = Thread.ofVirtual().name("relay-in").start(() -> {
             try {
@@ -52,8 +61,9 @@ final class Relay {
         });
         try {
             OutputStream out = stream.out();
+            clientSide.accept(consumed);
             out.write(consumed);
-            copy(visitor.getInputStream(), out);
+            copy(visitor.getInputStream(), out, clientSide);
             stream.close();
         } catch (IOException e) {
             LOG.debug("visitor -> node ended: {}", e.getMessage());
@@ -70,10 +80,17 @@ final class Relay {
     }
 
     static void copy(InputStream in, OutputStream out) throws IOException {
+        copy(in, out, null);
+    }
+
+    static void copy(InputStream in, OutputStream out, Tls13.Tap tap) throws IOException {
         byte[] buf = new byte[BUF];
         int n;
         while ((n = in.read(buf)) >= 0) {
             if (n > 0) {
+                if (tap != null && !tap.done()) {
+                    tap.accept(buf, 0, n);
+                }
                 out.write(buf, 0, n);
                 out.flush();
             }

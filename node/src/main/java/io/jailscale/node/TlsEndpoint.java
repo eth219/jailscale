@@ -1,6 +1,7 @@
 package io.jailscale.node;
 
 import io.jailscale.proto.tls.Tls;
+import io.jailscale.proto.tls.Tls13;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,9 +22,22 @@ import javax.net.ssl.SSLSession;
  */
 final class TlsEndpoint implements AutoCloseable {
 
+    /**
+     * The one key-exchange group offered, and the one ALPN protocol. Fixed so the node can
+     * reconstruct what JSSE puts in its ServerHello and EncryptedExtensions ({@link Transcript}):
+     * every TLS 1.3 client in use supports X25519, and a ClientHello whose key share is for
+     * something else gets a HelloRetryRequest, which the reconstruction covers.
+     */
+    static final String[] GROUPS = {"x25519"};
+    static final int[] GROUP_IDS = {Tls13.GROUP_X25519};
+    static final String ALPN = "http/1.1";
+
     private final SSLEngine engine;
     private final InputStream netIn;
     private final OutputStream netOut;
+    /** The plaintext handshake messages of each direction, for the signature's transcript (§9.2). */
+    private final Tls13.Tap clientSide = new Tls13.Tap();
+    private final Tls13.Tap serverSide = new Tls13.Tap();
     private final ByteBuffer netInBuf;
     private final ByteBuffer appInBuf;
     private final ByteBuffer netOutBuf;
@@ -39,6 +53,7 @@ final class TlsEndpoint implements AutoCloseable {
         // TLS 1.2 ECDHE handshake would ask it to sign a ServerKeyExchange instead.
         p.setProtocols(Tls.TLS13_ONLY);
         p.setApplicationProtocols(Tls.ALPN_HTTP11);
+        p.setNamedGroups(GROUPS);
         p.setUseCipherSuitesOrder(true);
         engine.setSSLParameters(p);
         this.netIn = netIn;
@@ -160,6 +175,9 @@ final class TlsEndpoint implements AutoCloseable {
                                 return r;
                             }
                             int n = netIn.read(netInBuf.array(), netInBuf.position(), netInBuf.remaining());
+                            if (n > 0 && !clientSide.done()) {
+                                clientSide.accept(netInBuf.array(), netInBuf.position(), n);
+                            }
                             if (n < 0) {
                                 netEof = true;
                                 if (engine.getHandshakeStatus() != SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING
@@ -193,6 +211,9 @@ final class TlsEndpoint implements AutoCloseable {
             }
             netOutBuf.flip();
             if (netOutBuf.hasRemaining()) {
+                if (!serverSide.done()) {
+                    serverSide.accept(netOutBuf.array(), netOutBuf.position(), netOutBuf.remaining());
+                }
                 netOut.write(netOutBuf.array(), netOutBuf.position(), netOutBuf.remaining());
                 netOut.flush();
             }
@@ -222,6 +243,21 @@ final class TlsEndpoint implements AutoCloseable {
     /** The negotiated session, for {@link SelfProbe} keying material. */
     SSLSession session() {
         return engine.getSession();
+    }
+
+    /** The session being negotiated (its cipher suite is known before the signature is asked for). */
+    SSLSession handshakeSession() {
+        return engine.getHandshakeSession();
+    }
+
+    /** The visitor's plaintext handshake messages so far: one ClientHello, or two around a retry. */
+    java.util.List<byte[]> clientMessages() {
+        return clientSide.messages();
+    }
+
+    /** This side's plaintext handshake messages so far: a HelloRetryRequest, if one went out. */
+    java.util.List<byte[]> serverMessages() {
+        return serverSide.messages();
     }
 
     /**

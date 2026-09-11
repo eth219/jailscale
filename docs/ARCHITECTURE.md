@@ -238,7 +238,7 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 | `CertUpdate` | Wildcard chain (public part) and its `keyId`, on connect and on renewal |
 | `LinkOpen` / `LinkOpened` | `kind: https\|tcp\|udp`, optional name, domain, port, local target, and for user domains the certificate chain. Reply carries `linkId` and a URL or hub port, or a reason |
 | `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name, domain or port (§11.4) |
-| `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `content`; then a signature or a reason (§9.2) |
+| `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `content`, `serverHello`, `encryptedExtensions`, optional `helloRetryRequest`; then a signature or a reason (§9.2) |
 | `ChallengeSet` / `ChallengeClear` | Register or drop a user-domain http-01 token (§8.3) |
 | `InviteCreate` / `InviteCreated`, `AdminLinkRequest` / `AdminLink` | A member node issuing an invite; a one-shot `/admin` login URL for an admin node |
 | `HubKeyRotation`, `Ping` / `Pong`, `Ack` / `Error` | §5.2; on-demand round trip; generic replies |
@@ -254,10 +254,11 @@ the node stop with the same kind of message, naming the hub's version and asking
 be updated, because there is no older encoding for it to drop to. The prologue number changes only
 when the Noise parameters change.
 
-`proto` is **2**, and `minProto` is 2 with it: 1 carried a signing request as a bare digest, a domain
-claim with no proof of key possession, and an http-01 challenge with no domain. Each of those is a
-field the hub now needs in order to check the request at all, so a node speaking 1 is told to upgrade
-rather than have its requests accepted unchecked.
+`proto` is **1**, and `minProto` is 1 with it. The number moves when a message gains a field the
+hub needs in order to check the request at all; a signing request without the node's ServerHello and
+EncryptedExtensions, a domain claim without its proof of key possession or an http-01 challenge
+without its domain would each have to be refused rather than accepted unchecked, so a node speaking
+an older version is told to upgrade.
 
 ### 6.2 Storage
 
@@ -551,22 +552,39 @@ someone else's name. So the hub signs only when all of these hold:
    it was handed, for any purpose at all.
 2. `streamId` names **a stream this hub opened on this connection**, still open.
 3. The `sni` recorded in that stream's `OPEN` maps to a name currently **assigned to this node**.
-4. That stream has used fewer than 4 signatures. A normal TLS 1.3 handshake uses one, and two covers
+4. **The transcript hash is that stream's handshake.** The hub keeps the ClientHello it delivered on
+   the stream (both of them, around a HelloRetryRequest); the request carries the node's ServerHello
+   and EncryptedExtensions; the Certificate message is the hub's own chain. The hub hashes
+   `ClientHello || ServerHello || EncryptedExtensions || Certificate` (with the `message_hash` rule
+   of RFC 8446 §4.4.1 after a retry) and signs only if that is the hash the content ends in. A
+   handshake the node is running for some other visitor, one whose ClientHello never came through
+   this hub on this stream, hashes to something else and is refused as `transcript-mismatch`.
+5. That stream has used fewer than 4 signatures. A normal TLS 1.3 handshake uses one, and two covers
    HelloRetryRequest.
-5. The node is within its signing rate: a token bucket of 2,000 with 1,000 per second sustained,
+6. The node is within its signing rate: a token bucket of 2,000 with 1,000 per second sustained,
    sized from a load test where 1,000 visitors handshake at once. Resumption needs no signature.
 
-**What this does and does not bind.** Conditions 2 and 3 bind the *request* to a stream the hub
-delivered for a name the node owns, and condition 1 binds the *content* to being a TLS 1.3 server
-handshake. What no condition binds is the transcript hash to that stream: the hub never sees the
-node's ServerHello, EncryptedExtensions or Certificate — JSSE does not expose them — so it cannot
-recompute the transcript and check which handshake the hash came from. A member node that has, by
-some other means, a network or DNS position in front of another name under the hub can therefore
-still drive that handshake itself and have the hub sign its CertificateVerify. **This is a known
-limit, not a property that holds** (see §15): closing it needs the transcript on the hub, which means
-the node terminating TLS without JSSE, or a key per name, which the wildcard certificate rules out.
-The prerequisite is a network position the attacker must obtain separately; membership on its own
-buys nothing here, because all traffic for `*.<hub>` normally transits the hub.
+**Where the node gets the messages from.** JSSE asks for the signature before it has written a byte
+of its flight, and shows neither its ServerHello nor its EncryptedExtensions, so the node rebuilds
+them (`Transcript`). The ClientHello and any HelloRetryRequest are plaintext, taken off the wire by
+`TlsEndpoint`. The Certificate is the chain. The EncryptedExtensions are a function of the ClientHello
+and a fixed server configuration: one key-exchange group (X25519; a client whose key share is for
+something else gets a retry) and one ALPN protocol. The ServerHello has two unknowns, its random and
+the X25519 key share, and both come out of the `SecureRandom` the node hands the `SSLContext`, which
+records what it draws for the handshake thread; the public key is recomputed from the recorded
+scalar, the cipher suite is on the handshake session, the session id is the client's echoed. The
+node checks its reconstruction against the hash JSSE handed it **before** sending anything, so a JDK
+that writes these messages differently fails the handshake locally with a clear reason, and
+`TranscriptTest` runs the reconstruction against JSSE itself, retry included, so such a JDK fails the
+build first. The hub trusts none of this: it recomputes from its own copy of the ClientHello.
+
+**What this binds.** Conditions 2 and 3 bind the *request* to a stream the hub delivered for a name
+the node owns; condition 1 binds the *content* to being a TLS 1.3 server handshake; condition 4 binds
+that handshake to the visitor on that stream. A member node that separately obtains a network or DNS
+position in front of another name under the hub can drive a handshake with that visitor, but the
+hub never delivered that visitor's ClientHello to it, so no request it can make hashes to what that
+handshake needs signed. Each of the hub's names is therefore impersonable only by the node that
+owns it, which was the claim §11.1 makes.
 
 **Keeping it to one signature.** Visitors are offered TLS 1.3 only: condition 1 means the hub signs
 nothing but a TLS 1.3 server `CertificateVerify`, and TLS 1.2 ECDHE would ask it to sign a
@@ -702,20 +720,19 @@ Four axes. None of them implies any other.
 ### 11.1 The boundary of signature delegation
 
 The wildcard private key exists only on the hub, and a node gets a signature only for a stream the
-hub delivered to it whose SNI is one of its own names, over content the hub recognises as a TLS 1.3
-server `CertificateVerify` (§9.2). Because the control channel is pinned to the hub key by Noise, a
-MITM proxy that defeats TLS still cannot intercept or forge signing requests. The hub checks every
-request against content, stream, name, count and rate and logs refusals; a node that keeps being
-refused is disconnected and flagged.
+hub delivered to it whose SNI is one of its own names, over the transcript of the handshake with the
+visitor on that stream (§9.2). So a compromised member node gains impersonation of **its own names**,
+which were already its own: a handshake it runs with some other visitor, for a name it does not
+hold, is one whose ClientHello the hub never delivered to it, and the hub signs no hash it cannot
+recompute from a ClientHello it did. Because the control channel is pinned to the hub key by Noise,
+a MITM proxy that defeats TLS still cannot intercept or forge signing requests. The hub checks every
+request against content, stream, name, transcript, count and rate and logs refusals; a node that
+keeps being refused is disconnected and flagged.
 
-**Where that boundary actually sits.** The hub cannot recompute the transcript hash inside the
-content it signs (§9.2), so the signature is bound to *a* handshake of that shape and not to *the*
-handshake on the delivered stream. A member node that separately obtains a network or DNS position in
-front of another name under the hub can still have its own forged handshake signed. So the honest
-statement is: a compromised member node gains impersonation of its own names, **plus** impersonation
-of any `*.<hub>` name it can already intercept. Removing the second half is on the list in §15; until
-then, names that need to withstand an attacker who is both a member and on-path should be user
-domains, whose keys never touch the hub.
+The one thing the binding rests on outside the hub is that the node can tell the hub what its own
+ServerHello and EncryptedExtensions were, which it reconstructs rather than reads (§9.2). That is a
+correctness dependency on JSSE's wire format, checked by tests and failing closed, not a trust
+dependency on the node: a node that lies about those messages gets no signature.
 
 Separately, joining opens no port on the node: only the port named in `jailscale open` is reachable,
 and only while that link is open. There is no TUN device, so there is no OS routing path to leak
@@ -940,14 +957,13 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   is caught today only by the first visitor handshake failing.
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
-- **Delegated signing is bound to the shape of what is signed, not to the handshake** (§9.2, §11.1).
-  The hub checks that the content is a TLS 1.3 server `CertificateVerify` and that the asking node
-  owns the stream and the name, but it cannot recompute the transcript hash those bytes end in,
-  because JSSE does not expose the node's own handshake messages. A member node that is also on-path
-  for another `*.<hub>` name can therefore still get its forged handshake signed. Closing it needs
-  either the transcript on the hub — which means terminating TLS without JSSE — or one key per name,
-  which a single wildcard certificate rules out and which public-CA rate limits make impractical to
-  replace with per-name certificates.
+- **Delegated signing depends on reconstructing JSSE's ServerHello and EncryptedExtensions** (§9.2).
+  The binding of a signature to the visitor's handshake is only as good as the node's ability to
+  say what JSSE wrote, which it derives from the ClientHello, a fixed configuration and the
+  randomness it recorded. A JDK that changes those encodings breaks every hub-signed handshake
+  until the reconstruction is updated; it cannot weaken the binding, because the hub recomputes
+  the hash itself, but it can take the service down. `TranscriptTest` exists to catch that at
+  build time. Visitors are also confined to TLS 1.3 with X25519 for the same reason.
 - **Raw TCP and UDP links are not end to end unless the app encrypts itself** (§8.4).
 - **User domains require port 80 on the hub.** The http-01 relay is the only verification path
   implemented; tls-alpn-01 would remove that requirement.
