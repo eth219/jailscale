@@ -119,10 +119,11 @@ docker pull ghcr.io/eth219/jailhub:edge
 docker pull ghcr.io/eth219/jailscale:edge
 ```
 
-Native binaries for Linux, macOS and Windows are built for every commit and are
-attached to [releases](https://github.com/eth219/jailscale/releases) once a
-version is tagged. Until then, `./native.sh` builds them from source with
-GraalVM.
+Native binaries for Linux, macOS and Windows — linux-amd64, linux-arm64,
+darwin-arm64, darwin-amd64, windows-amd64 — are attached to every tagged
+[release](https://github.com/eth219/jailscale/releases) with their checksums,
+alongside `jailscale.jar` and `jailhub.jar` for any other platform with a JVM 25.
+`./native.sh` builds them from source with GraalVM.
 
 ## Resource usage
 
@@ -184,8 +185,9 @@ What a compromised hub can and cannot do is written out in
 - Idle memory is 24.7 MB against a 20 MB goal (39.7 MB as Linux counts it, 15 MB
   of it anonymous). Most of the gap is JSSE standing up a TLS client.
 - No standby hub, no state replication, no OIDC.
-- No tagged release yet, so there are no downloadable binaries. The container
-  images are current.
+- v0.1.0 is the first tagged release, so there is no upgrade path to have got
+  wrong yet. What the protocol promises across versions is
+  [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md).
 
 ## Credit
 
