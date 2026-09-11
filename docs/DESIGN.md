@@ -128,7 +128,7 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 | 원격 서명 | 자체 JCE `Provider` + 불투명 `PrivateKey` + `Signature` SPI | PKCS#11 키가 쓰는 경로. `Provider.Service.newInstance` 재정의로 리플렉션 없이 등록 (§10.2) |
 | ACME 클라이언트 · DNS 응답기 | 자체 구현 (`jailscale-hub`, ~700줄) | JWS ES256·JSON·HttpClient는 JDK와 우리 코드로 충분. CSR DER 인코딩과 DNS TXT 응답만 손수 쓴다 (§6.3) |
 | 로깅 | 자체 초경량 로거 (`System.Logger` 백엔드) | SLF4J+logback은 ServiceLoader + 리플렉션 |
-| 암호 | JDK JCE (SunEC, SunJCE) + 자체 BLAKE2s | BouncyCastle은 native 설정이 번거롭고 크다 |
+| 암호 | JDK JCE (SunEC의 X25519, SunJCE의 ChaCha20-Poly1305) + 자체 BLAKE2s·HMAC·HKDF | BouncyCastle은 native 설정이 번거롭고 크다. 원시 함수는 JDK 것을 쓴다. 직접 짜는 셋은 선택이 아니라 필연이다: JDK에 BLAKE2s가 없고, Noise는 HMAC과 HKDF를 고른 해시 위에 정의하므로 BLAKE2s를 고르면 둘이 딸려온다. Noise의 HKDF는 RFC 5869과도 다르다 (salt/info 대신 출력 카운터 바이트, 최대 3단 연쇄) |
 | AWT / `java.awt.Desktop` | 금지 | 브라우저 열기는 `open` / `xdg-open` / `rundll32 url.dll,FileProtocolHandler`를 `ProcessBuilder`로 |
 | 프로세스 간 통신 | AF_UNIX 소켓 (`UnixDomainSocketChannel`, 모든 플랫폼) | Windows 10 1803+도 AF_UNIX를 지원한다. 명명된 파이프는 JDK 공개 API가 없다 |
 | 스레딩 | Virtual threads 전면 사용 | 패킷 핫패스가 없어졌다. 스트림당 virtual thread면 충분하다 (§13) |
@@ -136,6 +136,15 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 
 **빌드**
 
+- 빌드 도구는 **Maven**이다. 서드파티 의존성이 0개라 Gradle의 유연한 의존성·빌드 로직이 살
+  일이 없고, 고정된 생명주기가 5개 플랫폼에서 어긋날 여지를 줄인다. `native-maven-plugin`은
+  GraalVM 팀이 직접 관리한다. 빌드가 1분이라 Gradle의 증분·데몬 이점도 크지 않다.
+- `./mvnw`는 **only-script** 모드다. Gradle Wrapper와 달리 저장소에 바이너리 jar를 커밋하지
+  않는다. 서명된 바이너리를 배포하는 프로젝트가 출처를 스스로 확인할 수 없는 jar를 저장소에
+  두지 않기 위해서다. 받아오는 Maven 배포본은 `distributionSha256Sum`으로 고정한다. 그 값은
+  Maven Central이 공개한 sha512로 무결성을 확인한 바이트에서 뽑았고, 틀린 값을 넣으면 wrapper가
+  실행을 거부하는 것까지 확인했다. 공급망 표면을 0으로 유지하는 것이 이 표 전체의 목적이다.
+  Maven 버전을 올리면 이 값도 같이 바꿔야 한다.
 - 기본 프로파일: 일반 JVM 빌드 (`mvn test` 빠른 반복)
 - `-Pnative`: `native-maven-plugin`으로 바이너리 생성
 - CI 매트릭스: linux-amd64, linux-arm64, macos-arm64, macos-amd64, windows-amd64
