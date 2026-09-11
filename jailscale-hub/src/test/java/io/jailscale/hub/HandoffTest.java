@@ -22,6 +22,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -275,6 +276,27 @@ class HandoffTest {
         } catch (Exception e) {
             b.append(" | node unreadable: ").append(e);
         }
+        b.append(" | stuck threads: ").append(stacks());
         return b.toString();
+    }
+
+    /**
+     * Where the threads that carry a visitor stream currently are. The status line can say the
+     * stream is still open without saying who is sitting on it; this names the frame.
+     */
+    private static String stacks() {
+        StringBuilder b = new StringBuilder();
+        for (Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
+            String name = e.getKey().getName();
+            if (!name.startsWith("visitor") && !name.startsWith("drain") && !name.startsWith("mux")) {
+                continue;
+            }
+            b.append("\n    ").append(name).append(' ').append(e.getKey().getState());
+            StackTraceElement[] frames = e.getValue();
+            for (int i = 0; i < Math.min(6, frames.length); i++) {
+                b.append("\n      at ").append(frames[i]);
+            }
+        }
+        return b.length() == 0 ? "none" : b.toString();
     }
 }
