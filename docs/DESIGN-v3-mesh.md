@@ -23,7 +23,7 @@
 - 컨트롤 채널의 HTTP 서버/클라이언트를 **자체 최소 HTTP/1.1 구현**으로 변경. JDK HTTP
   서버/클라이언트가 Upgrade 후 raw 스트림을 내주지 않아 §4 규율과 충돌했다. WebSocket도
   검토했으나 채택하지 않았다 (§7.1).
-- **Caddy 제거.** hub이 TLS를 직접 종단하고 **내장 ACME HTTP-01**로 인증서를 받는다.
+- **Caddy 제거.** hub가 TLS를 직접 종단하고 **내장 ACME HTTP-01**로 인증서를 받는다.
   v1의 "내장 ACME 안 만든다" 결정을 뒤집었다 (§7.1.2).
 - 데이터 평면 폴백 경로 정리: 직접 UDP → hub TCP 릴레이(DERP). **hub UDP 릴레이**는 M4
   실측 후 결정 (§9, §15).
@@ -100,7 +100,7 @@
 릴레이 접속 인증이 별도 토큰 교환 없이 공짜로 해결된다. Tailscale이 둘을 분리한 이유는
 글로벌 릴레이 함대를 운영하기 위해서인데, 우리는 self-host 단일 노드가 주 사용처다.
 
-**포트는 넷이다.** TCP 443(컨트롤 + DERP + `/join` + 관리 웹, hub이 TLS를 직접 종단),
+**포트는 넷이다.** TCP 443(컨트롤 + DERP + `/join` + 관리 웹, hub가 TLS를 직접 종단),
 TCP 80(ACME HTTP-01 검증과 HTTPS 리디렉트), UDP 3478과 3479(STUN). 전부 `jailhub` 프로세스
 하나가 바인드한다. 앞에 프록시가 없는 것이 기본이다. STUN을 둘로 두는 이유는 §9.
 
@@ -173,7 +173,7 @@ jailscale/
 | 노드 바이너리 크기 | ≤ 40 MB (M0 실측 후 조정) | 릴리스 아티팩트 |
 | 콜드 스타트 | ≤ 50 ms | `jailscale status` 실행 시간 (IPC 왕복 포함) |
 | 암복호 처리량 | 기록만 (M0), 목표는 M1에서 설정 | 단일 스레드 ChaCha20-Poly1305 1280B 패킷 |
-| hub 아이들 RSS | ≤ 50 MB (M2부터 게이트) | 노드 10대 접속, 인증서 발급 완료 후 유휴. hub은 경량 원칙의 주 대상이 아니지만 상한은 둔다 |
+| hub 아이들 RSS | ≤ 50 MB (M2부터 게이트) | 노드 10대 접속, 인증서 발급 완료 후 유휴. hub는 경량 원칙의 주 대상이 아니지만 상한은 둔다 |
 
 수치를 넘으면 빌드가 실패한다. 예산은 이유와 함께 PR로만 바꾼다.
 
@@ -221,7 +221,7 @@ WireGuard와 붙일 여지를 남겨두기 위해서다. 표준 준수 주장은
 
 `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s`
 
-**PSK는 v1에서 쓰지 않는다.** 표준대로 32바이트 0을 넣는다. hub이 피어 쌍마다 PSK를 배포하는
+**PSK는 v1에서 쓰지 않는다.** 표준대로 32바이트 0을 넣는다. hub가 피어 쌍마다 PSK를 배포하는
 것은 나중에 추가할 수 있는 선택지로 남긴다.
 
 ### 메시지
@@ -334,7 +334,7 @@ ALPN을 `http/1.1`로 고정하는 이유: HTTP/2에는 Upgrade가 없다. `SSLP
 3. **망 통과.** 기업 방화벽과 중간 박스는 443의 TLS는 통과시키지만 평문 포트의 업그레이드나
    정체불명의 바이너리 스트림은 변형하거나 차단한다. 443에서 TLS가 아닌 트래픽을 막는 DPI도 있다.
 
-인증서는 hub이 스스로 받으므로(§7.1.2) 운영자에게 비용이 없다. 따라서 TLS를 벗겨 얻는 것은
+인증서는 hub가 스스로 받으므로(§7.1.2) 운영자에게 비용이 없다. 따라서 TLS를 벗겨 얻는 것은
 80 포트 하나이고, 잃는 것은 위 셋이다. 다만 OAuth가 사라진 지금 `--no-tls` 모드는 설계상
 성립한다. §15에 후보로 둔다.
 
@@ -368,13 +368,13 @@ WireGuard의 mac1/mac2/타임스탬프 확장은 쓰지 않는다. TLS+TCP 아�
 
 **회전.** `notAfter`는 hub 키의 만료 예정 시각이다. 만료를 하드 실패로 만들지 않기 위한 절차:
 
-1. 운영자가 `jailhub key rotate --grace 30d`를 실행하면 hub이 `next` 키를 생성한다.
+1. 운영자가 `jailhub key rotate --grace 30d`를 실행하면 hub가 `next` 키를 생성한다.
 2. 이후 붙는 모든 노드에게 컨트롤 채널로 `HubKeyRotation{ nextHubKey, activatesAt }`를 보낸다.
    이 메시지는 옛 키로 인증된 Noise 채널 안에서 오므로 별도 서명이 필요 없다.
    노드는 `next`를 node.json에 함께 저장한다.
-3. 유예 기간 동안 hub은 두 키 모두로 핸드셰이크를 받는다. 노드는 `current`로 시도하고
+3. 유예 기간 동안 hub는 두 키 모두로 핸드셰이크를 받는다. 노드는 `current`로 시도하고
    실패하면 `next`로 재시도한다.
-4. `activatesAt` 이후 hub은 옛 키를 버린다. `/v1/key`는 새 키만 돌려준다.
+4. `activatesAt` 이후 hub는 옛 키를 버린다. `/v1/key`는 새 키만 돌려준다.
 5. 유예 기간 동안 한 번도 접속하지 않은 노드는 두 키 모두 실패한다. 이 경우에만 노드는
    "hub 키가 바뀌었습니다. 다시 신뢰하시겠습니까 (y/N)"를 물은 뒤 `/v1/key`로 재부트스트랩한다.
    무인 노드는 실패 상태로 남고 로그에 이유를 남긴다.
@@ -398,7 +398,7 @@ Noise가 서버 인증을 완결하므로, **컨트롤 채널에 한해** TLS �
 
 ### 7.1.2 hub의 TLS 조달과 운영자 사전 준비
 
-hub은 TLS를 **직접 종단**한다. 앞에 Caddy나 nginx를 두지 않는다. 프로세스가 둘이 되면 설치·설정·
+hub는 TLS를 **직접 종단**한다. 앞에 Caddy나 nginx를 두지 않는다. 프로세스가 둘이 되면 설치·설정·
 장애 원인 추적이 둘이 되어 사용성에 손해이고, 프록시 배포 경로가 하나 더 생겨 범용성에도
 손해다. JDK의 TLS 서버는 이미 바이너리에 있으므로 경량화에는 비용이 없다.
 
@@ -410,14 +410,14 @@ hub 운영자가 `jailhub serve` 전에 해야 하는 일은 아래가 전부이
 | 1 | 공인 DNS 이름 → hub의 공인 IP | A 또는 AAAA. `hub.example.com`. **프록시 없이 직접** (Cloudflare는 "DNS only" 회색 구름) |
 | 2 | 방화벽: TCP 80, TCP 443, UDP 3478, UDP 3479 | 80은 ACME 검증용. 인증서를 직접 주면 80은 불필요 |
 
-둘뿐이다. 인증서는 hub이 스스로 받고, 계정·IdP·앱 등록은 없다. 첫 실행은
+둘뿐이다. 인증서는 hub가 스스로 받고, 계정·IdP·앱 등록은 없다. 첫 실행은
 `jailhub serve --base-url https://hub.example.com` 한 줄이며, 콘솔에 첫 초대 링크가 찍힌다 (§11.5).
 
 | TLS 방식 | 용도 | 비고 |
 |---|---|---|
 | 내장 ACME HTTP-01 | **기본값.** `--base-url`의 호스트명으로 자동 발급·갱신 | Let's Encrypt 기본. `--acme-directory`로 교체 가능 |
 | `--tls-cert` / `--tls-key` | 인증서를 이미 보유한 경우, 사내 CA, 80 포트를 열 수 없는 경우 | 파일 변경 감지 시 리로드 |
-| `--behind-proxy` | 이미 nginx 등이 있는 운영자 | hub은 루프백 평문 HTTP. `X-Forwarded-For` 신뢰. Upgrade 헤더 전달과 유휴 타임아웃 300초를 문서화 |
+| `--behind-proxy` | 이미 nginx 등이 있는 운영자 | hub는 루프백 평문 HTTP. `X-Forwarded-For` 신뢰. Upgrade 헤더 전달과 유휴 타임아웃 300초를 문서화 |
 | `--hub-key` 고정 | 개발 / 에어갭 | 컨트롤 채널만 TLS 검증 완화 가능 (§7.1.1) |
 
 #### 내장 ACME의 동작
@@ -433,12 +433,12 @@ jailhub serve --base-url https://hub.example.com ...
  │     b. UDP: 같은 IP의 3478 포트로 무작위 txid의 STUN 요청을 보내고 자기 STUN 서버가 그
  │        txid를 받았는지 확인 → "UDP가 hub에 닿지 않음: DNS가 프록시(Cloudflare 주황 구름)를
  │        거치거나 방화벽이 막고 있음". a만으로는 프록시 뒤를 못 잡는다. Cloudflare 엣지가
- │        80을 hub으로 전달해 주기 때문이다. UDP는 어떤 HTTP 프록시도 전달하지 않는다
+ │        80을 hub로 전달해 주기 때문이다. UDP는 어떤 HTTP 프록시도 전달하지 않는다
  │     이 검사는 Let's Encrypt의 실패 레이트리밋을 아끼고, "인증서는 받았는데 노드가 안 붙는"
  │     상태를 사전에 막는다. 1:1 NAT 뒤의 클라우드 VM처럼 공인 IP가 인터페이스에 없어도 동작한다.
  │     실패하면 60초마다 재시도하므로 DNS를 고친 뒤 재시작이 필요 없다.
  │     한계: 자기 공인 IP로 보낸 패킷이 되돌아오려면 NAT 헤어핀이 필요한데, 가정용 공유기
- │     뒤에서 포트포워딩으로 hub을 돌리면 헤어핀이 안 되는 기종이 많다. 그 경우 `--no-selfcheck`로
+ │     뒤에서 포트포워딩으로 hub를 돌리면 헤어핀이 안 되는 기종이 많다. 그 경우 `--no-selfcheck`로
  │     건너뛴다. 이때는 노드 쪽 `jailscale netcheck`가 "TLS는 되는데 STUN이 안 됨"을 보고해
  │     프록시/방화벽 문제를 대신 잡는다
  ├─3. 계정 키(EC P-256) 없으면 생성 → tls/account.key (0600). newAccount, 약관 동의
@@ -468,7 +468,7 @@ jailhub serve --base-url https://hub.example.com ...
 - **지원 범위.** ACME v2, http-01만. External Account Binding(ZeroSSL 등)은 v1 밖.
   tls-alpn-01은 X.509 자체 서명 인증서 생성까지 손수 써야 해서 §15로 보낸다.
 - **80 포트를 못 여는 환경**은 `--tls-cert/--tls-key`로 간다. certbot의 DNS-01 등 외부 도구로
-  받은 인증서를 파일로 주면 hub이 변경을 감지해 리로드한다.
+  받은 인증서를 파일로 주면 hub가 변경을 감지해 리로드한다.
 - **포트 바인딩 권한.** Linux에서 80/443은 root 또는 `CAP_NET_BIND_SERVICE`가 필요하다. 참조
   systemd 유닛은 전용 사용자 `jailhub` + `AmbientCapabilities=CAP_NET_BIND_SERVICE`로 root 없이
   띄운다. macOS는 비특권 바인딩이 허용된다. `--listen`으로 포트를 바꿀 수 있지만 ACME http-01은
@@ -499,7 +499,7 @@ jailhub serve --base-url https://hub.example.com ...
 발견·NAT 조율·키 만료·ACL 배포·DNS가 전부 없다. 그 빈칸이 이 프로젝트가 설계하는 대상이다.
 
 **왜 컨트롤 트래픽을 WireGuard 터널 안에 넣지 않는가.** 검토했으나 부트스트랩이 순환한다.
-hub과 터널을 맺으려면 hub의 키와 엔드포인트가 필요한데 그것이 부트스트랩하려는 대상이고,
+hub와 터널을 맺으려면 hub의 키와 엔드포인트가 필요한데 그것이 부트스트랩하려는 대상이고,
 등록 전 노드에는 IP가 없으며, DERP는 자신이 실어 나를 터널 안에서 돌 수 없다. 또한 등록에
 userspace TCP 스택이 선행되어야 해서 M5가 M2보다 앞서는 의존성 역전이 생긴다.
 
@@ -523,7 +523,7 @@ Noise 채널 위의 `CTRL` 프레임에 실리는 JSON 메시지. 모든 메시�
 | `HubKeyRotation` | H→N | §7.1.1 |
 | `Ping` / `Pong` | 양방향 | **요청 시** 왕복 시간 측정 (`jailscale netcheck`). 생존 확인은 §8의 `KEEPALIVE`가 담당하며 둘을 겹치지 않는다 |
 
-**버전 정책.** `proto`는 메시지 스키마와 DERP 프레임 집합의 버전이다. hub은 `minProto` 이상을
+**버전 정책.** `proto`는 메시지 스키마와 DERP 프레임 집합의 버전이다. hub는 `minProto` 이상을
 받는다. 노드가 hub보다 새 `proto`를 말하면 hub의 `proto`로 낮춰 동작한다. 프롤로그 문자열
 `jailscale-control-v1`의 숫자는 Noise 파라미터가 바뀔 때만 올린다.
 
@@ -570,7 +570,7 @@ netmap이 담는 정보(호스트명·사용자·공인 엔드포인트·온라�
 
 - IPv4: `100.64.0.0/10` (RFC 6598 CGNAT)에서 노드당 `/32`
 - IPv6: `fd7a:5ca1:e000::/48` (ULA, 설정 가능)에서 노드당 `/128`. 하위 비트 = 노드 ID
-- 할당은 hub이 단조 증가 노드 ID로 결정론적으로 계산 → 별도 IPAM 상태 불필요
+- 할당은 hub가 단조 증가 노드 ID로 결정론적으로 계산 → 별도 IPAM 상태 불필요
 - **예약**: ID 0은 쓰지 않는다. `100.100.100.100`(MagicDNS 네임서버)에 해당하는 ID는 건너뛴다.
 - 노드 ID는 MachineKey에 묶여 재등록해도 유지된다 (§5). 삭제된 노드의 ID는 재사용하지 않는다.
   22비트 공간이라 고갈은 현실적 문제가 아니다.
@@ -613,7 +613,7 @@ $JAILHUB_STATE/          (기본 /var/lib/jailhub 또는 ~/.local/share/jailhub)
 사용성 원칙 위반이다. 최소 페이지를 v1에 둔다.
 
 - 인증: 비밀번호도 IdP도 없다. **관리자 노드의 MachineKey가 신원이다.** 관리자가 자기 노드에서
-  `jailscale admin`을 치면 노드가 Noise 채널로 `AdminLink`를 요청하고, hub이 60초짜리 일회용
+  `jailscale admin`을 치면 노드가 Noise 채널로 `AdminLink`를 요청하고, hub가 60초짜리 일회용
   URL을 돌려주면 CLI가 브라우저를 연다. URL 방문 시 세션 쿠키 `HttpOnly; Secure; SameSite=Lax`
   발급. 노드가 없는 상황(첫 설치, 복구)은 hub 셸에서 `jailhub admin login-link`.
 - 기능: 대기 큐 승인/거부, 노드 목록·이름 변경·삭제, 초대 발급, auth-key 발급, 초대 정책 토글.
@@ -639,9 +639,9 @@ len은 Noise 암호문 길이(최대 65535)다.
 | `CTRL_MORE` | `[JSON 조각]` | 양방향. 마지막 조각은 `CTRL`로 보낸다 (65535B 초과 시) |
 | `KEEPALIVE` | 없음 | 양방향. **25초 주기**, 60초 무응답 시 연결 종료 |
 
-릴레이는 페이로드를 **읽지 못한다** — WireGuard로 종단간 암호화되어 있고, hub은
-피어의 NodeKey 개인키를 갖고 있지 않다. hub은 목적지 키를 보고 해당 노드의 연결로
-바이트를 옮길 뿐이다. `srcNodeKey`는 hub이 연결의 신원으로 채운다. 노드가 보낸 값은 없다.
+릴레이는 페이로드를 **읽지 못한다** — WireGuard로 종단간 암호화되어 있고, hub는
+피어의 NodeKey 개인키를 갖고 있지 않다. hub는 목적지 키를 보고 해당 노드의 연결로
+바이트를 옮길 뿐이다. `srcNodeKey`는 hub가 연결의 신원으로 채운다. 노드가 보낸 값은 없다.
 
 **릴레이 조건.** 등록이 완료되어 NodeKey가 MachineKey에 바인딩된 연결만 `SEND_PACKET`을 보낼
 수 있다. 대기(pending) 상태의 연결이 보낸 릴레이 프레임은 버린다. 목적지가 송신자의 netmap에
@@ -653,7 +653,7 @@ len은 Noise 암호문 길이(최대 65535)다.
 | 큐 | 내용 | 포화 시 |
 |---|---|---|
 | control (우선) | `CTRL`, `CTRL_MORE`, `KEEPALIVE`, `PEER_*`, `HubKeyRotation` | 버리지 않는다. 큐가 차면 그 연결을 끊는다. 노드는 재접속해 netmap 전문을 다시 받는다 |
-| data | `RECV_PACKET` | **버린다** (UDP 의미론 유지, 백프레셔로 hub이 멈추지 않게). WireGuard 핸드셰이크 패킷(타입 1·2)은 큐 앞쪽에 넣는다 |
+| data | `RECV_PACKET` | **버린다** (UDP 의미론 유지, 백프레셔로 hub가 멈추지 않게). WireGuard 핸드셰이크 패킷(타입 1·2)은 큐 앞쪽에 넣는다 |
 
 writer는 control 큐를 먼저 비운다. v1에서 큐 하나로 뒀던 설계는 netmap 푸시나 keepalive가
 데이터 폭주에 밀려 드롭될 수 있었다.
@@ -661,7 +661,7 @@ writer는 control 큐를 먼저 비운다. v1에서 큐 하나로 뒀던 설계�
 - 같은 MachineKey로 두 번째 연결이 오면 옛 연결을 `Goodbye{shutdown}`으로 닫고 새 연결이 이긴다.
   재접속이 옛 연결의 타임아웃보다 빠른 경우가 흔하다.
 - 연결 소켓에 `TCP_NODELAY`. 프레임이 작고 지연이 처리량보다 중요하다.
-- hub은 누가 누구에게 얼마나 보내는지를 본다. 내용은 못 보지만 메타데이터는 본다 (§12).
+- hub는 누가 누구에게 얼마나 보내는지를 본다. 내용은 못 보지만 메타데이터는 본다 (§12).
 
 ---
 
@@ -704,7 +704,7 @@ WireGuard 패킷(첫 바이트 1~4)과 매직으로 구분한다. DERP를 통해
 맞출 수 있다. `observedEndpoint`는 상대가 본 내 주소라 STUN 없이도 후보를 하나 더 준다.
 
 **후보 수집.** 모든 NetworkInterface의 유니캐스트 주소(링크로컬 제외) + STUN 결과 + 상대가
-알려준 `observedEndpoint`. IPv6 STUN은 hub이 IPv6를 가질 때만. UDP 소켓은 기본 41641,
+알려준 `observedEndpoint`. IPv6 STUN은 hub가 IPv6를 가질 때만. UDP 소켓은 기본 41641,
 실패 시 임의 포트.
 
 **폴백 경로의 정리.** 데이터 평면의 폴백은 피어 간 TCP가 아니라 **hub 경유 릴레이**다.
@@ -718,9 +718,9 @@ M4에서 이 비율을 실측해 로그로 남긴다.
 
 **hub UDP 릴레이 (M4 실측 후 결정).** 릴레이 비율이 예상보다 높으면 TCP DERP의 두 약점이
 커진다. 터널 안 TCP가 바깥 TCP 위에 얹혀 안팎 재전송이 간섭하는 것과, 한 TCP 스트림의
-head-of-line 블로킹이다. 해법은 hub이 이미 열고 있는 UDP 소켓으로 WireGuard 패킷을 중계하는
+head-of-line 블로킹이다. 해법은 hub가 이미 열고 있는 UDP 소켓으로 WireGuard 패킷을 중계하는
 것이다. 컨트롤 채널로 릴레이 세션 토큰을 받고 `[magic][8B sessionId][32B dstNodeKey][WG 패킷]`을
-hub UDP로 보내면 hub이 목적지 세션으로 전달한다. 사실상 TURN이며 Tailscale도 최근 같은 것을
+hub UDP로 보내면 hub가 목적지 세션으로 전달한다. 사실상 TURN이며 Tailscale도 최근 같은 것을
 peer relay라는 이름으로 추가했다. 경로 우선순위는 직접 UDP → hub UDP 릴레이 → hub TCP 릴레이가
 된다. TCP DERP는 UDP가 완전히 막힌 망을 위해 어차피 있어야 하므로 v1은 TCP DERP로 가고,
 UDP 릴레이는 `PathSelector` 뒤에 가산으로 붙는다.
@@ -892,7 +892,7 @@ MagicDNS 이름(`laptop.example.jail.net`)은 SOCKS5의 hostname 모드에서
 ## 11. 가입 — 초대와 승인
 
 IdP를 두지 않는다. 가입 권한은 **역량(capability)** 으로 전달한다. 초대 링크, 짧은 코드,
-auth-key는 모두 "소지가 곧 권한"인 비밀값이고, hub은 그 값과 함께 온 NodeKey를 가입시킨다.
+auth-key는 모두 "소지가 곧 권한"인 비밀값이고, hub는 그 값과 함께 온 NodeKey를 가입시킨다.
 사용자의 이름은 초대에 실려 오거나 가입자가 스스로 적는다. 관리자가 언제든 바꿀 수 있다.
 
 ### 11.1 IdP를 빼는 이유
@@ -929,7 +929,7 @@ $ jailhub invite create ...                          # hub 셸에서도 같은 �
 
 - **링크**는 128비트 토큰(base64url 22자). 기본 1회 · 24시간. 팀 채팅에 붙이는 용도.
 - **코드**는 같은 초대의 별칭이다. Crockford base32 8자(40비트), **10분 · 1회**로 짧게 두고,
-  hub은 IP당 분당 10회로 시도를 제한하며 실패가 쌓이면 코드를 폐기한다. 옆자리 동료나 전화
+  hub는 IP당 분당 10회로 시도를 제한하며 실패가 쌓이면 코드를 폐기한다. 옆자리 동료나 전화
   너머에 불러주는 용도이며, 링크보다 약하므로 수명으로 보상한다.
 - `--user`가 없으면 가입자가 이름을 적는다. `jailscale up`이 OS 사용자명을 기본값으로 묻는다.
 - 클립보드 복사는 `pbcopy` / `xclip` / `clip.exe`를 `ProcessBuilder`로 부른다. 없으면 건너뛴다.
@@ -965,7 +965,7 @@ $ jailscale up --hub hub.example.com
 관리자 승인을 기다리는 중… (호스트명 wq-macbook, mkey:0J3B…)
 ```
 
-hub은 `pending` 큐에 MachineKey·호스트명·OS·출발 IP만 기록한다. 관리자가 `/admin`이나
+hub는 `pending` 큐에 MachineKey·호스트명·OS·출발 IP만 기록한다. 관리자가 `/admin`이나
 `jailhub node approve 0J3B… --user wq`로 승인하면 열려 있는 스트림으로 즉시 완료가 push된다.
 Syncthing이 낯선 기기 ID를 승인하는 것과 같은 UX다. 두드리기는 무인증이므로 IP당 대기 항목
 수를 제한하고, 큐는 24시간 뒤 비운다. 관리자가 두드리기를 원치 않으면 `--knock off`.
@@ -1059,11 +1059,11 @@ SSH, SMB, 데이터베이스 포트, 개발 서버가 인터넷에는 절대 열
 즉 §10의 userspace 스택은 이식성 결정이면서 동시에 **기본 거부(default-deny) 인바운드**
 정책이다. 적대적 노드가 jailnet에 들어와도 얻는 것이 §12.3의 메타데이터뿐이도록 만든다.
 
-### 12.5 hub은 신뢰 대상이다 — 무엇을 할 수 있고 무엇을 못 하는가
+### 12.5 hub는 신뢰 대상이다 — 무엇을 할 수 있고 무엇을 못 하는가
 
-정직하게 적어둔다. hub이 침해되면:
+정직하게 적어둔다. hub가 침해되면:
 
-| hub이 할 수 없는 것 | hub이 할 수 있는 것 |
+| hub가 할 수 없는 것 | hub가 할 수 있는 것 |
 |---|---|
 | 기존 터널의 트래픽 읽기·위조 (NodeKey 개인키가 없다) | **netmap에서 피어의 NodeKey를 공격자 키로 바꿔치기** → 이후 새 핸드셰이크는 공격자와 맺어져 MITM |
 | 노드의 로컬 서비스 접근 (§12.4) | 임의 노드를 jailnet에 넣기, 승인 큐 우회 |
@@ -1134,8 +1134,8 @@ thread로 자유롭게 쓴다.
 - **netmap 델타** — `seq`는 v1부터 있다. 델타 인코딩과 재동기화는 노드 수가 수백을 넘는
   배포가 관측되면.
 - **피어 키 바인딩의 hub 독립 검증** — Tailscale tailnet lock 상당 (§12.5). 요구가 있으면.
-- **다중 DERP / 다중 hub** — 단일 hub이 전제다. 지역 분산 릴레이는 별도 설계.
-- **멀티 jailnet** — 하나의 hub이 여러 조직을 서빙할지. v1은 단일 jailnet.
+- **다중 DERP / 다중 hub** — 단일 hub가 전제다. 지역 분산 릴레이는 별도 설계.
+- **멀티 jailnet** — 하나의 hub가 여러 조직을 서빙할지. v1은 단일 jailnet.
 - **IdP 연동 (OIDC)** — 수십 명 이상 조직에서 외부 검증 신원이 요구될 때. `RegisterRequest`에
   `idToken` 필드 하나를 더하는 형태 (§11.6). 초대 경로는 그대로 유지.
 - **`--no-tls` 모드** — OAuth가 없으니 브라우저 경로는 `/join` 안내와 `/admin`뿐이다. 초대 링크에

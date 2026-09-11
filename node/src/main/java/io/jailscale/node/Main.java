@@ -170,8 +170,8 @@ public final class Main {
         String url = r.string("url");
         if (!kind.equals("https")) {
             System.out.println(url + "  ->  " + r.string("local"));
-            System.out.println("(hub 포트 " + r.integer("hubPort") + ". 앱이 스스로 암호화하지 않는 평문 프로토콜은 hub이 볼 수 있습니다; "
-                + "SSH·WireGuard·TLS를 켠 DB는 hub이 암호문만 봅니다)");
+            System.out.println("(hub 포트 " + r.integer("hubPort") + ". 앱이 스스로 암호화하지 않는 평문 프로토콜은 hub가 볼 수 있습니다; "
+                + "SSH·WireGuard·TLS를 켠 DB는 hub가 암호문만 봅니다)");
             return;
         }
         String visit = r.optString("visitUrl", null);

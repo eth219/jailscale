@@ -3,7 +3,7 @@
 > Java 25 LTS + GraalVM Native Image로 만드는 self-host 터널.
 > 노드가 `jailscale open 3000`을 치면 `https://<이름>.<hub 도메인>`이 열리고, 인터넷의
 > 브라우저가 노드의 로컬 포트에 닿는다. 방문자는 아무것도 설치하지 않는다.
-> hub은 SNI만 보고 바이트를 넘기며, TLS는 노드가 종단하고, 서명만 hub이 해준다.
+> hub는 SNI만 보고 바이트를 넘기며, TLS는 노드가 종단하고, 서명만 hub가 해준다.
 
 문서 버전: v4 (2026-09-10)
 
@@ -73,12 +73,12 @@
 
 **핵심 결정 세 가지.**
 
-- **hub은 SNI만 본다.** 공개 443으로 들어온 TLS 연결에서 ClientHello의 SNI를 읽고, 그 이름이
-  배정된 노드로 바이트 스트림을 넘긴다. hub은 방문자 트래픽의 HTTP를 파싱하지 않는다.
-  인터넷에 노출된 hub의 공격면이 TCP 수준으로 줄고, hub은 암호문만 본다.
+- **hub는 SNI만 본다.** 공개 443으로 들어온 TLS 연결에서 ClientHello의 SNI를 읽고, 그 이름이
+  배정된 노드로 바이트 스트림을 넘긴다. hub는 방문자 트래픽의 HTTP를 파싱하지 않는다.
+  인터넷에 노출된 hub의 공격면이 TCP 수준으로 줄고, hub는 암호문만 본다.
 - **노드가 TLS를 종단하되 키는 hub에 있다.** 이름은 `*.hub.example.com` 와일드카드 인증서
-  한 장으로 다 덮는다. 개인키는 hub을 떠나지 않으며, 노드는 핸드셰이크의 서명 한 번을 컨트롤
-  채널로 hub에 부탁한다. 서명은 hub이 그 노드에 배달한 스트림에 묶인다 (§9.3).
+  한 장으로 다 덮는다. 개인키는 hub를 떠나지 않으며, 노드는 핸드셰이크의 서명 한 번을 컨트롤
+  채널로 hub에 부탁한다. 서명은 hub가 그 노드에 배달한 스트림에 묶인다 (§9.3).
 - **노드도 HTTP를 파싱하지 않는다.** TLS를 벗긴 평문을 로컬 포트로 그대로 흘린다. HTTP/1.1이든
   WebSocket이든 로컬 앱이 처리한다. 시스템 전체에서 HTTP 파서는 컨트롤 채널용 소형 하나와,
   방문자 게이트를 켰을 때 첫 요청의 헤더를 읽는 것뿐이다.
@@ -125,7 +125,7 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 | JSON | 자체 파서 + 수동 인코더 (`proto`) | Jackson은 리플렉션 + 수 MB 증가. 메시지 스키마가 10여 개뿐이라 수동이 싸다 |
 | HTTP 서버 | **자체 최소 HTTP/1.1** (`hub`, 자기 이름의 5개 엔드포인트만) | JDK `com.sun.net.httpserver`는 Upgrade 후 소켓을 내주지 않는다. 방문자 트래픽은 HTTP를 파싱하지 않으므로 이것으로 충분하다 |
 | HTTP 클라이언트 | 노드: `SSLSocket` 위 자체 소형 HTTP/1.1 (~40줄). hub: JDK `java.net.http.HttpClient` (ACME) | 노드는 Upgrade가 필요해 JDK 클라이언트를 못 쓴다. 덕분에 노드 바이너리에서 `java.net.http`가 빠진다 |
-| TLS | JDK JSSE. hub은 `SSLServerSocket`(자기 이름), 노드는 `SSLEngine`(방문자 스트림) | 이미 바이너리에 있다 |
+| TLS | JDK JSSE. hub는 `SSLServerSocket`(자기 이름), 노드는 `SSLEngine`(방문자 스트림) | 이미 바이너리에 있다 |
 | 원격 서명 | 자체 JCE `Provider` + 불투명 `PrivateKey` + `Signature` SPI | PKCS#11 키가 쓰는 경로. `Provider.Service.newInstance` 재정의로 리플렉션 없이 등록 (§10.2) |
 | ACME 클라이언트 · DNS 응답기 | 자체 구현 (`hub`, ~700줄) | JWS ES256·JSON·HttpClient는 JDK와 우리 코드로 충분. CSR DER 인코딩과 DNS TXT 응답만 손수 쓴다 (§6.3) |
 | 로깅 | 자체 초경량 로거 (`System.Logger` 백엔드) | SLF4J+logback은 ServiceLoader + 리플렉션 |
@@ -202,7 +202,7 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 |---|---|---|---|
 | **MachineKey** (`mkey:`) | 노드 | 컨트롤 채널 Noise 핸드셰이크의 클라이언트 정적 키. 이 머신의 신원이자 `/admin` 로그인 신원 | 머신 수명 전체 |
 | **hkey** (`hkey:`) | hub | 컨트롤 채널 Noise 핸드셰이크의 서버 정적 키. 노드가 고정(pin)한다 | 회전 절차 있음 (§6.2) |
-| **와일드카드 인증서 키** | hub | `hub.example.com` + `*.hub.example.com` ECDSA P-256. **hub을 떠나지 않는다.** 노드는 서명만 위임받는다 | ACME 갱신마다 새 키 |
+| **와일드카드 인증서 키** | hub | `hub.example.com` + `*.hub.example.com` ECDSA P-256. **hub를 떠나지 않는다.** 노드는 서명만 위임받는다 | ACME 갱신마다 새 키 |
 | **사용자 도메인 키** | 노드 | `myapp.com`처럼 사용자가 가져온 도메인의 인증서 키. hub에 없다 | 노드의 ACME 갱신마다 |
 
 v3의 NodeKey(WireGuard)와 DiscoKey(경로 탐색)는 데이터 평면과 함께 사라졌다. 노드의 신원은
@@ -261,7 +261,7 @@ ALPN을 `http/1.1`로 고정하는 이유: HTTP/2에는 Upgrade가 없다. `SSLP
 **왜 TLS를 벗기지 않는가.** Noise만으로도 컨트롤 채널은 인증된다. 그럼에도 TLS인 이유는 셋이다.
 (1) hkey 부트스트랩: 노드가 호스트명만 알고 접속하려면 첫 접촉에서 hub 키를 믿을 근거가
 필요하고 그것이 웹 PKI다. (2) `/join`과 `/admin`은 브라우저가 가는 경로다. (3) 기업 방화벽은
-443의 TLS는 통과시키지만 정체불명의 바이너리 스트림은 차단한다. 인증서는 hub이 스스로
+443의 TLS는 통과시키지만 정체불명의 바이너리 스트림은 차단한다. 인증서는 hub가 스스로
 받으므로 운영자 비용이 없다. 그리고 공개 443 자체가 TLS라 컨트롤 채널만 벗길 이유가 없다.
 
 **왜 그런데도 Noise를 안에 넣는가.** 웹 PKI의 위협 모델에는 CA 침해와 사내 루트 CA를 설치한
@@ -285,12 +285,12 @@ ALPN을 `http/1.1`로 고정하는 이유: HTTP/2에는 Upgrade가 없다. `SSLP
 
 **회전.** `notAfter`는 hub 키의 만료 예정 시각이다.
 
-1. 운영자가 `jailhub key rotate --grace 30d`를 실행하면 hub이 `next` 키를 생성한다.
+1. 운영자가 `jailhub key rotate --grace 30d`를 실행하면 hub가 `next` 키를 생성한다.
 2. 이후 붙는 모든 노드에게 컨트롤 채널로 `HubKeyRotation{ nextHubKey, activatesAt }`를 보낸다.
    옛 키로 인증된 Noise 채널 안에서 오므로 별도 서명이 필요 없다. 노드는 `next`를 함께 저장한다.
-3. 유예 기간 동안 hub은 두 키 모두로 핸드셰이크를 받는다. 노드는 `current`로 시도하고 실패하면
+3. 유예 기간 동안 hub는 두 키 모두로 핸드셰이크를 받는다. 노드는 `current`로 시도하고 실패하면
    `next`로 재시도한다.
-4. `activatesAt` 이후 hub은 옛 키를 버린다.
+4. `activatesAt` 이후 hub는 옛 키를 버린다.
 5. 유예 기간 동안 한 번도 접속하지 않은 노드는 두 키 모두 실패한다. 이 경우에만 노드는
    "hub 키가 바뀌었습니다. 다시 신뢰하시겠습니까 (y/N)"를 물은 뒤 `/v1/key`로 재부트스트랩한다.
    무인 노드는 실패 상태로 남고 로그에 이유를 남긴다.
@@ -309,7 +309,7 @@ ALPN을 `http/1.1`로 고정하는 이유: HTTP/2에는 Upgrade가 없다. `SSLP
 두 달에 한 번이고 새 이름은 0초에 열린다.
 
 와일드카드는 DNS-01로만 받을 수 있다. 보통 이것은 DNS 제공자 API 토큰을 뜻하지만, 우리는
-**hub이 `_acme-challenge` 이름의 권한 DNS 서버가 된다** (acme-dns 패턴). 운영자가 만드는
+**hub가 `_acme-challenge` 이름의 권한 DNS 서버가 된다** (acme-dns 패턴). 운영자가 만드는
 레코드는 셋이다.
 
 ```
@@ -318,7 +318,7 @@ hub.example.com.                  A   203.0.113.10        ← 프록시 없이 �
 _acme-challenge.hub.example.com.  NS  hub.example.com.    ← NS 대상이 위임 영역 밖이라 글루 불필요
 ```
 
-CA가 `_acme-challenge.hub.example.com`의 TXT를 물으면 위임을 따라 hub의 53 포트로 오고, hub이
+CA가 `_acme-challenge.hub.example.com`의 TXT를 물으면 위임을 따라 hub의 53 포트로 오고, hub가
 그 순간의 챌린지 값을 답한다. 이 하나의 이름이 `hub.example.com`과 `*.hub.example.com` 두 SAN의
 검증을 모두 담당한다.
 
@@ -343,8 +343,9 @@ jailhub serve --base-url https://hub.example.com
  ├─2. 자가 진단 (통과해야 발급 시작. 실패하면 원인을 콘솔에 출력하고 60초마다 재시도)
  │     · 공용 리졸버(1.1.1.1, 8.8.8.8)에 _acme-challenge.hub.example.com TXT 를 물어
  │       내가 방금 넣은 무작위 값이 돌아오는지 확인 → NS 위임 누락 / 53 차단 / 캐시 를 구분
- │     · hub.example.com 과 임의의 *.hub.example.com 이 내 공인 IP로 풀리는지 확인
- │       → Cloudflare "Proxied"(주황 구름)면 엣지 IP가 나와 여기서 잡힌다
+ │     · hub.example.com 과 *.hub.example.com 이 내 공인 IP로 풀리는지의 검사는 **미구현** (§15).
+ │       hub.example.com 이 Cloudflare "Proxied"(주황 구름)면 NS 대상이 엣지 IP라 위 프로브에서
+ │       간접적으로 걸리지만, *.hub.example.com 만 주황인 것은 잡지 못한다
  │     · 가정용 공유기 뒤처럼 헤어핀이 안 되는 곳은 --no-selfcheck 로 건너뛴다
  ├─3. 계정 키(EC P-256) 없으면 생성 → tls/account.key (0600). newAccount, 약관 동의
  ├─4. newOrder { identifiers: [dns: hub.example.com, dns: *.hub.example.com] }
@@ -370,7 +371,7 @@ jailhub serve --base-url https://hub.example.com
   RSA 키 교환은 복호화가 필요하므로 그 스위트를 끈다 (§9.3).
 - **지원 범위.** ACME v2, dns-01만. External Account Binding(ZeroSSL 등)은 v1 밖.
 - **노드의 `--ca-file`은 상태에 남는다.** 사설 CA나 스테이징 루트로 붙인 노드는 그 경로를 계속
-  쓰므로, hub이 다른 CA의 인증서로 바뀌면 스스로 복구하지 못한다. `jailscale up --hub <이름>`을
+  쓰므로, hub가 다른 CA의 인증서로 바뀌면 스스로 복구하지 못한다. `jailscale up --hub <이름>`을
   `--ca-file` 없이 다시 실행하면 지워진다. 스테이징에서 운영으로 넘어갈 때 실제로 걸린다.
 - **직접 주는 인증서** `--tls-cert/--tls-key`: 사내 CA나 53을 열 수 없는 환경. 와일드카드 SAN이
   있어야 하며, 파일 변경 감지 시 리로드하고 노드에 push한다.
@@ -407,7 +408,7 @@ jailhub serve --base-url https://hub.example.com
 | `HubKeyRotation` | H→N | §6.2 |
 | `Ping` / `Pong` | 양방향 | 요청 시 왕복 측정 (`jailscale netcheck`). 생존 확인은 §8의 `KEEPALIVE` |
 
-**버전 정책.** `proto`는 메시지 스키마와 mux 프레임 집합의 버전이다. hub은 `minProto` 이상을
+**버전 정책.** `proto`는 메시지 스키마와 mux 프레임 집합의 버전이다. hub는 `minProto` 이상을
 받는다. 너무 낮으면 `Goodbye{upgrade-required}`를 **핸드셰이크 응답으로** 보낸다. 이때 노드는
 `HelloResponse`를 못 받으므로 `minProto`도 hub 버전도 알 수 없다. 그래서 `detail`에 필요한
 프로토콜 번호와 hub 버전, 다음에 할 일을 담아 보내고, 노드는 그것을 그대로 출력하고
@@ -419,9 +420,9 @@ jailhub serve --base-url https://hub.example.com
 
 **파일 기반.** append-only JSON Lines 이벤트 로그 + 인메모리 상태. 재시작 시 리플레이.
 
-**포맷 버전.** 스냅샷은 `v`를 담고, hub은 읽을 때 그 값을 확인해 **자기가 아는 버전보다 높으면
+**포맷 버전.** 스냅샷은 `v`를 담고, hub는 읽을 때 그 값을 확인해 **자기가 아는 버전보다 높으면
 기동을 거부한다.** 예전에는 쓰기만 하고 읽지 않아, 옛 바이너리가 새 스냅샷을 자기 것으로 여겨
-모르는 것을 조용히 버리고 시작했다. 상태를 못 읽는 hub은 일부만 들고 뜨는 것보다 멈추는 게 낫다.
+모르는 것을 조용히 버리고 시작했다. 상태를 못 읽는 hub는 일부만 들고 뜨는 것보다 멈추는 게 낫다.
 같은 버전 안에서 필드나 이벤트를 **추가**하는 것은 양방향 호환이다. 모르는 이벤트는 경고를 남기고
 넘어가므로 옛 바이너리로의 롤백도 그 범위에서는 안전하다. `v`는 옛 바이너리가 **기존 데이터의
 의미를 잘못 해석**하게 되는 변경에만 올린다.
@@ -460,7 +461,7 @@ $JAILHUB_STATE/          (기본 /var/lib/jailhub 또는 ~/.local/share/jailhub)
 사용성 원칙 위반이다. 최소 페이지를 v1에 둔다.
 
 - 인증: 비밀번호도 IdP도 없다. **관리자 노드의 MachineKey가 신원이다.** 관리자가 자기 노드에서
-  `jailscale admin`을 치면 노드가 스트림 0으로 `AdminLink`를 요청하고, hub이 60초짜리 일회용
+  `jailscale admin`을 치면 노드가 스트림 0으로 `AdminLink`를 요청하고, hub가 60초짜리 일회용
   URL을 돌려주면 CLI가 브라우저를 연다. 방문 시 세션 쿠키 `HttpOnly; Secure; SameSite=Lax`.
   노드가 없는 상황(첫 설치, 복구)은 hub 셸에서 `jailhub admin login-link`.
 - 기능: 대기 큐 승인/거부, 노드·이름·도메인 목록과 삭제·해제, 초대 발급, auth-key 발급,
@@ -468,9 +469,9 @@ $JAILHUB_STATE/          (기본 /var/lib/jailhub 또는 ~/.local/share/jailhub)
 - 구현: 서버 렌더링 HTML, JS 없음, CSS 인라인. 템플릿 엔진 없이 문자열 조립. 폼마다 세션에
   묶인 CSRF 토큰. 세션 12시간. (M3 구현)
 
-### 7.7 가용성: hub은 하나다
+### 7.7 가용성: hub는 하나다
 
-v1의 hub은 단일 프로세스, 단일 호스트다. 주 사용처가 self-host 단일 VPS이고, 규모 면에서는 hub
+v1의 hub는 단일 프로세스, 단일 호스트다. 주 사용처가 self-host 단일 VPS이고, 규모 면에서는 hub
 하나가 수천 노드와 수만 스트림을 감당한다(바이트 복사와 서명뿐이다). 남는 것은 가용성이며,
 v1은 **빠른 복구**로 답한다.
 
@@ -481,8 +482,8 @@ v1은 **빠른 복구**로 답한다.
 | 백업 단위 | `$JAILHUB_STATE` 디렉터리 하나. `hub.key`·`tls/`·`state.*`가 전부다 |
 | 호스트 교체 | 새 호스트에 디렉터리를 복사하고 DNS를 바꾼다. 노드는 hkey와 와일드카드 키가 같으므로 아무것도 모른다 |
 
-대기 hub(디렉터리 복제 + 낮은 TTL DNS 또는 유동 IP)은 §15. 능동-능동은 방문자가 붙은 hub과
-노드가 붙은 hub이 다를 수 있어 hub 사이 전달이 필요하며, 다중 hub 설계 전체라 v2 이후다.
+대기 hub(디렉터리 복제 + 낮은 TTL DNS 또는 유동 IP)은 §15. 능동-능동은 방문자가 붙은 hub와
+노드가 붙은 hub가 다를 수 있어 hub 사이 전달이 필요하며, 다중 hub 설계 전체라 v2 이후다.
 
 **무중단 교체 (hand-off, M3 구현).** hub 바이너리를 갱신할 때는 재시작 대신 **인수**한다.
 `jailhub serve --takeover`로 새 프로세스를 띄우면:
@@ -503,8 +504,8 @@ v1은 **빠른 복구**로 답한다.
 한 줄이다. 롤백도 같은 명령이다.
 
 **draining 목록에서 빠지는 조건.** 노드가 4번에서 남겨둔 연결은 `onClosed` 콜백이 목록에서
-제거한다. 그런데 그 콜백은 hub이 이미 닫아버린 연결에 대해서는 다시 울리지 않는다. 그런
-일이 두 가지 경로로 생긴다. hub이 감시가 시작되기 전에 연결을 끊는 경우, 그리고 추가 연결이
+제거한다. 그런데 그 콜백은 hub가 이미 닫아버린 연결에 대해서는 다시 울리지 않는다. 그런
+일이 두 가지 경로로 생긴다. hub가 감시가 시작되기 전에 연결을 끊는 경우, 그리고 추가 연결이
 자기 읽기 루프에서 먼저 `onClosed`에 도달해 아직 목록에 없는 자신을 지우려 드는 경우다.
 둘 다 연결은 죽었는데 항목만 남아 `drainingCount()`가 영원히 0이 되지 않는다. 그래서
 감시 스레드가 끝날 때 직접 제거한다.
@@ -522,7 +523,7 @@ v1은 **빠른 복구**로 답한다.
 
 | 타입 | 페이로드 | 방향 | 의미 |
 |---|---|---|---|
-| `OPEN` | `{linkId, sni?, visitorAddr, keyId?}` JSON | H→N | hub이 방문자 연결을 배달. https는 `sni`, raw 포트는 `linkId`가 스트림의 정체다 |
+| `OPEN` | `{linkId, sni?, visitorAddr, keyId?}` JSON | H→N | hub가 방문자 연결을 배달. https는 `sni`, raw 포트는 `linkId`가 스트림의 정체다 |
 | `DATA` | 바이트 | 양방향 | 스트림 데이터 |
 | `WINDOW` | `[4B delta]` | 양방향 | 흐름 제어 윈도우 증가 |
 | `CLOSE` | 없음 | 양방향 | 반쪽 닫기 (FIN 상당) |
@@ -532,17 +533,17 @@ v1은 **빠른 복구**로 답한다.
 
 - **흐름 제어.** 스트림당 수신 윈도우 256 KB, 연결당 합계 8 MB. 윈도우가 0이면 송신 측이
   멈춘다. 느린 방문자 하나가 다른 스트림을 막지 않게 하는 장치다. TCP 위이므로 재전송은 없다.
-- **스트림 ID.** hub이 여는 스트림은 짝수, 노드가 여는 스트림은 홀수(현재는 없음. 향후 노드
+- **스트림 ID.** hub가 여는 스트림은 짝수, 노드가 여는 스트림은 홀수(현재는 없음. 향후 노드
   발신용). 0은 컨트롤.
 - **우선순위.** writer는 스트림 0의 프레임을 먼저 내보낸다. `SignRequest`/`SignResponse`가
   방문자 데이터에 밀리면 핸드셰이크 지연이 늘어난다.
 - **노드당 다중 연결.** 모든 스트림이 한 TCP+TLS 연결을 공유하면 손실 시 함께 멈추고(head-of-line)
   처리량이 TCP 흐름 하나의 상한에 걸린다. 그래서 노드는 hub에 연결을 **N개** 연다. 기본 N=1,
   `--connections 4`까지. 각 연결은 완전한 Noise 채널이며 `Hello{conn: 0..N-1}`로 번호를 밝힌다.
-  hub은 같은 MachineKey의 연결들을 **묶음**으로 다룬다. 스트림 0(컨트롤)은 0번 연결에만 있고,
+  hub는 같은 MachineKey의 연결들을 **묶음**으로 다룬다. 스트림 0(컨트롤)은 0번 연결에만 있고,
   방문자 스트림은 묶음 안에서 미해결 바이트가 가장 적은 연결에 배정한다. 서명 요청은 0번
   연결의 스트림 0으로 가되 `streamId`에 연결 번호를 상위 8비트로 넣어 어느 연결의 스트림인지
-  hub이 안다. 0번 연결이 끊기면 묶음 전체를 끊고 노드가 다시 연다. (M3 구현. 서명 요청은
+  hub가 안다. 0번 연결이 끊기면 묶음 전체를 끊고 노드가 다시 연다. (M3 구현. 서명 요청은
   실제로는 스트림을 소유한 연결로 보내는데, hand-off 중 draining 연결의 스트림이 0번 연결에서
   찾아지지 않는 문제를 피하기 위해서다. 검사 조건은 같다.)
 - 같은 MachineKey·같은 `conn` 번호로 두 번째 연결이 오면 옛 연결을 `Goodbye{shutdown}`으로 닫고
@@ -563,11 +564,11 @@ server_name 순으로 100줄이다.
 |---|---|
 | `hub.example.com` | hub 자신의 `SSLServerSocket`으로 넘긴다. 컨트롤 채널·`/join`·`/admin`·`/v1/*` |
 | `<name>.hub.example.com`, 활성 이름 | 소유 노드의 mux에 `OPEN{sni, visitorAddr, keyId}` 스트림을 열고, 이미 읽은 ClientHello 바이트부터 그대로 넘긴다 |
-| `<name>.hub.example.com`, 미배정·비활성 | hub이 와일드카드로 종단해 "그런 링크가 없습니다" 페이지. hub에 키가 있으니 가능하다 |
-| 등록된 사용자 도메인 | 소유 노드로 스트림. `keyId`는 `user-domain` (hub은 그 키가 없다) |
+| `<name>.hub.example.com`, 미배정·비활성 | hub가 와일드카드로 종단해 "그런 링크가 없습니다" 페이지. hub에 키가 있으니 가능하다 |
+| 등록된 사용자 도메인 | 소유 노드로 스트림. `keyId`는 `user-domain` (hub는 그 키가 없다) |
 | 그 외, SNI 없음 | 즉시 닫는다 |
 
-이후 hub은 양방향으로 바이트만 복사한다. TLS 레코드도 HTTP도 보지 않는다. 방문자 소켓 →
+이후 hub는 양방향으로 바이트만 복사한다. TLS 레코드도 HTTP도 보지 않는다. 방문자 소켓 →
 스트림 `DATA`, 스트림 `DATA` → 방문자 소켓. 방문자 쪽 반쪽 닫기는 `CLOSE`, 오류는 `RST`.
 
 **연결 한도.** 방문자 IP당 동시 연결 64, 이름당 동시 연결 1024, ClientHello 대기 5초. SYN 플러드
@@ -575,7 +576,7 @@ server_name 순으로 100줄이다.
 뒤에 두면 모든 방문자가 한 주소로 보이기 때문인데, 그 배치에서는 `--proxy-protocol`(§9.6)이
 정답이고 이 예외는 안전망이다. 리스너 backlog는 1024(OS `somaxconn`이 상한).
 
-**hub이 보는 것.** SNI, 방문자 IP, 바이트 수, 연결 시각. 내용은 못 본다. 이것이 v3의 "hub은
+**hub가 보는 것.** SNI, 방문자 IP, 바이트 수, 연결 시각. 내용은 못 본다. 이것이 v3의 "hub는
 내용을 못 본다"를 이 구조에서 되찾은 지점이다.
 
 **HTTP가 아니어도 TLS+SNI면 443으로 된다.** hub도 노드도 HTTP를 파싱하지 않으므로, SNI를
@@ -583,9 +584,9 @@ server_name 순으로 100줄이다.
 MQTT over TLS, gRPC가 그렇다. `jailscale open 5432`는 HTTP 앱과 똑같이 동작한다. TLS를 쓰지
 않는 클라이언트만 §9.5의 raw 포트가 필요하다.
 
-**방문자가 자기 쪽을 안 닫을 때.** 양방향 모두 반닫기이므로(§8) hub은 노드 쪽이 끝난 뒤에도
+**방문자가 자기 쪽을 안 닫을 때.** 양방향 모두 반닫기이므로(§8) hub는 노드 쪽이 끝난 뒤에도
 방문자가 자기 half를 닫을 때까지 기다린다. 방문자에게는 그럴 의무가 없다. 그래서 노드가 자기
-쪽을 닫은 시점부터 10초를 세고, 그 안에 닫지 않으면 hub이 소켓을 닫는다. 이 시계는 노드가
+쪽을 닫은 시점부터 10초를 세고, 그 안에 닫지 않으면 hub가 소켓을 닫는다. 이 시계는 노드가
 끝낸 뒤에야 돌기 시작하므로 계속 열려 있어야 하는 스트림(WebSocket·SSE·긴 다운로드)은 여기에
 닿지 않는다. 없으면 소켓과 그것을 읽는 스레드, 반쯤 열린 스트림이 무기한 묶인다.
 
@@ -594,7 +595,7 @@ MQTT over TLS, gRPC가 그렇다. `jailscale open 5432`는 HTTP 앱과 똑같이
 - **형식.** `<name>.hub.example.com`. `name`은 소문자·숫자·하이픈, 3~40자. `hub`·`admin`·`www`·
   `_acme-challenge` 같은 예약어 금지.
 - **임의 이름.** `jailscale open 3000`은 `q7x2k` 같은 5자 임의 이름을 받는다. 같은 노드가 같은
-  로컬 포트로 다시 열면 hub이 이전 이름을 돌려준다. 재시작해도 URL이 바뀌지 않는다.
+  로컬 포트로 다시 열면 hub가 이전 이름을 돌려준다. 재시작해도 URL이 바뀌지 않는다.
 - **지정 이름.** `--name myapp`. 첫 요청자의 사용자에게 귀속되고, 같은 사용자의 다른 노드도 쓸
   수 있다. 다른 사용자가 요청하면 `taken`. 관리자가 `name reassign`으로 옮긴다.
 - **활성.** 노드가 `LinkOpen`을 보내고 연결이 살아 있는 동안만 라우팅된다. 노드가 끊기면
@@ -602,7 +603,7 @@ MQTT over TLS, gRPC가 그렇다. `jailscale open 5432`는 HTTP 앱과 똑같이
 - **와일드카드라 이름 생성에 ACME가 없다.** 이름을 여는 데 걸리는 시간은 `LinkOpen` 왕복
   하나다.
 
-### 9.3 서명 위임 — 노드가 종단하고 hub이 서명한다
+### 9.3 서명 위임 — 노드가 종단하고 hub가 서명한다
 
 노드는 hub에서 받은 와일드카드 **인증서**로 방문자와 TLS를 맺지만 **개인키가 없다.** TLS 1.3
 서버 핸드셰이크에서 개인키가 하는 일은 `CertificateVerify`의 서명 한 번이다. 노드는 그 서명을
@@ -618,12 +619,12 @@ hub에 부탁한다.
 방문자 ◄──────────────── hub ◄──bytes────────── 노드
 ```
 
-**서명 오라클을 막는 조건.** hub은 트랜스크립트 해시만 보므로 어느 SNI의 핸드셰이크인지 알 수
+**서명 오라클을 막는 조건.** hub는 트랜스크립트 해시만 보므로 어느 SNI의 핸드셰이크인지 알 수
 없다. 조건 없이 서명하면 모든 멤버 노드가 와일드카드 전체의 서명 오라클을 갖고, 방문자의
-DNS를 속일 수 있는 공격자는 남의 이름을 사칭할 수 있다. 따라서 hub은 다음을 모두 만족할 때만
+DNS를 속일 수 있는 공격자는 남의 이름을 사칭할 수 있다. 따라서 hub는 다음을 모두 만족할 때만
 서명한다.
 
-1. `streamId`가 **이 연결에서 hub이 연 스트림**이고, 아직 열려 있다.
+1. `streamId`가 **이 연결에서 hub가 연 스트림**이고, 아직 열려 있다.
 2. 그 스트림의 `OPEN`에 기록된 `sni`가 **이 노드에 배정된 이름**이다.
 3. 그 스트림에서의 서명 횟수가 상한(4) 이내다. TLS 1.3 정상 핸드셰이크는 1회, HelloRetryRequest를
    고려해도 2회면 충분하다.
@@ -631,7 +632,7 @@ DNS를 속일 수 있는 공격자는 남의 이름을 사칭할 수 있다. 따
    방문자 1,000명이 동시에 핸드셰이크하는 경우를 기준으로 정했다. 세션 재개는 서명이 없다).
 
 트랜스크립트에는 양쪽 랜덤이 들어가므로 이 서명은 다른 연결에 재사용할 수 없다. 결과적으로
-노드는 **hub이 자기에게 배달한 연결에 대해서만** 서명을 받고, 사칭할 수 있는 것은 자기 이름뿐이다.
+노드는 **hub가 자기에게 배달한 연결에 대해서만** 서명을 받고, 사칭할 수 있는 것은 자기 이름뿐이다.
 그것은 원래 자기 것이다.
 
 **서명만 필요하게 만들기.** 인증서를 ECDSA P-256으로 받는다 (§6.3). TLS 1.3과 TLS 1.2 ECDHE
@@ -639,7 +640,7 @@ DNS를 속일 수 있는 공격자는 남의 이름을 사칭할 수 있다. 따
 노드의 티켓 키로 처리되어 hub 왕복이 없다. 0-RTT는 끈다.
 
 **키 회전.** `CertUpdate`는 `keyId`(인증서 지문)를 담는다. 노드는 최신 `keyId`로 새 핸드셰이크를
-시작하고, `SignRequest`에 `keyId`를 넣는다. hub은 옛 키를 24시간 더 갖고 있으므로(§6.3) 갱신
+시작하고, `SignRequest`에 `keyId`를 넣는다. hub는 옛 키를 24시간 더 갖고 있으므로(§6.3) 갱신
 직전에 시작된 핸드셰이크도 완료된다.
 
 **지연.** 방문자의 첫 핸드셰이크마다 노드↔hub 왕복 한 번이 붙는다. Cloudflare Keyless SSL이
@@ -652,20 +653,20 @@ DNS를 속일 수 있는 공격자는 남의 이름을 사칭할 수 있다. 따
 
 - 사용자는 `myapp.com CNAME hub.example.com`(또는 A)을 만든다.
 - 노드는 `domains/<domain>.{key,pem}`이 없거나 갱신 시점이면 자기 키로 ACME HTTP-01을 먼저
-  치른다. DNS가 hub을 가리키므로 CA의 `http://myapp.com/.well-known/…` 요청은 hub의 80으로 온다.
-  노드가 `ChallengeSet{token, keyAuthorization}`을 올려두면(노드당 10개, 10분) hub이 그 값을
-  대신 답하고, 끝나면 `ChallengeClear`. hub은 토큰과 응답 문자열만 알 뿐 키를 모른다.
-- 그 다음 `LinkOpen{domain, chainPem}`. **인증서 체인이 소유 증명이다.** hub은 체인이 공개 CA로
+  치른다. DNS가 hub를 가리키므로 CA의 `http://myapp.com/.well-known/…` 요청은 hub의 80으로 온다.
+  노드가 `ChallengeSet{token, keyAuthorization}`을 올려두면(노드당 10개, 10분) hub가 그 값을
+  대신 답하고, 끝나면 `ChallengeClear`. hub는 토큰과 응답 문자열만 알 뿐 키를 모른다.
+- 그 다음 `LinkOpen{domain, chainPem}`. **인증서 체인이 소유 증명이다.** hub는 체인이 공개 CA로
   검증되고 SAN이 그 도메인일 때만 도메인을 노드에 귀속시킨다. 체인이 없으면 `domain-unverified`,
   이름이 다르면 `domain-cert-name-mismatch`, 검증 실패면 `domain-cert-untrusted`. hub 이름 아래의
   이름은 `bad-domain`. 같은 도메인의 유효한 인증서를 가진 다른 노드가 오면 그 노드가 이긴다
   (도메인을 실제로 통제하는 쪽이 인증서를 받을 수 있으므로).
-- 이후는 순수 SNI 통과다. 인증서도 키도 노드에만 있고, hub은 그 이름의 암호문을 넘길 뿐이다.
+- 이후는 순수 SNI 통과다. 인증서도 키도 노드에만 있고, hub는 그 이름의 암호문을 넘길 뿐이다.
   `SignRequest`는 없다.
 - 인증서 한도는 사용자 자신의 등록 도메인 기준이라 hub 도메인의 한도와 무관하다.
 - 갱신은 노드가 잔여 수명 1/3 규칙으로 스스로 한다. 노드가 오프라인이면 갱신도 멈추므로 만료
   7일 전 `jailscale status`가 경고한다.
-- **hub 80 포트가 이 기능의 전제다.** 80을 열지 않은 hub은 사용자 도메인을 거부한다.
+- **hub 80 포트가 이 기능의 전제다.** 80을 열지 않은 hub는 사용자 도메인을 거부한다.
   tls-alpn-01(80 불필요, 노드가 자체 서명 챌린지 인증서 생성)은 §15.
 
 이 절이 v3에서 "keyless로 사용자 도메인"이라 했던 것의 최종 형태다. 노드가 어차피 TLS를
@@ -674,7 +675,7 @@ DNS를 속일 수 있는 공격자는 남의 이름을 사칭할 수 있다. 따
 ### 9.5 raw TCP / UDP 포트 공개 (M3)
 
 TLS를 쓰지 않는 클라이언트(SSH, 게임 서버, 평문 DB, DNS, WireGuard 같은 UDP 프로토콜)는
-SNI가 없어 이름으로 구분할 수 없다. 그래서 hub이 **이름 대신 포트**를 배정한다. ngrok의 tcp
+SNI가 없어 이름으로 구분할 수 없다. 그래서 hub가 **이름 대신 포트**를 배정한다. ngrok의 tcp
 모드, frp의 tcp/udp 타입과 같은 구조다.
 
 ```
@@ -688,15 +689,15 @@ $ jailscale open 22 --tcp --port 10022                  # 희망 포트. 비어 
 - **포트 범위.** hub `--port-range 10000-10999`(기본). 이 범위를 방화벽에서 TCP와 UDP 모두
   열어야 하며, 운영자 준비 목록에 "raw 포트를 쓸 때만" 조건으로 들어간다 (§6.3). 범위 크기가
   곧 동시 raw 공개 수 상한이다. 배정된 포트는 같은 노드·같은 로컬 포트에 대해 유지된다.
-- **TCP.** hub이 배정 포트에 `ServerSocket`을 연다. 방문자 연결마다 `OPEN{linkId, visitorAddr}`
+- **TCP.** hub가 배정 포트에 `ServerSocket`을 연다. 방문자 연결마다 `OPEN{linkId, visitorAddr}`
   스트림을 열고 바이트를 복사한다. SNI 파싱 없음, TLS 없음.
 - **E2E의 한계.** 방문자↔hub 구간은 방문자 클라이언트가 보낸 그대로이고, hub↔노드 구간은
   여전히 Noise로 암호화된다. 따라서 평문이 존재하는 곳은 **hub 프로세스 안**뿐이며, 그것도
-  앱이 스스로 암호화하지 않을 때만이다. SSH·WireGuard·자체 TLS를 켠 DB는 hub이 앱의 암호문만
-  보므로 사실상 E2E이고, 평문 프로토콜은 hub이 본다. 방문자 클라이언트가 협조하지 않는 한
+  앱이 스스로 암호화하지 않을 때만이다. SSH·WireGuard·자체 TLS를 켠 DB는 hub가 앱의 암호문만
+  보므로 사실상 E2E이고, 평문 프로토콜은 hub가 본다. 방문자 클라이언트가 협조하지 않는 한
   우리가 고칠 수 없는 한계이며 ngrok·frp도 같다. 이 점을 `open --tcp/--udp` 출력에 한 줄로 알린다.
   클라이언트가 TLS를 말할 수 있으면 §9.1의 443 경로가 E2E다.
-- **UDP.** hub이 배정 포트에 `DatagramChannel`을 연다. 처음 보는 방문자 주소마다 `DGRAM` 플래그의
+- **UDP.** hub가 배정 포트에 `DatagramChannel`을 연다. 처음 보는 방문자 주소마다 `DGRAM` 플래그의
   스트림을 열고, 이후 그 주소의 데이터그램은 그 스트림의 DATA 프레임 하나씩으로 나른다.
   노드는 스트림마다 로컬 UDP 소켓을 하나 만들어 로컬 포트로 보내고, 응답을 같은 스트림으로
   돌려보낸다. 방문자 주소별 유휴 60초면 스트림을 닫는다. 데이터그램 크기 상한은 mux 프레임
@@ -707,21 +708,21 @@ $ jailscale open 22 --tcp --port 10022                  # 희망 포트. 비어 
 
 ### 9.6 TCP 프록시 뒤 배치와 PROXY 프로토콜 (M4)
 
-이미 nginx나 HAProxy가 443을 쥔 서버에 hub을 얹는 운영자를 지원한다. 조건은 프록시가
+이미 nginx나 HAProxy가 443을 쥔 서버에 hub를 얹는 운영자를 지원한다. 조건은 프록시가
 **TLS를 열지 않고 TCP 바이트만 넘기는 것**이다.
 
 - 참조 설정 두 벌을 배포물에 동봉한다. nginx `stream { server { listen 443; proxy_pass
   127.0.0.1:8443; proxy_protocol on; } }`와 HAProxy `mode tcp` + `send-proxy-v2`. SNI 기반으로
-  hub 이름 아래만 hub으로 보내고 나머지는 기존 서비스로 보내는 `ssl_preread` 예시도 넣는다.
-- hub은 `--listen 127.0.0.1:8443 --proxy-protocol`로 뜬다. `--proxy-protocol`이 켜지면 연결 첫
+  hub 이름 아래만 hub로 보내고 나머지는 기존 서비스로 보내는 `ssl_preread` 예시도 넣는다.
+- hub는 `--listen 127.0.0.1:8443 --proxy-protocol`로 뜬다. `--proxy-protocol`이 켜지면 연결 첫
   바이트에서 PROXY v1/v2 헤더를 읽어 방문자 IP를 얻는다. 이 헤더는 신뢰하는 프록시에서만
   와야 하므로 `--proxy-protocol`은 `--listen`이 루프백이거나 `--trusted-proxy <cidr>`가 있을 때만
   받는다. 아니면 누구나 방문자 IP를 위조한다.
 - 자가 진단(§6.3)은 프록시 뒤에서도 그대로 동작한다. 공인 이름이 결국 hub에 닿는지를 보기 때문이다.
 - raw 포트(§9.5)도 같은 방식으로 프록시를 거칠 수 있지만 참조 설정은 443만 다룬다.
 - (M4 구현) 파서는 v1 텍스트와 v2 바이너리(IPv4·IPv6·LOCAL) 모두 받는다. v1의 주소는 **리터럴만**
-  받는다. 호스트명을 허용하면 accept 경로에서 DNS 조회가 일어나 공격자가 hub을 멈출 수 있다
-  (퍼징이 찾았다). `--proxy-protocol`이 켜진 hub은 헤더 없는 연결을 거부하므로 노드의 컨트롤
+  받는다. 호스트명을 허용하면 accept 경로에서 DNS 조회가 일어나 공격자가 hub를 멈출 수 있다
+  (퍼징이 찾았다). `--proxy-protocol`이 켜진 hub는 헤더 없는 연결을 거부하므로 노드의 컨트롤
   연결도 프록시를 지나야 한다. 참조 파일은 `deploy/nginx-stream.conf`, `deploy/haproxy.cfg`.
 
 ---
@@ -752,7 +753,7 @@ $ jailscale close q7x2k
 방문자 스트림(§8)은 소켓이 아니라 바이트 스트림이므로 `SSLSocket`을 얹을 수 없다. `SSLEngine`을
 직접 돌린다. 스트림 → `unwrap` → 평문 → 로컬 소켓, 로컬 소켓 → `wrap` → 스트림. 200줄 안팎.
 
-- `SSLContext`는 hub이 `CertUpdate`로 준 인증서 체인과 **불투명한 `PrivateKey`**로 구성한다.
+- `SSLContext`는 hub가 `CertUpdate`로 준 인증서 체인과 **불투명한 `PrivateKey`**로 구성한다.
   이 키 객체는 바이트를 갖고 있지 않고 `keyId`만 안다.
 - 자체 JCE `Provider`가 `Signature.SHA256withECDSA`를 이 불투명 키에 대해 제공한다. JSSE는
   키 타입에 맞는 공급자를 고르는 지연 선택을 하므로(PKCS#11 키가 쓰는 경로) 우리 공급자가
@@ -761,7 +762,7 @@ $ jailscale close q7x2k
   재정의로 하며 리플렉션이 없다.
 - `SSLParameters`: 프로토콜 TLS 1.3 + 1.2, ECDHE 스위트만, ALPN `http/1.1`만, 0-RTT 없음.
   h2를 협상하면 로컬 앱이 h1일 때 깨진다.
-- 세션 티켓 키는 노드가 생성해 메모리에만 둔다. 재개 핸드셰이크는 hub을 거치지 않는다.
+- 세션 티켓 키는 노드가 생성해 메모리에만 둔다. 재개 핸드셰이크는 hub를 거치지 않는다.
 - 사용자 도메인 스트림(`keyId = user-domain`)은 `domains/<domain>.key`의 진짜 키로 종단한다.
 
 ### 10.3 릴레이
@@ -769,7 +770,7 @@ $ jailscale close q7x2k
 TLS를 벗긴 뒤 노드는 **바이트를 복사할 뿐이다.** 방문자가 보낸 평문 → `127.0.0.1:<port>`,
 로컬 응답 → 방문자. HTTP/1.1 keep-alive, chunked, WebSocket Upgrade, SSE가 전부 그대로 통과한다.
 로컬 앱이 처리하기 때문이다. 방문자 IP를 로컬 앱에 알리고 싶으면 `open --proxy-protocol`로 첫 줄에
-PROXY v1 헤더를 붙인다(HAProxy 형식, 앱이 지원할 때만). hub이 `visitorAddr`·`visitorPort`를 스트림
+PROXY v1 헤더를 붙인다(HAProxy 형식, 앱이 지원할 때만). hub가 `visitorAddr`·`visitorPort`를 스트림
 메타에 실어 보내고, 목적지 주소로는 로컬 대상을 적는다. raw TCP 링크도 같다. (M4 구현)
 
 로컬 연결이 거부·리셋되면(작은 listen backlog에 방문자가 몰릴 때 macOS 기본 128에서 실제로 난다)
@@ -796,7 +797,7 @@ $ jailscale gate q7x2k --new-link --ttl 7d
 - `?jail=<token>` 쿼리가 유효하면 `Set-Cookie: jail=…; Secure; HttpOnly; SameSite=Lax` + 쿼리를
   뺀 경로로 302, 그리고 닫는다.
 - 둘 다 없으면 403 HTML 한 장을 돌려주고 닫는다.
-- 토큰은 128비트, 노드에는 해시만. hub은 게이트를 모른다. 암호문만 보기 때문이다. 게이트가
+- 토큰은 128비트, 노드에는 해시만. hub는 게이트를 모른다. 암호문만 보기 때문이다. 게이트가
   노드에 있는 것은 E2E와 일관된 자리다.
 - 본문은 읽지 않으므로 HTTP 파싱은 헤더 경계(`\r\n\r\n`)까지다.
 
@@ -831,7 +832,7 @@ v3의 노드가 하던 일 대부분이 없다. WireGuard도, userspace TCP도, 
 ## 11. 가입 — 초대와 승인
 
 IdP를 두지 않는다. 가입 권한은 **역량(capability)** 으로 전달한다. 초대 링크, 짧은 코드,
-auth-key는 모두 "소지가 곧 권한"인 비밀값이고, hub은 그 값과 함께 온 MachineKey를 가입시킨다.
+auth-key는 모두 "소지가 곧 권한"인 비밀값이고, hub는 그 값과 함께 온 MachineKey를 가입시킨다.
 가입은 곧 **발행 권한**이다. 가입한 노드는 이름을 열 수 있고, 방문자는 가입하지 않는다.
 
 ### 11.1 IdP를 빼는 이유
@@ -864,7 +865,7 @@ $ jailhub invite create ...                          # hub 셸에서도 같은 �
 
 - **링크**는 128비트 토큰(base64url 22자). 기본 1회 · 24시간.
 - **코드**는 같은 초대의 별칭이다. Crockford base32 8자(40비트), **10분 · 1회**로 짧게 두고,
-  hub은 IP당 분당 10회로 시도를 제한하며 실패가 쌓이면 코드를 폐기한다.
+  hub는 IP당 분당 10회로 시도를 제한하며 실패가 쌓이면 코드를 폐기한다.
 - `--user`가 없으면 가입자가 이름을 적는다. `jailscale up`이 OS 사용자명을 기본값으로 묻는다.
 - 클립보드 복사는 `pbcopy` / `xclip` / `clip.exe`를 `ProcessBuilder`로 부른다. 없으면 건너뛴다.
 - 발급 요청은 IPC → 스트림 0 `InviteCreate` → hub. hub에는 토큰의 해시만 남는다.
@@ -898,12 +899,12 @@ $ jailscale up --hub hub.example.com
 관리자 승인을 기다리는 중… (호스트명 wq-macbook, mkey:0J3B…)
 ```
 
-hub은 `pending` 큐에 MachineKey·호스트명·OS·출발 IP만 기록한다. 관리자가 `/admin`이나
+hub는 `pending` 큐에 MachineKey·호스트명·OS·출발 IP만 기록한다. 관리자가 `/admin`이나
 `jailhub node approve 0J3B… --user wq`로 승인하면 열려 있는 스트림 0으로 즉시 완료가 push된다.
 두드리기는 무인증이므로 IP당 대기 항목 수를 제한하고, 큐는 24시간 뒤 비운다. 관리자가
 두드리기를 원치 않으면 `--knock off`.
 
-**`--registration open`.** 개인 hub이나 소규모 팀처럼 게이트가 과한 곳을 위한 옵션이다. 켜면
+**`--registration open`.** 개인 hub나 소규모 팀처럼 게이트가 과한 곳을 위한 옵션이다. 켜면
 두드린 노드가 **즉시 승인**된다. 초대 없이 `jailscale up --hub hub.example.com`만으로 가입이
 끝나고, 이름은 가입자가 적는다. 기본값은 여전히 초대이며, 켤 때 콘솔에 위험을 명시한다.
 호스트명을 아는 누구나 `*.hub.example.com` 아래 이름을 열 수 있게 되므로 §12.4의 남용 대응이
@@ -942,21 +943,21 @@ jailscale up --hub hub.example.com --auth-key jk_…
 
 | 축 | 질문 | 우리의 답 |
 |---|---|---|
-| **전송 보호** | 방문자와 노드 사이를 누가 읽나 | hub 포함 아무도. hub은 SNI·IP·바이트 수만 본다 (§9.1) |
+| **전송 보호** | 방문자와 노드 사이를 누가 읽나 | hub 포함 아무도. hub는 SNI·IP·바이트 수만 본다 (§9.1) |
 | **발행 권한** | 누가 이름을 열 수 있나 | 초대·auth-key·승인으로 가입한 노드만. **개방 가입 없음** |
 | **방문 권한** | 누가 공개 링크에 들어오나 | 기본 공개. `--gate`면 방문 링크 소지자만 (§10.4) |
-| **이름 신원** | "`myapp.hub.example.com` = alice의 노드"를 누가 보증하나 | **hub.** 라우팅 표와 와일드카드 키를 hub이 쥔다 (§12.3) |
+| **이름 신원** | "`myapp.hub.example.com` = alice의 노드"를 누가 보증하나 | **hub.** 라우팅 표와 와일드카드 키를 hub가 쥔다 (§12.3) |
 
 ### 12.1 서명 위임의 경계
 
-와일드카드 개인키는 hub에만 있다. 노드는 hub이 자기에게 배달한 스트림에 대해서만, 그 스트림의
+와일드카드 개인키는 hub에만 있다. 노드는 hub가 자기에게 배달한 스트림에 대해서만, 그 스트림의
 SNI가 자기 이름일 때만 서명을 받는다 (§9.3의 4조건). 따라서:
 
 - 멤버 노드가 침해되어도 공격자가 얻는 것은 **그 노드의 이름**에 대한 사칭뿐이다. 그것은 원래
   그 노드의 것이다.
 - 컨트롤 채널이 Noise로 hub 키에 고정되어 있으므로, TLS를 뚫는 MITM 프록시도 서명 요청을
   가로채거나 위조하지 못한다 (§6.1).
-- hub은 서명 요청을 스트림·이름·횟수·속도로 검사하고 거부를 로그에 남긴다. 거부가 반복되는
+- hub는 서명 요청을 스트림·이름·횟수·속도로 검사하고 거부를 로그에 남긴다. 거부가 반복되는
   노드는 자동으로 연결을 끊고 관리자에게 표시한다.
 
 ### 12.2 노드는 기본적으로 아무것도 노출하지 않는다
@@ -965,18 +966,18 @@ SNI가 자기 이름일 때만 서명을 받는다 (§9.3의 4조건). 따라서
 그 명령을 친 동안만 열린다. TUN이 없으니 OS 라우팅으로 새는 경로도 없다. 방문자가 닿을 수
 있는 것은 노드가 명시한 `host:port` 하나이며, 노드의 다른 서비스나 LAN은 보이지 않는다.
 
-### 12.3 hub은 신뢰 대상이다
+### 12.3 hub는 신뢰 대상이다
 
-정직하게 적어둔다. hub이 침해되면:
+정직하게 적어둔다. hub가 침해되면:
 
-| hub이 할 수 없는 것 | hub이 할 수 있는 것 |
+| hub가 할 수 없는 것 | hub가 할 수 있는 것 |
 |---|---|
 | 정상 노드로 가는 방문자 트래픽 읽기 (노드가 종단한다) | **이름을 공격자 노드로 재배정**하고 와일드카드 키로 서명 → 그 이름의 방문자를 통째로 가로챈다 |
 | 노드의 MachineKey·사용자 도메인 키 획득 (hub에 없다) | 임의 노드를 가입시키기, 초대를 마음대로 발급 |
 | 노드의 로컬 서비스 중 공개하지 않은 것 접근 | 누가 언제 어느 이름에 얼마나 접속했는지 보기 |
 
-v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 권위**이기도 하다. hub 침해는 hub
-도메인 아래 모든 이름의 사칭이다. 사용자 도메인(§9.4)은 예외다. 키가 노드에 있어 hub이 할 수
+v3의 메시와 달리 이 제품에서 hub는 **와일드카드 키를 쥔 TLS 권위**이기도 하다. hub 침해는 hub
+도메인 아래 모든 이름의 사칭이다. 사용자 도메인(§9.4)은 예외다. 키가 노드에 있어 hub가 할 수
 있는 것은 라우팅을 끊는 것뿐이다. self-host라 "hub 운영자 = 조직"인 위협 모델이 대부분의
 배포에 맞고, 그 이상이 필요한 이름은 사용자 도메인으로 간다.
 
@@ -1044,12 +1045,12 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 | **M0** ✅ | 프로젝트 골격 · Maven wrapper · GraalVM native 빌드 파이프라인 · `crypto`(BLAKE2s·HKDF·X25519·ChaCha·Noise IK) | RFC 7693/7748/8439 벡터와 noise-c IK 벡터 통과. `./native.sh`로 node·hub 바이너리 생성. 기준선: 4.9 MiB, RSS 8.4 MB, 콜드 스타트 5 ms (자리표시자 main) |
 | **M1** ✅ | 컨트롤 채널 · 자체 HTTP/1.1 · hkey 부트스트랩·회전 · 버전 협상 · mux(스트림 0만) · 초대·코드·auth-key·두드리기 · **로컬 IPC (노드·hub)** · 파일 저장소 · `./measure.sh` | `jailscale invite`로 만든 링크로 다른 기기가 `jailscale up --invite`만으로 가입한다(loopback e2e 테스트 + native 프로세스로 확인). 키 회전 후 노드가 끊기지 않는다. 실측(arm64 macOS): 바이너리 24 MiB, **노드 아이들 RSS 23.8 MB(목표 20)**, hub 24.2 MB, CLI 콜드 스타트 6 ms. 인증서는 M2의 ACME 전까지 `--tls-cert/--tls-key` |
 | **M2** ✅ | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림 · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3007 --name demo` 후 `curl`이 hub→노드를 거쳐 로컬 앱을 받는다(native 프로세스로 확인). 서명 오라클 테스트 통과. ACME는 테스트 CA(mock)로 dns-01·CSR·발급·재시작 재사용까지 통과. 실측(loopback, arm64): 방문자 전체 핸드셰이크 2.3 ms(hub 서명 왕복 포함), 노드 RSS 26.6 MB, hub 26.2 MB. **확인 완료**: 실제 도메인·실제 CA 발급은 아래 실물 검증 참조. 노드당 다중 연결(§8)은 M3로 이월 |
-| **M3** ✅ | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · 노드당 다중 연결(§8, M2에서 이월) · **hub 무중단 교체(§7.7)** | 게이트 링크 없이는 403, 방문 링크로 302+쿠키. Upgrade 에코 앱이 그대로 통과. `/admin`은 관리자 노드의 `jailscale admin` 일회용 링크로 로그인하고 승인·초대·설정을 바꾼다(설정은 저장소에 있어 재시작 후에도 유지). `--domain`은 노드가 hub을 통해 http-01을 치르고 자기 키로 종단한다(mock CA, 재시작 시 인증서 재사용). `open --tcp`는 200 KB 에코 왕복, `--udp`는 주소별 DGRAM 스트림 왕복. `--connections 2`로 스트림이 두 연결에 나뉜다. `serve --takeover`로 진행 중 스트림이 끊기지 않는다. 테스트 84개. native 프로세스로 raw tcp·https 이름·port-80 리다이렉트·admin 링크 확인. 실측(arm64 macOS): 바이너리 27.2/27.3 MiB(M2 24; 노드에 `java.net.http`가 들어옴, §15), 노드 아이들 RSS 24.8 MB, hub 25.1 MB, CLI 콜드 스타트 6.1 ms. **확인 완료**: hub 와일드카드와 노드 사용자 도메인 모두 실제 Let's Encrypt로 발급. 아래 실물 검증 참조 |
+| **M3** ✅ | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · 노드당 다중 연결(§8, M2에서 이월) · **hub 무중단 교체(§7.7)** | 게이트 링크 없이는 403, 방문 링크로 302+쿠키. Upgrade 에코 앱이 그대로 통과. `/admin`은 관리자 노드의 `jailscale admin` 일회용 링크로 로그인하고 승인·초대·설정을 바꾼다(설정은 저장소에 있어 재시작 후에도 유지). `--domain`은 노드가 hub를 통해 http-01을 치르고 자기 키로 종단한다(mock CA, 재시작 시 인증서 재사용). `open --tcp`는 200 KB 에코 왕복, `--udp`는 주소별 DGRAM 스트림 왕복. `--connections 2`로 스트림이 두 연결에 나뉜다. `serve --takeover`로 진행 중 스트림이 끊기지 않는다. 테스트 84개. native 프로세스로 raw tcp·https 이름·port-80 리다이렉트·admin 링크 확인. 실측(arm64 macOS): 바이너리 27.2/27.3 MiB(M2 24; 노드에 `java.net.http`가 들어옴, §15), 노드 아이들 RSS 24.8 MB, hub 25.1 MB, CLI 콜드 스타트 6.1 ms. **확인 완료**: hub 와일드카드와 노드 사용자 도메인 모두 실제 Let's Encrypt로 발급. 아래 실물 검증 참조 |
 | **M4** ✅ | 릴리스 패키징 (5개 플랫폼 + fallback JAR) · 서비스 등록(systemd/launchd/Windows) · 참조 systemd 유닛 · Dockerfile · **nginx stream / HAProxy 참조 설정 + PROXY 프로토콜** · 퍼징·부하 · 예산 게이트 확정 · ACME 전송을 자체 HTTP 클라이언트로 교체(`java.net.http` 제거) | `.github/workflows/release.yml`이 태그마다 linux/darwin × amd64/arm64 + windows-amd64 native와 fallback JAR(`target/jailscale.jar`, `jailhub.jar`)을 릴리스에 붙인다. `deploy/`에 systemd 유닛(reload = takeover)·Dockerfile(distroless)·nginx stream·HAProxy·Homebrew formula. `jailscale service install`. PROXY v1/v2 e2e 테스트에서 방문자 IP가 hub 한도·로그·로컬 앱(`open --proxy-protocol`)까지 정확히 전달된다. 퍼징(SNI·HTTP·mux·JSON·코덱·PROXY·DNS, 각 1만~2만 케이스)이 PROXY v1 호스트명 DNS 조회 문제를 찾았고, 부하 테스트(1,000 동시 방문자)가 다중 연결 스트림 id 충돌과 서명 한도(50/s) 문제를 찾았다. 실측(arm64 macOS, native, `LOAD=1000 ./measure.sh --check`): 바이너리 24.9/25.2 MiB, 아이들 RSS hub 24.6 / 노드 24.4 MB, 방문자 1,000명 동시 접속 1,000/1,000 성공 0.5초, 직후 RSS hub 75.5 / 노드 102.8 MB(방문자당 약 50/80 KB, TLS 세션 버퍼), CLI 6.3 ms. 게이트 통과. **남은 것**: Windows·Linux에서 `service install` 실기 확인, 태그 릴리스 1회 실행. 그 외는 아래 실물 검증 참조 |
 
 **실물 검증 (2026-09-11)**
 
-루프백과 목 CA로만 확인되던 경로를 실제 도메인·실제 CA·실제 인터넷에서 한 번씩 돌렸다. hub은
+루프백과 목 CA로만 확인되던 경로를 실제 도메인·실제 CA·실제 인터넷에서 한 번씩 돌렸다. hub는
 GCP 서울 e2-micro(Debian 12), 노드는 arm64 macOS, 도메인은 Cloudflare가 NS를 쥔 실제 등록
 도메인이다.
 
@@ -1065,7 +1066,7 @@ GCP 서울 e2-micro(Debian 12), 노드는 arm64 macOS, 도메인은 Cloudflare�
 검증 중 드러난 것 셋. hub의 DNS 응답기는 GCP Debian 12에서 `0.0.0.0:53`에 붙지 못한다.
 systemd-resolved가 127.0.0.53과 127.0.0.54를 쥐고 있어 §6.3이 예상한 대로 내부 IP를 지정해야
 한다(외부 IP는 NAT로 넘어오므로 CA 질의는 정상 도달). 노드는 `--ca-file`을 상태에 영구
-저장하므로, hub이 스테이징에서 운영 인증서로 바뀌면 그 노드는 스스로 복구하지 못하고
+저장하므로, hub가 스테이징에서 운영 인증서로 바뀌면 그 노드는 스스로 복구하지 못하고
 `jailscale up --hub <이름>`을 인자 없이 다시 실행해 지워야 한다. 그리고 `--acme-email`은
 스테이징에 불필요하다.
 
@@ -1092,7 +1093,7 @@ systemd-resolved가 127.0.0.53과 127.0.0.54를 쥐고 있어 §6.3이 예상한
   옆에 두 번째 데이터 평면으로 얹는 형태가 된다. 요구가 있으면 `DESIGN-v3-mesh.md`를 기준으로 재개.
 - **Windows 서비스** — CLI 브라우저 열기(`rundll32`), 파일 ACL, 서비스 등록 분기. M4.
 - **raw 포트의 TLS 래핑** — `open 22 --tcp --tls`처럼 hub 포트에서도 노드 종단 TLS를 제공해
-  hub이 내용을 못 보게 하는 옵션. 방문자 클라이언트가 TLS를 말할 수 있을 때만 의미가 있다.
+  hub가 내용을 못 보게 하는 옵션. 방문자 클라이언트가 TLS를 말할 수 있을 때만 의미가 있다.
 - **방문자 핸드셰이크 지연 최적화** — 실측이 나쁘면 노드가 `ServerHello`까지의 트랜스크립트를
   미리 계산해 `SignRequest`를 더 일찍 보내는 등의 파이프라이닝. M2 실측 후.
 - **`--no-tls` 컨트롤 채널** — 공개 443이 어차피 TLS라 의미가 줄었다. 보류.
@@ -1107,5 +1108,9 @@ systemd-resolved가 127.0.0.53과 127.0.0.54를 쥐고 있어 §6.3이 예상한
   `java.net.http`를 썼고 바이너리가 24 → 27.3 MiB로 늘었다. **M4에서 해결**: §6.1의 자체 HTTP/1.1
   클라이언트에 chunked 디코딩을 붙여(`HttpCall`) 교체했고 바이너리는 25 MiB로 돌아왔다.
 - **사용자 도메인 소유 증명** — 현재는 "그 이름으로 검증되는 공개 CA 인증서 체인"이 증명이다. 이는
-  hub이 키를 갖지 않으면서도 남의 도메인을 자기 노드로 끌어가는 것을 막는다. hub 셸의 `domain release`로
-  관리자가 회수할 수 있다. DNS가 hub을 가리키는지의 사전 검사(친절한 오류)는 추후.
+  hub가 키를 갖지 않으면서도 남의 도메인을 자기 노드로 끌어가는 것을 막는다. hub 셸의 `domain release`로
+  관리자가 회수할 수 있다. DNS가 hub를 가리키는지의 사전 검사(친절한 오류)는 추후.
+- **자가 진단의 A 레코드 검사** — §6.3 2단계가 적어 둔 "hub와 `*.hub`가 내 공인 IP로 풀리는지"는 구현되지
+  않았다. hub가 자기 공인 IP를 모르기 때문이며, 후보는 프로브 TXT 질의의 응답 경로에서 얻은 주소와 A 레코드를
+  비교하거나 Cloudflare 엣지 대역을 걸러내는 것. `*.hub`만 주황 구름인 배포는 지금은 첫 방문자 핸드셰이크
+  실패로만 드러난다.
