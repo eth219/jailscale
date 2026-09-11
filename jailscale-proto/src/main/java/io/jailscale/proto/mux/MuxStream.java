@@ -137,6 +137,19 @@ public final class MuxStream {
         this.dgram = dgram;
     }
 
+    /**
+     * Flow-control state, for a stream that stopped moving. A stall here is always one of two
+     * things: the writer is out of credits because a WINDOW frame never arrived, or the reader is
+     * waiting for data the peer believes it already sent. Printing both sides tells them apart.
+     */
+    public String flowState() {
+        synchronized (lock) {
+            return "credits=" + credits + " inboundBytes=" + inboundBytes
+                + " consumedSinceWindow=" + consumedSinceWindow + " queued=" + inbound.size()
+                + " localClosed=" + localClosed + " remoteClosed=" + remoteClosed + " error=" + error;
+        }
+    }
+
     public long id() {
         return id;
     }

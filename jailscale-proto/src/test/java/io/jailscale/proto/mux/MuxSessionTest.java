@@ -35,6 +35,29 @@ class MuxSessionTest {
         LinkedBlockingQueue<MuxStream> nodeOpened, LinkedBlockingQueue<byte[]> hubCtrl, LinkedBlockingQueue<byte[]> nodeCtrl,
         CompletableFuture<Throwable> hubClosed, CompletableFuture<Throwable> nodeClosed) {}
 
+    /** Where every mux thread is parked, for the watchdog above. */
+    private static String stacks() {
+        StringBuilder b = new StringBuilder();
+        for (java.util.Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
+            StackTraceElement[] frames = e.getValue();
+            boolean ours = false;
+            for (StackTraceElement fr : frames) {
+                if (fr.getClassName().startsWith("io.jailscale")) {
+                    ours = true;
+                    break;
+                }
+            }
+            if (!ours) {
+                continue;
+            }
+            b.append("\n    ").append(e.getKey().getName()).append(' ').append(e.getKey().getState());
+            for (int i = 0; i < Math.min(8, frames.length); i++) {
+                b.append("\n      at ").append(frames[i]);
+            }
+        }
+        return b.length() == 0 ? " none" : b.toString();
+    }
+
     private static Pair pair() throws Exception {
         X25519.Keypair hk = X25519.generate();
         X25519.Keypair nk = X25519.generate();
@@ -131,7 +154,23 @@ class MuxSessionTest {
                 throw new RuntimeException(e);
             }
         });
-        byte[] got = ns.in().readAllBytes();
+        Thread watchdog = Thread.ofVirtual().start(() -> {
+            try {
+                Thread.sleep(20_000);
+            } catch (InterruptedException e) {
+                return;
+            }
+            System.err.println("largeTransferRespectsFlowControl stalled"
+                + "\n  writer side: " + hs.flowState()
+                + "\n  reader side: " + ns.flowState()
+                + "\n  threads:" + stacks());
+        });
+        byte[] got;
+        try {
+            got = ns.in().readAllBytes();
+        } finally {
+            watchdog.interrupt();
+        }
         w.join();
         assertArrayEquals(data, got);
         p.hub().close();
