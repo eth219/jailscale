@@ -21,8 +21,8 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 B_BINARY_MIB=30
 B_NODE_IDLE_MB=28
 B_HUB_IDLE_MB=30
-B_NODE_LOAD_MB=96
-B_HUB_LOAD_MB=96
+B_NODE_LOAD_MB=192
+B_HUB_LOAD_MB=160
 B_CLI_MS=50
 
 mkdir -p "$W/hub" "$W/app"
@@ -78,19 +78,28 @@ printf '  %-10s %6.1f\n' jailhub "$(rss_mb "$HUBPID")";  gate "hub idle RSS" "$(
 printf '  %-10s %6.1f\n' jailscale "$(rss_mb "$NODEPID")"; gate "node idle RSS" "$(rss_mb "$NODEPID")" "$B_NODE_IDLE_MB"
 
 if [ -n "${LOAD:-}" ]; then
-  echo "load: $LOAD concurrent visitors (curl --parallel), then RSS"
-  t0=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
-  curl -s -o /dev/null --cacert "$CERT" --resolve "demo.hub.test:$PORT:127.0.0.1" \
-    --parallel --parallel-immediate --parallel-max "$LOAD" -w '%{http_code}\n' \
-    "https://demo.hub.test:$PORT/?v=[1-$LOAD]" > "$W/codes.txt" || true
-  t1=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
-  ok=$(grep -c '^200$' "$W/codes.txt" || true)
-  printf '  %s/%s ok in %.1fs' "$ok" "$LOAD" "$(echo "$t1 - $t0" | bc -l)"
-  [ "$ok" -lt "$LOAD" ] && printf '  (other codes: %s)' "$(grep -v '^200$' "$W/codes.txt" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
-  echo
-  printf '  %-10s %6.1f  (after load)\n' jailhub "$(rss_mb "$HUBPID")";  gate "hub RSS under load" "$(rss_mb "$HUBPID")" "$B_HUB_LOAD_MB"
-  printf '  %-10s %6.1f  (after load)\n' jailscale "$(rss_mb "$NODEPID")"; gate "node RSS under load" "$(rss_mb "$NODEPID")" "$B_NODE_LOAD_MB"
-  [ "$CHECK" = 1 ] && [ "$ok" -lt $((LOAD * 99 / 100)) ] && { echo "  !! only $ok of $LOAD visitors succeeded"; fail=1; }
+  # Visitors are held open at the same time, not fired and forgotten. curl --parallel churns
+  # short requests, so it never has LOAD sessions alive at once and reported about a third of the
+  # real memory. The peak below is sampled while every connection is still up.
+  echo "load: $LOAD visitors held open at once, peak RSS while they are up"
+  python3 "$R/tools/hold-visitors.py" "$PORT" "$CERT" "$LOAD" "$W" > "$W/held.log" 2>&1 &
+  LGPID=$!
+  peak_h=0; peak_n=0
+  while kill -0 $LGPID 2>/dev/null; do
+    h=$(rss_mb "$HUBPID"); n=$(rss_mb "$NODEPID")
+    [ "$(echo "$h > $peak_h" | bc -l)" = 1 ] && peak_h=$h
+    [ "$(echo "$n > $peak_n" | bc -l)" = 1 ] && peak_n=$n
+    sleep 1
+  done
+  wait $LGPID 2>/dev/null || true
+  ok=$(cut -d' ' -f1 "$W/held.txt" 2>/dev/null || echo 0)
+  printf '  %s/%s held in %ss\n' "$ok" "$LOAD" "$(cut -d' ' -f2 "$W/held.txt" 2>/dev/null || echo '?')"
+  printf '  %-10s %6.1f  (peak)\n' jailhub "$peak_h";  gate "hub RSS under load" "$peak_h" "$B_HUB_LOAD_MB"
+  printf '  %-10s %6.1f  (peak)\n' jailscale "$peak_n"; gate "node RSS under load" "$peak_n" "$B_NODE_LOAD_MB"
+  for f in "$W/hub.log" "$W/node.log"; do
+    [ -f "$f" ] && grep -qi OutOfMemory "$f" && { echo "  !! OutOfMemoryError in $(basename "$f")"; fail=1; }
+  done
+  [ "$CHECK" = 1 ] && [ "$ok" -lt $((LOAD * 99 / 100)) ] && { echo "  !! only $ok of $LOAD visitors were held"; fail=1; }
 fi
 
 echo "CLI cold start, jailscale status, 10 runs (ms)"
