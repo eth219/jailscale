@@ -61,7 +61,9 @@ What it did not buy: idle memory is 24.7 MB against a 20 MB goal, and roughly
 ## Usage
 
 A hub is running at **`jailscale.sinabro.io`**. Registration is open, so you can
-point a node at it and start.
+point a node at it and start. It is rate limited per address, and the operator
+can remove a node or bar an address, which is worth knowing before you treat it
+as anything but a place to try this out.
 
 ```sh
 # 1. Join. Registration is open on this hub, so it takes effect immediately.
