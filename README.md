@@ -77,7 +77,7 @@ enforces these as a budget in CI.
 |---|---|---|
 | Binary | 25.0 MiB | 25.3 MiB |
 | Idle RSS | 24.7 MB | 24.7 MB |
-| Peak RSS, 1,000 visitors held open at once | 77 MB | 87 MB |
+| Peak RSS, 1,000 visitors held open at once | 77 MB | 85 MB |
 | CLI cold start | — | 6 ms |
 
 The hub above runs on a GCP e2-micro: 2 shared vCPU, 1 GB of memory, Debian 12.
