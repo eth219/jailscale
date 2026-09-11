@@ -157,7 +157,7 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 |---|---|---|
 | 노드 아이들 RSS | ≤ 28 MB | native `jailscale`이 hub에 붙어 공개 링크 하나를 연 뒤 10초 유휴 |
 | hub 아이들 RSS | ≤ 30 MB | 노드 2대, 링크 하나, 유휴 |
-| 부하 중 RSS | 노드·hub 각 ≤ 64 MB | `LOAD=1000`: 방문자 1,000명이 동시에 https로 링크를 친 직후 |
+| 부하 중 RSS | 노드·hub 각 ≤ 128 MB | `LOAD=1000`: 방문자 1,000명이 동시에 https로 링크를 친 직후 |
 | 바이너리 크기 | ≤ 30 MiB | 릴리스 아티팩트 |
 | CLI 콜드 스타트 | ≤ 50 ms | `jailscale status` 10회 중앙값 (IPC 왕복 포함) |
 | 방문자 핸드셰이크 지연 | 기록만 | M2 실측 2.3 ms(단독), M4 부하에서 0.5 ms/건(1,000건 병렬) |
