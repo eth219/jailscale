@@ -92,7 +92,7 @@ class LoadTest {
     @Test
     void thousandConcurrentVisitors() throws Exception {
         Log.setLevel(Log.Level.INFO);
-        root = Files.createTempDirectory(Path.of("/tmp"), "jload");
+        root = TestDirs.newRoot("jload");
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();
         }

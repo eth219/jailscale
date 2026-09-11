@@ -28,6 +28,11 @@ jobs:
           java-version: '25'
           distribution: 'graalvm-community'
           native-image-job-reports: 'true'
+      - name: Set version from the tag
+        # Without this the binaries report the pom's 0.x.y-SNAPSHOT no matter which tag built them.
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: ./mvnw -B -ntp versions:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false
       - name: Build (tests + native)
         run: ./mvnw -B -ntp -Pnative package
         shell: bash

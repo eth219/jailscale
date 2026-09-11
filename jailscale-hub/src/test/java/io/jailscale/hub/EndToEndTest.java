@@ -42,7 +42,7 @@ class EndToEndTest {
     void startHub() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         // AF_UNIX paths are limited to ~100 bytes on macOS; keep the tree short.
-        root = Files.createTempDirectory(Path.of("/tmp"), "js");
+        root = TestDirs.newRoot("js");
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();
         }

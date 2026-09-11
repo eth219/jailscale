@@ -92,7 +92,7 @@ class AcmeFlowTest {
     @Test
     void hubObtainsWildcardCertificateAndServesALink() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
-        root = Files.createTempDirectory(Path.of("/tmp"), "ja");
+        root = TestDirs.newRoot("ja");
         int port;
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();

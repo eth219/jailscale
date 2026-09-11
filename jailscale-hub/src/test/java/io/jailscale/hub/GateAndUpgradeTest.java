@@ -48,7 +48,7 @@ class GateAndUpgradeTest {
     @BeforeEach
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
-        root = Files.createTempDirectory(Path.of("/tmp"), "jg");
+        root = TestDirs.newRoot("jg");
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();
         }

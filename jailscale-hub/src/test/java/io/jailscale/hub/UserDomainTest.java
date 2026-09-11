@@ -71,7 +71,7 @@ class UserDomainTest {
     @Test
     void ownDomainIsIssuedRelayedAndPassedThrough() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
-        root = Files.createTempDirectory(Path.of("/tmp"), "jd");
+        root = TestDirs.newRoot("jd");
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();
         }

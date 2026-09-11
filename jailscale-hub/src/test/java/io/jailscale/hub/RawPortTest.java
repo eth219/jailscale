@@ -84,7 +84,7 @@ class RawPortTest {
     @Test
     void tcpAndUdpThroughAssignedPorts() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
-        root = Files.createTempDirectory(Path.of("/tmp"), "jr");
+        root = TestDirs.newRoot("jr");
         port = freePort();
         int lo = freeRange(4);
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
@@ -182,6 +182,7 @@ class RawPortTest {
         // Ports are stable across a reconnect: the same local target gets the same hub port.
         assertEquals(tcpPort, hub.store().portFor(node.machineKey(), "tcp", "127.0.0.1:" + echoTcp.getLocalPort()));
         JsonObject again = Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", echoTcp.getLocalPort()).put("kind", "tcp").build());
+        assertTrue(again.optBool("ok", false), again.toString());
         assertEquals(tcpPort, again.integer("hubPort"));
 
         // Close releases the listener.

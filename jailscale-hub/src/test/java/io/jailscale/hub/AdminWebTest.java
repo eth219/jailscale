@@ -71,7 +71,7 @@ class AdminWebTest {
     @Test
     void adminNodeLogsInAndApprovesAKnock() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
-        root = Files.createTempDirectory(Path.of("/tmp"), "jw");
+        root = TestDirs.newRoot("jw");
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();
         }

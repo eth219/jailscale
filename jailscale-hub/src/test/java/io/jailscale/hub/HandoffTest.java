@@ -89,9 +89,14 @@ class HandoffTest {
         });
     }
 
+    /**
+     * The body trickles out over ~1.5 s, and a visitor arriving right after a hand-off also pays
+     * for a TLS handshake with a signing round-trip. A shared CI runner stretches all of that, so
+     * the per-read budget is generous; {@code @Timeout(120)} on the test still catches a real hang.
+     */
     private HttpResponse visit(int port, String host) throws Exception {
         SSLContext ctx = Tls.clientContext(CERT, false);
-        try (SSLSocket s = Tls.connect(ctx, host, "127.0.0.1", port, true, 10_000)) {
+        try (SSLSocket s = Tls.connect(ctx, host, "127.0.0.1", port, true, 30_000)) {
             Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
             return Http.readResponse(s.getInputStream(), 65536);
         }
@@ -100,7 +105,7 @@ class HandoffTest {
     @Test
     void takeoverKeepsInFlightStreamsAndServesNewVisitors() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
-        root = Files.createTempDirectory(Path.of("/tmp"), "jh");
+        root = TestDirs.newRoot("jh");
         int port;
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             port = s.getLocalPort();
