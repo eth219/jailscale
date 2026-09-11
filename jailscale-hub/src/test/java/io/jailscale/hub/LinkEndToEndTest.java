@@ -29,6 +29,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import java.nio.charset.StandardCharsets;
 
 /**
  * M2 data path (DESIGN.md §14): {@code jailscale open} publishes a local HTTP server as
@@ -177,6 +178,44 @@ class LinkEndToEndTest {
             t.join();
         }
         assertEquals(8, okCount[0]);
+    }
+
+    @Test
+    void hubReleasesAVisitorThatNeverClosesItsHalf() throws Exception {
+        long previous = Relay.lingerMs;
+        Relay.lingerMs = 500;
+        try {
+            Daemon alice = node("alice");
+            ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+                .put("user", "alice").put("caFile", CERT.toString())));
+            waitFor(() -> alice.hasCert(hub.tls().keyId()));
+            ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "lingerapp")));
+            waitFor(() -> hub.links().byName("lingerapp") != null);
+
+            SSLContext ctx = Tls.clientContext(CERT, false);
+            try (SSLSocket s = Tls.connect(ctx, "lingerapp.hub.test", "127.0.0.1", port, true, 10_000)) {
+                Http.writeRequest(s.getOutputStream(), "GET", "lingerapp.hub.test", "/", null, null);
+                assertEquals(200, Http.readResponse(s.getInputStream(), 65536).status());
+
+                // The local app answered and closed, so the node is done with this stream. The
+                // visitor deliberately does not close its own half. Before the linger existed the
+                // hub waited on it forever and this write kept succeeding.
+                IOException cut = null;
+                long deadline = System.currentTimeMillis() + 15_000;
+                while (cut == null && System.currentTimeMillis() < deadline) {
+                    try {
+                        s.getOutputStream().write("still here\n".getBytes(StandardCharsets.US_ASCII));
+                        s.getOutputStream().flush();
+                        Thread.sleep(100);
+                    } catch (IOException e) {
+                        cut = e;
+                    }
+                }
+                assertNotNull(cut, "hub never closed a visitor that held its half open");
+            }
+        } finally {
+            Relay.lingerMs = previous;
+        }
     }
 
     @Test
