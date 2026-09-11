@@ -63,6 +63,60 @@ What it did not buy: idle memory is 24.7 MB against a 20 MB goal, and roughly
 7.6 MB of that is JSSE standing up a single TLS client. On Linux the number to
 compare is the 6 MB of anonymous memory, not the 40 MB `ps` prints.
 
+## Install
+
+`jailscale` is the node: the binary you run on the machine whose port you want
+to publish. `jailhub` is the hub, and you only need it if you are running your
+own. Neither has a runtime dependency and neither needs root to run.
+
+### A binary
+
+Every tagged release carries all five targets for both programs: `linux-amd64`,
+`linux-arm64`, `darwin-arm64`, `darwin-amd64`, `windows-amd64.exe`.
+
+```sh
+base=https://github.com/eth219/jailscale/releases/download/v0.1.0
+target=darwin-arm64   # pick yours
+
+curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
+shasum -a 256 --ignore-missing -c SHA256SUMS.txt   # sha256sum -c on Linux
+sudo install -m 755 "jailscale-$target" /usr/local/bin/jailscale
+jailscale version
+```
+
+Keep the release's own filename until the checksum has been checked. Renaming it
+on the way down leaves nothing in `SHA256SUMS.txt` to match, and
+`--ignore-missing` then reports success for having verified nothing.
+`jailhub-$target` is the same download for the hub.
+
+The binaries are not code-signed. That does not affect a `curl` download, but
+macOS quarantines what a browser downloaded — `xattr -d com.apple.quarantine
+jailscale` — and Windows SmartScreen warns for the same reason.
+
+### A container image
+
+For linux/amd64 and linux/arm64. `:v0.1.0` pins this release, `:latest` follows
+releases, `:edge` follows main.
+
+```
+docker pull ghcr.io/eth219/jailhub:v0.1.0
+docker pull ghcr.io/eth219/jailscale:v0.1.0
+```
+
+### Anything else, with a JVM 25
+
+`jailscale.jar` and `jailhub.jar` are in the release as well and need no
+GraalVM: `java -jar jailscale.jar version`. They cost the JVM's startup and
+memory, so every number under [Resource usage](#resource-usage) is the native
+binary and none of them applies to the JAR.
+
+### From source
+
+```sh
+./mvnw package    # the JARs
+./native.sh       # the native binaries, needs GraalVM
+```
+
 ## Usage
 
 A hub is running at **`jailscale.sinabro.io`**. Registration is open, so you can
@@ -111,19 +165,8 @@ jailhub serve --base-url https://jailscale.example.com --acme-email you@example.
 ```
 
 The first run prints an invite. Whoever joins with it becomes the administrator.
-
-Container images are published for linux/amd64 and linux/arm64:
-
-```
-docker pull ghcr.io/eth219/jailhub:edge
-docker pull ghcr.io/eth219/jailscale:edge
-```
-
-Native binaries for Linux, macOS and Windows — linux-amd64, linux-arm64,
-darwin-arm64, darwin-amd64, windows-amd64 — are attached to every tagged
-[release](https://github.com/eth219/jailscale/releases) with their checksums,
-alongside `jailscale.jar` and `jailhub.jar` for any other platform with a JVM 25.
-`./native.sh` builds them from source with GraalVM.
+[deploy/](deploy/) has a systemd unit, container files, and the proxy
+configurations for putting the hub behind nginx or HAProxy.
 
 ## Resource usage
 
