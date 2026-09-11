@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
@@ -21,6 +22,7 @@ import java.net.Socket;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import javax.net.ssl.SSLContext;
@@ -257,6 +259,19 @@ class LinkEndToEndTest {
         // A real handshake on bob's own stream needed exactly one signature; further ones are capped at 4.
         // (Exercised implicitly: the 200 above proves the positive path.)
         assertNotNull(hub.links().byName("bobapp"));
+
+        // The hub signs what it can recognise, not whatever it is handed. A bare digest, or any
+        // other 130 bytes, would make the wildcard key sign a handshake for a name that is not the
+        // asker's -- the hub's own name included, since the certificate covers it.
+        assertThrows(GeneralSecurityException.class, () -> hub.tls().sign(hub.tls().keyId(), digest));
+        byte[] notCertVerify = new byte[HubTls.CERT_VERIFY_CONTEXT.length + 32];
+        java.util.Arrays.fill(notCertVerify, (byte) 7);
+        assertThrows(GeneralSecurityException.class, () -> hub.tls().sign(hub.tls().keyId(), notCertVerify));
+
+        // The shape it does accept: the RFC 8446 §4.4.3 context and a transcript hash.
+        byte[] certVerify = new byte[HubTls.CERT_VERIFY_CONTEXT.length + 32];
+        System.arraycopy(HubTls.CERT_VERIFY_CONTEXT, 0, certVerify, 0, HubTls.CERT_VERIFY_CONTEXT.length);
+        assertNotNull(hub.tls().sign(hub.tls().keyId(), certVerify));
     }
 
     private interface Check {

@@ -5,6 +5,7 @@ import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
@@ -13,6 +14,7 @@ import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -103,10 +105,29 @@ final class HubTls {
     }
 
     /**
-     * ECDSA over a precomputed SHA-256 digest, DER encoded (what TLS CertificateVerify carries).
+     * The 98 bytes every TLS 1.3 server CertificateVerify signature begins with: 64 spaces, the
+     * context string, and a zero byte (RFC 8446 §4.4.3). What follows is the transcript hash.
+     */
+    static final byte[] CERT_VERIFY_CONTEXT = certVerifyContext();
+
+    private static byte[] certVerifyContext() {
+        byte[] label = "TLS 1.3, server CertificateVerify".getBytes(StandardCharsets.US_ASCII);
+        byte[] c = new byte[64 + label.length + 1];
+        Arrays.fill(c, 0, 64, (byte) 0x20);
+        System.arraycopy(label, 0, c, 64, label.length);
+        return c;
+    }
+
+    /**
+     * ECDSA over what the node is answering a visitor with, DER encoded. The node sends the bytes
+     * rather than their hash so that this side can see them: with a bare digest the hub signs
+     * whatever 32 bytes it is handed, which makes it a signing oracle for its own wildcard key and
+     * puts every name on the certificate — the hub's own included — within reach of any member
+     * that can get a visitor to talk to it (§9.2). Checking the shape does not tie the signature to
+     * a particular handshake, but it does confine the key to being a TLS 1.3 server.
      * Returns null if the keyId is unknown or retired.
      */
-    byte[] sign(String keyId, byte[] digest) throws GeneralSecurityException {
+    byte[] sign(String keyId, byte[] content) throws GeneralSecurityException {
         Material m = byKeyId.get(keyId);
         if (m == null) {
             return null;
@@ -115,12 +136,14 @@ final class HubTls {
             byKeyId.remove(keyId);
             return null;
         }
-        if (digest.length != 32) {
-            throw new GeneralSecurityException("digest must be SHA-256");
+        int hash = content.length - CERT_VERIFY_CONTEXT.length;
+        if (hash != 32 && hash != 48
+            || !Arrays.equals(content, 0, CERT_VERIFY_CONTEXT.length, CERT_VERIFY_CONTEXT, 0, CERT_VERIFY_CONTEXT.length)) {
+            throw new GeneralSecurityException("not a TLS 1.3 server CertificateVerify");
         }
-        Signature sig = Signature.getInstance("NONEwithECDSA");
+        Signature sig = Signature.getInstance("SHA256withECDSA");
         sig.initSign(m.key());
-        sig.update(digest);
+        sig.update(content);
         return sig.sign();
     }
 

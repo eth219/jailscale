@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpServer;
@@ -99,11 +100,11 @@ class UserDomainTest {
             .put("port", port).put("user", "alice").put("caFile", CERT.toString()).build()).optBool("ok", false));
 
         // The hub insists on proof: no chain, a chain for another name, a name under the hub itself.
-        Message r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", null), "LinkOpened");
+        Message r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", null, null), "LinkOpened");
         assertEquals("domain-unverified", ((Message.LinkOpened) r).reason());
-        r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", List.of(Files.readString(CERT))), "LinkOpened");
+        r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", List.of(Files.readString(CERT)), null), "LinkOpened");
         assertEquals("domain-cert-name-mismatch", ((Message.LinkOpened) r).reason());
-        r = node.debugRequest(new Message.LinkOpen("https", null, "x.hub.test", null, "127.0.0.1:1", null), "LinkOpened");
+        r = node.debugRequest(new Message.LinkOpen("https", null, "x.hub.test", null, "127.0.0.1:1", null, null), "LinkOpened");
         assertEquals("bad-domain", ((Message.LinkOpened) r).reason());
 
         // The port-80 front answers only registered tokens and redirects the rest.
@@ -132,6 +133,40 @@ class UserDomainTest {
         // A visitor: SNI app.example.test → hub passthrough → node terminates with its own key → local app.
         assertEquals("200 hello from " + DOMAIN, get(DOMAIN, "/"));
 
+        // The chain is public -- every visitor above was handed it -- so presenting one is not a
+        // claim. Without a signature from its private key the hub does not move the domain, and a
+        // signature that is not over this connection's handshake hash is no better.
+        List<String> real = List.of(Files.readString(root.resolve("node/domains/" + DOMAIN + ".pem")));
+        r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", real, null), "LinkOpened");
+        assertEquals("domain-proof-missing", ((Message.LinkOpened) r).reason());
+        r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", real, new byte[64]), "LinkOpened");
+        assertEquals("domain-proof-invalid", ((Message.LinkOpened) r).reason());
+        assertEquals("alice", hub.store().domain(DOMAIN).user());
+
+        // A relayed http-01 token answers for its own name and nothing else. Answering regardless
+        // of Host would validate every domain pointed at this hub, for whichever node asked.
+        assertNull(hub.challenges().set("m_test", DOMAIN, "tok-a", "tok-a.thumb"));
+        try (Socket c = new Socket("127.0.0.1", hub.httpPort())) {
+            Http.writeRequest(c.getOutputStream(), "GET", DOMAIN, "/.well-known/acme-challenge/tok-a", new Headers(), null);
+            HttpResponse ok = Http.readResponse(c.getInputStream(), 4096);
+            assertEquals(200, ok.status());
+            assertEquals("tok-a.thumb", ok.bodyText());
+        }
+        try (Socket c = new Socket("127.0.0.1", hub.httpPort())) {
+            Http.writeRequest(c.getOutputStream(), "GET", "hub.test", "/.well-known/acme-challenge/tok-a", new Headers(), null);
+            assertEquals(404, Http.readResponse(c.getInputStream(), 4096).status());
+        }
+        try (Socket c = new Socket("127.0.0.1", hub.httpPort())) {
+            Http.writeRequest(c.getOutputStream(), "GET", "other.example.test", "/.well-known/acme-challenge/tok-a", new Headers(), null);
+            assertEquals(404, Http.readResponse(c.getInputStream(), 4096).status());
+        }
+
+        // And the hub does not lend its own name out for validation at all.
+        Message ownName = node.debugRequest(new Message.ChallengeSet("hub.test", "tok-b", "tok-b.thumb"), "Ack");
+        assertEquals("bad-domain", ((Message.Error) ownName).reason());
+        ownName = node.debugRequest(new Message.ChallengeSet("x.hub.test", "tok-c", "tok-c.thumb"), "Ack");
+        assertEquals("bad-domain", ((Message.Error) ownName).reason());
+
         // A hub sub-name keeps working next to it, and the hub refuses unknown domains outright.
         JsonObject named = Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", app.getAddress().getPort()).put("name", "plain").build());
         assertTrue(named.optBool("ok", false), named.toString());
@@ -156,5 +191,15 @@ class UserDomainTest {
         assertEquals("200 hello from " + DOMAIN, get(DOMAIN, "/"));
         JsonObject ls = Ipc.call(sock, JsonObject.builder().put("cmd", "ls").build());
         assertTrue(ls.toString().contains("certExpiresAt"), ls.toString());
+
+        // A domain does not change hands on a claim, however well proven: the same rule as a name
+        // (§8.2). Alice still holds the key and the certificate, but the record says the domain is
+        // bob's, so the hub refuses and the operator has to release it first.
+        hub.store().claimDomain(DOMAIN, "bob", "m_bob");
+        JsonObject retake = Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", app.getAddress().getPort())
+            .put("domain", DOMAIN).put("acmeDirectory", ca.base + "/directory").put("acmeEmail", "alice@example.test").build());
+        assertTrue(!retake.optBool("ok", false), retake.toString());
+        assertEquals("taken", retake.optString("error", null));
+        assertEquals("bob", hub.store().domain(DOMAIN).user());
     }
 }

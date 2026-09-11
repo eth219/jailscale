@@ -47,6 +47,9 @@ final class HubLink implements AutoCloseable {
         void onVisitor(HubLink link, Session session, MuxStream stream);
     }
 
+    /** The oldest hub protocol this node can talk to; below it the hub cannot decode what we send. */
+    static final int MIN_HUB_PROTO = 2;
+
     /** One connection to the hub. */
     final class Session implements MuxSession.Listener {
         final int conn;
@@ -260,6 +263,14 @@ final class HubLink implements AutoCloseable {
         }
         Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn);
         HubClient.Connected c = HubClient.connect(state.hubHost, state.hubAddr, state.hubPort, ctx, verify, state.machineKey, keys, hello);
+        if (c.hello().proto() < MIN_HUB_PROTO) {
+            // There is no older encoding to fall back to: the first SignRequest, domain claim or
+            // http-01 upload would be a message the hub cannot decode, and it would just close.
+            c.channel().close();
+            throw new HubClient.Rejected(Message.Goodbye.UPGRADE_REQUIRED, "the hub speaks protocol " + c.hello().proto()
+                + " and this jailscale needs " + MIN_HUB_PROTO + ". The hub runs jailhub " + c.hello().version()
+                + "; update jailhub there (or run a jailscale from the same release as the hub).");
+        }
         if (conn == 0) {
             if (!c.usedHubKey().equals(state.hubKey)) {
                 LOG.info("hub key rotation complete; pinning the new key");
@@ -286,6 +297,20 @@ final class HubLink implements AutoCloseable {
         } else {
             onRegistered();
         }
+    }
+
+    /**
+     * What a rejected registration means to the person at the keyboard. The hub's reason is one
+     * word; the ones with a known remedy get it spelled out, because a bare {@code user-taken}
+     * leaves them nothing to act on (§6.1).
+     */
+    static String rejectionText(String reason) {
+        String text = "registration rejected: " + reason;
+        if ("user-taken".equals(reason)) {
+            text += ". That name already belongs to someone on this hub. If it is you, run `jailscale invite --self`"
+                + " on a machine that is already joined and use that invite here; otherwise join with `--user <another name>`.";
+        }
+        return text;
     }
 
     /** Registered (now or earlier): reopen links and bring up the extra connections. */
@@ -403,9 +428,9 @@ final class HubLink implements AutoCloseable {
                     }
                     case Message.RegisterResponse.PENDING -> LOG.info("waiting for admin approval");
                     default -> {
-                        LOG.error("registration rejected: {}", r.reason());
+                        lastError = rejectionText(r.reason());
+                        LOG.error("{}", lastError);
                         stopReconnecting = true;
-                        lastError = "registration rejected: " + r.reason();
                         return false;
                     }
                 }
@@ -480,6 +505,26 @@ final class HubLink implements AutoCloseable {
     /** Full stream id as the hub sees it: {@code (conn << 24) | localId}. */
     static long fullStreamId(int conn, long localId) {
         return ((long) conn << CONN_SHIFT) | (localId & ((1L << CONN_SHIFT) - 1));
+    }
+
+    /** Builds a message bound to the connection it will travel on, given that connection's Noise handshake hash. */
+    interface Bound {
+        Message build(byte[] handshakeHash) throws IOException;
+    }
+
+    /**
+     * Sends a request built over the control connection's Noise handshake hash, on that same
+     * connection. A domain claim is signed over the hash so the hub can tell the claim was made on
+     * this connection and not copied from somewhere else (§8.3); taking the hash and sending
+     * against one snapshot of the session is what keeps a reconnect in between from producing a
+     * proof for one connection on another.
+     */
+    Message request(Bound m, String replyKey, long timeoutMs) throws IOException, TimeoutException {
+        Session s = primary;
+        if (s == null || s.mux.isClosed()) {
+            throw new IOException(lastError != null ? "not connected: " + lastError : "not connected");
+        }
+        return requestOn(s, m.build(s.connected.channel().handshakeHash()), replyKey, timeoutMs);
     }
 
     /** Sends a request on the control connection and waits for the reply registered under {@code replyKey}. */

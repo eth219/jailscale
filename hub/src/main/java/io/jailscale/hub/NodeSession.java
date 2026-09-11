@@ -14,6 +14,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
+import java.util.Locale;
 
 /**
  * One connection from a node after the HTTP 101 (ARCHITECTURE.md §5, §5.3, §6). The Hello carries the
@@ -23,7 +24,7 @@ import java.security.GeneralSecurityException;
 final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     private static final Log LOG = Log.get("session");
-    static final int MIN_PROTO = 1;
+    static final int MIN_PROTO = 2;
     static final int IDLE_TIMEOUT_MS = 60_000;
     static final int MAX_CONNECTIONS = 4;
 
@@ -37,6 +38,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private volatile Store.NodeRec node;
     private volatile boolean closed;
     private volatile boolean draining;
+    private volatile byte[] handshakeHash;
 
     NodeSession(Hub hub, Socket socket, String remoteIp) {
         this.hub = hub;
@@ -70,6 +72,14 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     String remoteIp() {
         return remoteIp;
+    }
+
+    /**
+     * The Noise handshake hash of this connection. Both ends derive it and nobody else can, so it
+     * is what a node signs to prove a domain claim belongs to this connection (§8.3).
+     */
+    byte[] handshakeHash() {
+        return handshakeHash;
     }
 
     /** Runs to completion on the connection's virtual thread. */
@@ -116,6 +126,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             if (rejected[0]) {
                 return;
             }
+            handshakeHash = ch.handshakeHash();
             if (hub.isHandingOff()) {
                 LOG.info("node {} arrived during hand-off; asking it to retry", mkey);
                 return;
@@ -197,6 +208,16 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         return true;
     }
 
+    /**
+     * Why a node may not have the hub answer http-01 for this domain, or null. The hub owns port 80
+     * for every name that resolves to it, so relaying a token is lending out domain validation:
+     * it is lent only for a domain this node may claim (the same rule {@code LinkOpen} applies),
+     * and never for the hub's own name (which serves /admin, /join and the first-contact key).
+     */
+    private String challengeRefusal(String domain) {
+        return domain == null ? "bad-domain" : hub.links().domainRefusal(node, domain);
+    }
+
     private boolean handleControl(Message m) throws IOException {
         switch (m) {
             case Message.RegisterRequest r -> {
@@ -220,12 +241,17 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             }
             case Message.LinkOpen lo -> send(hub.links().open(this, lo));
             case Message.ChallengeSet cs -> {
+                String domain = cs.domain() == null ? null : cs.domain().toLowerCase(Locale.ROOT);
+                String refusal = node == null ? null : challengeRefusal(domain);
                 if (node == null) {
                     send(new Message.Error(cs.type(), "not-registered"));
                 } else if (!hub.config().hasHttp()) {
                     send(new Message.Error(cs.type(), "hub-has-no-port-80"));
-                } else if (!hub.challenges().set(mkey, cs.token(), cs.keyAuthorization())) {
-                    send(new Message.Error(cs.type(), "too-many-challenges"));
+                } else if (refusal != null) {
+                    LOG.warn("node {}: refused http-01 relay for {}: {}", mkey, cs.domain(), refusal);
+                    send(new Message.Error(cs.type(), refusal));
+                } else if ((refusal = hub.challenges().set(mkey, domain, cs.token(), cs.keyAuthorization())) != null) {
+                    send(new Message.Error(cs.type(), refusal));
                 } else {
                     send(new Message.Ack(cs.type()));
                 }

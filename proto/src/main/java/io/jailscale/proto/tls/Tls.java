@@ -23,6 +23,8 @@ import javax.net.ssl.X509TrustManager;
 public final class Tls {
 
     public static final String[] PROTOCOLS = {"TLSv1.3", "TLSv1.2"};
+    /** For a server whose signing is delegated (§9.2): TLS 1.2 ECDHE would need a ServerKeyExchange signature. */
+    public static final String[] TLS13_ONLY = {"TLSv1.3"};
     public static final String[] ALPN_HTTP11 = {"http/1.1"};
 
     private Tls() {}

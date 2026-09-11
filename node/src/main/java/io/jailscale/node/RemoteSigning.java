@@ -1,11 +1,10 @@
 package io.jailscale.node;
 
 import io.jailscale.proto.control.Message;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.Socket;
 import java.security.InvalidKeyException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.Principal;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -111,16 +110,15 @@ final class RemoteSigning {
     }
 
     static final class RemoteSignature extends SignatureSpi {
-        private final MessageDigest sha256;
-        private RemotePrivateKey key;
+        /**
+         * A TLS 1.3 CertificateVerify content is 98 bytes of context and a transcript hash. The cap
+         * is what stops an unexpected caller streaming something large through the hub; the hub
+         * checks the shape as well, and is the side that matters.
+         */
+        static final int MAX_CONTENT = 1024;
 
-        RemoteSignature() {
-            try {
-                sha256 = MessageDigest.getInstance("SHA-256");
-            } catch (NoSuchAlgorithmException e) {
-                throw new IllegalStateException(e);
-            }
-        }
+        private final ByteArrayOutputStream content = new ByteArrayOutputStream(160);
+        private RemotePrivateKey key;
 
         @Override
         protected void engineInitVerify(PublicKey publicKey) throws InvalidKeyException {
@@ -133,17 +131,17 @@ final class RemoteSigning {
                 throw new InvalidKeyException("not a remote key");
             }
             key = k;
-            sha256.reset();
+            content.reset();
         }
 
         @Override
         protected void engineUpdate(byte b) {
-            sha256.update(b);
+            content.write(b);
         }
 
         @Override
         protected void engineUpdate(byte[] b, int off, int len) {
-            sha256.update(b, off, len);
+            content.write(b, off, len);
         }
 
         @Override
@@ -152,10 +150,16 @@ final class RemoteSigning {
             if (ctx == null) {
                 throw new SignatureException("no signing context on this thread");
             }
-            byte[] digest = sha256.digest();
+            // The bytes, not their hash: the hub hashes them itself so that it can see what it is
+            // being asked to sign (§9.2). It cannot check a digest against anything.
+            byte[] bytes = content.toByteArray();
+            content.reset();
+            if (bytes.length > MAX_CONTENT) {
+                throw new SignatureException("too much to sign remotely: " + bytes.length + " bytes");
+            }
             Message reply;
             try {
-                reply = ctx.link().requestOn(ctx.session(), new Message.SignRequest(ctx.streamId(), key.keyId(), "ECDSA-P256-SHA256", digest),
+                reply = ctx.link().requestOn(ctx.session(), new Message.SignRequest(ctx.streamId(), key.keyId(), ALGORITHM, bytes),
                     "SignResponse:" + ctx.streamId(), SIGN_TIMEOUT_MS);
             } catch (IOException | TimeoutException e) {
                 throw new SignatureException("hub did not sign: " + e.getMessage(), e);

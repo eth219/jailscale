@@ -90,7 +90,7 @@ final class DomainCerts {
         List<String> tokens = new ArrayList<>();
         try {
             for (AcmeClient.Challenge c : challenges) {
-                Message r = ask(link, new Message.ChallengeSet(c.token(), client.keyAuthorization(c.token())));
+                Message r = ask(link, new Message.ChallengeSet(domain, c.token(), client.keyAuthorization(c.token())));
                 if (!(r instanceof Message.Ack)) {
                     throw new IOException("hub refused the challenge: " + (r instanceof Message.Error e ? e.reason() : r.type()));
                 }

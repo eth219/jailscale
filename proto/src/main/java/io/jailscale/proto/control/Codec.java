@@ -36,16 +36,16 @@ public final class Codec {
             case Message.Error x -> b.put("inReplyTo", x.inReplyTo()).put("reason", x.reason());
             case Message.CertUpdate x -> b.put("chainPem", x.chainPem()).put("keyId", x.keyId());
             case Message.LinkOpen x -> b.put("kind", x.kind()).put("name", x.name()).put("domain", x.domain()).put("port", x.port())
-                .put("local", x.local()).put("chainPem", x.chainPem());
+                .put("local", x.local()).put("chainPem", x.chainPem()).putBytes("domainProof", x.domainProof());
             case Message.LinkOpened x -> b.put("linkId", x.linkId()).put("name", x.name()).put("url", x.url())
                 .put("hubPort", x.hubPort()).put("reason", x.reason());
             case Message.LinkClose x -> b.put("linkId", x.linkId());
             case Message.LinkRevoked x -> b.put("linkId", x.linkId()).put("name", x.name())
                 .put("reason", x.reason()).put("at", x.at());
             case Message.SignRequest x -> b.put("streamId", x.streamId()).put("keyId", x.keyId()).put("alg", x.alg())
-                .putBytes("digest", x.digest());
+                .putBytes("content", x.content());
             case Message.SignResponse x -> b.put("streamId", x.streamId()).putBytes("sig", x.sig()).put("reason", x.reason());
-            case Message.ChallengeSet x -> b.put("token", x.token()).put("keyAuthorization", x.keyAuthorization());
+            case Message.ChallengeSet x -> b.put("domain", x.domain()).put("token", x.token()).put("keyAuthorization", x.keyAuthorization());
             case Message.ChallengeClear x -> b.put("token", x.token());
             case Message.Ack x -> b.put("inReplyTo", x.inReplyTo());
         }
@@ -80,15 +80,16 @@ public final class Codec {
                 case "Error" -> new Message.Error(o.optString("inReplyTo", null), o.string("reason"));
                 case "CertUpdate" -> new Message.CertUpdate(o.stringArray("chainPem"), o.string("keyId"));
                 case "LinkOpen" -> new Message.LinkOpen(o.string("kind"), o.optString("name", null), o.optString("domain", null),
-                    o.has("port") ? o.integer("port") : null, o.optString("local", null), o.has("chainPem") ? o.stringArray("chainPem") : null);
+                    o.has("port") ? o.integer("port") : null, o.optString("local", null), o.has("chainPem") ? o.stringArray("chainPem") : null,
+                    o.optBytes("domainProof"));
                 case "LinkOpened" -> new Message.LinkOpened(o.optString("linkId", null), o.optString("name", null),
                     o.optString("url", null), o.has("hubPort") ? o.integer("hubPort") : null, o.optString("reason", null));
                 case "LinkClose" -> new Message.LinkClose(o.string("linkId"));
                 case "LinkRevoked" -> new Message.LinkRevoked(o.optString("linkId", null), o.string("name"),
                     o.string("reason"), o.lng("at"));
-                case "SignRequest" -> new Message.SignRequest(o.lng("streamId"), o.string("keyId"), o.string("alg"), o.bytes("digest"));
+                case "SignRequest" -> new Message.SignRequest(o.lng("streamId"), o.string("keyId"), o.string("alg"), o.bytes("content"));
                 case "SignResponse" -> new Message.SignResponse(o.lng("streamId"), o.optBytes("sig"), o.optString("reason", null));
-                case "ChallengeSet" -> new Message.ChallengeSet(o.string("token"), o.string("keyAuthorization"));
+                case "ChallengeSet" -> new Message.ChallengeSet(o.optString("domain", null), o.string("token"), o.string("keyAuthorization"));
                 case "ChallengeClear" -> new Message.ChallengeClear(o.string("token"));
                 case "Ack" -> new Message.Ack(o.optString("inReplyTo", null));
                 default -> throw new CodecException("unknown message type '" + t + "'");

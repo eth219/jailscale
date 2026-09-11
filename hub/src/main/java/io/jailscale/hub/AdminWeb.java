@@ -126,6 +126,16 @@ final class AdminWeb {
     }
 
     /**
+     * What to put in the Name box of a knock. The node's own suggestion, unless it names someone
+     * who already exists here: an operator approving on autopilot would then be handing a stranger
+     * another member's identity, and admin rights with it. An empty box asks them to choose.
+     */
+    private String suggestedName(Store.PendingRec p) {
+        String suggested = p.user() == null ? p.hostname() : p.user();
+        return hub.registrar().taken(suggested) ? "" : suggested;
+    }
+
+    /**
      * Registered nodes with the controls an admin has over them, and the current bans. Rendered
      * on {@code /admin} and, for a signed-in admin, on the status page; {@code back} is where the
      * POST returns to so a button pressed on one page does not land on the other.
@@ -291,7 +301,7 @@ final class AdminWeb {
                 .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(p.mkey())).append("\">")
                 .append("<code>").append(HttpFront.escape(p.mkey().substring(0, 17))).append("…</code> ")
                 .append(HttpFront.escape(p.hostname())).append(" (").append(HttpFront.escape(p.os())).append(", ").append(HttpFront.escape(String.valueOf(p.ip()))).append(") ")
-                .append("Name <input name=user value=\"").append(HttpFront.escape(p.user() == null ? p.hostname() : p.user())).append("\" size=12> ")
+                .append("Name <input name=user value=\"").append(HttpFront.escape(suggestedName(p))).append("\" size=12> ")
                 .append("<button>Approve</button></form>")
                 .append("<form method=post action=/admin/deny class=row>").append(csrf)
                 .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(p.mkey())).append("\"><button>Deny</button></form>");

@@ -14,12 +14,21 @@ final class Challenges {
     static final long TTL_MS = 10 * 60_000;
     static final int MAX_PER_NODE = 10;
 
-    private record Entry(String keyAuthorization, String mkey, long expiresAt) {}
+    private record Entry(String domain, String keyAuthorization, String mkey, long expiresAt) {}
 
     private final Map<String, Entry> byToken = new ConcurrentHashMap<>();
 
-    /** Returns false when the node already holds too many live tokens. */
-    boolean set(String mkey, String token, String keyAuthorization) {
+    static final String TOKEN_IN_USE = "token-in-use";
+    static final String TOO_MANY = "too-many-challenges";
+
+    /**
+     * Stores the token and returns null, or the reason it was not: {@link #TOO_MANY} when the node
+     * already holds too many live tokens, {@link #TOKEN_IN_USE} when the token is another node's.
+     * A token is stored against the domain it was issued for and answered only for that Host: a
+     * relay that answers any token under any name validates every domain pointed at the hub, for
+     * any node that asks.
+     */
+    String set(String mkey, String domain, String token, String keyAuthorization) {
         long now = System.currentTimeMillis();
         int mine = 0;
         for (Map.Entry<String, Entry> e : byToken.entrySet()) {
@@ -29,11 +38,15 @@ final class Challenges {
                 mine++;
             }
         }
-        if (mine >= MAX_PER_NODE) {
-            return false;
+        Entry held = byToken.get(token);
+        if (held != null && held.expiresAt() >= now && !held.mkey().equals(mkey)) {
+            return TOKEN_IN_USE;
         }
-        byToken.put(token, new Entry(keyAuthorization, mkey, now + TTL_MS));
-        return true;
+        if (mine >= MAX_PER_NODE) {
+            return TOO_MANY;
+        }
+        byToken.put(token, new Entry(domain, keyAuthorization, mkey, now + TTL_MS));
+        return null;
     }
 
     void clear(String mkey, String token) {
@@ -47,13 +60,17 @@ final class Challenges {
         byToken.entrySet().removeIf(e -> e.getValue().mkey().equals(mkey));
     }
 
-    /** The key authorization for a token, or null. */
-    String answer(String token) {
+    /** The key authorization for a token asked for under {@code host}, or null. */
+    String answer(String host, String token) {
         Entry e = byToken.get(token);
         if (e == null || e.expiresAt() < System.currentTimeMillis()) {
             return null;
         }
-        LOG.info("answered http-01 challenge for node {}", e.mkey());
+        if (host == null || !host.equals(e.domain())) {
+            LOG.warn("http-01 token of {} asked for under {}, refusing", e.domain(), host);
+            return null;
+        }
+        LOG.info("answered http-01 challenge for {} (node {})", e.domain(), e.mkey());
         return e.keyAuthorization();
     }
 }

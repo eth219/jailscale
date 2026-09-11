@@ -238,7 +238,7 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 | `CertUpdate` | Wildcard chain (public part) and its `keyId`, on connect and on renewal |
 | `LinkOpen` / `LinkOpened` | `kind: https\|tcp\|udp`, optional name, domain, port, local target, and for user domains the certificate chain. Reply carries `linkId` and a URL or hub port, or a reason |
 | `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name, domain or port (§11.4) |
-| `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `digest`; then a signature or a reason (§9.2) |
+| `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `content`; then a signature or a reason (§9.2) |
 | `ChallengeSet` / `ChallengeClear` | Register or drop a user-domain http-01 token (§8.3) |
 | `InviteCreate` / `InviteCreated`, `AdminLinkRequest` / `AdminLink` | A member node issuing an invite; a one-shot `/admin` login URL for an admin node |
 | `HubKeyRotation`, `Ping` / `Pong`, `Ack` / `Error` | §5.2; on-demand round trip; generic replies |
@@ -248,8 +248,16 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 so the node never sees a `HelloResponse` and cannot learn `minProto` or the hub version from it.
 `detail` therefore carries the required protocol number, the hub version and what to do next; the
 node prints it verbatim, keeps it in `status` as `lastError`, and stops reconnecting, because a
-one-word reason in a log leaves the user with nothing to act on. A node announcing a newer `proto`
-drops to the hub's. The prologue number changes only when the Noise parameters change.
+one-word reason in a log leaves the user with nothing to act on. The check runs the other way too:
+a node needs the hub to speak at least its own minimum, and a `HelloResponse` announcing less makes
+the node stop with the same kind of message, naming the hub's version and asking for `jailhub` to
+be updated, because there is no older encoding for it to drop to. The prologue number changes only
+when the Noise parameters change.
+
+`proto` is **2**, and `minProto` is 2 with it: 1 carried a signing request as a bare digest, a domain
+claim with no proof of key possession, and an http-01 challenge with no domain. Each of those is a
+field the hub now needs in order to check the request at all, so a node speaking 1 is told to upgrade
+rather than have its requests accepted unchecked.
 
 ### 6.2 Storage
 
@@ -415,16 +423,34 @@ and domain links.
 CNAME or A record. When the node has no certificate for it, or renewal is due, the node runs ACME
 **http-01 with its own key**: since DNS points at the hub, the CA's
 `http://myapp.com/.well-known/acme-challenge/...` request arrives on the hub's port 80, the node
-uploads `ChallengeSet{token, keyAuthorization}` (at most 10 per node, 10 minutes each), the hub
-answers on its behalf, and `ChallengeClear` removes it. The hub learns the token and the response
+uploads `ChallengeSet{domain, token, keyAuthorization}` (at most 10 per node, 10 minutes each), the
+hub answers on its behalf, and `ChallengeClear` removes it. The hub learns the token and the response
 string and nothing about the node's key.
 
-Then comes `LinkOpen{domain, chainPem}`, where **the certificate chain is the proof of ownership**:
-the hub binds the domain only when the chain validates against public roots and its SAN is that
-domain, rejecting otherwise with `domain-unverified`, `domain-cert-name-mismatch`,
-`domain-cert-untrusted`, or `bad-domain` for a name under the hub's own domain. If another node later
-presents a valid certificate for the same domain that node wins, because obtaining the certificate is
-evidence of controlling the domain. After that it is pure SNI passthrough: certificate and key exist
+**The relay is lending out domain validation, so it is lent narrowly.** The hub owns port 80 for
+every name that resolves to it, which is every user domain any member has pointed here and every name
+under the hub's own. A token is therefore stored against the domain it was issued for and answered
+only when the request's `Host` is that domain; a token for `<hub>` or anything under it is refused
+outright, and a domain another user already holds is refused too. Answering any token under any Host
+would let one member pass validation for another member's domain, or for the hub's own name — the
+origin that serves `/admin`, `/join` and the first-contact key — and walk away with a publicly trusted
+certificate for it.
+
+Then comes `LinkOpen{domain, chainPem, domainProof}`. **The chain says which certificate; the proof
+says the node holds its key.** A chain is public — it is handed to every visitor in the clear and
+mirrored in CT logs — so presenting one shows only that the presenter has seen the site. The key is
+what the CA bound to the domain, so the key is what answers: `domainProof` is a signature by the
+leaf's private key over `"jailscale domain claim v1" || handshakeHash || domain`, where
+`handshakeHash` is the Noise handshake hash of the connection carrying the claim. Both ends derive it
+and nobody else can, so the proof is good for that claim on that connection only, and no round trip
+is needed to agree a nonce. The hub binds the domain when the chain validates against public roots,
+its SAN is that domain, and the proof verifies against the leaf's public key — rejecting otherwise
+with `domain-unverified`, `domain-cert-name-mismatch`, `domain-cert-untrusted`,
+`domain-proof-missing`, `domain-proof-invalid`, or `bad-domain` for a name under the hub's own domain.
+
+A domain already held by **another user** is `taken`, the same rule as a name (§8.2): the operator
+releases it with `domain release` and the new owner claims it then. Between machines of the same user
+the newest claim wins, as names do. After that it is pure SNI passthrough: certificate and key exist
 only on the node, the hub forwards ciphertext, and there is no `SignRequest`. The node renews on the
 same third-of-lifetime rule, checked hourly, and an offline node does not renew. **Port 80 on the hub
 is a precondition**; `--http-listen none` means user domains are refused.
@@ -499,8 +525,8 @@ drives an `SSLEngine` directly: stream to `unwrap` to plaintext to the local soc
 
 ```
 visitor ──ClientHello──> hub ──OPEN + bytes──> node (SSLEngine)
-                                                  │  transcript hash h
-                                                  ├──SignRequest{streamId, keyId, alg, h}──> hub
+                                                  │  CertificateVerify content c
+                                                  ├──SignRequest{streamId, keyId, alg, c}──> hub
                                                   │                          checked, then signed
                                                   <──SignResponse{streamId, sig}─────────────┘
                                                   │  ServerHello ... CertificateVerify(sig) ... Finished
@@ -514,24 +540,38 @@ key type, and JSSE's delayed provider selection picks it, the mechanism PKCS#11 
 virtual thread. The service is registered by subclassing `Provider.Service` and overriding
 `newInstance`, so no reflection is involved.
 
-**The four conditions that stop a signing oracle.** The hub sees only a transcript hash, so it cannot
-tell which SNI a handshake belongs to. Signing unconditionally would give every member node an oracle
-for the whole wildcard, and anyone able to spoof a visitor's DNS could then impersonate someone
-else's name. So the hub signs only when all of these hold:
+**The conditions that narrow the signing oracle.** Signing unconditionally would give every member
+node an oracle for the whole wildcard, and anyone able to spoof a visitor's DNS could then impersonate
+someone else's name. So the hub signs only when all of these hold:
 
-1. `streamId` names **a stream this hub opened on this connection**, still open.
-2. The `sni` recorded in that stream's `OPEN` maps to a name currently **assigned to this node**.
-3. That stream has used fewer than 4 signatures. A normal TLS 1.3 handshake uses one, and two covers
+1. `SignRequest` carries **what is to be signed, not its hash**, and those bytes are a TLS 1.3 server
+   `CertificateVerify` content: the 64 spaces, the `TLS 1.3, server CertificateVerify` label and the
+   zero byte of RFC 8446 §4.4.3, followed by a transcript hash. The hub hashes them itself. A bare
+   digest cannot be checked against anything, so a hub that signed one would sign whatever 32 bytes
+   it was handed, for any purpose at all.
+2. `streamId` names **a stream this hub opened on this connection**, still open.
+3. The `sni` recorded in that stream's `OPEN` maps to a name currently **assigned to this node**.
+4. That stream has used fewer than 4 signatures. A normal TLS 1.3 handshake uses one, and two covers
    HelloRetryRequest.
-4. The node is within its signing rate: a token bucket of 2,000 with 1,000 per second sustained,
+5. The node is within its signing rate: a token bucket of 2,000 with 1,000 per second sustained,
    sized from a load test where 1,000 visitors handshake at once. Resumption needs no signature.
 
-Both peers' randoms are in the transcript, so a signature cannot be replayed on another connection. A
-node therefore gets signatures only for connections the hub delivered to it, and the only name it can
-impersonate is its own.
+**What this does and does not bind.** Conditions 2 and 3 bind the *request* to a stream the hub
+delivered for a name the node owns, and condition 1 binds the *content* to being a TLS 1.3 server
+handshake. What no condition binds is the transcript hash to that stream: the hub never sees the
+node's ServerHello, EncryptedExtensions or Certificate — JSSE does not expose them — so it cannot
+recompute the transcript and check which handshake the hash came from. A member node that has, by
+some other means, a network or DNS position in front of another name under the hub can therefore
+still drive that handshake itself and have the hub sign its CertificateVerify. **This is a known
+limit, not a property that holds** (see §15): closing it needs the transcript on the hub, which means
+the node terminating TLS without JSSE, or a key per name, which the wildcard certificate rules out.
+The prerequisite is a network position the attacker must obtain separately; membership on its own
+buys nothing here, because all traffic for `*.<hub>` normally transits the hub.
 
-**Keeping it to one signature.** The certificate is ECDSA P-256, so in TLS 1.3 and TLS 1.2 ECDHE the
-private-key operation is a single signature and RSA key exchange is excluded by the key type. Session
+**Keeping it to one signature.** Visitors are offered TLS 1.3 only: condition 1 means the hub signs
+nothing but a TLS 1.3 server `CertificateVerify`, and TLS 1.2 ECDHE would ask it to sign a
+`ServerKeyExchange` instead. The certificate is ECDSA P-256, so the private-key operation is a
+single signature and RSA key exchange is excluded by the key type. Session
 tickets are generated by the node and kept in memory, so a resumed handshake never touches the hub.
 0-RTT is off, and ALPN offers only `http/1.1`, because negotiating h2 would break a local app that
 speaks h1. `CertUpdate` carries a `keyId` (a certificate fingerprint) that the node echoes in
@@ -562,6 +602,14 @@ through, because the same TCP connection is the same client; a valid `?jail=<tok
 token, then closes; neither one gets a 403 page and a close. Tokens are 128-bit and the node stores
 only a SHA-256 hash. The hub knows nothing about gates, because it only sees ciphertext, and keeping
 the gate on the node is the position consistent with end-to-end encryption.
+
+**The gate is for https links, and both commands say so.** A raw tcp or udp link has no HTTP in which
+to carry a token, so `open --gate` refuses it — and so does `jailscale gate <name>`, which used to
+take it: the raw link is named `tcp/<port>` in node state, so the command matched, armed the gate,
+saved it, printed a visit link and reported the link as gated, while the raw serving path never looks
+at `gateHash`. A control that is on in the status output and absent on the wire is worse than one
+that was never offered. The serving path refuses a raw link carrying a gate as well, so state written
+by an older build cannot serve a phantom one.
 
 ### 9.4 Daemon and CLI
 
@@ -594,6 +642,17 @@ Tailscale auth-keys, headscale pre-auth keys and Syncthing device approval all u
 is externally verified identity: a leaked link lets someone else in under that name, and the
 countermeasures are one-use short-TTL defaults and removal from the admin list.
 
+**A user name is an identity, so it cannot be self-served.** Admin rights and name ownership are both
+keyed on the user string, so whoever chooses that string chooses who they are. A joining node
+proposes its own name only when the credential does not fix one, and a proposal that collides with an
+existing user is refused with `user-taken` — otherwise joining as "alice" would be enough to *be*
+alice, with her admin rights and her names. Joining as an existing user is a real thing to want, and
+it is authorised the same way everything else here is, by a credential that names them: an invite
+pinned to that user (the second machine of a person runs `jailscale invite --self` on the first), an
+auth-key whose owner is them, or an operator typing the name at approval. For the same reason a
+member may pin an invite to a *new* user or to themselves, but naming an existing user in an invite
+is an admin's call.
+
 **Credentials.** Invites are not admin-only: by default any member issues one from their own node,
 the issuer is recorded, and an admin can narrow it with `--invite-policy admins`. `jailscale invite`
 prints a link carrying a 128-bit token (one use, 24 hours by default) and a short code that is an
@@ -612,7 +671,10 @@ victim joins, nothing local is exposed until they run `open`.
 
 **Knocking.** With only the hostname a node can knock: the hub queues MachineKey, hostname, OS,
 source address and self-chosen name, and an admin approves through `/admin` or `jailhub node
-approve`, which is pushed over the already-open stream 0. Knocking is unauthenticated, so pending
+approve`, which is pushed over the already-open stream 0. The queued name is the joiner's own
+suggestion and a knock is unauthenticated, so the approval form leaves the box **empty** when that
+suggestion is an existing user, and approving without naming anyone is refused in that case rather
+than handing a stranger someone else's account on one click. Knocking is unauthenticated, so pending
 entries are capped at 5 per source address, and `--knock off` disables it. `--registration open`
 suits a personal hub or small team where the gate is overhead, approving a knocking node immediately;
 the default is still invite-only, and turning it on prints the consequence, which is that anyone who
@@ -640,11 +702,20 @@ Four axes. None of them implies any other.
 ### 11.1 The boundary of signature delegation
 
 The wildcard private key exists only on the hub, and a node gets a signature only for a stream the
-hub delivered to it whose SNI is one of its own names (§9.2). So a compromised member node gains
-impersonation of **its own names**, which were already its own. Because the control channel is pinned
-to the hub key by Noise, a MITM proxy that defeats TLS still cannot intercept or forge signing
-requests. The hub checks every request against stream, name, count and rate and logs refusals; a node
-that keeps being refused is disconnected and flagged.
+hub delivered to it whose SNI is one of its own names, over content the hub recognises as a TLS 1.3
+server `CertificateVerify` (§9.2). Because the control channel is pinned to the hub key by Noise, a
+MITM proxy that defeats TLS still cannot intercept or forge signing requests. The hub checks every
+request against content, stream, name, count and rate and logs refusals; a node that keeps being
+refused is disconnected and flagged.
+
+**Where that boundary actually sits.** The hub cannot recompute the transcript hash inside the
+content it signs (§9.2), so the signature is bound to *a* handshake of that shape and not to *the*
+handshake on the delivered stream. A member node that separately obtains a network or DNS position in
+front of another name under the hub can still have its own forged handshake signed. So the honest
+statement is: a compromised member node gains impersonation of its own names, **plus** impersonation
+of any `*.<hub>` name it can already intercept. Removing the second half is on the list in §15; until
+then, names that need to withstand an attacker who is both a member and on-path should be user
+domains, whose keys never touch the hub.
 
 Separately, joining opens no port on the node: only the port named in `jailscale open` is reachable,
 and only while that link is open. There is no TUN device, so there is no OS routing path to leak
@@ -869,6 +940,14 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   is caught today only by the first visitor handshake failing.
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
+- **Delegated signing is bound to the shape of what is signed, not to the handshake** (§9.2, §11.1).
+  The hub checks that the content is a TLS 1.3 server `CertificateVerify` and that the asking node
+  owns the stream and the name, but it cannot recompute the transcript hash those bytes end in,
+  because JSSE does not expose the node's own handshake messages. A member node that is also on-path
+  for another `*.<hub>` name can therefore still get its forged handshake signed. Closing it needs
+  either the transcript on the hub — which means terminating TLS without JSSE — or one key per name,
+  which a single wildcard certificate rules out and which public-CA rate limits make impractical to
+  replace with per-name certificates.
 - **Raw TCP and UDP links are not end to end unless the app encrypts itself** (§8.4).
 - **User domains require port 80 on the hub.** The http-01 relay is the only verification path
   implemented; tls-alpn-01 would remove that requirement.

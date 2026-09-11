@@ -8,8 +8,13 @@ import java.util.List;
  */
 public sealed interface Message {
 
-    /** Current control protocol version (message schema + frame set). */
-    int PROTO = 1;
+    /**
+     * Current control protocol version (message schema + frame set). 2 carries what is to be signed
+     * instead of its hash, a proof of key possession on a domain claim, and the domain an ACME
+     * challenge belongs to. A node speaking 1 cannot express any of the three, so the hub refuses
+     * it rather than accept a request it can no longer check.
+     */
+    int PROTO = 2;
 
     String type();
 
@@ -110,9 +115,14 @@ public sealed interface Message {
 
     /**
      * {@code local} is the node-side target ("host:port"); it keys the stable random name.
-     * {@code chainPem}: for user domains, the node's own certificate chain proving the name (§8.3).
+     * {@code chainPem}: for user domains, the node's own certificate chain for the name (§8.3).
+     * {@code domainProof}: a signature with that certificate's private key over
+     * {@code "jailscale domain claim v1" || handshakeHash || domain}, bound to the Noise handshake
+     * of the connection carrying it so it cannot be replayed onto another one. A chain on its own
+     * proves nothing, being public in every TLS handshake and in CT logs.
      */
-    record LinkOpen(String kind, String name, String domain, Integer port, String local, List<String> chainPem) implements Message {
+    record LinkOpen(String kind, String name, String domain, Integer port, String local, List<String> chainPem,
+        byte[] domainProof) implements Message {
         public static final String HTTPS = "https";
         public static final String TCP = "tcp";
         public static final String UDP = "udp";
@@ -140,7 +150,12 @@ public sealed interface Message {
         @Override public String type() { return "LinkRevoked"; }
     }
 
-    record SignRequest(long streamId, String keyId, String alg, byte[] digest) implements Message {
+    /**
+     * {@code content} is the bytes to be signed, not their hash: the hub hashes them itself so it
+     * can check what it is signing (ARCHITECTURE.md §9.2). Carrying a bare digest would make the
+     * hub a general-purpose signing oracle for its own wildcard key.
+     */
+    record SignRequest(long streamId, String keyId, String alg, byte[] content) implements Message {
         @Override public String type() { return "SignRequest"; }
     }
 
@@ -148,7 +163,12 @@ public sealed interface Message {
         @Override public String type() { return "SignResponse"; }
     }
 
-    record ChallengeSet(String token, String keyAuthorization) implements Message {
+    /**
+     * {@code domain} is the identifier the token belongs to. The hub answers the challenge only for
+     * that Host, and only for a domain this node may claim: without it the relay validates any name
+     * that resolves to the hub, for any node.
+     */
+    record ChallengeSet(String domain, String token, String keyAuthorization) implements Message {
         @Override public String type() { return "ChallengeSet"; }
     }
 

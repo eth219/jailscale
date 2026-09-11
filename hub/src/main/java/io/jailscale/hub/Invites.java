@@ -41,6 +41,12 @@ final class Invites {
             return new Message.Error(ic.type(), "policy: only admins may invite new users");
         }
         String user = ic.self() ? node.user() : ic.user();
+        // Pinning an invite to a user is naming them, and the hub keys admin rights on that name.
+        // A member may name a new user or themselves; naming someone who already exists is an
+        // admin's call, or the invite would be a way to hand out another member's identity.
+        if (user != null && !admin && !user.equals(node.user()) && store.userExists(user)) {
+            return new Message.Error(ic.type(), user + " already has an account here; ask an admin to invite that machine");
+        }
         Created c = create(user, ic.uses(), ic.ttlSeconds(), node.user(), false);
         return new Message.InviteCreated(c.url(), c.code(), c.rec().expiresAt());
     }

@@ -31,9 +31,10 @@ class CodecTest {
             new Message.AdminLink("https://hub/admin/login/x", 1789000060L),
             new Message.Error("InviteCreate", "policy"),
             new Message.CertUpdate(List.of("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----"), "sha256:ab"),
-            new Message.LinkOpen("https", "myapp", null, null, "127.0.0.1:3000", null),
-            new Message.LinkOpen("tcp", null, null, 10022, "127.0.0.1:22", null),
-            new Message.LinkOpen("https", null, "app.example.com", null, "127.0.0.1:3000", java.util.List.of("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n")),
+            new Message.LinkOpen("https", "myapp", null, null, "127.0.0.1:3000", null, null),
+            new Message.LinkOpen("tcp", null, null, 10022, "127.0.0.1:22", null, null),
+            new Message.LinkOpen("https", null, "app.example.com", null, "127.0.0.1:3000",
+                java.util.List.of("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), new byte[] {9, 8, 7}),
             new Message.Ack("ChallengeSet"),
             new Message.LinkOpened("l1", "myapp", "https://myapp.hub.example.com", null, null),
             new Message.LinkOpened(null, null, null, null, "taken"),
@@ -41,7 +42,7 @@ class CodecTest {
             new Message.SignRequest((2L << 24) | 40, "sha256:ab", "ECDSA-P256-SHA256", new byte[] {1, 2, 3}),
             new Message.SignResponse(40, new byte[] {4, 5}, null),
             new Message.SignResponse(40, null, "not-your-stream"),
-            new Message.ChallengeSet("tok", "tok.thumb"),
+            new Message.ChallengeSet("app.example.com", "tok", "tok.thumb"),
             new Message.ChallengeClear("tok"),
         };
         for (Message m : all) {
@@ -50,7 +51,11 @@ class CodecTest {
             assertEquals(m.type(), dec.type());
             if (m instanceof Message.SignRequest a && dec instanceof Message.SignRequest b) {
                 assertEquals(a.streamId(), b.streamId());
-                assertArrayEquals(a.digest(), b.digest());
+                assertArrayEquals(a.content(), b.content());
+            } else if (m instanceof Message.LinkOpen a && dec instanceof Message.LinkOpen b) {
+                assertEquals(a.domain(), b.domain());
+                assertEquals(a.chainPem(), b.chainPem());
+                assertArrayEquals(a.domainProof(), b.domainProof());
             } else if (m instanceof Message.SignResponse a && dec instanceof Message.SignResponse b) {
                 assertArrayEquals(a.sig(), b.sig());
                 assertEquals(a.reason(), b.reason());

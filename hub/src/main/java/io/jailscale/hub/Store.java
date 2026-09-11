@@ -140,6 +140,37 @@ final class Store implements AutoCloseable {
         return u;
     }
 
+    /**
+     * Whether a user name already means someone here: a node's user, an admin, or the owner of a
+     * name or domain. Ownership outlives a node (§8.2: releasing is the operator's act), so a
+     * user whose machines are all gone still exists as far as identity goes, or a stranger could
+     * join under that name and inherit what it owns.
+     */
+    synchronized boolean userExists(String user) {
+        if (user == null) {
+            return false;
+        }
+        if (admins.contains(user)) {
+            return true;
+        }
+        for (NodeRec n : nodesByKey.values()) {
+            if (n.user().equals(user)) {
+                return true;
+            }
+        }
+        for (NameRec n : names.values()) {
+            if (n.user().equals(user)) {
+                return true;
+            }
+        }
+        for (DomainRec d : domains.values()) {
+            if (d.user().equals(user)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     synchronized String nextHubKey() {
         return nextHubKey;
     }

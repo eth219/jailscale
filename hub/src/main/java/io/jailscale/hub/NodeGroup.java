@@ -169,13 +169,13 @@ final class NodeGroup {
         }
         visitors.put(id, new VisitorStream(vs.linkId(), vs.sni(), vs.signatures() + 1));
         try {
-            byte[] sig = hub.tls().sign(sr.keyId(), sr.digest());
+            byte[] sig = hub.tls().sign(sr.keyId(), sr.content());
             if (sig == null) {
                 return reject(sr, "unknown-key");
             }
             return new Message.SignResponse(id, sig, null);
         } catch (GeneralSecurityException e) {
-            return reject(sr, "sign-failed");
+            return reject(sr, "sign-failed: " + e.getMessage());
         }
     }
 

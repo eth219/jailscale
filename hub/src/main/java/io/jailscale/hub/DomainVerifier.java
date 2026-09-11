@@ -1,5 +1,6 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.tls.DomainProof;
 import io.jailscale.proto.tls.Pem;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -17,8 +18,10 @@ import javax.net.ssl.X509TrustManager;
 
 /**
  * Proof of ownership for a user domain (ARCHITECTURE.md §8.3): a certificate chain for that exact
- * name that validates to a public CA. Whoever holds such a certificate controls the domain,
- * so the hub routes the name to them without keeping any key of its own.
+ * name that validates to a public CA, <em>and</em> a signature made with that certificate's private
+ * key. The chain alone proves nothing — it is handed to every visitor in the clear and mirrored in
+ * CT logs, so anyone can copy one — and the key is what the CA actually bound to the domain. The
+ * hub verifies both and keeps no key of its own.
  */
 final class DomainVerifier {
 
@@ -56,8 +59,12 @@ final class DomainVerifier {
         return domain != null && DOMAIN.matcher(domain).matches();
     }
 
-    /** Returns null when the chain proves {@code domain}, else the reason it does not. */
-    String verify(String domain, List<String> chainPem) {
+    /**
+     * Returns null when the chain proves {@code domain} and {@code proof} shows the node holds its
+     * private key, else the reason it does not. The proof is over the connection's Noise handshake
+     * hash, so it cannot be lifted from one connection and replayed on another.
+     */
+    String verify(String domain, List<String> chainPem, byte[] handshakeHash, byte[] proof) {
         if (chainPem == null || chainPem.isEmpty()) {
             return "domain-unverified";
         }
@@ -87,6 +94,16 @@ final class DomainVerifier {
             trust.checkServerTrusted(chain.toArray(new X509Certificate[0]), leaf.getPublicKey().getAlgorithm().equals("EC") ? "ECDHE_ECDSA" : "RSA");
         } catch (CertificateException e) {
             return "domain-cert-untrusted";
+        }
+        if (proof == null || handshakeHash == null) {
+            return "domain-proof-missing";
+        }
+        try {
+            if (!DomainProof.verify(leaf.getPublicKey(), handshakeHash, domain, proof)) {
+                return "domain-proof-invalid";
+            }
+        } catch (GeneralSecurityException e) {
+            return "domain-proof-invalid";
         }
         return null;
     }

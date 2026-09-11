@@ -4,6 +4,7 @@ import io.jailscale.crypto.KeyText;
 import io.jailscale.crypto.X25519;
 import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -14,6 +15,8 @@ import java.util.EnumSet;
 
 /** {@code node.json}: the MachineKey, the hub we belong to, and our registration (ARCHITECTURE.md §4). */
 final class NodeState {
+
+    private static final Log LOG = Log.get("state");
 
     static final String PRIVATE_PREFIX = "mkeypriv";
 
@@ -131,6 +134,14 @@ final class NodeState {
                     LinkRec rec = new LinkRec(lo.optString("kind", "https"), lo.string("host"), lo.integer("port"), lo.optString("name", null));
                     rec.gateHash = lo.optString("gateHash", null);
                     rec.gateExpiresAt = lo.has("gateExpiresAt") ? lo.lng("gateExpiresAt") : 0;
+                    if (rec.gateHash != null && !"https".equals(rec.kind)) {
+                        // An older build let `gate` arm a raw link, which has no HTTP to check a
+                        // token in. Dropping it here keeps `ls` and the wire telling one story.
+                        LOG.warn("link {} is a raw {} link and cannot be gated; the gate an older build saved on it is dropped",
+                            rec.name, rec.kind);
+                        rec.gateHash = null;
+                        rec.gateExpiresAt = 0;
+                    }
                     rec.hubPort = lo.optInt("hubPort", 0);
                     rec.domain = lo.optString("domain", null);
                     rec.acmeDirectory = lo.optString("acmeDirectory", null);

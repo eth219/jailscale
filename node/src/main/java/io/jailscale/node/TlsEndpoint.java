@@ -35,7 +35,9 @@ final class TlsEndpoint implements AutoCloseable {
         this.engine = ctx.createSSLEngine();
         engine.setUseClientMode(false);
         SSLParameters p = engine.getSSLParameters();
-        p.setProtocols(Tls.PROTOCOLS);
+        // TLS 1.3 only: the hub signs nothing but a TLS 1.3 server CertificateVerify (§9.2), and a
+        // TLS 1.2 ECDHE handshake would ask it to sign a ServerKeyExchange instead.
+        p.setProtocols(Tls.TLS13_ONLY);
         p.setApplicationProtocols(Tls.ALPN_HTTP11);
         p.setUseCipherSuitesOrder(true);
         engine.setSSLParameters(p);

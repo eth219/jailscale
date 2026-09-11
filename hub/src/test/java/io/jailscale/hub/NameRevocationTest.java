@@ -78,10 +78,24 @@ class NameRevocationTest {
         return r;
     }
 
-    /** Joins as the same user, so the hub lets the second node take the first one's name. */
+    /** The first machine of a user: nobody is called alice yet, so the name is hers to take. */
     private void join(String home) throws Exception {
         ok(cli(home, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
             .put("user", "alice").put("caFile", CERT.toString())));
+    }
+
+    /**
+     * Another machine of the same user. Joining as an existing user takes a credential that names
+     * them (§10): alice issues an invite for herself, and the machine redeeming it is hers. Asking
+     * to be alice without one is how someone else would become her.
+     */
+    private void joinSameUser(String home, String invite) throws Exception {
+        ok(cli(home, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("invite", invite).put("caFile", CERT.toString())));
+    }
+
+    private String selfInvite(String home) throws Exception {
+        return ok(cli(home, JsonObject.builder().put("cmd", "invite").put("self", true))).string("url");
     }
 
     private List<Object> revoked(String home) throws IOException {
@@ -96,8 +110,15 @@ class NameRevocationTest {
         assertEquals(0, revoked("a").size());
 
         // A second node of the same user opens the same name: the newest opener wins (§8.2).
+        String invite = selfInvite("a");
+        // Asking to be alice without a credential is refused, and the refusal says what to do.
+        node("c");
+        JsonObject asAlice = cli("c", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString()));
+        assertTrue(!asAlice.optBool("ok", false), asAlice.toString());
+        assertTrue(asAlice.toString().contains("user-taken") && asAlice.toString().contains("invite --self"), asAlice.toString());
         node("b");
-        join("b");
+        joinSameUser("b", invite);
         ok(cli("b", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "shared")));
 
         waitFor(() -> revoked("a").size() == 1);
@@ -117,13 +138,14 @@ class NameRevocationTest {
         join("a");
         ok(cli("a", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "shared")));
 
+        String invite = selfInvite("a");
         // Alice goes away. This is the case that matters: nobody can be told anything right now.
         a.close();
         daemons.remove(a);
         waitFor(() -> hub.links().byName("shared") == null);
 
         node("b");
-        join("b");
+        joinSameUser("b", invite);
         ok(cli("b", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "shared")));
         // Nothing could be sent, so the hub is holding it.
         assertEquals(1, hub.store().noticeCount());

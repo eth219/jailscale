@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -72,16 +73,28 @@ final class HttpChallengeFront implements AutoCloseable {
 
     HttpResponse route(HttpRequest req) {
         String path = req.path();
-        if (path.startsWith(PREFIX)) {
-            String token = path.substring(PREFIX.length());
-            String answer = TOKEN.matcher(token).matches() ? hub.challenges().answer(token) : null;
-            return answer == null ? HttpResponse.text(404, "no such challenge") : HttpResponse.text(200, answer);
-        }
         String host = req.headers().get("Host");
         if (host == null || !HOST.matcher(host).matches()) {
-            host = hub.config().hostname();
+            host = null;
         }
-        return new HttpResponse(301).header("Location", "https://" + host + path);
+        if (path.startsWith(PREFIX)) {
+            // Only for the name the token was stored against: a CA validating http-01 resolves the
+            // identifier and asks for it here, so answering regardless of Host would let any node
+            // pass validation for every domain that points at this hub.
+            String token = path.substring(PREFIX.length());
+            String answer = TOKEN.matcher(token).matches() ? hub.challenges().answer(hostOnly(host), token) : null;
+            return answer == null ? HttpResponse.text(404, "no such challenge") : HttpResponse.text(200, answer);
+        }
+        return new HttpResponse(301).header("Location", "https://" + (host == null ? hub.config().hostname() : host) + path);
+    }
+
+    /** The Host header without its port, lowercased, as the stored domain is. */
+    static String hostOnly(String host) {
+        if (host == null) {
+            return null;
+        }
+        int colon = host.indexOf(':');
+        return (colon < 0 ? host : host.substring(0, colon)).toLowerCase(Locale.ROOT);
     }
 
     @Override

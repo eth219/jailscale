@@ -63,11 +63,11 @@ final class Registrar {
         }
         if (req.invite() != null) {
             Store.InviteRec inv = store.consumeInvite(req.invite());
-            return inv == null ? rejected("invite-invalid") : register(mkey, inv.user() != null ? inv.user() : self, hostname, os, inv.admin());
+            return inv == null ? rejected("invite-invalid") : registerFrom(mkey, inv, self, hostname, os);
         }
         if (req.code() != null) {
             Store.InviteRec inv = store.consumeCode(Tokens.normalizeCode(req.code()));
-            return inv == null ? rejected("code-invalid") : register(mkey, inv.user() != null ? inv.user() : self, hostname, os, inv.admin());
+            return inv == null ? rejected("code-invalid") : registerFrom(mkey, inv, self, hostname, os);
         }
         if (req.authKey() != null) {
             Store.AuthKeyRec ak = store.consumeAuthKey(req.authKey());
@@ -75,7 +75,7 @@ final class Registrar {
                 return rejected("authkey-invalid");
             }
             String owner = ak.owner() != null ? ak.owner() : "tag:" + ak.tag();
-            return register(mkey, owner, hostname, os, false);
+            return register(mkey, owner, hostname, os, false, true);
         }
         // knock
         if ("off".equals(store.setting(Store.SETTING_KNOCK, "on"))) {
@@ -86,7 +86,7 @@ final class Registrar {
                 LOG.warn("too many open registrations from {}, refusing", ip);
                 return rejected("rate-limited");
             }
-            return register(mkey, self != null ? self : hostname, hostname, os, false);
+            return register(mkey, self != null ? self : hostname, hostname, os, false, false);
         }
         if (store.pending(mkey) == null) {
             if (store.pendingCountFrom(ip) >= MAX_PENDING_PER_IP) {
@@ -98,21 +98,54 @@ final class Registrar {
         return new Decision(Message.RegisterResponse.pending(), null);
     }
 
-    /** Admin approval of a pending node. */
+    /**
+     * Admin approval of a pending node. The name is the operator's to choose; when they do not, the
+     * one the node asked for is used only if it does not already mean someone else, because a knock
+     * is unauthenticated and its user field is the joiner's own suggestion.
+     */
     Store.NodeRec approvePending(String mkey, String user) throws IOException {
         Store.PendingRec p = store.pending(mkey);
         if (p == null) {
             throw new IllegalArgumentException("no pending node " + mkey);
         }
-        String u = user != null ? user : p.user() != null ? p.user() : p.hostname();
+        String u = user;
+        if (u == null) {
+            u = p.user() != null ? p.user() : p.hostname();
+            if (taken(u)) {
+                throw new IllegalArgumentException(u + " is already a user here; approve this node with an explicit name");
+            }
+        }
         Store.NodeRec n = store.registerNode(mkey, u, p.hostname(), p.os());
         store.clearPending(mkey);
         return n;
     }
 
-    private Decision register(String mkey, String user, String hostname, String os, boolean admin) throws IOException {
+    /** Whether a user name already means someone on this hub (a node, an admin, or an owner of names). */
+    boolean taken(String user) {
+        return store.userExists(user);
+    }
+
+    private Decision registerFrom(String mkey, Store.InviteRec inv, String self, String hostname, String os) throws IOException {
+        // An invite pinned to a user was written by someone the hub let name them; an invite that
+        // names nobody leaves the choice to whoever redeems it, which is not the same authority.
+        return inv.user() != null
+            ? register(mkey, inv.user(), hostname, os, inv.admin(), true)
+            : register(mkey, self, hostname, os, inv.admin(), false);
+    }
+
+    /**
+     * {@code vouched} says the user name came from the credential or from an operator, rather than
+     * from the joining node. The hub keys admin rights and name ownership on that string, so a node
+     * that picks its own may not pick one that already means someone: doing so would make joining
+     * as "alice" enough to be alice, admin rights included.
+     */
+    private Decision register(String mkey, String user, String hostname, String os, boolean admin, boolean vouched) throws IOException {
         if (user == null || user.isBlank()) {
             return rejected("user-required");
+        }
+        if (!vouched && taken(user)) {
+            LOG.warn("refused a node asking to join as {}: that user exists and nothing authorised the name", user);
+            return rejected("user-taken");
         }
         Store.NodeRec n = store.registerNode(mkey, user, hostname, os);
         store.clearPending(mkey);

@@ -158,15 +158,36 @@ final class Links {
     }
 
     /**
-     * ARCHITECTURE.md §8.3: the node brings its own certificate for its own domain; a chain that
-     * validates is the proof of ownership. Pure SNI passthrough afterwards, no signing.
+     * Why {@code node} may not claim {@code domain}, or null: {@code bad-domain} for a name that is
+     * not a domain or is the hub's own, {@code taken} for one another user holds. One rule for the
+     * claim itself and for relaying its http-01 challenge, decided by user like a name (§8.2): a
+     * domain does not move between users on a claim alone — the operator takes it back with
+     * {@code domain release} and the new owner claims it then, so a hijack cannot pass for a
+     * handover.
+     */
+    String domainRefusal(Store.NodeRec node, String domain) {
+        if (!DomainVerifier.validName(domain) || domain.equals(config.hostname()) || domain.endsWith("." + config.hostname())) {
+            return "bad-domain";
+        }
+        Store.DomainRec prior = store.domain(domain);
+        if (prior != null && !prior.user().equals(node.user())) {
+            LOG.warn("node {} ({}) claimed {}, held by {}: refused", node.mkey(), node.user(), domain, prior.user());
+            return "taken";
+        }
+        return null;
+    }
+
+    /**
+     * ARCHITECTURE.md §8.3: the node brings its own certificate for its own domain, and proves it
+     * holds that certificate's private key. Pure SNI passthrough afterwards, no signing.
      */
     private Message openDomain(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
         String domain = req.domain().toLowerCase(Locale.ROOT);
-        if (!DomainVerifier.validName(domain) || domain.equals(config.hostname()) || domain.endsWith("." + config.hostname())) {
-            return new Message.LinkOpened(null, null, null, null, "bad-domain");
+        String refusal = domainRefusal(node, domain);
+        if (refusal != null) {
+            return new Message.LinkOpened(null, null, null, null, refusal);
         }
-        String problem = domains.verify(domain, req.chainPem());
+        String problem = domains.verify(domain, req.chainPem(), s.handshakeHash(), req.domainProof());
         if (problem != null) {
             return new Message.LinkOpened(null, null, null, null, problem);
         }

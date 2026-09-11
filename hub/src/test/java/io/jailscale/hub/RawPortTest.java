@@ -160,6 +160,22 @@ class RawPortTest {
             writer.join();
         }
 
+        // The `gate` command is refused on a raw link too, not only `open --gate`. It used to set
+        // the gate, save it and print a visit link, while the raw path served every visitor
+        // without looking at a token.
+        JsonObject gate = Ipc.call(sock, JsonObject.builder().put("cmd", "gate").put("name", "tcp/" + tcpPort).build());
+        assertTrue(!gate.optBool("ok", false), gate.toString());
+        assertTrue(gate.toString().contains("https"), gate.toString());
+        JsonObject rows = Ipc.call(sock, JsonObject.builder().put("cmd", "ls").build());
+        assertTrue(!rows.toString().contains("\"gate\":true"), rows.toString());
+        // and the port still serves, so the refusal did not break the link
+        try (Socket v = new Socket("127.0.0.1", tcpPort)) {
+            v.getOutputStream().write("hi".getBytes(StandardCharsets.UTF_8));
+            v.getOutputStream().flush();
+            v.shutdownOutput();
+            assertArrayEquals("hi".getBytes(StandardCharsets.UTF_8), new DataInputStream(v.getInputStream()).readNBytes(2));
+        }
+
         // A second raw link gets a different port; a requested port is honoured.
         JsonObject udp = Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", echoUdp.getLocalPort()).put("kind", "udp")
             .put("hubPort", lo + 2).build());

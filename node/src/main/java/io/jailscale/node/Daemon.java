@@ -7,6 +7,7 @@ import io.jailscale.proto.http.Http;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.tls.DomainProof;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
@@ -117,12 +118,22 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
-        List<String> chain = null;
-        if (rec.domain != null) {
-            chain = domainMaterial(rec, false).chainPem();
-        }
-        Message r = link.request(new Message.LinkOpen(rec.kind, rec.name, rec.domain, rec.hubPort > 0 ? rec.hubPort : null, rec.local(), chain),
-            "LinkOpened", REPLY_TIMEOUT_MS);
+        DomainCerts.Material material = rec.domain == null ? null : domainMaterial(rec, false);
+        List<String> chain = material == null ? null : material.chainPem();
+        Message r = link.request(handshakeHash -> {
+            byte[] proof = null;
+            if (material != null) {
+                // The chain says which certificate; the proof says we hold its key. Signed over
+                // the handshake hash of the connection the claim goes out on, so it is good for
+                // this claim on this connection only.
+                try {
+                    proof = DomainProof.sign(material.key(), handshakeHash, rec.domain);
+                } catch (GeneralSecurityException e) {
+                    throw new IOException("cannot prove " + rec.domain + " with its certificate key: " + e.getMessage(), e);
+                }
+            }
+            return new Message.LinkOpen(rec.kind, rec.name, rec.domain, rec.hubPort > 0 ? rec.hubPort : null, rec.local(), chain, proof);
+        }, "LinkOpened", REPLY_TIMEOUT_MS);
         if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
             if (lo.hubPort() != null) {
                 rec.hubPort = lo.hubPort();
@@ -175,6 +186,14 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 NodeState.LinkRec rec = state.linkByName(req.string("name"));
                 if (rec == null) {
                     reply.error("no link named " + req.string("name"));
+                    return;
+                }
+                // The same rule `open --gate` applies (§9.3). Without it this arms a gate on a raw
+                // link, saves it, prints a visit link and reports the link as gated, while the raw
+                // path serves every visitor without looking at it: a control that is on in the
+                // status output and absent on the wire is worse than one that was never offered.
+                if (!Message.LinkOpen.HTTPS.equals(rec.kind) && !req.optBool("off", false)) {
+                    reply.error("the gate is for https links; raw tcp/udp links have no HTTP to gate");
                     return;
                 }
                 if (req.optBool("off", false)) {
@@ -556,7 +575,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 .put("nodeId", r.nodeId()).put("user", r.user()));
             case Message.RegisterResponse.PENDING -> reply.done(JsonObject.builder().put("ok", true).put("status", "pending")
                 .put("machineKey", state.machineKeyText()));
-            default -> reply.error("registration rejected: " + r.reason());
+            default -> reply.error(HubLink.rejectionText(r.reason()));
         }
     }
 
