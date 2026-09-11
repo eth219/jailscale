@@ -134,6 +134,12 @@ final class NodeGroup {
         return java.util.Set.copyOf(visitors.keySet());
     }
 
+    /** How many signatures a visitor stream has used, or -1 if it is not open (tests). */
+    int signaturesUsed(long streamId) {
+        VisitorStream vs = visitors.get(streamId);
+        return vs == null ? -1 : vs.signatures();
+    }
+
     /** Where the relay hands the visitor's first bytes so the hub can see the ClientHello it delivered. */
     Tls13.Tap clientSide(MuxStream stream) {
         Long id = streamIds.get(stream);

@@ -284,6 +284,10 @@ class LinkEndToEndTest {
             stalled.getOutputStream().flush();
             waitFor(() -> !bobGroup.visitorIds().isEmpty());
             long streamId = bobGroup.visitorIds().iterator().next();
+            // Let bob's own, honest signature for this stream go through first. A forged request
+            // sent while it is in flight would be answered under the same reply key and fail the
+            // honest handshake instead, closing the stream before the check below is reached.
+            waitFor(() -> bobGroup.signaturesUsed(streamId) >= 1);
 
             byte[] content = java.util.Arrays.copyOf(HubTls.CERT_VERIFY_CONTEXT, HubTls.CERT_VERIFY_CONTEXT.length + 32);
             java.util.Arrays.fill(content, HubTls.CERT_VERIFY_CONTEXT.length, content.length, (byte) 0x5a);
