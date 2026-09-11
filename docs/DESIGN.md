@@ -369,6 +369,9 @@ jailhub serve --base-url https://hub.example.com
 - **ECDSA를 고르는 이유.** 노드가 위임받는 개인키 연산이 **서명 하나**뿐이게 하기 위해서다.
   RSA 키 교환은 복호화가 필요하므로 그 스위트를 끈다 (§9.3).
 - **지원 범위.** ACME v2, dns-01만. External Account Binding(ZeroSSL 등)은 v1 밖.
+- **노드의 `--ca-file`은 상태에 남는다.** 사설 CA나 스테이징 루트로 붙인 노드는 그 경로를 계속
+  쓰므로, hub이 다른 CA의 인증서로 바뀌면 스스로 복구하지 못한다. `jailscale up --hub <이름>`을
+  `--ca-file` 없이 다시 실행하면 지워진다. 스테이징에서 운영으로 넘어갈 때 실제로 걸린다.
 - **직접 주는 인증서** `--tls-cert/--tls-key`: 사내 CA나 53을 열 수 없는 환경. 와일드카드 SAN이
   있어야 하며, 파일 변경 감지 시 리로드하고 노드에 push한다.
 - **포트 바인딩 권한.** Linux에서 443/53은 root 또는 `CAP_NET_BIND_SERVICE`. 참조 systemd
@@ -1040,9 +1043,31 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 |---|---|---|
 | **M0** ✅ | 프로젝트 골격 · Maven wrapper · GraalVM native 빌드 파이프라인 · `crypto`(BLAKE2s·HKDF·X25519·ChaCha·Noise IK) | RFC 7693/7748/8439 벡터와 noise-c IK 벡터 통과. `./native.sh`로 node·hub 바이너리 생성. 기준선: 4.9 MiB, RSS 8.4 MB, 콜드 스타트 5 ms (자리표시자 main) |
 | **M1** ✅ | 컨트롤 채널 · 자체 HTTP/1.1 · hkey 부트스트랩·회전 · 버전 협상 · mux(스트림 0만) · 초대·코드·auth-key·두드리기 · **로컬 IPC (노드·hub)** · 파일 저장소 · `./measure.sh` | `jailscale invite`로 만든 링크로 다른 기기가 `jailscale up --invite`만으로 가입한다(loopback e2e 테스트 + native 프로세스로 확인). 키 회전 후 노드가 끊기지 않는다. 실측(arm64 macOS): 바이너리 24 MiB, **노드 아이들 RSS 23.8 MB(목표 20)**, hub 24.2 MB, CLI 콜드 스타트 6 ms. 인증서는 M2의 ACME 전까지 `--tls-cert/--tls-key` |
-| **M2** ✅ | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림 · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3007 --name demo` 후 `curl`이 hub→노드를 거쳐 로컬 앱을 받는다(native 프로세스로 확인). 서명 오라클 테스트 통과. ACME는 테스트 CA(mock)로 dns-01·CSR·발급·재시작 재사용까지 통과. 실측(loopback, arm64): 방문자 전체 핸드셰이크 2.3 ms(hub 서명 왕복 포함), 노드 RSS 26.6 MB, hub 26.2 MB. **남은 것**: 실제 도메인에서 Let's Encrypt 스테이징 발급 확인, 노드당 다중 연결(§8)은 M3로 이월 |
-| **M3** ✅ | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · 노드당 다중 연결(§8, M2에서 이월) · **hub 무중단 교체(§7.7)** | 게이트 링크 없이는 403, 방문 링크로 302+쿠키. Upgrade 에코 앱이 그대로 통과. `/admin`은 관리자 노드의 `jailscale admin` 일회용 링크로 로그인하고 승인·초대·설정을 바꾼다(설정은 저장소에 있어 재시작 후에도 유지). `--domain`은 노드가 hub을 통해 http-01을 치르고 자기 키로 종단한다(mock CA, 재시작 시 인증서 재사용). `open --tcp`는 200 KB 에코 왕복, `--udp`는 주소별 DGRAM 스트림 왕복. `--connections 2`로 스트림이 두 연결에 나뉜다. `serve --takeover`로 진행 중 스트림이 끊기지 않는다. 테스트 84개. native 프로세스로 raw tcp·https 이름·port-80 리다이렉트·admin 링크 확인. 실측(arm64 macOS): 바이너리 27.2/27.3 MiB(M2 24; 노드에 `java.net.http`가 들어옴, §15), 노드 아이들 RSS 24.8 MB, hub 25.1 MB, CLI 콜드 스타트 6.1 ms. **남은 것**: 실제 Let's Encrypt 스테이징(hub 와일드카드·노드 사용자 도메인 모두), 브라우저 3종 확인 |
-| **M4** ✅ | 릴리스 패키징 (5개 플랫폼 + fallback JAR) · 서비스 등록(systemd/launchd/Windows) · 참조 systemd 유닛 · Dockerfile · **nginx stream / HAProxy 참조 설정 + PROXY 프로토콜** · 퍼징·부하 · 예산 게이트 확정 · ACME 전송을 자체 HTTP 클라이언트로 교체(`java.net.http` 제거) | `.github/workflows/release.yml`이 태그마다 linux/darwin × amd64/arm64 + windows-amd64 native와 fallback JAR(`target/jailscale.jar`, `jailhub.jar`)을 릴리스에 붙인다. `deploy/`에 systemd 유닛(reload = takeover)·Dockerfile(distroless)·nginx stream·HAProxy·Homebrew formula. `jailscale service install`. PROXY v1/v2 e2e 테스트에서 방문자 IP가 hub 한도·로그·로컬 앱(`open --proxy-protocol`)까지 정확히 전달된다. 퍼징(SNI·HTTP·mux·JSON·코덱·PROXY·DNS, 각 1만~2만 케이스)이 PROXY v1 호스트명 DNS 조회 문제를 찾았고, 부하 테스트(1,000 동시 방문자)가 다중 연결 스트림 id 충돌과 서명 한도(50/s) 문제를 찾았다. 실측(arm64 macOS, native, `LOAD=1000 ./measure.sh --check`): 바이너리 24.9/25.2 MiB, 아이들 RSS hub 24.6 / 노드 24.4 MB, 방문자 1,000명 동시 접속 1,000/1,000 성공 0.5초, 직후 RSS hub 75.5 / 노드 102.8 MB(방문자당 약 50/80 KB, TLS 세션 버퍼), CLI 6.3 ms. 게이트 통과. **남은 것**: 실제 Let's Encrypt 스테이징, 브라우저 3종, Windows·Linux에서 `service install` 실기 확인, 태그 릴리스 1회 실행 |
+| **M2** ✅ | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림 · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3007 --name demo` 후 `curl`이 hub→노드를 거쳐 로컬 앱을 받는다(native 프로세스로 확인). 서명 오라클 테스트 통과. ACME는 테스트 CA(mock)로 dns-01·CSR·발급·재시작 재사용까지 통과. 실측(loopback, arm64): 방문자 전체 핸드셰이크 2.3 ms(hub 서명 왕복 포함), 노드 RSS 26.6 MB, hub 26.2 MB. **확인 완료**: 실제 도메인·실제 CA 발급은 아래 실물 검증 참조. 노드당 다중 연결(§8)은 M3로 이월 |
+| **M3** ✅ | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · 노드당 다중 연결(§8, M2에서 이월) · **hub 무중단 교체(§7.7)** | 게이트 링크 없이는 403, 방문 링크로 302+쿠키. Upgrade 에코 앱이 그대로 통과. `/admin`은 관리자 노드의 `jailscale admin` 일회용 링크로 로그인하고 승인·초대·설정을 바꾼다(설정은 저장소에 있어 재시작 후에도 유지). `--domain`은 노드가 hub을 통해 http-01을 치르고 자기 키로 종단한다(mock CA, 재시작 시 인증서 재사용). `open --tcp`는 200 KB 에코 왕복, `--udp`는 주소별 DGRAM 스트림 왕복. `--connections 2`로 스트림이 두 연결에 나뉜다. `serve --takeover`로 진행 중 스트림이 끊기지 않는다. 테스트 84개. native 프로세스로 raw tcp·https 이름·port-80 리다이렉트·admin 링크 확인. 실측(arm64 macOS): 바이너리 27.2/27.3 MiB(M2 24; 노드에 `java.net.http`가 들어옴, §15), 노드 아이들 RSS 24.8 MB, hub 25.1 MB, CLI 콜드 스타트 6.1 ms. **확인 완료**: hub 와일드카드와 노드 사용자 도메인 모두 실제 Let's Encrypt로 발급. 아래 실물 검증 참조 |
+| **M4** ✅ | 릴리스 패키징 (5개 플랫폼 + fallback JAR) · 서비스 등록(systemd/launchd/Windows) · 참조 systemd 유닛 · Dockerfile · **nginx stream / HAProxy 참조 설정 + PROXY 프로토콜** · 퍼징·부하 · 예산 게이트 확정 · ACME 전송을 자체 HTTP 클라이언트로 교체(`java.net.http` 제거) | `.github/workflows/release.yml`이 태그마다 linux/darwin × amd64/arm64 + windows-amd64 native와 fallback JAR(`target/jailscale.jar`, `jailhub.jar`)을 릴리스에 붙인다. `deploy/`에 systemd 유닛(reload = takeover)·Dockerfile(distroless)·nginx stream·HAProxy·Homebrew formula. `jailscale service install`. PROXY v1/v2 e2e 테스트에서 방문자 IP가 hub 한도·로그·로컬 앱(`open --proxy-protocol`)까지 정확히 전달된다. 퍼징(SNI·HTTP·mux·JSON·코덱·PROXY·DNS, 각 1만~2만 케이스)이 PROXY v1 호스트명 DNS 조회 문제를 찾았고, 부하 테스트(1,000 동시 방문자)가 다중 연결 스트림 id 충돌과 서명 한도(50/s) 문제를 찾았다. 실측(arm64 macOS, native, `LOAD=1000 ./measure.sh --check`): 바이너리 24.9/25.2 MiB, 아이들 RSS hub 24.6 / 노드 24.4 MB, 방문자 1,000명 동시 접속 1,000/1,000 성공 0.5초, 직후 RSS hub 75.5 / 노드 102.8 MB(방문자당 약 50/80 KB, TLS 세션 버퍼), CLI 6.3 ms. 게이트 통과. **남은 것**: Windows·Linux에서 `service install` 실기 확인, 태그 릴리스 1회 실행. 그 외는 아래 실물 검증 참조 |
+
+**실물 검증 (2026-09-11)**
+
+루프백과 목 CA로만 확인되던 경로를 실제 도메인·실제 CA·실제 인터넷에서 한 번씩 돌렸다. hub은
+GCP 서울 e2-micro(Debian 12), 노드는 arm64 macOS, 도메인은 Cloudflare가 NS를 쥔 실제 등록
+도메인이다.
+
+| 경로 | 결과 |
+|---|---|
+| hub 와일드카드, dns-01 (§6.3) | 스테이징·운영 모두 발급. CA가 hub의 53번에 직접 질의해 통과 |
+| 사용자 도메인, http-01 중계 (§9.4) | 운영 발급. 키·인증서는 노드에만, hub에는 없음 |
+| 원격 서명 위임 (§9.3) | 인터넷 경유 방문자 요청 200, 왕복 0.06초 |
+| 무중단 교체 (§7.7) | 다운로드 진행 중 교체, 200/200 바이트 무손실 |
+| 공개 신뢰 체인 | 시스템 신뢰만으로 검증(`--cacert` 불필요), 브라우저 접속 확인 |
+| 릴리스 워크플로 | 5개 플랫폼 통과, 아티팩트 5개 |
+
+검증 중 드러난 것 셋. hub의 DNS 응답기는 GCP Debian 12에서 `0.0.0.0:53`에 붙지 못한다.
+systemd-resolved가 127.0.0.53과 127.0.0.54를 쥐고 있어 §6.3이 예상한 대로 내부 IP를 지정해야
+한다(외부 IP는 NAT로 넘어오므로 CA 질의는 정상 도달). 노드는 `--ca-file`을 상태에 영구
+저장하므로, hub이 스테이징에서 운영 인증서로 바뀌면 그 노드는 스스로 복구하지 못하고
+`jailscale up --hub <이름>`을 인자 없이 다시 실행해 지워야 한다. 그리고 `--acme-email`은
+스테이징에 불필요하다.
 
 **테스트 전략 (마일스톤 공통)**
 
