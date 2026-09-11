@@ -63,6 +63,23 @@ class MuxSessionTest {
         }
     }
 
+    /**
+     * Both sessions eventually drop every fully closed stream. "Eventually" is the guarantee:
+     * {@code onClose} wakes the blocked reader inside the stream lock and only calls
+     * {@code maybeRemove} after releasing it, so a reader can see -1 a few instructions before
+     * the entry leaves the map. Asserting it the moment {@code read()} returns failed 6 times in
+     * 240 runs. A real leak still fails here, just five seconds later.
+     */
+    private static void awaitNoStreams(Pair p) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (System.currentTimeMillis() < deadline
+            && (p.hub().streamCount() != 0 || p.node().streamCount() != 0)) {
+            Thread.sleep(10);
+        }
+        assertEquals(0, p.hub().streamCount(), "hub kept a closed stream registered");
+        assertEquals(0, p.node().streamCount(), "node kept a closed stream registered");
+    }
+
     private static Pair pair() throws Exception {
         X25519.Keypair hk = X25519.generate();
         X25519.Keypair nk = X25519.generate();
@@ -133,8 +150,7 @@ class MuxSessionTest {
         assertEquals("late", new String(hs.in().readNBytes(4)));
         ns.close();
         assertEquals(-1, hs.in().read());
-        assertEquals(0, p.hub().streamCount());
-        assertEquals(0, p.node().streamCount());
+        awaitNoStreams(p);
 
         MuxStream odd = p.node().open(JsonObject.builder().put("k", "v").build(), false);
         assertEquals(1, odd.id());
