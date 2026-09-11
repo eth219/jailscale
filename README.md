@@ -160,4 +160,4 @@ jailscale open 3000 --domain app.example.com
 
 ## 라이선스
 
-아직 정해지지 않았다. 저장소에 `LICENSE` 파일이 없으므로 현재로서는 전권 보유 상태다.
+[Apache-2.0](LICENSE).

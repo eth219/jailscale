@@ -12,6 +12,14 @@
   <name>jailscale</name>
   <description>A self-hosted tunnel in Java: SNI-passthrough hub, node-terminated TLS with hub-side signing, wildcard ACME via built-in DNS-01, invite-based membership (no IdP)</description>
 
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
   <modules>
     <module>crypto</module>
     <module>proto</module>
