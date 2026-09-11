@@ -17,11 +17,11 @@ final class AdminWeb {
     private static final Log LOG = Log.get("admin");
     static final long LOGIN_LINK_TTL_MS = 60_000;
     static final long SESSION_TTL_MS = 12 * 3600 * 1000L;
-    static final String COOKIE = "jailhub_admin";
+    static final String COOKIE = "__Host-jailhub_admin";
 
-    private record Login(String user, long expiresAt) {}
+    private record Login(String user, boolean shell, long expiresAt) {}
 
-    private record Session(String user, long expiresAt, String csrf) {}
+    private record Session(String user, boolean shell, long expiresAt, String csrf) {}
 
     private final Hub hub;
     private final Map<String, Login> logins = new ConcurrentHashMap<>();
@@ -33,32 +33,66 @@ final class AdminWeb {
 
     /** A one-time URL that logs {@code user} in for the next minute. */
     String loginLink(String user) {
+        return loginLink(user, false);
+    }
+
+    /**
+     * As above, but {@code shell} marks a link issued over the admin IPC socket. That caller is
+     * authorised by the socket's file permissions (§7.6) and has no entry in the admin list, so
+     * it is exempt from the per-request admin re-check rather than being looked up there.
+     */
+    String loginLink(String user, boolean shell) {
+        prune();
         String token = Tokens.inviteToken();
-        logins.put(token, new Login(user, System.currentTimeMillis() + LOGIN_LINK_TTL_MS));
+        logins.put(token, new Login(user, shell, System.currentTimeMillis() + LOGIN_LINK_TTL_MS));
         return hub.config().baseUrl() + "/admin/login/" + token;
+    }
+
+    /**
+     * Drops what has expired. Nothing else removed these: an unused login token and every
+     * logged-out-by-time session stayed in the map for the life of the process.
+     */
+    private void prune() {
+        long now = System.currentTimeMillis();
+        logins.entrySet().removeIf(e -> now > e.getValue().expiresAt());
+        sessions.entrySet().removeIf(e -> now > e.getValue().expiresAt());
     }
 
     HttpResponse handle(HttpRequest req) throws IOException {
         String path = req.path();
+        prune();
         if (path.startsWith("/admin/login/")) {
             Login l = logins.remove(path.substring("/admin/login/".length()));
             if (l == null || System.currentTimeMillis() > l.expiresAt()) {
                 return HttpResponse.html(403, page("로그인 링크가 만료되었습니다", "<p>노드에서 <code>jailscale admin</code>을 다시 실행하세요.</p>"));
             }
             String sid = Tokens.inviteToken();
-            sessions.put(sid, new Session(l.user(), System.currentTimeMillis() + SESSION_TTL_MS, Tokens.inviteToken()));
+            sessions.put(sid, new Session(l.user(), l.shell(), System.currentTimeMillis() + SESSION_TTL_MS, Tokens.inviteToken()));
             LOG.info("admin {} logged in", l.user());
-            return HttpResponse.redirect("/admin")
-                .header("Set-Cookie", COOKIE + "=" + sid + "; Path=/admin; Secure; HttpOnly; SameSite=Lax; Max-Age=" + SESSION_TTL_MS / 1000);
+            return HttpResponse.redirect("/admin").header("Set-Cookie", cookie(sid, SESSION_TTL_MS / 1000));
         }
         Session s = session(req);
         if (s == null) {
             return HttpResponse.html(403, page("jailhub 관리", "<p>관리자 노드에서 <code>jailscale admin</code>을 실행하면 로그인 링크가 열립니다.</p>"));
         }
+        // Admin rights are checked again on every request, not only when the link was issued.
+        // Without this, `admin remove` left the removed admin's browser working until the twelve
+        // hour session lapsed.
+        if (!authorized(s)) {
+            sessions.values().removeIf(v -> v == s);
+            LOG.warn("session for {} is no longer an admin; signed out", s.user());
+            return HttpResponse.html(403, page("권한이 없습니다", "<p>이 계정은 더 이상 관리자가 아닙니다.</p>"))
+                .header("Set-Cookie", cookie("", 0));
+        }
         if (req.method().equals("POST")) {
             Map<String, String> f = req.form();
             if (!s.csrf().equals(f.get("csrf"))) {
                 return HttpResponse.text(403, "bad csrf token");
+            }
+            if (path.equals("/admin/logout")) {
+                sessions.values().removeIf(v -> v == s);
+                LOG.info("admin {} signed out", s.user());
+                return HttpResponse.redirect("/admin").header("Set-Cookie", cookie("", 0));
             }
             try {
                 act(path, f, s);
@@ -71,6 +105,16 @@ final class AdminWeb {
             return HttpResponse.text(404, "not found");
         }
         return HttpResponse.html(200, render(s));
+    }
+
+    /** The local shell is authorised by the IPC socket's permissions; everyone else by the list. */
+    private boolean authorized(Session s) {
+        return s.shell() || hub.store().isAdmin(s.user());
+    }
+
+    /** {@code __Host-} forbids a Domain attribute and requires Path=/ and Secure. */
+    private static String cookie(String sid, long maxAgeSeconds) {
+        return COOKIE + "=" + sid + "; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=" + maxAgeSeconds;
     }
 
     private Session session(HttpRequest req) {
@@ -150,6 +194,7 @@ final class AdminWeb {
             .append(" · 노드 ").append(store.nodes().size()).append(" · 온라인 ").append(hub.registry().size())
             .append(" · 링크 ").append(hub.links().all().size()).append("</p>");
         String csrf = "<input type=hidden name=csrf value=\"" + s.csrf() + "\">";
+        b.append("<form method=post action=/admin/logout>").append(csrf).append("<button>로그아웃</button></form>");
 
         b.append("<h2>승인 대기</h2>");
         if (store.pending().isEmpty()) {

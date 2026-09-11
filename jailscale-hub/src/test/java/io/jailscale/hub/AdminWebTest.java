@@ -149,9 +149,41 @@ class AdminWebTest {
         assertTrue(!inv.optBool("ok", false) && inv.string("error").startsWith("policy"), inv.toString());
         assertTrue(Ipc.call(bSock, JsonObject.builder().put("cmd", "invite").put("self", true).build()).optBool("ok", false));
 
-        // The shell login link works too.
+        // The shell login link works too, and keeps working: it is authorised by the IPC socket's
+        // permissions and has no entry in the admin list for the per-request check to find.
         JsonObject shell = Ipc.call(root.resolve("hub/jailhub.sock"), JsonObject.builder().put("cmd", "admin-login-link").build());
-        assertEquals(302, http("GET", URI.create(shell.string("url")).getPath(), null, null).status());
+        HttpResponse shellLogin = http("GET", URI.create(shell.string("url")).getPath(), null, null);
+        assertEquals(302, shellLogin.status());
+        String shellCookie = shellLogin.headers().get("Set-Cookie");
+        shellCookie = shellCookie.substring(0, shellCookie.indexOf(';'));
+        assertEquals(200, http("GET", "/admin", shellCookie, null).status());
+
+        // The cookie carries the __Host- prefix, which bars a Domain attribute. Node links live on
+        // siblings of the hub's own name, so without it a node could plant this cookie.
+        assertTrue(setCookie.startsWith("__Host-"), setCookie);
+        assertTrue(setCookie.contains("Path=/;") && setCookie.contains("Secure"), setCookie);
+
+        // Losing admin ends the session immediately rather than at its twelve hour expiry.
+        assertEquals(200, http("GET", "/admin", cookie, null).status());
+        hub.store().removeAdmin("alice");
+        assertEquals(403, http("GET", "/admin", cookie, null).status(), "removed admin kept access");
+        assertEquals(403, http("POST", "/admin/approve", cookie, "csrf=" + csrf).status(), "removed admin could still act");
+
+        // Logging out drops the session.
+        hub.store().addAdmin("alice");
+        HttpResponse back = http("GET", URI.create(Ipc.call(aSock, JsonObject.builder().put("cmd", "admin").build())
+            .string("url")).getPath(), null, null);
+        String c2 = back.headers().get("Set-Cookie");
+        c2 = c2.substring(0, c2.indexOf(';'));
+        String csrf2 = csrfOf(http("GET", "/admin", c2, null).bodyText());
+        assertEquals(302, http("POST", "/admin/logout", c2, "csrf=" + csrf2).status());
+        assertEquals(403, http("GET", "/admin", c2, null).status(), "session survived logout");
+    }
+
+    private static String csrfOf(String html) {
+        Matcher m = Pattern.compile("name=csrf value=\"([^\"]+)\"").matcher(html);
+        assertTrue(m.find(), html);
+        return m.group(1);
     }
 
     private static String enc(String s) {
