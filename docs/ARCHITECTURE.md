@@ -110,6 +110,13 @@ fetches is pinned with `distributionSha256Sum`. Keeping the supply-chain surface
 of this section. `-Pnative` produces the binaries, CI covers linux and macos on amd64 and arm64 plus
 windows-amd64, and each release also ships `jailscale.jar` and `jailhub.jar` for JVM 25.
 
+**Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu and macos for
+every push and pull request, the §14 budget on main and nightly, and Windows nightly rather than
+per push, because the Windows stall below fails about 2% of runs through no fault of ours and a
+gate that is red 2% of the time teaches people to ignore it. `release` builds the five native
+targets on a tag. The container images build with `-DskipTests`, deliberately: they are packaging,
+not verification.
+
 Two toolchain hazards are load-bearing. **JDK 25.0.0 to 25.0.2 must not be used**: moving
 virtual-thread timed park onto ForkJoinPool delayed tasks (JDK-8351927) made cancelling a delayed
 task corrupt the scheduler heap, so other threads' `Thread.sleep` wakes late or never (JDK-8370887),
@@ -934,8 +941,10 @@ node daemons on loopback, joins them with the real CLI and opens a link.
 | RSS with 1,000 visitor sessions held open | node 87 MB, hub 77 MB | node 192 MB, hub 160 MB |
 | CLI cold start | about 6 ms (`jailscale status`, median of 10, IPC round trip included) | 50 ms |
 
-`./measure.sh --check` fails when a number exceeds its budget and runs in CI. The budget values live
-at the top of the script and must match this table; they change only by a PR that states a reason.
+`./measure.sh --check` fails when a number exceeds its budget. The budget values live at the top of
+the script and must match this table; they change only by a PR that states a reason. The `budget` job
+of the `ci` workflow runs it with `LOAD=1000` on every push to main and once a night, on
+linux-amd64 rather than the arm64 macOS of the table, so the budgets have to hold on both.
 
 **Load is measured with the connections held open.** An earlier gate fired 1,000 short requests with
 `curl --parallel` and finished, which means 1,000 were never alive at once and the figure was roughly
