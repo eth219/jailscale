@@ -796,6 +796,14 @@ are not cut, nodes reconnect with no backoff, and deploy and rollback are the sa
 router's 3-second wait for a claimed but momentarily offline name (§8.1) keeps the gap from becoming
 an error page.
 
+**Hand-off does not compose with a systemd unit.** It works by leaving a second process holding the
+listeners while the first exits, and under `Type=simple` the first process is the one systemd
+tracks: its exit stops the unit and the cgroup takes the new process with it. Tested, and the hub
+went inactive. Under systemd the upgrade is `systemctl restart`, which costs a few seconds while
+nodes reconnect. `deploy/jailhub.service` therefore has no `ExecReload`. Making the two work
+together would need the hub to speak the `sd_notify` protocol and hand the listening sockets over
+rather than rebind them, which is not implemented.
+
 ---
 
 ## 14. Current characteristics
@@ -840,6 +848,8 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 - **Certificate expiry is not warned about in advance.** Renewal is automatic on both sides at a
   third of the lifetime remaining, but a node that stays offline stops renewing and nothing counts
   down for the operator.
+- **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
+  is not zero-downtime.
 - **There is no standby hub.** Recovery is restoring one directory and changing DNS (§13).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.

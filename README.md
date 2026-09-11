@@ -109,8 +109,9 @@ What a compromised hub can and cannot do is written out in
 ## Not done yet
 
 - No production track record. The hub above has been up since 2026-09-11.
-- The hub is a single process on a single host. Replacing it without dropping
-  nodes works (`serve --takeover`), but losing the host means downtime.
+- The hub is a single process on a single host. Losing the host means downtime.
+  Replacing the binary without dropping nodes works with `serve --takeover`, but
+  not under a systemd unit, where an upgrade is a restart.
 - `service install` is verified on macOS only. Linux and Windows are untested
   outside CI.
 - The self-probe runs when you type `jailscale verify`. It should run on a

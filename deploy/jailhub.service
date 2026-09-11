@@ -4,9 +4,14 @@
 #   install -m 0644 jailhub.service /etc/systemd/system/
 #   systemctl enable --now jailhub
 #
-# Updates without dropping nodes: replace the binary, then `jailhub serve --takeover` as the
-# jailhub user (or `systemctl reload jailhub`, wired to ExecReload below). The old process
-# hands off and exits on its own; systemd keeps tracking the new one through the PID file.
+# Updating: replace the binary and `systemctl restart jailhub`. Nodes reconnect on their own and
+# the hub is back inside a few seconds.
+#
+# Not `systemctl reload`, and there is deliberately no ExecReload here. `serve --takeover` works by
+# starting a second process that takes the listeners and lets the first exit. Under a Type=simple
+# unit that first process is the one systemd tracks, so its exit stops the unit and takes the new
+# process down with the cgroup. Tried it: the hub went inactive. The hand-off is for operators who
+# run jailhub outside a unit.
 
 [Unit]
 Description=jailhub — jailscale hub (SNI router, control channel, ACME)
@@ -21,7 +26,6 @@ Group=jailhub
 Environment=JAILHUB_STATE=/var/lib/jailhub
 # Edit: your public name, and an e-mail for Let's Encrypt expiry notices.
 ExecStart=/usr/local/bin/jailhub serve --base-url https://hub.example.com --acme-email ops@example.com
-ExecReload=/usr/local/bin/jailhub serve --takeover --base-url https://hub.example.com --acme-email ops@example.com
 Restart=on-failure
 RestartSec=2s
 # jailhub binds 443, 80 and 53 as a non-root user:
