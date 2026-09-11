@@ -12,9 +12,10 @@
 # The state volume holds the machine key and the open links. Losing it means rejoining.
 
 FROM ghcr.io/graalvm/native-image-community:25 AS build
-# The base image ships neither wget nor curl, so the Maven wrapper downloads nothing and then
-# fails its own checksum check on the missing file. Install one before building.
-RUN microdnf install -y curl || dnf install -y curl || yum install -y curl
+# The Maven wrapper needs both. Without a downloader it fetches nothing; without unzip it
+# silently switches to the .tar.gz distribution, whose checksum is not the pinned .zip one, and
+# then reports the distribution as compromised. Neither is in the base image.
+RUN microdnf install -y curl unzip || dnf install -y curl unzip || yum install -y curl unzip
 WORKDIR /src
 COPY . .
 RUN ./mvnw -B -ntp -DskipTests -Pnative -pl node -am package

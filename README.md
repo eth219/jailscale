@@ -1,286 +1,140 @@
 # jailscale
 
-**자바로 어디까지 되는지 겪어보려고 만든 펀 프로젝트다.** [Tailscale](https://tailscale.com)과
-[gosuda/portal-tunnel](https://github.com/gosuda/portal-tunnel)에서 영감을 받아, 같은 문제를
-JVM 위에서 풀어보면 경량화·사용성·범용성·보안성이 각각 어디까지 가는지 재보는 것이 목적이다.
-쓸 만하게 만들었고 실제 도메인과 실제 CA로 동작을 확인했지만, 프로덕션에서 검증된 물건은
-아니다. 무엇이 보장되고 무엇이 안 되는지는 아래에 그대로 적었다.
+**Tailscale's control plane, plus portal-tunnel's keyless TLS, written with Claude.**
 
-하는 일은 이것이다. 로컬에서 도는 것을 인터넷에 HTTPS로 내놓는다.
-**중계하는 hub는 당신이 소유한다.**
+A self-hosted HTTPS tunnel. Nodes dial out to a hub you run and get a public
+`https://name.your-domain` address. The hub never sees plaintext: it forwards
+the TLS bytes untouched and the node terminates the session, using a wildcard
+certificate whose private key stays on the hub and is used only to sign the
+handshake.
+
+Two binaries, no runtime dependencies, nothing to install underneath them. No
+TUN device, no root, no inbound ports on the node.
+
+Full design and architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Usage
+
+A hub is running at **`jailscale.sinabro.io`**. You can point a node at it
+today. Joining puts you in an approval queue, so ask the operator to let you in.
 
 ```sh
-# 노드(내 노트북) — hub 운영자가 준 초대 링크 한 줄로 가입
-jailscale up --invite https://hub.example.com/join/TOKEN
+# 1. Join. The node knocks and waits for the hub operator to approve it.
+jailscale up --hub jailscale.sinabro.io
 
-# 로컬 3000번을 공개
-jailscale open 3000 --name demo
-# → https://demo.hub.example.com
+# 2. Publish a local port.
+jailscale open 3000
+#    https://a7f2k.jailscale.sinabro.io  ->  127.0.0.1:3000
+
+# 3. Or ask for a name.
+jailscale open 3000 --name myapp
+#    https://myapp.jailscale.sinabro.io  ->  127.0.0.1:3000
 ```
 
-방문자는 그 URL만 알면 된다. 노트북에는 **인터넷으로 열린 포트가 하나도 없다.** 포트포워딩도,
-공인 IP도, TUN 장치도, root 권한도 필요 없다.
+Other things a node can do:
 
----
-
-## 자바 위에서 무엇을 골랐나
-
-네 가지를 목표로 두고 스택을 골랐다. 각 선택이 무엇을 사서 무엇을 포기했는지 함께 적는다.
-
-| 목표 | 선택 | 결과 |
-|---|---|---|
-| 경량화 | **GraalVM Native Image** | 25 MiB 단일 파일, 아이들 25 MB, CLI 6.3 ms. 대신 리플렉션·DI·동적 로딩을 처음부터 금지해야 했다 |
-| 경량화 | **Virtual threads** | 스트림당 스레드 하나로 끝난다. 패킷 핫패스도 이벤트 루프도 없다 |
-| 범용성 | 네이티브 5종 + **fallback JAR** | 그 밖의 환경은 JVM 25로 돈다 |
-| 범용성 | **AF_UNIX IPC** | Windows 10 1803+ 포함 전 플랫폼 동일 경로 |
-| 보안성 | **JSSE + 자체 JCE Provider** | 개인키 없이 TLS를 종단한다. 서명만 hub에 위임 (§9.3) |
-| 보안성 | **의존성 0개** | 공급망 표면이 없다. JSON·HTTP/1.1·mux·ACME·DNS를 직접 갖는다 |
-| 사용성 | **와일드카드 한 장 + 내장 DNS-01** | 새 이름이 0초에 열린다. DNS 제공자 API 토큰이 필요 없다 |
-| 사용성 | **초대 링크 한 줄** | IdP 없이 가입. `jailscale up --invite <링크>` |
-
-암호는 JDK의 것(X25519, ChaCha20-Poly1305)을 쓰고, JDK에 없고 Noise가 요구하는
-BLAKE2s·HMAC·HKDF만 직접 구현한다. 직접 짠 암호를 줄이려는 선택이다.
-
-선택의 근거는 [DESIGN.md §4](docs/DESIGN.md)에 항목별 표로 있다.
-
-## 계보
-
-혼자 생각해낸 설계가 아니다. 두 프로젝트를 읽고 만들었다.
-
-- [**Tailscale**](https://tailscale.com) — 컨트롤 평면과 초대·auth-key 기반 멤버십. 노드↔hub
-  컨트롤 채널이 Noise로 hub 키에 고정되는 것도 ts2021과 같은 구조다. 처음 설계(v3)는 WireGuard
-  피어 메시였고 그 문서는 [DESIGN-v3-mesh.md](docs/DESIGN-v3-mesh.md)에 남아 있다.
-- [**gosuda/portal-tunnel**](https://github.com/gosuda/portal-tunnel) — SNI만 읽고 암호문을
-  그대로 넘기는 릴레이, 그리고 개인키를 릴레이에 두고 핸드셰이크 서명만 위임하는 키리스 구조.
-  이 저장소 §9.3의 원격 서명 위임이 같은 계열이다. Go로 구현되어 있다.
-
-키리스 TLS 자체는 더 거슬러 올라가면 Cloudflare Keyless SSL이다.
-
-## 무엇이 다른가
-
-localtunnel·ngrok·Cloudflare Tunnel·Tailscale Funnel·frp가 푸는 문제와 같다. 다른 것은
-**누구를 믿어야 하는가**이다.
-
-| | jailscale | ngrok · Cloudflare Tunnel | Tailscale Funnel | frp |
-|---|---|---|---|---|
-| 중계자 | 내 hub | 벤더 엣지 | 벤더 릴레이 | 내 서버 |
-| TLS 종단 위치 | **노드** | 벤더 엣지 | 노드 | 직접 구성 |
-| **중계자가 평문을 보는가** | **아니오** | **본다** | 아니오 | 구성에 따라 |
-| 중계자가 키를 쥐는가 | 와일드카드 키 보유 | 보유 | 미보유 | 해당 없음 |
-| TUN·root | 불필요 | 불필요 | TUN (userspace 모드 선택 가능) | 불필요 |
-| 인증서 | 와일드카드 한 장, 자동 | 자동 | 자동 | 직접 |
-
-**hub가 평문을 보지 못하는 것은 hub가 정직할 때의 이야기다.** 와일드카드 개인키는 hub에 있다.
-침해된 hub는 이름을 공격자 노드로 재배정하고 그 키로 서명해 그 이름의 트래픽을 가로챌 수 있다.
-무조건 성립하는 것은 사용자 도메인뿐이며, 그때는 키가 노드에만 있어 hub가 할 수 있는 일은
-라우팅을 끊는 것뿐이다. 막지는 못하지만 **알아챌 수는 있다.** `jailscale verify`가 자기 이름에
-접속해 그 TLS를 자신이 종단했는지 확인한다(아래 portal-tunnel 비교, [DESIGN.md §12.5](docs/DESIGN.md)).
-자세한 것은 [DESIGN.md §12.3](docs/DESIGN.md).
-
-### 같은 계열인 portal-tunnel과는
-
-릴레이 구조가 같으므로 비교는 "무엇을 믿느냐"가 아니라 **무엇을 더 했느냐**가 된다. 아래는
-2026-09-11 기준 양쪽 공개 README를 읽고 적은 것이며, "언급 없음"은 없다는 뜻이 아니라 그
-문서에서 확인하지 못했다는 뜻이다.
-
-| | jailscale | portal-tunnel |
-|---|---|---|
-| 구현 | Java, GraalVM 네이티브, 서드파티 의존성 0개 | Go |
-| hub 도메인 인증서 | **와일드카드 한 장.** hub이 스스로 권한 DNS가 되어 dns-01을 친다 | 언급 없음 |
-| 새 이름 여는 비용 | 0초 (이미 받은 와일드카드가 덮는다) | 언급 없음 |
-| 무중단 교체 | `serve --takeover`. 진행 중 스트림 유지 | 언급 없음 |
-| raw TCP/UDP | 있음 | 있음 |
-| 사용자 도메인 | 키가 **노드에만**. 서명 위임조차 없는 순수 통과 | 있음 |
-| 방문 링크 게이트 | 있음 | 언급 없음 |
-| **릴레이의 TLS 종단 탐지** | 있음 (`jailscale verify`) | 있음 (keying material 대조, ECH) |
-
-마지막 행은 원래 jailscale 쪽이 "없음"이었고, 그것을 보고 만들었다. `portal-tunnel`은 자기
-연결을 스스로 탐침해 양쪽에서 export한 TLS keying material을 비교하고, 불일치를 릴레이의 TLS
-종단으로 간주한다. jailscale도 이제 같은 것을 한다. 노드가 자신이 종단한 방문자 세션의 export
-값을 기억해 두고, `jailscale verify`가 공개 이름으로 접속해 그 값이 기억에 있는지 본다. 없으면
-중간의 누군가가 TLS를 종단한 것이다.
-
-**두 구현이 공유하는 것은 약점 쪽이다.** 침해된 릴레이가 트래픽을 가로챌 수 있다는 사실 자체는
-어느 쪽도 막지 못한다. 릴레이가 이름의 소유를 정하기 때문이다. 다른 것은 **알아챌 수 있느냐**
-하나뿐이고, 이제 양쪽 다 알아챌 수 있다. 탐지는 사후이므로 예방이 아니다.
-
-덧붙여, jailscale의 서명 4조건([DESIGN.md §12.1](docs/DESIGN.md))은 이 공격을 막지 못한다.
-그 조건을 검사하는 주체가 hub 자신이라 **악성 노드**를 막을 뿐 **악성 hub**에는 아무 말도 하지
-않는다. 자기 탐침은 노드가 돌리므로 정확히 반대쪽을 본다.
-
-### 키는 hub에, TLS는 노드가
-
-이 프로젝트에서 가장 특이한 부분이다.
-
-```
-방문자 ──ClientHello──► hub ──바이트 전달──► 노드 (TLS 종단)
-                                              │  트랜스크립트 해시
-                                              ├──서명 요청──► hub (조건 검사 후 서명)
-방문자 ◄──────────────── hub ◄──바이트────── 노드
+```sh
+jailscale open 3000 --gate                    # visitors need a one-time link
+jailscale open 22 --tcp                       # a raw TCP port, no TLS
+jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
+jailscale verify                              # check that this node, not the hub, terminated the TLS
+jailscale ls | close NAME | status | down
+jailscale service install                     # keep the daemon running across logins
 ```
 
-노드는 hub가 발급받은 와일드카드 **인증서**를 갖지만 **개인키는 없다.** TLS 1.3에서 개인키가
-하는 일은 `CertificateVerify` 서명 한 번뿐이므로, 노드는 그 한 번만 hub에 부탁한다. hub는
-트랜스크립트 해시만 보므로 평문을 복원할 수 없다. Cloudflare Keyless SSL과 같은 구조다.
+### Running your own hub
 
-hub는 아무 서명이나 해주지 않는다. 요청한 스트림이 **자기가 그 노드에 배달한 스트림**이고, 그
-스트림의 SNI가 **그 노드에 배정된 이름**이며, 스트림당 4회와 노드당 속도 한도 안일 때만 서명한다.
-그래서 노드가 침해되어도 공격자가 사칭할 수 있는 것은 원래 자기 이름뿐이다.
-
----
-
-## 무엇이 보장되는가
-
-| 보장 | 근거 |
-|---|---|
-| 노드는 인터넷에 포트를 하나도 열지 않는다 | 나가는 연결만 만든다. `lsof`로 0개 확인 |
-| `open`한 포트 외에는 아무것도 닿지 않는다 | 방문자가 볼 수 있는 것은 지정한 `host:port` 하나 (§12.2) |
-| 정상 동작 중 hub는 평문을 보지 못한다 | TLS를 노드가 종단한다 (§9.3) |
-| 노드가 침해돼도 사칭 범위는 자기 이름뿐 | 서명 4조건 (§12.1) |
-| 사용자 도메인은 hub를 신뢰하지 않아도 된다 | 키가 노드에만 있다 (§9.4) |
-| 인증서는 자동으로 받고 자동으로 갱신된다 | 와일드카드 dns-01, 잔여 수명 1/3 규칙 (§6.3) |
-| hub 교체 중 진행 중인 다운로드가 끊기지 않는다 | 핸드오프 (§7.7). 실제 인터넷에서 확인 |
-
-**보장되지 않는 것도 같은 무게로 적는다.** hub가 침해되면 이름을 재배정해 그 이름의 트래픽을
-가로챌 수 있다. hub는 단일 호스트이고 능동-능동이 아니다. 프로덕션 운영 실적이 없다.
-
-## 무엇이 보이고 무엇이 보이지 않는가
-
-익명성은 상대에 따라 다르다. 뭉뚱그리면 위험하므로 나눠 적는다.
-
-**방문자에게** 노드의 IP와 네트워크 위치는 드러나지 않는다. 방문자가 보는 주소는 hub의 것이다.
-노드가 여는 리슨 포트는 0개이고, 방문자가 닿을 수 있는 것은 `jailscale open`으로 지정한
-`host:port` 하나다. 같은 기기의 다른 서비스나 LAN은 보이지 않는다.
-
-**hub 운영자에게는 숨겨지지 않는다.** 누가 언제 어느 이름에 얼마나 접속했는지 보인다. 트래픽
-내용은 위에서 설명한 이유로 보이지 않지만, 그것도 hub가 정직할 때다. self-host라면 운영자는
-보통 자기 자신이다. **남의 hub에 붙는다는 것은 그 사람을 신뢰한다는 뜻이다.**
-
-가입만으로는 아무것도 열리지 않는다. 열리는 것은 `jailscale open`으로 지정한 포트뿐이고, `jailscale close`나
-`jailscale down`을 칠 때까지 열려 있다. 데몬을 재시작해도 열어 둔 목록은 그대로 복원된다.
-
----
-
-## 크기와 속도
-
-형용사 대신 측정값을 둔다. 전부 `./measure.sh --check`로 재현되며 예산을 넘으면 실패한다. 이 게이트는
-아직 로컬에서 돌리는 것이고 CI에는 걸려 있지 않다. 아래 값은 DESIGN.md §14의 M4 실측이다.
-
-| 측정 | 값 | 예산 |
-|---|---|---|
-| 바이너리 크기 | jailhub 24.9 / jailscale 25.2 MiB | ≤ 30 MiB |
-| 아이들 RSS | hub 24.6 / 노드 24.4 MB | ≤ 30 / 28 MB |
-| 방문자 1,000명 동시 접속 | 1,000/1,000 성공, 0.5초 | — |
-| 부하 직후 RSS | hub 75.5 / 노드 102.8 MB | ≤ 128 MB (목표는 더 낮다, §15) |
-| CLI 콜드 스타트 | 6.3 ms | ≤ 50 ms |
-
-측정 환경은 arm64 macOS의 네이티브 빌드다. 서버를 서울 GCP e2-micro에 두고 실제로 재보면
-인터넷 왕복이 0.06초였다.
-
----
-
-## 설치
-
-릴리스에서 플랫폼 바이너리를 받는다. linux/macOS × amd64/arm64와 windows-amd64를 제공하고,
-그 밖의 환경을 위해 JVM 25용 fallback JAR(`jailscale.jar`, `jailhub.jar`)도 함께 올린다.
-네이티브 바이너리는 런타임을 따로 설치할 필요가 없고, JAR는 JVM 25가 필요하다.
-
-### hub 세우기
-
-운영자가 준비할 것은 **DNS 레코드 셋과 포트 셋**이 전부다.
+You need a host with a public address, a domain, and ports 443, 80 and 53. The
+hub answers DNS for its own `_acme-challenge` name, so it issues its own
+wildcard certificate with no DNS provider API token.
 
 ```
-hub.example.com.                  A   203.0.113.10      ← 프록시 없이 직접
-*.hub.example.com.                A   203.0.113.10
-_acme-challenge.hub.example.com.  NS  hub.example.com.
+jailscale.example.com.                  A   203.0.113.10
+*.jailscale.example.com.                A   203.0.113.10
+_acme-challenge.jailscale.example.com.  NS  jailscale.example.com.
 ```
 
 ```sh
-jailhub serve --base-url https://hub.example.com --acme-email you@example.com
+jailhub serve --base-url https://jailscale.example.com --acme-email you@example.com
 ```
 
-hub가 `_acme-challenge` 이름의 권한 DNS 서버가 되어 스스로 dns-01 챌린지에 답하고, 와일드카드
-한 장을 받는다. 이름마다 인증서를 받지 않으므로 **새 이름은 0초에 열린다.** 필요한 포트는
-TCP 443과 DNS 53(UDP·TCP)이다. 80은 사용자 도메인 기능을 쓸 때만, `--port-range`(기본 10000-10999)의
-TCP·UDP는 raw 포트 공개를 쓸 때만 연다.
+The first run prints an invite. Whoever joins with it becomes the administrator.
 
-Cloudflare를 쓴다면 A 레코드 둘은 **회색 구름(DNS only)** 이어야 한다. 주황 구름은 SNI 통과를
-깨뜨린다. hub의 자가 진단은 `_acme-challenge` 위임이 자기에게 닿는지만 확인하므로, `hub.example.com`이
-주황이면 그 단계에서 걸리지만 `*.hub.example.com`만 주황인 것은 잡지 못한다.
+Binaries for Linux, macOS and Windows are on the
+[releases page](https://github.com/eth219/jailscale/releases). Container images:
 
-### 자기 도메인 쓰기
-
-```sh
-jailscale open 3000 --domain app.example.com
+```
+ghcr.io/eth219/jailhub:latest
+ghcr.io/eth219/jailscale:latest
 ```
 
-`app.example.com`을 hub로 CNAME하면, 노드가 **자기 키로** HTTP-01 챌린지를 치러 인증서를 받는다.
-이 경우 hub는 순수 통과이고 키도 인증서도 노드에만 있다.
+## Resource usage
 
----
+Measured on arm64 macOS with the native binaries. `./measure.sh --check`
+enforces these as a budget in CI.
 
-## 그 밖에
+| | jailhub | jailscale |
+|---|---|---|
+| Binary | 25.0 MiB | 25.3 MiB |
+| Idle RSS | 24.7 MB | 24.7 MB |
+| Peak RSS, 1,000 visitors held open at once | 77 MB | 87 MB |
+| CLI cold start | — | 6 ms |
 
-`jailscale open 22 --tcp`(UDP는 `--udp`)로 TLS 없는 raw 포트를 공개할 수 있다. 이 경로는 hub가 방문자
-바이트를 그대로 보므로, 앱이 스스로 암호화하지 않으면 위 표의 "평문을 보지 않는다"가 성립하지 않는다.
-SSH·WireGuard·TLS를 켠 DB는 hub가 암호문만 본다. `--gate`를 붙이면 방문 링크를 가진 사람만 접속할 수
-있다. `jailhub serve --takeover`는 진행 중인 다운로드를 끊지 않고 hub 프로세스를 교체한다. nginx `stream`이나
-HAProxy 뒤에 둘 수 있고 참조 설정이 `deploy/`에 있다.
+The hub above runs on a GCP e2-micro: 2 shared vCPU, 1 GB of memory, Debian 12.
+That is the smallest instance Google sells, and it is not the constraint.
 
----
+Requirements:
 
-## 지금 어디까지 왔나
+| | Hub | Node |
+|---|---|---|
+| Inbound ports | 443, 80, 53 | none |
+| Public address | yes | no |
+| Root | no (`CAP_NET_BIND_SERVICE`) | no |
+| TUN device | no | no |
+| Runtime to install | none | none |
 
-M0부터 M4까지 구현했고 테스트 105개가 돈다. 2026-09-11에 실제 도메인과 실제 Let's Encrypt로
-전 구간을 한 번 돌렸다. hub를 GCP 서울 e2-micro에, 노드를 맥에 두고 확인한 것들이다.
+A hub accepts 1,024 concurrent visitors per name, and 20 names per node.
 
-- hub 와일드카드가 **실제 CA**에서 발급됐다. CA가 hub의 53번 포트에 직접 질의해 dns-01을 통과했다
-- 사용자 도메인도 실제 발급됐다. 키와 인증서는 노드에만 남았다
-- 인터넷을 거친 방문자 요청이 200으로 돌아왔다. 왕복 0.06초
-- 다운로드 진행 중 hub를 교체했고 200/200 바이트가 온전했다
-- 릴리스 워크플로가 5개 플랫폼에서 통과하고 아티팩트를 만든다
+## Trust
 
-가장 최근에 붙인 것은 자기 탐침(`jailscale verify`)이다. `portal-tunnel`을 읽다가 jailscale에
-없는 것을 발견해 그대로 가져왔다. 노드가 기록값을 위조하도록 고쳐 탐침이 실제로 가짜 종단을
-잡는지 반증까지 확인했다.
+The hub holds the wildcard private key. A compromised hub cannot read traffic to
+a healthy node, but it can move a name to a node of its own and sign for it. The
+node detects that afterwards with `jailscale verify`, and an honest hub reports
+the move on its own. Names you bring yourself are not exposed this way: the key
+stays on the node and the hub only routes.
 
-아직 안 한 것은 태그 릴리스 1회 실행과 Linux·Windows에서의 `service install` 실기 확인이다.
-그리고 **프로덕션 운영 실적이 없다.**
+What a compromised hub can and cannot do is written out in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## 이 프로젝트의 값어치
+## Not done yet
 
-**자바로도 이게 된다는 것 자체가 결과다.** 25 MiB 단일 파일, 아이들 25 MB, CLI 6.3 ms는 Go로
-짠 같은 계열 도구와 견줄 만한 수치이고, GraalVM Native Image와 virtual thread를 처음부터
-규율로 삼으면 JVM이라는 이유로 포기할 것이 생각보다 적다는 뜻이다. 리플렉션과 DI를 금지한
-대가로 얻은 값이라 공짜는 아니다.
+- No production track record. The hub above has been up since 2026-09-11.
+- The hub is a single process on a single host. Replacing it without dropping
+  nodes works (`serve --takeover`), but losing the host means downtime.
+- `service install` is verified on macOS only. Linux and Windows are untested
+  outside CI.
+- The self-probe runs when you type `jailscale verify`. It should run on a
+  schedule.
+- Windows nodes occasionally need to reconnect, costing that connection's
+  visitors up to 60 seconds. It is a JDK bug, not ours:
+  [docs/windows-virtual-thread-stall](docs/windows-virtual-thread-stall/).
+- Idle memory is 24.7 MB against a 20 MB goal. Most of the gap is JSSE standing
+  up a TLS client.
+- No standby hub, no state replication, no OIDC.
 
-**설계 결정을 근거와 함께 남긴 문서가 코드만큼 있다.** [DESIGN.md](docs/DESIGN.md)는 왜 그렇게
-했는지, 무엇을 포기했는지, 무엇이 아직 안 되는지를 마일스톤별 실측과 함께 적는다. 보안 절은
-hub가 침해됐을 때 무엇을 할 수 있는지를 표로 적어둔다. 읽고 판단할 수 있는 물건을 목표로 했다.
+## Credit
 
-**앞으로 갈 만한 곳**은 [DESIGN.md §15](docs/DESIGN.md)에 모아뒀다. 대기 hub와 상태 복제,
-OIDC 연동, hub 80 포트를 없애는 tls-alpn-01, 부하 중 RSS를 줄이는 버퍼 풀링, 그리고 이름을
-뺏긴 노드에게 통지를 보내는 일(탐침을 쳐야만 아는 지금을 보완한다)이 후보다. 메시 데이터 평면(v3의 WireGuard)은 컨트롤 평면이 그대로라 필요해지면
-다시 얹을 수 있고, 그 설계는 [DESIGN-v3-mesh.md](docs/DESIGN-v3-mesh.md)에 보관되어 있다.
+- [Tailscale](https://tailscale.com) for the control plane shape: a coordination
+  server, joining by invite rather than by identity provider, and nodes that
+  only dial out.
+- [gosuda/portal-tunnel](https://github.com/gosuda/portal-tunnel) for the
+  keyless TLS relay, and for the self-probe, which jailscale did not have until
+  reading that project.
+- [Keyless SSL](https://blog.cloudflare.com/keyless-ssl-the-nitty-gritty-technical-details/)
+  for separating the private key from the server that uses it.
 
-## 한계
+Built with [Claude Code](https://claude.com/claude-code).
 
-- **hub는 단일 프로세스·단일 호스트다.** 능동-능동 다중화는 없다. 재시작은 5초 안에 끝나고
-  무중단 교체가 있지만, 호스트 자체를 잃으면 그동안 서비스가 멈춘다.
-- **hub 앞에 TLS를 종단하는 리버스 프록시를 둘 수 없다.** SNI 통과가 필요하기 때문이다. nginx
-  `stream`이나 HAProxy `mode tcp`처럼 바이트만 넘기는 4계층 프록시는 된다.
-- **hub는 신뢰 대상이다.** 위의 위협 모델을 읽고 판단할 것.
-- **Windows에서 드물게 재접속이 필요하다.** JDK 25의 가상 스레드 관련 버그이며 jailscale 코드와
-  무관하다. 그 연결의 방문자는 최대 60초를 잃고 회복된다. 재현기와 측정이 [docs/windows-virtual-thread-stall/](docs/windows-virtual-thread-stall/)에 있다.
-- 노드 아이들 RSS 20 MB 목표를 아직 못 맞췄다(현재 24.4 MB). 대부분 JSSE의 이미지 힙이다.
-
----
-
-## 문서
-
-설계 전문은 [docs/DESIGN.md](docs/DESIGN.md)에 있다. 프로토콜, 위협 모델, 예산, 마일스톤별
-실측이 모두 그 문서에 있고, 이 README는 그 요약이다.
-
-## 라이선스
+## License
 
 [Apache-2.0](LICENSE).
