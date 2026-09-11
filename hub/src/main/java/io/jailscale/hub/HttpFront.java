@@ -147,7 +147,10 @@ final class HttpFront {
         row(b, "Nodes", online + " online of " + hub.store().nodes().size() + " registered");
         row(b, "Links open", String.valueOf(hub.links().all().size()));
         row(b, "Certificate", hub.tls().isLoaded() ? "loaded" : "not loaded yet");
-        row(b, "Memory", rss < 0 ? Resources.humanBytes(Resources.heapUsedBytes()) + " heap"
+        // Heap is a small part of what a native image occupies, so where RSS is unavailable say
+        // that rather than let a two-megabyte heap read as the process footprint.
+        row(b, "Memory", rss < 0
+            ? Resources.humanBytes(Resources.heapUsedBytes()) + " heap in use (resident size unavailable here)"
             : Resources.humanBytes(rss) + " resident");
         b.append("</table>");
 

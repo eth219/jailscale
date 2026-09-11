@@ -1,6 +1,7 @@
 # jailscale
 
-**[Tailscale](https://tailscale.com)'s control plane, plus reverse
+**[Tailscale](https://tailscale.com)'s control plane, plus
+[gosuda/portal-tunnel](https://github.com/gosuda/portal-tunnel)'s reverse
 [keyless TLS](https://blog.cloudflare.com/keyless-ssl-the-nitty-gritty-technical-details/),
 in Java, written with [Claude](https://claude.com/claude-code).**
 
