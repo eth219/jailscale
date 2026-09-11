@@ -3,6 +3,7 @@ package io.jailscale.node;
 import io.jailscale.crypto.KeyText;
 import io.jailscale.proto.acme.AcmeException;
 import io.jailscale.proto.control.Message;
+import io.jailscale.proto.http.Http;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.mux.MuxStream;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
 
 /** The resident node process: owns the state file, the hub link, links and the local IPC (DESIGN.md §10). */
 public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events {
@@ -27,6 +29,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private final NodeConfig config;
     private final NodeState state;
     private final HubLink link;
+    private static final int VERIFY_TIMEOUT_MS = 10_000;
+
     private final Visitors visitors;
     private final DomainCerts domainCerts;
     private volatile boolean closed;
@@ -102,6 +106,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         switch (req.string("cmd")) {
             case "status" -> reply.done(status());
             case "up" -> up(req, reply);
+            case "verify" -> verify(reply);
             case "down" -> {
                 link.close();
                 reply.ok();
@@ -361,6 +366,49 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local())
             .put("kind", kind).put("hubPort", lo.hubPort()).put("visitUrl", visitUrl)
             .put("certExpiresAt", rec.certExpiresAt > 0 ? Long.valueOf(rec.certExpiresAt) : null));
+    }
+
+    /**
+     * DESIGN.md §12.3: connect to each open name as an ordinary visitor and check that the TLS
+     * was terminated here. The keying material of a TLS 1.3 session is derivable by its two ends
+     * and nobody else, so a value this node never recorded means something in between -- a hub
+     * holding the wildcard key can be that something. The §12.1 signing conditions do not help:
+     * the hub enforces those, so they bind nodes, not the hub.
+     */
+    private void verify(Ipc.Reply reply) throws IOException {
+        List<Object> rows = new ArrayList<>();
+        boolean allOk = true;
+        for (NodeState.LinkRec rec : state.links) {
+            if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
+                continue; // raw ports carry no TLS of ours to compare
+            }
+            URI u = URI.create(rec.url);
+            String host = u.getHost();
+            int port = u.getPort() > 0 ? u.getPort() : 443;
+            String verdict;
+            boolean ok = false;
+            try {
+                SSLContext ctx = Tls.clientContext(state.caFile == null ? null : Path.of(state.caFile), state.tlsInsecure);
+                try (SSLSocket s = Tls.connect(ctx, host, state.hubAddr, port, !state.tlsInsecure, VERIFY_TIMEOUT_MS)) {
+                    Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
+                    Http.readResponse(s.getInputStream(), 1 << 16);
+                    String material = SelfProbe.material(s.getSession());
+                    ok = visitors.probe().terminatedHere(material);
+                    verdict = material == null ? "keying material unavailable (needs TLS 1.3)"
+                        : ok ? "terminated by this node" : "TERMINATED ELSEWHERE";
+                }
+            } catch (IOException | GeneralSecurityException | io.jailscale.proto.http.HttpException | RuntimeException e) {
+                verdict = "unreachable: " + e.getMessage();
+            }
+            if (!ok) {
+                allOk = false;
+                if (verdict.startsWith("TERMINATED")) {
+                    visitors.probe().warn(host);
+                }
+            }
+            rows.add(JsonObject.builder().put("name", host).put("ok", ok).put("verdict", verdict).build().asMap());
+        }
+        reply.done(JsonObject.builder().put("ok", allOk).put("checked", rows.size()).put("results", rows));
     }
 
     private static String visitUrl(NodeState.LinkRec rec, String token) {

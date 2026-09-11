@@ -24,6 +24,7 @@ public final class Main {
         jailscale gate NAME [--new-link [--ttl 24h] | --off]
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | admin | daemon
+        jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
         jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
         jailscale version
@@ -57,7 +58,7 @@ public final class Main {
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
                 case "status" -> print(call(cfg, JsonObject.builder().put("cmd", "status").build(), false));
-                case "down", "leave", "netcheck" -> print(call(cfg, JsonObject.builder().put("cmd", cmd).build(), false));
+                case "down", "leave", "netcheck", "verify" -> print(call(cfg, JsonObject.builder().put("cmd", cmd).build(), false));
                 case "invite" -> invite(cfg, a);
                 case "open" -> open(cfg, a);
                 case "ls" -> ls(cfg);

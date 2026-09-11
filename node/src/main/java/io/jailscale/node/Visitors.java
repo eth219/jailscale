@@ -37,6 +37,7 @@ final class Visitors {
     static final long UDP_IDLE_MS = 60_000;
 
     private final NodeState state;
+    private final SelfProbe probe = new SelfProbe();
     private final Map<String, SSLContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, SSLContext> domainContexts = new ConcurrentHashMap<>();
 
@@ -83,6 +84,10 @@ final class Visitors {
         domainContexts.put("domain:" + m.domain(), ctx);
     }
 
+    SelfProbe probe() {
+        return probe;
+    }
+
     void removeDomain(String domain) {
         domainContexts.remove("domain:" + domain);
     }
@@ -111,6 +116,8 @@ final class Visitors {
             RemoteSigning.enter(new RemoteSigning.Context(link, session, HubLink.fullStreamId(conn, stream.id()), keyId));
             try {
                 tls.handshake();
+                // Remember that this node, and not the hub or another node, terminated it (§12.5).
+                probe.record(SelfProbe.material(tls.session()));
             } finally {
                 RemoteSigning.exit();
             }

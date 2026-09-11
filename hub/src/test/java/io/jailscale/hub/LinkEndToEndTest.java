@@ -150,6 +150,18 @@ class LinkEndToEndTest {
         HttpResponse none = visit("nothere.hub.test", "/");
         assertEquals(404, none.status());
 
+        // DESIGN.md §12.3: the node checks that it was the one that terminated the TLS for its own
+        // names. An honest hub passes bytes through, so the keying material of the probe's session
+        // is one the node recorded.
+        JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));
+        assertTrue(verified.integer("checked") >= 1, verified.toString());
+        for (Object o : verified.array("results")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            assertEquals(Boolean.TRUE, row.get("ok"), row.toString());
+            assertEquals("terminated by this node", row.get("verdict"), row.toString());
+        }
+
         // ls shows both; close removes
         assertEquals(2, ok(cli("alice", JsonObject.builder().put("cmd", "ls"))).array("links").size());
         ok(cli("alice", JsonObject.builder().put("cmd", "close").put("name", "myapp")));

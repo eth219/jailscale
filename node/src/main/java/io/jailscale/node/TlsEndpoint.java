@@ -11,6 +11,7 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLEngineResult;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSession;
 
 /**
  * Server-side TLS over an arbitrary byte stream (DESIGN.md §10.2): drives an {@link SSLEngine}
@@ -212,5 +213,10 @@ final class TlsEndpoint implements AutoCloseable {
         } catch (IOException ignored) {
             // best effort close_notify
         }
+    }
+
+    /** The negotiated session, for {@link SelfProbe} keying material after the handshake. */
+    SSLSession session() {
+        return engine.getSession();
     }
 }
