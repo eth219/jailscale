@@ -1,0 +1,25 @@
+# jailscale node container (DESIGN.md §14). Same shape as Dockerfile.hub: GraalVM builds the
+# native binary, distroless ships it. No JVM, no shell.
+#
+#   docker build -f deploy/Dockerfile.node -t jailscale .
+#   docker run -d --name jailscale -v jailscale-state:/var/lib/jailscale \
+#       jailscale up --invite https://hub.example.com/join/XXXX
+#
+# The node reaches the hub with one outbound TLS connection, so no ports are published here.
+# Publishing a local service means the node has to reach it: use --network host, or point
+# `jailscale open` at a host the container can see rather than 127.0.0.1.
+#
+# The state volume holds the machine key and the open links. Losing it means rejoining.
+
+FROM ghcr.io/graalvm/native-image-community:25 AS build
+WORKDIR /src
+COPY . .
+RUN ./mvnw -B -ntp -DskipTests -Pnative -pl node -am package
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /src/node/target/jailscale /jailscale
+ENV JAILSCALE_HOME=/var/lib/jailscale
+VOLUME /var/lib/jailscale
+USER nonroot
+ENTRYPOINT ["/jailscale"]
+CMD ["--help"]

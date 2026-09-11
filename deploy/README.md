@@ -5,7 +5,8 @@
 | 파일 | 용도 |
 |---|---|
 | `jailhub.service` | hub systemd 유닛. `systemctl reload jailhub`가 `jailhub serve --takeover`(무중단 교체)로 연결됨 |
-| `Dockerfile` | hub 컨테이너 (GraalVM native → distroless, ~30 MB) |
+| `Dockerfile.hub` | hub 컨테이너 (GraalVM native → distroless, ~30 MB) |
+| `Dockerfile.node` | 노드 컨테이너 (같은 구성) |
 | `nginx-stream.conf` | 이미 nginx가 443을 쥔 서버에 hub를 얹을 때. `ssl_preread` SNI 라우팅 + PROXY 헤더 |
 | `haproxy.cfg` | 같은 것을 HAProxy로. `send-proxy-v2` |
 | `homebrew/jailscale.rb` | tap용 formula 템플릿 |
