@@ -8,6 +8,9 @@
 # The state volume holds hub.key, tls/ and the event log: back it up, it is the whole hub.
 
 FROM ghcr.io/graalvm/native-image-community:25 AS build
+# The base image ships neither wget nor curl, so the Maven wrapper downloads nothing and then
+# fails its own checksum check on the missing file. Install one before building.
+RUN microdnf install -y curl || dnf install -y curl || yum install -y curl
 WORKDIR /src
 COPY . .
 RUN ./mvnw -B -ntp -DskipTests -Pnative -pl hub -am package
