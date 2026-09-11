@@ -39,12 +39,18 @@ final class SelfProbe {
     /** The keying material for {@code session}, or null when the session cannot produce it. */
     static String material(SSLSession session) {
         if (!(session instanceof ExtendedSSLSession e)) {
+            LOG.debug("no keying material: {} is not an ExtendedSSLSession",
+                session == null ? "null" : session.getClass().getName());
             return null;
         }
         try {
             return HexFormat.of().formatHex(e.exportKeyingMaterialData(LABEL, null, LENGTH));
         } catch (javax.net.ssl.SSLKeyException | RuntimeException ex) {
-            return null; // TLS 1.2 and below, or a session that has not finished
+            // TLS 1.2 and below have no RFC 5705 exporter, and a session that has not finished
+            // cannot derive one yet. Say which, or a probe that goes quiet looks like an attack.
+            LOG.debug("no keying material for {} ({}): {}", session.getProtocol(),
+                session.getCipherSuite(), ex.toString());
+            return null;
         }
     }
 

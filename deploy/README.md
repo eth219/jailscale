@@ -1,16 +1,28 @@
 # deploy/
 
-운영자용 참조 파일. 설계 근거는 `docs/DESIGN.md` §6.3, §7.7, §9.6, §14.
+Reference files for operators. The reasoning behind them is in
+[ARCHITECTURE.md](../docs/ARCHITECTURE.md).
 
-| 파일 | 용도 |
+| File | Purpose |
 |---|---|
-| `jailhub.service` | hub systemd 유닛. `systemctl reload jailhub`가 `jailhub serve --takeover`(무중단 교체)로 연결됨 |
-| `Dockerfile.hub` | hub 컨테이너 (GraalVM native → distroless, ~30 MB) |
-| `Dockerfile.node` | 노드 컨테이너 (같은 구성) |
-| `nginx-stream.conf` | 이미 nginx가 443을 쥔 서버에 hub를 얹을 때. `ssl_preread` SNI 라우팅 + PROXY 헤더 |
-| `haproxy.cfg` | 같은 것을 HAProxy로. `send-proxy-v2` |
-| `homebrew/jailscale.rb` | tap용 formula 템플릿 |
+| `jailhub.service` | systemd unit for the hub. `systemctl reload jailhub` is wired to `jailhub serve --takeover`, which replaces the process without dropping nodes |
+| `Dockerfile.hub` | Hub container: GraalVM native build on a distroless base, about 30 MB |
+| `Dockerfile.node` | Node container, same shape |
+| `nginx-stream.conf` | For a server where nginx already owns 443. SNI routing with `ssl_preread`, plus a PROXY header |
+| `haproxy.cfg` | The same with HAProxy, using `send-proxy-v2` |
+| `homebrew/jailscale.rb` | Formula template for a tap |
 
-노드 쪽 서비스 등록은 파일이 아니라 명령이다: `jailscale service install` (macOS launchd, Linux systemd --user, Windows 로그온 작업).
+Registering the node as a service is a command rather than a file:
+`jailscale service install` (launchd on macOS, `systemctl --user` on Linux, a
+logon task on Windows).
 
-프록시 뒤에 둘 때 hub는 반드시 `--proxy-protocol`과 함께 루프백에 리슨하거나 `--trusted-proxy <cidr>`를 줘야 한다. 그렇지 않으면 방문자 주소를 아무나 위조할 수 있으므로 hub가 기동을 거부한다.
+Behind a proxy, the hub must either listen on loopback with `--proxy-protocol`
+or be given `--trusted-proxy <cidr>`. Otherwise anyone could forge a visitor
+address, so the hub refuses to start.
+
+Published images:
+
+```
+ghcr.io/eth219/jailhub:latest
+ghcr.io/eth219/jailscale:latest
+```

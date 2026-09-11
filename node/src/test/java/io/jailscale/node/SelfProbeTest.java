@@ -58,17 +58,33 @@ class SelfProbeTest {
         return ctx;
     }
 
-    /** One TLS session; returns the keying material each side derived, server first. */
+    /**
+     * One TLS session; returns the keying material each side derived, server first.
+     *
+     * <p>The server exports only after reading application data. On the server side of TLS 1.3
+     * the exporter is not usable until the peer's Finished has been processed, and that has not
+     * necessarily happened when {@code startHandshake} returns. The node does the same thing for
+     * the same reason (see {@code Visitors}).
+     *
+     * <p>Server-side failures are carried out rather than swallowed. A null here used to mean
+     * "something went wrong somewhere", which said nothing on the one platform where it did.
+     */
     private static String[] session(SSLContext ctx) throws Exception {
         try (SSLServerSocket ss = (SSLServerSocket) ctx.getServerSocketFactory()
             .createServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             String[] out = new String[2];
+            String[] detail = new String[1];
             Thread server = Thread.ofVirtual().start(() -> {
                 try (SSLSocket s = (SSLSocket) ss.accept()) {
                     s.startHandshake();
-                    s.getInputStream().read();
+                    int b = s.getInputStream().read();
+                    detail[0] = "protocol=" + s.getSession().getProtocol()
+                        + " suite=" + s.getSession().getCipherSuite() + " firstByte=" + b;
                     out[0] = SelfProbe.material(s.getSession());
+                    s.getOutputStream().write(2);
+                    s.getOutputStream().flush();
                 } catch (Exception e) {
+                    detail[0] = "server threw " + e;
                     out[0] = null;
                 }
             });
@@ -80,17 +96,23 @@ class SelfProbeTest {
                 c.startHandshake();
                 c.getOutputStream().write(1);
                 c.getOutputStream().flush();
+                c.getInputStream().read();
                 out[1] = SelfProbe.material(c.getSession());
             }
             server.join();
+            lastDetail = detail[0];
             return out;
         }
     }
 
+    /** What the server side saw in the most recent {@link #session}, for failure messages. */
+    private static volatile String lastDetail;
+
     @Test
     void bothEndsOfOneSessionDeriveTheSameMaterial() throws Exception {
         String[] s = session(context());
-        assertNotNull(s[0], "server side produced no keying material");
+        assertNotNull(s[0], "server side produced no keying material: " + lastDetail);
+        assertNotNull(s[1], "client side produced no keying material: " + lastDetail);
         assertEquals(s[0], s[1], "the two ends of one session must agree");
         assertEquals(SelfProbe.LENGTH * 2, s[0].length(), "expected " + SelfProbe.LENGTH + " bytes as hex");
     }
@@ -110,7 +132,7 @@ class SelfProbeTest {
         String[] mine = session(ctx);
         probe.record(mine[0]);
 
-        assertTrue(probe.terminatedHere(mine[1]), "a probe of its own session must be recognised");
+        assertTrue(probe.terminatedHere(mine[1]), "a probe of its own session must be recognised: " + lastDetail);
         assertFalse(probe.terminatedHere(session(ctx)[1]), "a session it never terminated must not be");
         assertFalse(probe.terminatedHere(null), "no material means no claim");
         assertEquals(1, probe.size());

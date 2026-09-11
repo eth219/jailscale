@@ -1,53 +1,61 @@
-# Windows + 가상 스레드 + 양방향 루프백에서 읽기가 깨어나지 않는 문제
+# A lost read wake-up on Windows with virtual threads and bidirectional loopback traffic
 
-`MuxSessionTest.largeTransferRespectsFlowControl`이 Windows CI에서만 간헐적으로 30초 타임아웃에
-걸렸다. 원인을 좁힌 결과 **jailscale 코드와 무관한 JDK 문제**였다. `SockLoop.java`는 의존성 없이
-그 현상만 남긴 재현기다 (`java.base`만 쓴다).
+`MuxSessionTest.largeTransferRespectsFlowControl` hit a 30 second timeout
+intermittently, on Windows CI only. Narrowing it down produced a JDK problem
+with nothing to do with jailscale. `SockLoop.java` is the reproducer: about 180
+lines, no dependencies, `java.base` only.
 
 ```sh
 javac -d out SockLoop.java
-java -cp out SockLoop <반복> <건당 타임아웃 s> <전체 예산 s> <virtual|platform> <uni|bidi>
+java -cp out SockLoop <runs> <per-run timeout s> <total budget s> <virtual|platform> <uni|bidi>
 ```
 
-## 측정 (GitHub Actions, Liberica NIK 25.0.4, 4코어)
+## Measurements
 
-| 조건 | 멈춤 |
+GitHub Actions, Liberica NIK 25.0.4, 4 cores.
+
+| Condition | Stalls |
 |---|---|
-| windows-2025, bidi, **virtual** | 152회 중 **60** (39.5%) |
-| windows-2025, bidi, platform | 5,000회 중 0 |
-| windows-2025, uni, virtual | 5,000회 중 0 |
-| ubuntu-24.04, bidi, virtual | 5,000회 중 0 |
-| ubuntu-24.04, bidi, platform | 5,000회 중 0 |
+| windows-2025, bidi, **virtual** | **60** of 152 (39.5%) |
+| windows-2025, bidi, platform | 0 of 5,000 |
+| windows-2025, uni, virtual | 0 of 5,000 |
+| ubuntu-24.04, bidi, virtual | 0 of 5,000 |
+| ubuntu-24.04, bidi, platform | 0 of 5,000 |
 
-세 가지가 모두 있어야 터진다. **Windows, 가상 스레드, 양방향 트래픽.** 하나라도 빼면 나오지
-않는다. 참고로 같은 조건에서 우리 `MuxSession`을 거치면 3,000회 중 55회(1.8%)로, 재현기보다
-오히려 낮다. Noise 암호화와 프레임 처리가 타이밍을 바꾸기 때문이지 우리 쪽 결함이 아니다.
+All three have to be present: Windows, virtual threads, and traffic in both
+directions. Remove any one and it does not happen.
 
-## 영구 유실인가, 지연인가
+For comparison, the same conditions through jailscale's own `MuxSession` stall
+in 55 of 3,000 runs (1.8%), which is lower than the bare reproducer. The Noise
+encryption and frame handling shift the timing. It is not a defect on our side.
 
-영구 유실이다. 같은 코드를 건당 제한만 바꿔 돌렸다.
+## Lost, not delayed
 
-| 건당 제한 | 멈춤 |
+The wake-up is lost. The same code was run with only the per-run limit changed.
+
+| Per-run limit | Stalls |
 |---|---|
-| 10초 | 281회 중 120 (42.7%) |
-| 150초 | 20회 중 8 (40.0%) |
+| 10s | 120 of 281 (42.7%) |
+| 150s | 8 of 20 (40.0%) |
 
-비율이 그대로다. 10초 안에 오지 않은 깨어남은 150초를 기다려도 오지 않는다. 늦게 오는 것이
-아니라 잃는 것이다.
+The rate is unchanged. A wake-up that has not arrived within 10 seconds does not
+arrive within 150 either.
 
-## 무엇이 멈추는가
+## What stalls
 
-쓰는 쪽은 송신 버퍼가 차서 park되고, 읽는 쪽은 프레임 길이를 기다리며 park된 채 깨어나지
-않는다. 루프백 연결 하나에서 동시에 성립할 수 없는 조합이라, Windows의 `wepoll` 기반 폴러가
-읽기 준비 신호를 잃는 것으로 보인다. 플랫폼 스레드는 OS에서 직접 블록하므로 이 경로를 타지
-않는다.
+The writing side parks with a full send buffer. The reading side parks waiting
+for a frame length and is never woken. Those two states cannot both hold on one
+loopback connection, which points at the `wepoll`-based poller on Windows losing
+a read-readiness signal. Platform threads block in the OS directly and do not
+take that path.
 
-## jailscale에 대한 영향
+## What it means for jailscale
 
-코드로 고칠 수 있는 것이 아니다. 감지하고 복구하는 안전망은 이미 있다. hub(`NodeSession`)과
-노드(`HubClient`) 모두 mux 소켓에 60초 읽기 타임아웃을 걸고 `MuxSession`이 25초마다 KEEPALIVE를
-보내므로, 실제로 이 일이 나면 `peer idle too long`으로 세션이 닫히고 노드가 재접속한다. 그 연결의
-방문자는 최대 60초를 잃고 그 뒤 회복된다.
+There is nothing to fix in our code. The safety net already exists: both the hub
+(`NodeSession`) and the node (`HubClient`) set a 60 second read timeout on the
+mux socket, and `MuxSession` sends a KEEPALIVE every 25 seconds. If this happens
+in production the session closes with `peer idle too long` and the node
+reconnects. Visitors on that connection lose up to 60 seconds and then recover.
 
-CI에서는 `MuxSessionTest`가 Windows 실행의 1~2%에서 실패한다. 테스트를 끄거나 재시도로 덮지
-않는다. 실패하면 이 문서를 보면 된다.
+In CI, `MuxSessionTest` fails on 1 to 2% of Windows runs. The test is neither
+disabled nor wrapped in a retry. When it fails, read this page.
