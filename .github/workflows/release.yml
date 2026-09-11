@@ -48,11 +48,11 @@ jobs:
         run: |
           mkdir -p dist
           ext=""; [ "${{ matrix.target }}" = windows-amd64 ] && ext=.exe
-          cp jailscale-node/target/jailscale$ext dist/jailscale-${{ matrix.target }}$ext
-          cp jailscale-hub/target/jailhub$ext   dist/jailhub-${{ matrix.target }}$ext
+          cp node/target/jailscale$ext dist/jailscale-${{ matrix.target }}$ext
+          cp hub/target/jailhub$ext   dist/jailhub-${{ matrix.target }}$ext
           if [ "${{ matrix.target }}" = linux-amd64 ]; then
-            cp jailscale-node/target/jailscale.jar dist/jailscale.jar
-            cp jailscale-hub/target/jailhub.jar   dist/jailhub.jar
+            cp node/target/jailscale.jar dist/jailscale.jar
+            cp hub/target/jailhub.jar   dist/jailhub.jar
           fi
           # macOS ships shasum and no sha256sum; the Windows runner's bash is the other way
           # round. Both print the same "<hash>  <name>" that the release job concatenates.

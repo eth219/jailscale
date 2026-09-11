@@ -8,14 +8,7 @@
     <artifactId>jailscale-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
   </parent>
-  <artifactId>jailscale-proto</artifactId>
-  <name>jailscale-proto</name>
-  <description>Control messages, JSON codec, mux framing, minimal HTTP/1.1 and SNI parsers</description>
-
-  <dependencies>
-    <dependency>
-      <groupId>io.jailscale</groupId>
-      <artifactId>jailscale-crypto</artifactId>
-    </dependency>
-  </dependencies>
+  <artifactId>crypto</artifactId>
+  <name>crypto</name>
+  <description>Noise IK cryptographic primitives: BLAKE2s, HKDF, X25519, ChaCha20-Poly1305</description>
 </project>

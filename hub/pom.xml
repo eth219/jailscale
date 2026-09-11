@@ -8,20 +8,27 @@
     <artifactId>jailscale-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
   </parent>
-  <artifactId>jailscale-node</artifactId>
-  <name>jailscale-node</name>
-  <description>Node daemon and CLI: local IPC, TLS termination with remote signing, relay, visitor gate</description>
+  <artifactId>hub</artifactId>
+  <name>hub</name>
+  <description>Hub: SNI router, coordinator, ACME with built-in DNS-01, signing service, admin IPC and web</description>
 
   <properties>
     <native.skip>false</native.skip>
-    <native.imageName>jailscale</native.imageName>
-    <native.mainClass>io.jailscale.node.Main</native.mainClass>
+    <native.imageName>jailhub</native.imageName>
+    <native.mainClass>io.jailscale.hub.Main</native.mainClass>
   </properties>
 
   <dependencies>
     <dependency>
       <groupId>io.jailscale</groupId>
-      <artifactId>jailscale-proto</artifactId>
+      <artifactId>proto</artifactId>
+    </dependency>
+    <!-- The end-to-end test (hub + two nodes on loopback) drives the real node daemon. -->
+    <dependency>
+      <groupId>io.jailscale</groupId>
+      <artifactId>node</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 
@@ -34,7 +41,7 @@
           <archive>
             <manifest>
               <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
-              <mainClass>io.jailscale.node.Main</mainClass>
+              <mainClass>io.jailscale.hub.Main</mainClass>
             </manifest>
           </archive>
         </configuration>
@@ -44,15 +51,15 @@
         <artifactId>maven-shade-plugin</artifactId>
         <executions>
           <execution>
-            <!-- Fallback JAR for platforms without a native binary (DESIGN.md §1, §14 M4): java -jar target/jailscale.jar -->
+            <!-- Fallback JAR for platforms without a native binary (DESIGN.md §1, §14 M4): java -jar target/jailhub.jar -->
             <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>
-              <outputFile>${project.build.directory}/jailscale.jar</outputFile>
+              <outputFile>${project.build.directory}/jailhub.jar</outputFile>
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>io.jailscale.node.Main</mainClass>
+                  <mainClass>io.jailscale.hub.Main</mainClass>
                 </transformer>
               </transformers>
             </configuration>

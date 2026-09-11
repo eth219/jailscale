@@ -95,15 +95,16 @@
 
 ## 3. 모듈 레이아웃
 
-Maven 멀티모듈. 의존 방향은 위에서 아래로만 흐른다.
+Maven 멀티모듈. 의존 방향은 위에서 아래로만 흐른다. 저장소 이름이 이미 `jailscale`이라
+디렉터리와 `artifactId`에는 접두사를 붙이지 않는다. 자바 패키지는 `io.jailscale.*`이다.
 
 ```
 jailscale/
-├── pom.xml                  parent (release=25, native 프로파일)
-├── jailscale-crypto/        BLAKE2s · HKDF · X25519 · ChaCha20-Poly1305 · Noise IK · 키 타입/인코딩
-├── jailscale-proto/         컨트롤 메시지 + JSON 코덱 + mux 프레이밍 + 최소 HTTP/1.1 파서 + SNI 파서 (crypto 의존)
-├── jailscale-node/          데몬 + CLI + 로컬 IPC + TLS 종단 + 원격 서명 Provider + 게이트  → 바이너리 `jailscale`
-└── jailscale-hub/           SNI 라우터 + coordinator + ACME/DNS + 서명 서비스 + 관리 IPC/웹   → 바이너리 `jailhub`
+├── pom.xml    parent (release=25, native 프로파일)
+├── crypto/    BLAKE2s · HKDF · X25519 · ChaCha20-Poly1305 · Noise IK · 키 타입/인코딩
+├── proto/     컨트롤 메시지 + JSON 코덱 + mux 프레이밍 + 최소 HTTP/1.1 파서 + SNI 파서 (crypto 의존)
+├── node/      데몬 + CLI + 로컬 IPC + TLS 종단 + 원격 서명 Provider + 게이트  → 바이너리 `jailscale`
+└── hub/       SNI 라우터 + coordinator + ACME/DNS + 서명 서비스 + 관리 IPC/웹   → 바이너리 `jailhub`
 ```
 
 v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/IP)은 없다. 바이너리를
@@ -121,12 +122,12 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 | 리플렉션 | 금지 | reachability metadata 관리 비용, 바이너리 비대화 |
 | 동적 프록시 / 클래스로딩 | 금지 | native-image에서 사실상 불가 |
 | DI 프레임워크 | 사용 안 함. 생성자 수동 배선 | Spring/Guice는 리플렉션 덩어리 |
-| JSON | 자체 파서 + 수동 인코더 (`jailscale-proto`) | Jackson은 리플렉션 + 수 MB 증가. 메시지 스키마가 10여 개뿐이라 수동이 싸다 |
-| HTTP 서버 | **자체 최소 HTTP/1.1** (`jailscale-hub`, 자기 이름의 5개 엔드포인트만) | JDK `com.sun.net.httpserver`는 Upgrade 후 소켓을 내주지 않는다. 방문자 트래픽은 HTTP를 파싱하지 않으므로 이것으로 충분하다 |
+| JSON | 자체 파서 + 수동 인코더 (`proto`) | Jackson은 리플렉션 + 수 MB 증가. 메시지 스키마가 10여 개뿐이라 수동이 싸다 |
+| HTTP 서버 | **자체 최소 HTTP/1.1** (`hub`, 자기 이름의 5개 엔드포인트만) | JDK `com.sun.net.httpserver`는 Upgrade 후 소켓을 내주지 않는다. 방문자 트래픽은 HTTP를 파싱하지 않으므로 이것으로 충분하다 |
 | HTTP 클라이언트 | 노드: `SSLSocket` 위 자체 소형 HTTP/1.1 (~40줄). hub: JDK `java.net.http.HttpClient` (ACME) | 노드는 Upgrade가 필요해 JDK 클라이언트를 못 쓴다. 덕분에 노드 바이너리에서 `java.net.http`가 빠진다 |
 | TLS | JDK JSSE. hub은 `SSLServerSocket`(자기 이름), 노드는 `SSLEngine`(방문자 스트림) | 이미 바이너리에 있다 |
 | 원격 서명 | 자체 JCE `Provider` + 불투명 `PrivateKey` + `Signature` SPI | PKCS#11 키가 쓰는 경로. `Provider.Service.newInstance` 재정의로 리플렉션 없이 등록 (§10.2) |
-| ACME 클라이언트 · DNS 응답기 | 자체 구현 (`jailscale-hub`, ~700줄) | JWS ES256·JSON·HttpClient는 JDK와 우리 코드로 충분. CSR DER 인코딩과 DNS TXT 응답만 손수 쓴다 (§6.3) |
+| ACME 클라이언트 · DNS 응답기 | 자체 구현 (`hub`, ~700줄) | JWS ES256·JSON·HttpClient는 JDK와 우리 코드로 충분. CSR DER 인코딩과 DNS TXT 응답만 손수 쓴다 (§6.3) |
 | 로깅 | 자체 초경량 로거 (`System.Logger` 백엔드) | SLF4J+logback은 ServiceLoader + 리플렉션 |
 | 암호 | JDK JCE (SunEC의 X25519, SunJCE의 ChaCha20-Poly1305) + 자체 BLAKE2s·HMAC·HKDF | BouncyCastle은 native 설정이 번거롭고 크다. 원시 함수는 JDK 것을 쓴다. 직접 짜는 셋은 선택이 아니라 필연이다: JDK에 BLAKE2s가 없고, Noise는 HMAC과 HKDF를 고른 해시 위에 정의하므로 BLAKE2s를 고르면 둘이 딸려온다. Noise의 HKDF는 RFC 5869과도 다르다 (salt/info 대신 출력 카운터 바이트, 최대 3단 연쇄) |
 | AWT / `java.awt.Desktop` | 금지 | 브라우저 열기는 `open` / `xdg-open` / `rundll32 url.dll,FileProtocolHandler`를 `ProcessBuilder`로 |
@@ -217,7 +218,7 @@ Windows는 `%LOCALAPPDATA%\jailscale\`이며 현재 사용자만 읽는 ACL. 사
 
 ---
 
-## 6. 컨트롤 채널 (`jailscale-hub` ↔ `jailscale-node`)
+## 6. 컨트롤 채널 (`hub` ↔ `node`)
 
 ### 6.1 전송 계층: TLS 위의 Noise (심층 방어)
 
@@ -444,7 +445,7 @@ $JAILHUB_STATE/          (기본 /var/lib/jailhub 또는 ~/.local/share/jailhub)
 프로세스다. 상태가 인메모리이므로 **실행 중인 서버에 요청**해야 한다.
 
 - 전송: AF_UNIX 소켓 `$JAILHUB_STATE/jailhub.sock` (0600). 소켓 파일 권한이 곧 인가다.
-- 프로토콜: 줄 단위 JSON 요청/응답. `jailscale-proto`의 코덱을 재사용.
+- 프로토콜: 줄 단위 JSON 요청/응답. `proto`의 코덱을 재사용.
 - 명령: `node list|approve|deny|remove|rename`, `name list|reassign|release`, `domain list|release`,
   `user list|remove`, `invite create|list|revoke`, `authkey create|list|revoke`,
   `admin add|remove|login-link`, `key rotate`, `setting <key> <value>`, `status`, `handoff`.
@@ -507,7 +508,7 @@ v1은 **빠른 복구**로 답한다.
 
 ---
 
-## 8. 스트림 멀티플렉서 (`jailscale-proto`)
+## 8. 스트림 멀티플렉서 (`proto`)
 
 노드와 hub 사이의 Noise 채널 하나 위에 **여러 바이트 스트림**을 싣는다. 방문자 연결 하나가
 스트림 하나다. v3의 DERP 프레임이 있던 자리다. yamux와 같은 수준의 프로토콜이며 500줄 안팎.
@@ -547,7 +548,7 @@ v1은 **빠른 복구**로 답한다.
 
 ---
 
-## 9. 공개 인그레스 (`jailscale-hub`)
+## 9. 공개 인그레스 (`hub`)
 
 ### 9.1 SNI 라우터
 
@@ -722,7 +723,7 @@ $ jailscale open 22 --tcp --port 10022                  # 희망 포트. 비어 
 
 ---
 
-## 10. 노드 (`jailscale-node`)
+## 10. 노드 (`node`)
 
 ### 10.1 공개 링크 UX
 
@@ -1037,7 +1038,7 @@ v3의 메시와 달리 이 제품에서 hub은 **와일드카드 키를 쥔 TLS 
 
 | # | 범위 | 완료 기준 |
 |---|---|---|
-| **M0** ✅ | 프로젝트 골격 · Maven wrapper · GraalVM native 빌드 파이프라인 · `jailscale-crypto`(BLAKE2s·HKDF·X25519·ChaCha·Noise IK) | RFC 7693/7748/8439 벡터와 noise-c IK 벡터 통과. `./native.sh`로 node·hub 바이너리 생성. 기준선: 4.9 MiB, RSS 8.4 MB, 콜드 스타트 5 ms (자리표시자 main) |
+| **M0** ✅ | 프로젝트 골격 · Maven wrapper · GraalVM native 빌드 파이프라인 · `crypto`(BLAKE2s·HKDF·X25519·ChaCha·Noise IK) | RFC 7693/7748/8439 벡터와 noise-c IK 벡터 통과. `./native.sh`로 node·hub 바이너리 생성. 기준선: 4.9 MiB, RSS 8.4 MB, 콜드 스타트 5 ms (자리표시자 main) |
 | **M1** ✅ | 컨트롤 채널 · 자체 HTTP/1.1 · hkey 부트스트랩·회전 · 버전 협상 · mux(스트림 0만) · 초대·코드·auth-key·두드리기 · **로컬 IPC (노드·hub)** · 파일 저장소 · `./measure.sh` | `jailscale invite`로 만든 링크로 다른 기기가 `jailscale up --invite`만으로 가입한다(loopback e2e 테스트 + native 프로세스로 확인). 키 회전 후 노드가 끊기지 않는다. 실측(arm64 macOS): 바이너리 24 MiB, **노드 아이들 RSS 23.8 MB(목표 20)**, hub 24.2 MB, CLI 콜드 스타트 6 ms. 인증서는 M2의 ACME 전까지 `--tls-cert/--tls-key` |
 | **M2** ✅ | **와일드카드 ACME + hub DNS-01 응답기** · SNI 라우터 · mux 데이터 스트림 · 노드 `SSLEngine` 종단 · **원격 서명 Provider와 4조건 검사** · 릴레이 | `jailscale open 3007 --name demo` 후 `curl`이 hub→노드를 거쳐 로컬 앱을 받는다(native 프로세스로 확인). 서명 오라클 테스트 통과. ACME는 테스트 CA(mock)로 dns-01·CSR·발급·재시작 재사용까지 통과. 실측(loopback, arm64): 방문자 전체 핸드셰이크 2.3 ms(hub 서명 왕복 포함), 노드 RSS 26.6 MB, hub 26.2 MB. **남은 것**: 실제 도메인에서 Let's Encrypt 스테이징 발급 확인, 노드당 다중 연결(§8)은 M3로 이월 |
 | **M3** ✅ | 방문자 게이트 · WebSocket/SSE 통과 검증 · 이름 관리(지정·재배정·오프라인 페이지) · `/admin` · 사용자 도메인(HTTP-01 중계) · **raw TCP/UDP 포트 공개** · 노드당 다중 연결(§8, M2에서 이월) · **hub 무중단 교체(§7.7)** | 게이트 링크 없이는 403, 방문 링크로 302+쿠키. Upgrade 에코 앱이 그대로 통과. `/admin`은 관리자 노드의 `jailscale admin` 일회용 링크로 로그인하고 승인·초대·설정을 바꾼다(설정은 저장소에 있어 재시작 후에도 유지). `--domain`은 노드가 hub을 통해 http-01을 치르고 자기 키로 종단한다(mock CA, 재시작 시 인증서 재사용). `open --tcp`는 200 KB 에코 왕복, `--udp`는 주소별 DGRAM 스트림 왕복. `--connections 2`로 스트림이 두 연결에 나뉜다. `serve --takeover`로 진행 중 스트림이 끊기지 않는다. 테스트 84개. native 프로세스로 raw tcp·https 이름·port-80 리다이렉트·admin 링크 확인. 실측(arm64 macOS): 바이너리 27.2/27.3 MiB(M2 24; 노드에 `java.net.http`가 들어옴, §15), 노드 아이들 RSS 24.8 MB, hub 25.1 MB, CLI 콜드 스타트 6.1 ms. **남은 것**: 실제 Let's Encrypt 스테이징(hub 와일드카드·노드 사용자 도메인 모두), 브라우저 3종 확인 |

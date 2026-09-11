@@ -10,10 +10,10 @@
 FROM ghcr.io/graalvm/native-image-community:25 AS build
 WORKDIR /src
 COPY . .
-RUN ./mvnw -B -ntp -DskipTests -Pnative -pl jailscale-hub -am package
+RUN ./mvnw -B -ntp -DskipTests -Pnative -pl hub -am package
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /src/jailscale-hub/target/jailhub /jailhub
+COPY --from=build /src/hub/target/jailhub /jailhub
 ENV JAILHUB_STATE=/var/lib/jailhub
 VOLUME /var/lib/jailhub
 EXPOSE 443 80 53/udp 53/tcp 10000-10999

@@ -13,10 +13,10 @@
   <description>A self-hosted tunnel in Java: SNI-passthrough hub, node-terminated TLS with hub-side signing, wildcard ACME via built-in DNS-01, invite-based membership (no IdP)</description>
 
   <modules>
-    <module>jailscale-crypto</module>
-    <module>jailscale-proto</module>
-    <module>jailscale-node</module>
-    <module>jailscale-hub</module>
+    <module>crypto</module>
+    <module>proto</module>
+    <module>node</module>
+    <module>hub</module>
   </modules>
 
   <properties>
@@ -35,7 +35,7 @@
     <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
     <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
 
-    <!-- Modules that produce a native binary override these (see jailscale-node, jailscale-hub). -->
+    <!-- Modules that produce a native binary override these (see node, hub). -->
     <native.skip>true</native.skip>
     <native.imageName>${project.artifactId}</native.imageName>
     <native.mainClass/>
@@ -53,12 +53,12 @@
       </dependency>
       <dependency>
         <groupId>io.jailscale</groupId>
-        <artifactId>jailscale-crypto</artifactId>
+        <artifactId>crypto</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>io.jailscale</groupId>
-        <artifactId>jailscale-proto</artifactId>
+        <artifactId>proto</artifactId>
         <version>${project.version}</version>
       </dependency>
     </dependencies>

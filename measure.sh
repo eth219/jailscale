@@ -9,10 +9,10 @@
 #   --check      exit 1 when a number exceeds the budget below (the CI gate)
 set -eu
 R=$(cd "$(dirname "$0")" && pwd)
-HUB=$R/jailscale-hub/target/jailhub
-NODE=$R/jailscale-node/target/jailscale
-CERT=$R/jailscale-hub/src/test/resources/tls/hub-test.crt
-KEY=$R/jailscale-hub/src/test/resources/tls/hub-test.key
+HUB=$R/hub/target/jailhub
+NODE=$R/node/target/jailscale
+CERT=$R/hub/src/test/resources/tls/hub-test.crt
+KEY=$R/hub/src/test/resources/tls/hub-test.key
 W=/tmp/jsm$$
 PORT=${PORT:-18443}
 CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
