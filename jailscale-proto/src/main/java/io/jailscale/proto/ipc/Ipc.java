@@ -140,8 +140,12 @@ public final class Ipc {
         @Override
         public void close() throws IOException {
             ch.close();
+            // Delete only what we can prove is still our file: during a hand-off (DESIGN.md §7.7)
+            // the successor has already rebound this path, and unlinking its socket strands every
+            // admin client. Windows reports no file key, so there we never delete -- harmless,
+            // because serve() unlinks a stale socket before binding.
             Object now = fileKey(path);
-            if (now == null || fileKey == null || now.equals(fileKey)) {
+            if (fileKey != null && fileKey.equals(now)) {
                 Files.deleteIfExists(path);
             }
         }

@@ -14,6 +14,8 @@ import java.nio.channels.DatagramChannel;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Raw TCP/UDP publishing (DESIGN.md §9.5): the hub listens on an assigned port and forwards
@@ -31,11 +33,31 @@ final class RawPorts implements AutoCloseable {
         void close();
     }
 
+    /** How long close() waits for a listener's loop to leave its blocking call. */
+    private static final long CLOSE_WAIT_MS = 2_000;
+
     private final Hub hub;
     private final Map<String, Listener> listeners = new ConcurrentHashMap<>();
 
     RawPorts(Hub hub) {
         this.hub = hub;
+    }
+
+    /**
+     * Waits for a listener's loop to leave its blocking call. {@code close()} on a socket that
+     * another thread is blocked on is deferred by the JDK until that thread returns, so the port
+     * is still taken for a moment afterwards. Reopening a raw link closes the old listener and
+     * binds the same port immediately (DESIGN.md §9.5, "the newest opener wins"), which without
+     * this wait loses the race and answers {@code port-bind-failed}.
+     */
+    private static void awaitRelease(CountDownLatch stopped) {
+        try {
+            if (!stopped.await(CLOSE_WAIT_MS, TimeUnit.MILLISECONDS)) {
+                LOG.warn("listener did not stop within {} ms; its port may still be busy", CLOSE_WAIT_MS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** Binds the link's port; throws if the port is not free on this host. */
@@ -66,6 +88,7 @@ final class RawPorts implements AutoCloseable {
     private final class Tcp implements Listener {
         private final Links.Link link;
         private final ServerSocket server;
+        private final CountDownLatch stopped = new CountDownLatch(1);
 
         Tcp(Links.Link link) throws IOException {
             this.link = link;
@@ -76,14 +99,18 @@ final class RawPorts implements AutoCloseable {
         }
 
         private void accept() {
-            while (!server.isClosed()) {
-                Socket s;
-                try {
-                    s = server.accept();
-                } catch (IOException e) {
-                    break;
+            try {
+                while (!server.isClosed()) {
+                    Socket s;
+                    try {
+                        s = server.accept();
+                    } catch (IOException e) {
+                        break;
+                    }
+                    Thread.ofVirtual().name("raw-tcp-" + link.port() + "-" + s.getPort()).start(() -> serve(s));
                 }
-                Thread.ofVirtual().name("raw-tcp-" + link.port() + "-" + s.getPort()).start(() -> serve(s));
+            } finally {
+                stopped.countDown();
             }
         }
 
@@ -120,6 +147,7 @@ final class RawPorts implements AutoCloseable {
             } catch (IOException ignored) {
                 // closing
             }
+            awaitRelease(stopped);
         }
     }
 
@@ -129,6 +157,7 @@ final class RawPorts implements AutoCloseable {
         private final Links.Link link;
         private final DatagramChannel channel;
         private final Map<SocketAddress, Flow> flows = new ConcurrentHashMap<>();
+        private final CountDownLatch stopped = new CountDownLatch(1);
         private volatile boolean closed;
 
         Udp(Links.Link link) throws IOException {
@@ -140,6 +169,14 @@ final class RawPorts implements AutoCloseable {
         }
 
         private void receive() {
+            try {
+                receiveLoop();
+            } finally {
+                stopped.countDown();
+            }
+        }
+
+        private void receiveLoop() {
             ByteBuffer buf = ByteBuffer.allocate(Frame.MAX_DATA + 1);
             while (!closed) {
                 SocketAddress from;
@@ -237,6 +274,7 @@ final class RawPorts implements AutoCloseable {
             } catch (IOException ignored) {
                 // closing
             }
+            awaitRelease(stopped);
             for (Map.Entry<SocketAddress, Flow> e : flows.entrySet()) {
                 end(e.getKey(), e.getValue());
             }
