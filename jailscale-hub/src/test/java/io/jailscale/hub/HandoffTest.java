@@ -22,6 +22,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
@@ -42,6 +43,7 @@ class HandoffTest {
     private Path root;
     private Hub old;
     private Hub fresh;
+    private Path sock;
     private Daemon alice;
     private ServerSocket localApp;
 
@@ -119,14 +121,15 @@ class HandoffTest {
 
         alice = new Daemon(NodeConfig.in(root.resolve("alice")));
         alice.start();
-        Path sock = root.resolve("alice/jailscale.sock");
+        sock = root.resolve("alice/jailscale.sock");
         JsonObject up = Ipc.call(sock, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1")
             .put("port", port).put("user", "alice").put("caFile", CERT.toString()).put("connections", 2).build());
         assertTrue(up.optBool("ok", false), up.toString());
-        waitFor(() -> alice.hasCert(old.tls().keyId()));
+        waitFor("node never received the certificate", () -> alice.hasCert(old.tls().keyId()));
         JsonObject open = Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "slow").build());
         assertTrue(open.optBool("ok", false), open.toString());
-        waitFor(() -> Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).integer("connections") == 2);
+        waitFor("node did not open both connections before the hand-off",
+            () -> Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).integer("connections") == 2);
         assertEquals(2, old.registry().get(Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).string("machineKey")).connections());
 
         // A visitor whose response is still streaming when the hand-off happens.
@@ -146,22 +149,30 @@ class HandoffTest {
         assertTrue(old.isHandingOff());
 
         // The in-flight response completes through the old process.
-        HttpResponse r = inFlight.get(20, TimeUnit.SECONDS);
+        HttpResponse r;
+        try {
+            r = inFlight.get(20, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new AssertionError(state("in-flight response never finished through the draining connection"), e);
+        }
         assertEquals(200, r.status());
         assertEquals("chunkchunkchunkchunkchunkchunk", r.bodyText());
 
         // The node has moved: registered with the new hub, link reopened, extras back up.
-        waitFor(() -> fresh.registry().size() == 1 && fresh.links().byName("slow") != null);
+        waitFor("node did not re-register and reopen its link on the new hub",
+            () -> fresh.registry().size() == 1 && fresh.links().byName("slow") != null);
         JsonObject st = Ipc.call(sock, JsonObject.builder().put("cmd", "status").build());
         assertTrue(st.optBool("connected", false), st.toString());
-        waitFor(() -> Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).integer("connections") == 2);
+        waitFor("node did not restore both connections after the hand-off",
+            () -> Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).integer("connections") == 2);
 
         // New visitors are served by the new hub; nothing failed in between.
         assertEquals(200, visit(port, "slow.hub.test").status());
 
         // The old process drains to zero sessions.
-        waitFor(() -> old.registry().liveSessions() == 0);
-        waitFor(() -> Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).integer("draining") == 0);
+        waitFor("old hub never drained to zero sessions", () -> old.registry().liveSessions() == 0);
+        waitFor("node still holds a draining connection",
+            () -> Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()).integer("draining") == 0);
 
         // Admin IPC now reaches the new hub.
         JsonObject status = Ipc.call(root.resolve("hub/jailhub.sock"), JsonObject.builder().put("cmd", "status").build());
@@ -172,7 +183,7 @@ class HandoffTest {
         boolean ok() throws Exception;
     }
 
-    private static void waitFor(Check c) throws Exception {
+    private void waitFor(String what, Check c) throws Exception {
         long deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {
             if (c.ok()) {
@@ -180,6 +191,34 @@ class HandoffTest {
             }
             Thread.sleep(100);
         }
-        throw new AssertionError("condition not met in time");
+        throw new AssertionError(state(what));
+    }
+
+    /**
+     * Both halves of the hand-off, for a wait that ran out. A bare TimeoutException says only that
+     * something stalled; this says which side still thinks it owns the stream. Adding the same kind
+     * of detail to RawPortTest turned "missing field 'hubPort'" into "port-bind-failed" in one run.
+     */
+    private String state(String what) {
+        StringBuilder b = new StringBuilder(what);
+        try {
+            b.append(" | old: handingOff=").append(old.isHandingOff())
+                .append(" liveSessions=").append(old.registry().liveSessions())
+                .append(" registry=").append(old.registry().size());
+        } catch (Exception e) {
+            b.append(" | old unreadable: ").append(e);
+        }
+        try {
+            b.append(" | fresh: ").append(fresh == null ? "not started"
+                : "registry=" + fresh.registry().size() + " slowLink=" + (fresh.links().byName("slow") != null));
+        } catch (Exception e) {
+            b.append(" | fresh unreadable: ").append(e);
+        }
+        try {
+            b.append(" | node: ").append(Ipc.call(sock, JsonObject.builder().put("cmd", "status").build()));
+        } catch (Exception e) {
+            b.append(" | node unreadable: ").append(e);
+        }
+        return b.toString();
     }
 }
