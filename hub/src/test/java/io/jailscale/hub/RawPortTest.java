@@ -27,7 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** DESIGN.md §9.5: raw TCP and UDP through hub-assigned ports. */
+/** ARCHITECTURE.md §8.4: raw TCP and UDP through hub-assigned ports. */
 @Timeout(90)
 class RawPortTest {
 

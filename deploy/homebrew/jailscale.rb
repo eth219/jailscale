@@ -1,4 +1,4 @@
-# Homebrew formula template for a tap (DESIGN.md §14 M4): brew install <you>/tap/jailscale
+# Homebrew formula template for a tap (ARCHITECTURE.md §14): brew install <you>/tap/jailscale
 # Fill in the version and the sha256 values from the release's SHA256SUMS.txt.
 class Jailscale < Formula
   desc "Publish a local port on the internet through your own hub, no root, no TUN"

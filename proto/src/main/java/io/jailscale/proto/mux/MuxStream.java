@@ -7,7 +7,7 @@ import java.io.OutputStream;
 import java.util.ArrayDeque;
 
 /**
- * One byte stream (or datagram stream) inside a {@link MuxSession} (DESIGN.md §8). The session's
+ * One byte stream (or datagram stream) inside a {@link MuxSession} (ARCHITECTURE.md §5.3). The session's
  * reader thread feeds {@link #onData} etc.; application threads use {@link #in()}/{@link #out()}.
  * Flow control: the receiver advertises {@link #WINDOW} bytes and refills it with WINDOW frames
  * once half is consumed; the sender blocks when out of credits.

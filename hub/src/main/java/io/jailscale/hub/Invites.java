@@ -3,7 +3,7 @@ package io.jailscale.hub;
 import io.jailscale.proto.control.Message;
 import java.io.IOException;
 
-/** Invite issuance from nodes and from the admin CLI (DESIGN.md §11.2). */
+/** Invite issuance from nodes and from the admin CLI (ARCHITECTURE.md §10). */
 final class Invites {
 
     static final int DEFAULT_USES = 1;

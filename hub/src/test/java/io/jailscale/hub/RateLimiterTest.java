@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** DESIGN.md §12.4: the per-address token bucket behind the handshake and credential limits. */
+/** ARCHITECTURE.md §11.5: the per-address token bucket behind the handshake and credential limits. */
 @Timeout(30)
 class RateLimiterTest {
 

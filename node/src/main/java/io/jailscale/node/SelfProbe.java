@@ -9,7 +9,7 @@ import javax.net.ssl.SSLSession;
 
 /**
  * Detects a hub that serves one of this node's names itself, or hands it to another node
- * (DESIGN.md §12.3). The signing conditions of §12.1 do not cover this: they are enforced by the
+ * (ARCHITECTURE.md §11.2). The signing conditions of §11.1 do not cover this: they are enforced by the
  * hub, so they stop a rogue node and say nothing about a rogue hub.
  *
  * <p>The check is RFC 5705 keying material. Both ends of a TLS 1.3 session derive the same bytes
@@ -92,7 +92,7 @@ final class SelfProbe {
 
     void warn(String name) {
         LOG.error("{}: the TLS for this name was terminated by something other than this node. "
-            + "A hub holding the wildcard key can do that (DESIGN.md §12.3, detection §12.5). Treat the name as compromised.", name);
+            + "A hub holding the wildcard key can do that (ARCHITECTURE.md §11.2, detection §11.3). Treat the name as compromised.", name);
     }
 
     private static boolean constantTimeEquals(String a, String b) {

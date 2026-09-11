@@ -44,7 +44,7 @@
         <artifactId>maven-shade-plugin</artifactId>
         <executions>
           <execution>
-            <!-- Fallback JAR for platforms without a native binary (DESIGN.md §1, §14 M4): java -jar target/jailscale.jar -->
+            <!-- Fallback JAR for platforms without a native binary (ARCHITECTURE.md §1, §14): java -jar target/jailscale.jar -->
             <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>

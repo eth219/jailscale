@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The multiplexer over one {@link NoiseChannel} (DESIGN.md §8): stream 0 carries control JSON,
+ * The multiplexer over one {@link NoiseChannel} (ARCHITECTURE.md §5.3): stream 0 carries control JSON,
  * other streams carry bytes with per-stream flow control. One reader thread dispatches frames;
  * a keepalive thread sends KEEPALIVE every 25 s.
  *

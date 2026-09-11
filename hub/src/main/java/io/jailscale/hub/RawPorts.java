@@ -18,7 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Raw TCP/UDP publishing (DESIGN.md §9.5): the hub listens on an assigned port and forwards
+ * Raw TCP/UDP publishing (ARCHITECTURE.md §8.4): the hub listens on an assigned port and forwards
  * every visitor connection (TCP) or every visitor address (UDP, one DGRAM stream each) to the
  * node. No TLS, no SNI: bytes in, bytes out.
  */
@@ -47,7 +47,7 @@ final class RawPorts implements AutoCloseable {
      * Waits for a listener's loop to leave its blocking call. {@code close()} on a socket that
      * another thread is blocked on is deferred by the JDK until that thread returns, so the port
      * is still taken for a moment afterwards. Reopening a raw link closes the old listener and
-     * binds the same port immediately (DESIGN.md §9.5, "the newest opener wins"), which without
+     * binds the same port immediately (ARCHITECTURE.md §8.4, "the newest opener wins"), which without
      * this wait loses the race and answers {@code port-bind-failed}.
      */
     private static void awaitRelease(CountDownLatch stopped) {

@@ -9,7 +9,7 @@ import java.util.Random;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** The DNS responder is exposed to the whole internet on :53 (DESIGN.md §14): mutation fuzzing of its packet path. */
+/** The DNS responder is exposed to the whole internet on :53 (ARCHITECTURE.md §14): mutation fuzzing of its packet path. */
 @Timeout(120)
 class DnsFuzzTest {
 

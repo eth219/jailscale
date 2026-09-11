@@ -5,7 +5,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * The whole logging framework (DESIGN.md §4): one line per event on stderr,
+ * The whole logging framework (ARCHITECTURE.md §3.1): one line per event on stderr,
  * {@code HH:mm:ss.SSS LEVEL [tag] message}. Level is process-wide.
  */
 public final class Log {

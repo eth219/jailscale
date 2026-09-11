@@ -7,7 +7,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Admin commands over the state-directory socket (DESIGN.md §7.6). Socket permissions are the auth. */
+/** Admin commands over the state-directory socket (ARCHITECTURE.md §6.3). Socket permissions are the auth. */
 final class AdminIpc implements Ipc.Handler {
 
     private final Hub hub;
@@ -96,7 +96,7 @@ final class AdminIpc implements Ipc.Handler {
             }
             case "name-release" -> {
                 store.releaseName(req.string("name"));
-                hub.links().releasedByOperator(req.string("name"), false); // §12.6
+                hub.links().releasedByOperator(req.string("name"), false); // §11.4
                 reply.ok();
             }
             case "domain-list" -> {

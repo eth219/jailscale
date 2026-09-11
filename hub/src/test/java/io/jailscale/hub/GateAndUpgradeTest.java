@@ -31,7 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** DESIGN.md §10.4 (visitor gate) and §10.3 (Upgrade/bidirectional passthrough). */
+/** ARCHITECTURE.md §9.3: the visitor gate, and Upgrade/bidirectional passthrough. */
 @Timeout(90)
 class GateAndUpgradeTest {
 

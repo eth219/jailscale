@@ -14,7 +14,7 @@ import java.util.EnumSet;
 import java.util.List;
 
 /**
- * The hub's static Noise key and its rotation (DESIGN.md §6.2). {@code hub.key} holds the
+ * The hub's static Noise key and its rotation (ARCHITECTURE.md §5.2). {@code hub.key} holds the
  * current private key, {@code hub.key.next} the next one during a grace period.
  */
 final class HubKeys {

@@ -30,7 +30,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** DESIGN.md §9.6 (hub behind a TCP proxy sending PROXY headers) and §10.3 (node prepends one for the local app). */
+/** ARCHITECTURE.md §8.5 (hub behind a TCP proxy sending PROXY headers) and §9.3 (node prepends one for the local app). */
 @Timeout(90)
 class ProxyProtocolEndToEndTest {
 

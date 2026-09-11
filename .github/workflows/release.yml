@@ -1,4 +1,4 @@
-# Release build (DESIGN.md §14 M4): native binaries for five platforms plus the fallback JARs,
+# Release build (ARCHITECTURE.md §14): native binaries for five platforms plus the fallback JARs,
 # attached to the GitHub release of the pushed tag. Triggered by tags like v0.1.0.
 name: release
 on:
@@ -23,7 +23,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # Liberica NIK rather than GraalVM CE, and JDK 25.0.3 or newer, on purpose (DESIGN.md §4).
+      # Liberica NIK rather than GraalVM CE, and JDK 25.0.3 or newer, on purpose (ARCHITECTURE.md §3.2).
       # JDK 25.0.0-25.0.2 lose timed virtual-thread wake-ups once a delayed task is cancelled
       # (JDK-8370887, with JDK-8369227 next to it); a hand-off cancels the old connections'
       # keepalive sleeps, and HandoffTest then stalled on one or two runners per run. Both fixes

@@ -1,7 +1,7 @@
 package io.jailscale.proto.mux;
 
 /**
- * One multiplexer frame (DESIGN.md §8): {@code [4B streamId][1B type][1B flags][2B len][payload]}.
+ * One multiplexer frame (ARCHITECTURE.md §5.3): {@code [4B streamId][1B type][1B flags][2B len][payload]}.
  * Exactly one frame travels inside one Noise transport message.
  */
 public record Frame(long streamId, int type, int flags, byte[] payload) {

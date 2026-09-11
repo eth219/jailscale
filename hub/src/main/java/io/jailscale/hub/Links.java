@@ -12,7 +12,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
-/** Names and the links currently serving them (DESIGN.md §9.2). */
+/** Names and the links currently serving them (ARCHITECTURE.md §8.2). */
 final class Links {
 
     private static final Log LOG = Log.get("links");
@@ -127,7 +127,7 @@ final class Links {
             if (prior == null || !prior.mkey().equals(node.mkey())) {
                 store.claimName(name, node.user(), node.mkey(), req.local());
                 if (prior != null) {
-                    // The name moved between this user's nodes (DESIGN.md §12.6). Driven by the
+                    // The name moved between this user's nodes (ARCHITECTURE.md §11.4). Driven by the
                     // stored claim, not by a live link: the node that loses a name is usually the
                     // one that is offline, and that is exactly when there is no link to look at.
                     notifyRevoked(prior.mkey(), null, name, Message.LinkRevoked.REASSIGNED);
@@ -158,7 +158,7 @@ final class Links {
     }
 
     /**
-     * DESIGN.md §9.4: the node brings its own certificate for its own domain; a chain that
+     * ARCHITECTURE.md §8.3: the node brings its own certificate for its own domain; a chain that
      * validates is the proof of ownership. Pure SNI passthrough afterwards, no signing.
      */
     private Message openDomain(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
@@ -186,7 +186,7 @@ final class Links {
         return new Message.LinkOpened(link.linkId(), domain, "https://" + domain + portSuffix(), null, null);
     }
 
-    /** DESIGN.md §9.5: a port instead of a name. Stable per node, kind and local target. */
+    /** ARCHITECTURE.md §8.4: a port instead of a name. Stable per node, kind and local target. */
     private Message openRaw(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
         if (!config.hasPortRange()) {
             return new Message.LinkOpened(null, null, null, null, "raw-ports-disabled");
@@ -270,7 +270,7 @@ final class Links {
     }
 
     /**
-     * An operator released a name or domain (DESIGN.md §12.6): take the live link down and tell
+     * An operator released a name or domain (ARCHITECTURE.md §11.4): take the live link down and tell
      * the node. Without this the name keeps serving from the old node until it closes the link.
      */
     void releasedByOperator(String name, boolean domain) {
@@ -295,7 +295,7 @@ final class Links {
 
     /**
      * Tells the node that lost a name: now if it is connected, on its next connection if not
-     * (DESIGN.md §12.6). Being offline is often why the name was taken, so the stored notice is
+     * (ARCHITECTURE.md §11.4). Being offline is often why the name was taken, so the stored notice is
      * the common path, not the exception.
      */
     private void notifyRevoked(String mkey, String linkId, String name, String reason) {

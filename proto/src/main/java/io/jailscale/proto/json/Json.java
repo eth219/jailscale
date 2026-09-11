@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A small RFC 8259 parser and writer with no reflection (DESIGN.md §4).
+ * A small RFC 8259 parser and writer with no reflection (ARCHITECTURE.md §3.1).
  *
  * <p>Values map to plain Java: object → {@link LinkedHashMap}, array → {@link ArrayList},
  * string → {@link String}, integer → {@link Long}, other numbers → {@link Double},

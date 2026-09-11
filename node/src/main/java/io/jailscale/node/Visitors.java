@@ -27,7 +27,7 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 
 /**
- * Visitor streams on the node (DESIGN.md §10.2, §10.3): terminate TLS with the hub's
+ * Visitor streams on the node (ARCHITECTURE.md §9.2, §9.3): terminate TLS with the hub's
  * certificate and a remote key, connect to the local target, copy bytes both ways.
  */
 final class Visitors {
@@ -71,7 +71,7 @@ final class Visitors {
         return contexts.containsKey(keyId);
     }
 
-    /** DESIGN.md §10.2: a user domain terminates with the node's real key under keyId {@code domain:<name>}. */
+    /** ARCHITECTURE.md §9.2: a user domain terminates with the node's real key under keyId {@code domain:<name>}. */
     void installDomain(DomainCerts.Material m) throws GeneralSecurityException, IOException {
         KeyStore ks = KeyStore.getInstance("PKCS12");
         ks.load(null, null);
@@ -113,7 +113,7 @@ final class Visitors {
         }
         TlsEndpoint tls = new TlsEndpoint(ctx, stream.in(), stream.out());
         try {
-            // Remember that this node, and not the hub or another node, terminated it (§12.5).
+            // Remember that this node, and not the hub or another node, terminated it (§11.3).
             // Not after handshake(): on the server side of TLS 1.3 the exporter is not usable
             // until the peer's Finished has been processed, and that has not necessarily happened
             // when the handshake loop returns. Recording nothing would later read as a compromised
@@ -174,7 +174,7 @@ final class Visitors {
         relay(tls, local, stream, concat(proxyLine, replay));
     }
 
-    /** DESIGN.md §10.3: {@code --proxy-protocol} tells the local app who the visitor is, HAProxy style. */
+    /** ARCHITECTURE.md §9.3: {@code --proxy-protocol} tells the local app who the visitor is, HAProxy style. */
     private static byte[] proxyLine(MuxStream stream, NodeState.LinkRec target) {
         if (target == null || !target.proxyProtocol) {
             return null;
@@ -197,7 +197,7 @@ final class Visitors {
         return out;
     }
 
-    /** DESIGN.md §9.5 / §10.3: raw TCP copies bytes; raw UDP maps one DGRAM stream to one local socket. */
+    /** ARCHITECTURE.md §8.4 / §9.3: raw TCP copies bytes; raw UDP maps one DGRAM stream to one local socket. */
     private static void serveRaw(String kind, MuxStream stream, NodeState.LinkRec target) {
         if (target == null || !target.kind.equals(kind)) {
             LOG.warn("{} visitor refused: unknown link", kind);

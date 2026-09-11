@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Live node groups by MachineKey (DESIGN.md §8). */
+/** Live node groups by MachineKey (ARCHITECTURE.md §5.3). */
 final class Registry {
 
     private final Hub hub;

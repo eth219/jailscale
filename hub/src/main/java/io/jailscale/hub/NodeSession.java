@@ -16,7 +16,7 @@ import java.net.Socket;
 import java.security.GeneralSecurityException;
 
 /**
- * One connection from a node after the HTTP 101 (DESIGN.md §6, §7, §8). The Hello carries the
+ * One connection from a node after the HTTP 101 (ARCHITECTURE.md §5, §5.3, §6). The Hello carries the
  * connection index; index 0 is the control connection and handles registration, links,
  * invites and signing on stream 0. Every connection carries visitor streams.
  */
@@ -273,7 +273,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     }
 
     /**
-     * Hands over the names this node lost while it was away (DESIGN.md §12.6), then forgets them.
+     * Hands over the names this node lost while it was away (ARCHITECTURE.md §11.4), then forgets them.
      * Cleared only after every one is on the wire, so a node that dies mid-delivery is told again.
      */
     private void deliverNotices() throws IOException {
@@ -309,7 +309,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     }
 
     /**
-     * Hand-off (DESIGN.md §7.7): the node is asked to reconnect elsewhere; this connection stays
+     * Hand-off (ARCHITECTURE.md §13): the node is asked to reconnect elsewhere; this connection stays
      * open only for the streams already on it and closes once they are gone.
      */
     void drain() {

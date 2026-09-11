@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The minimal admin page (DESIGN.md §7.6): no password, no IdP. An admin node asks for a
+ * The minimal admin page (ARCHITECTURE.md §6.3): no password, no IdP. An admin node asks for a
  * one-time login link over the control channel; visiting it sets a session cookie. Server
  * rendered HTML, no JavaScript, forms with a session-bound CSRF token.
  */
@@ -38,7 +38,7 @@ final class AdminWeb {
 
     /**
      * As above, but {@code shell} marks a link issued over the admin IPC socket. That caller is
-     * authorised by the socket's file permissions (§7.6) and has no entry in the admin list, so
+     * authorised by the socket's file permissions (§6.3) and has no entry in the admin list, so
      * it is exempt from the per-request admin re-check rather than being looked up there.
      */
     String loginLink(String user, boolean shell) {
@@ -176,7 +176,7 @@ final class AdminWeb {
             case "/admin/name/release" -> {
                 String name = need(f, "name");
                 store.releaseName(name);
-                hub.links().releasedByOperator(name, false); // take it down now, and tell the node (§12.6)
+                hub.links().releasedByOperator(name, false); // take it down now, and tell the node (§11.4)
             }
             case "/admin/domain/release" -> {
                 String domain = need(f, "domain");

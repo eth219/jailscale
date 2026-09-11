@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Timeout;
 import java.nio.charset.StandardCharsets;
 
 /**
- * M2 data path (DESIGN.md §14): {@code jailscale open} publishes a local HTTP server as
+ * M2 data path (ARCHITECTURE.md §14): {@code jailscale open} publishes a local HTTP server as
  * {@code https://<name>.hub.test}; a TLS client with that SNI goes through the hub's SNI router,
  * is terminated by the node with the hub's wildcard certificate (signature delegated to the hub),
  * and reaches the local server. Also the signing-oracle refusals.
@@ -150,7 +150,7 @@ class LinkEndToEndTest {
         HttpResponse none = visit("nothere.hub.test", "/");
         assertEquals(404, none.status());
 
-        // DESIGN.md §12.3: the node checks that it was the one that terminated the TLS for its own
+        // ARCHITECTURE.md §11.3: the node checks that it was the one that terminated the TLS for its own
         // names. An honest hub passes bytes through, so the keying material of the probe's session
         // is one the node recorded.
         JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));

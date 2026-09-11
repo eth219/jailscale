@@ -3,7 +3,7 @@ package io.jailscale.proto.control;
 import java.util.List;
 
 /**
- * Control messages carried on mux stream 0 (DESIGN.md §7). Every message serialises to a JSON
+ * Control messages carried on mux stream 0 (ARCHITECTURE.md §6.1). Every message serialises to a JSON
  * object with a {@code "t"} type field; {@link Codec} does the encoding by hand.
  */
 public sealed interface Message {
@@ -108,7 +108,7 @@ public sealed interface Message {
 
     /**
      * {@code local} is the node-side target ("host:port"); it keys the stable random name.
-     * {@code chainPem}: for user domains, the node's own certificate chain proving the name (§9.4).
+     * {@code chainPem}: for user domains, the node's own certificate chain proving the name (§8.3).
      */
     record LinkOpen(String kind, String name, String domain, Integer port, String local, List<String> chainPem) implements Message {
         public static final String HTTPS = "https";
@@ -126,12 +126,12 @@ public sealed interface Message {
     }
 
     /**
-     * The hub telling a node that one of its names is no longer served by it (DESIGN.md §12.6).
+     * The hub telling a node that one of its names is no longer served by it (ARCHITECTURE.md §11.4).
      * Sent when another node opens the same name, or when an operator releases it. An honest hub
-     * sends this; a compromised one will not, which is what the self-probe (§12.5) is for.
+     * sends this; a compromised one will not, which is what the self-probe (§11.3) is for.
      */
     record LinkRevoked(String linkId, String name, String reason, long at) implements Message {
-        /** Another node opened the same name; the newest opener won (§9.2). */
+        /** Another node opened the same name; the newest opener won (§8.2). */
         public static final String REASSIGNED = "reassigned";
         /** An operator released the name, domain or port on the hub. */
         public static final String RELEASED = "released";

@@ -15,7 +15,7 @@ import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
 /**
- * Public port 443 (DESIGN.md §9.1): peek the ClientHello, then either terminate TLS for the
+ * Public port 443 (ARCHITECTURE.md §8.1): peek the ClientHello, then either terminate TLS for the
  * hub's own name, relay the raw bytes to the node serving {@code <name>.<hub>}, or answer with
  * a short page under the wildcard certificate.
  */
@@ -85,7 +85,7 @@ final class SniRouter {
                     return;
                 }
             } else {
-                // A user domain (DESIGN.md §9.4): passthrough only, the hub has no certificate to answer with.
+                // A user domain (ARCHITECTURE.md §8.3): passthrough only, the hub has no certificate to answer with.
                 name = sni.toLowerCase(java.util.Locale.ROOT);
                 link = hub.links().byDomain(name);
                 if (link == null && hub.store().domain(name) != null) {

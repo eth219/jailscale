@@ -23,7 +23,7 @@ import java.util.List;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 
-/** The node's side of DESIGN.md §6: TLS to the hub, {@code /v1/key}, and the {@code /v1/noise} upgrade. */
+/** The node's side of ARCHITECTURE.md §5: TLS to the hub, {@code /v1/key}, and the {@code /v1/noise} upgrade. */
 final class HubClient {
 
     static final String UPGRADE_PROTOCOL = "jailscale-control-v1";
@@ -35,7 +35,7 @@ final class HubClient {
 
     record HubKeyInfo(String hubKey, String nextHubKey, Long notAfter) {}
 
-    /** {@code GET /v1/key} over web-PKI TLS: the first-contact trust bootstrap (§6.2). */
+    /** {@code GET /v1/key} over web-PKI TLS: the first-contact trust bootstrap (§5.2). */
     static HubKeyInfo fetchHubKey(String host, String addr, int port, SSLContext ctx, boolean verifyHostname) throws IOException {
         try (SSLSocket s = Tls.connect(ctx, host, addr, port, verifyHostname, CONNECT_TIMEOUT_MS)) {
             Http.writeRequest(s.getOutputStream(), "GET", host, "/v1/key", new Headers().add("Accept", "application/json"), null);
@@ -107,7 +107,7 @@ final class HubClient {
                 s.close();
             } catch (java.io.EOFException e) {
                 // The hub cannot answer a handshake it failed to decrypt; it just closes. Treat
-                // that like a wrong key and try the next candidate (rotation, DESIGN.md §6.2).
+                // that like a wrong key and try the next candidate (rotation, ARCHITECTURE.md §5.2).
                 lastNoise = new NoiseException("hub closed the connection during the handshake (wrong hub key?)");
                 s.close();
             } catch (IllegalArgumentException e) {

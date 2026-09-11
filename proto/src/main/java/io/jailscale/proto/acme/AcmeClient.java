@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The subset of ACME v2 (RFC 8555) DESIGN.md §6.3 needs: account, order with dns-01, finalize,
+ * The subset of ACME v2 (RFC 8555) ARCHITECTURE.md §7.2 needs: account, order with dns-01, finalize,
  * download. JWS-signed POSTs, nonce tracking with one badNonce retry, problem documents as
  * {@link AcmeException}.
  */
@@ -123,7 +123,7 @@ public final class AcmeClient {
         return challenge(authzUrl, "dns-01");
     }
 
-    /** The http-01 challenge of an authorization (user domains, DESIGN.md §9.4). */
+    /** The http-01 challenge of an authorization (user domains, ARCHITECTURE.md §8.3). */
     public Challenge http01(String authzUrl) throws AcmeException {
         return challenge(authzUrl, "http-01");
     }

@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code jailscale service install|uninstall|status} (DESIGN.md §10.5): keep the daemon running
+ * {@code jailscale service install|uninstall|status} (ARCHITECTURE.md §9.4): keep the daemon running
  * across logins and reboots with what the OS already has. launchd agent on macOS, systemd user
  * unit on Linux, a logon scheduled task on Windows. No third-party service wrapper.
  */

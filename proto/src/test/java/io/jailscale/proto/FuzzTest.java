@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * Mutation fuzzing of every parser that faces the network (DESIGN.md §14 "테스트 전략"): valid
+ * Mutation fuzzing of every parser that faces the network (ARCHITECTURE.md §14): valid
  * inputs get bytes flipped, inserted, deleted and truncated; the only acceptable outcomes are a
  * result or the parser's declared exception. Anything else (index errors, NPEs, negative sizes,
  * OOM-sized allocations) is a bug. Deterministic seed, ~10k cases per parser, a few seconds.

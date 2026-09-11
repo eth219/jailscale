@@ -29,7 +29,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** DESIGN.md §9.4: a user domain, certified with the node's own key via http-01 relayed by the hub. */
+/** ARCHITECTURE.md §8.3: a user domain, certified with the node's own key via http-01 relayed by the hub. */
 @Timeout(120)
 class UserDomainTest {
 

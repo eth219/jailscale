@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Certificates for user domains (DESIGN.md §9.4): the node's own key, obtained with ACME
+ * Certificates for user domains (ARCHITECTURE.md §8.3): the node's own key, obtained with ACME
  * http-01 where the hub answers the challenge on port 80. Files in {@code <config>/domains/}.
  */
 final class DomainCerts {
@@ -37,7 +37,7 @@ final class DomainCerts {
             return chain.get(0).getNotAfter().getTime();
         }
 
-        /** DESIGN.md §9.4: renew when a third of the lifetime is left. */
+        /** ARCHITECTURE.md §8.3: renew when a third of the lifetime is left. */
         boolean dueForRenewal() {
             long notBefore = chain.get(0).getNotBefore().getTime();
             long remaining = notAfter() - System.currentTimeMillis();

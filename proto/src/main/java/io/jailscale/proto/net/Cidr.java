@@ -4,7 +4,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.List;
 
-/** IPv4/IPv6 prefix matching for {@code --trusted-proxy} (DESIGN.md §9.6). */
+/** IPv4/IPv6 prefix matching for {@code --trusted-proxy} (ARCHITECTURE.md §8.5). */
 public final class Cidr {
 
     private final byte[] network;

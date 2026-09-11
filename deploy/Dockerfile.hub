@@ -1,4 +1,4 @@
-# jailhub container (DESIGN.md §14 M4). Builds the native binary with GraalVM, ships it on a
+# jailhub container (ARCHITECTURE.md §14). Builds the native binary with GraalVM, ships it on a
 # distroless base: no JVM, no shell, ~30 MB image.
 #
 #   docker build -f deploy/Dockerfile -t jailhub .

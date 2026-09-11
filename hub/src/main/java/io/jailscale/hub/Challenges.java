@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * ACME http-01 tokens that nodes asked the hub to answer on port 80 for their own domains
- * (DESIGN.md §9.4). Short-lived, capped per node; the hub never learns the node's keys.
+ * (ARCHITECTURE.md §8.3). Short-lived, capped per node; the hub never learns the node's keys.
  */
 final class Challenges {
 

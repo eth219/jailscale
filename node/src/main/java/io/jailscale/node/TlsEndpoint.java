@@ -14,7 +14,7 @@ import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSession;
 
 /**
- * Server-side TLS over an arbitrary byte stream (DESIGN.md §10.2): drives an {@link SSLEngine}
+ * Server-side TLS over an arbitrary byte stream (ARCHITECTURE.md §9.2): drives an {@link SSLEngine}
  * between the visitor's mux stream and plaintext streams for the relay. The engine's
  * {@code wrap}/{@code unwrap} serialise internally, so one thread may read plaintext while
  * another writes it.

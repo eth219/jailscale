@@ -20,10 +20,10 @@ import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
 
 /**
- * The node's connections to the hub (DESIGN.md §6, §7, §8): connection 0 carries control and
+ * The node's connections to the hub (ARCHITECTURE.md §5, §5.3, §6): connection 0 carries control and
  * registration; {@code --connections N} adds N-1 more that only carry visitor streams. On a hub
  * hand-off ({@code Goodbye(draining)}) the current sessions are kept for their streams while a
- * fresh set is opened, so nothing in flight is cut (§7.7).
+ * fresh set is opened, so nothing in flight is cut (§13).
  */
 final class HubLink implements AutoCloseable {
 
@@ -41,7 +41,7 @@ final class HubLink implements AutoCloseable {
 
         void onCert(Message.CertUpdate cert);
 
-        /** The hub says this node no longer serves a name it opened (DESIGN.md §12.6). */
+        /** The hub says this node no longer serves a name it opened (ARCHITECTURE.md §11.4). */
         void onRevoked(Message.LinkRevoked revoked);
 
         void onVisitor(HubLink link, Session session, MuxStream stream);

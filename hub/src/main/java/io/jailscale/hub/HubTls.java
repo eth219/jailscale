@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.net.ssl.SSLContext;
 
 /**
- * The hub's wildcard certificate and private key (DESIGN.md §6.3, §9.3). The key never leaves
+ * The hub's wildcard certificate and private key (ARCHITECTURE.md §7.2, §9.2). The key never leaves
  * this class: nodes get the chain via {@link #certUpdate()} and ask {@link #sign} for
  * handshake signatures. Previous keys are kept for a day so in-flight handshakes finish.
  */
@@ -48,7 +48,7 @@ final class HubTls {
     synchronized void install(List<X509Certificate> chain, PrivateKey key) throws GeneralSecurityException {
         X509Certificate leaf = chain.get(0);
         if (!"EC".equals(key.getAlgorithm())) {
-            throw new GeneralSecurityException("the hub certificate key must be ECDSA (DESIGN.md §6.3), got " + key.getAlgorithm());
+            throw new GeneralSecurityException("the hub certificate key must be ECDSA (ARCHITECTURE.md §7.2), got " + key.getAlgorithm());
         }
         boolean wild = false;
         try {

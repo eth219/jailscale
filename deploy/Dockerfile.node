@@ -1,4 +1,4 @@
-# jailscale node container (DESIGN.md §14). Same shape as Dockerfile.hub: GraalVM builds the
+# jailscale node container (ARCHITECTURE.md §14). Same shape as Dockerfile.hub: GraalVM builds the
 # native binary, distroless ships it. No JVM, no shell.
 #
 #   docker build -f deploy/Dockerfile.node -t jailscale .

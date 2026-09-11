@@ -13,7 +13,7 @@ import java.io.OutputStream;
 import java.net.Socket;
 
 /**
- * The hub's own HTTP endpoints on its name (DESIGN.md §6.1): {@code /v1/key}, {@code /v1/noise}
+ * The hub's own HTTP endpoints on its name (ARCHITECTURE.md §5.1): {@code /v1/key}, {@code /v1/noise}
  * (Upgrade), {@code /join/<token>}, and a root page. {@link SniRouter} hands over connections
  * whose SNI is the hub's own name, already wrapped in TLS.
  */
@@ -24,7 +24,7 @@ final class HttpFront {
     private static final int HTTP_TIMEOUT_MS = 15_000;
     private static final int MAX_BODY = 64 * 1024;
     /**
-     * Unauthenticated Noise handshakes per source address (DESIGN.md §12.4). A node opens up to
+     * Unauthenticated Noise handshakes per source address (ARCHITECTURE.md §11.5). A node opens up to
      * four connections and retries with backoff, and a NAT'd site puts many nodes behind one
      * address, so the burst is roomy; the sustained rate is what caps a flood.
      */
@@ -41,7 +41,7 @@ final class HttpFront {
     /**
      * Serves one TLS connection to completion. {@code ip} is the caller's address as resolved by
      * {@link SniRouter}, which is the PROXY header's address when the hub sits behind a proxy
-     * (DESIGN.md §9.6) and the socket's peer otherwise.
+     * (ARCHITECTURE.md §8.5) and the socket's peer otherwise.
      */
     void serve(Socket socket, String ip) {
         try (socket) {
@@ -105,7 +105,7 @@ final class HttpFront {
             if (token.isEmpty() || token.contains("/")) {
                 return HttpResponse.text(404, "not found");
             }
-            // Viewing the page never consumes the invite (DESIGN.md §11.3).
+            // Viewing the page never consumes the invite (ARCHITECTURE.md §10).
             String url = hub.config().baseUrl() + "/join/" + escape(token);
             return HttpResponse.html(200, page("jailscale invitation",
                 "<p>Run this on the machine you want to join:</p>"

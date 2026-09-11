@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * M1 completion criterion (DESIGN.md §14): a node invited by another node joins with nothing but
+ * M1 completion criterion (ARCHITECTURE.md §14): a node invited by another node joins with nothing but
  * {@code jailscale up --invite}, plus code invites, knock + admin approval, and hub key
  * rotation without dropping nodes. Everything runs in-process over loopback TLS with the test
  * certificate; the CLI is exercised through the same IPC the real binary uses.

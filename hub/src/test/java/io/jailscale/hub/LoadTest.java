@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * DESIGN.md §14 M4: 1,000 concurrent visitors through hub → node → local app, all holding their
+ * ARCHITECTURE.md §14: 1,000 concurrent visitors through hub → node → local app, all holding their
  * connection open at the same time, then a short throughput burst. Correctness (every visitor
  * gets its answer) and timing are asserted loosely; the memory budget is measured on the native
  * binaries by {@code measure.sh LOAD=1000}, not here. Excluded from the default build:

@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * DESIGN.md §7.7 hand-off and §8 multi-connection: a second hub takes over the same state
+ * ARCHITECTURE.md §13 hand-off and §5.3 multi-connection: a second hub takes over the same state
  * directory and port while a visitor stream is in flight; the stream completes through the old
  * process, the node reconnects to the new one, and new visitors are served with no failure.
  */

@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Hub state (DESIGN.md §7.5): in-memory maps, an append-only JSON Lines event log with fsync,
+ * Hub state (ARCHITECTURE.md §6.2): in-memory maps, an append-only JSON Lines event log with fsync,
  * and a periodic snapshot that truncates the log. Only {@code jailhub serve} writes here.
  *
  * <p>All public methods are synchronized; the maps are small and the hot path is elsewhere.
@@ -39,17 +39,17 @@ final class Store implements AutoCloseable {
 
     record PendingRec(String mkey, String hostname, String os, String ip, String user, long at) {}
 
-    /** A claimed name: who owns it and which node/local target last used it (DESIGN.md §9.2). */
+    /** A claimed name: who owns it and which node/local target last used it (ARCHITECTURE.md §8.2). */
     record NameRec(String name, String user, String mkey, String local, long at) {}
 
-    /** A user domain proven by a node's own certificate (DESIGN.md §9.4). */
+    /** A user domain proven by a node's own certificate (ARCHITECTURE.md §8.3). */
     record DomainRec(String domain, String user, String mkey, long at) {}
 
-    /** A raw port assigned to a node's local target (DESIGN.md §9.5); stable across restarts. */
+    /** A raw port assigned to a node's local target (ARCHITECTURE.md §8.4); stable across restarts. */
     record PortRec(int port, String kind, String user, String mkey, String local, long at) {}
 
     /**
-     * A name a node lost while it was not listening (DESIGN.md §12.6). Kept until the node
+     * A name a node lost while it was not listening (ARCHITECTURE.md §11.4). Kept until the node
      * reconnects and is told, so the notice survives the node being offline -- which is the
      * common case, since being offline is often why the name was reassigned.
      */

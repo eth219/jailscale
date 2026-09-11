@@ -12,7 +12,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.EnumSet;
 
-/** {@code node.json}: the MachineKey, the hub we belong to, and our registration (DESIGN.md §5). */
+/** {@code node.json}: the MachineKey, the hub we belong to, and our registration (ARCHITECTURE.md §4). */
 final class NodeState {
 
     static final String PRIVATE_PREFIX = "mkeypriv";
@@ -28,19 +28,19 @@ final class NodeState {
     long hubKeyActivatesAt;
     String caFile;        // trust exactly this PEM instead of system roots (tests, private CAs)
     boolean tlsInsecure;  // only with a pinned hub key
-    int connections = 1;  // connections to the hub (DESIGN.md §8), 1..4
+    int connections = 1;  // connections to the hub (ARCHITECTURE.md §5.3), 1..4
     boolean registered;
     long nodeId;
     String user;
     String dnsSuffix;
     final java.util.List<LinkRec> links = new java.util.concurrent.CopyOnWriteArrayList<>();
-    /** Names the hub said are no longer ours (DESIGN.md §12.6). Kept so `status` can repeat it. */
+    /** Names the hub said are no longer ours (ARCHITECTURE.md §11.4). Kept so `status` can repeat it. */
     final java.util.List<RevokedRec> revoked = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** One revocation the hub reported. Survives a restart, and is cleared by reopening the name. */
     record RevokedRec(String name, String reason, long at) {}
 
-    /** A link this node keeps open (DESIGN.md §10.1). {@code linkId}/{@code url} are per hub session. */
+    /** A link this node keeps open (ARCHITECTURE.md §9.1). {@code linkId}/{@code url} are per hub session. */
     static final class LinkRec {
         final String kind;
         final String host;
@@ -48,14 +48,14 @@ final class NodeState {
         volatile String name;   // assigned by the hub; requested on reopen so it stays stable
         volatile String linkId;
         volatile String url;
-        volatile String gateHash;      // visitor gate (DESIGN.md §10.4): SHA-256 of the visit token, or null
+        volatile String gateHash;      // visitor gate (ARCHITECTURE.md §9.3): SHA-256 of the visit token, or null
         volatile long gateExpiresAt;   // ms epoch; 0 = never
         volatile int hubPort;          // raw tcp/udp: the hub port assigned last time (requested again on reopen)
-        volatile String domain;        // user domain (DESIGN.md §9.4), or null
+        volatile String domain;        // user domain (ARCHITECTURE.md §8.3), or null
         volatile String acmeDirectory; // ACME directory used for the domain, or null for Let's Encrypt
         volatile String acmeEmail;
         volatile long certExpiresAt;   // not persisted: from the loaded certificate
-        volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (DESIGN.md §10.3)
+        volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (ARCHITECTURE.md §9.3)
 
         LinkRec(String kind, String host, int port, String name) {
             this.kind = kind;

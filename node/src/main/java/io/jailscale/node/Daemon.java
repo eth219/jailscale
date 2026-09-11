@@ -19,7 +19,7 @@ import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 
-/** The resident node process: owns the state file, the hub link, links and the local IPC (DESIGN.md §10). */
+/** The resident node process: owns the state file, the hub link, links and the local IPC (ARCHITECTURE.md §9). */
 public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events {
 
     private static final Log LOG = Log.get("daemon");
@@ -79,7 +79,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     /**
-     * A name this node opened is no longer served by it (DESIGN.md §12.6). Drop it from the state
+     * A name this node opened is no longer served by it (ARCHITECTURE.md §11.4). Drop it from the state
      * so the next reconnect does not silently reopen it, and say so loudly: if the node did not
      * expect this, someone else is now answering for that name.
      */
@@ -109,7 +109,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         if (Message.LinkRevoked.REASSIGNED.equals(r.reason())) {
             LOG.error("{} was reassigned: the hub now serves that name from another node. If you did not "
-                + "move it, treat it as compromised and read DESIGN.md §12.3.", r.name());
+                + "move it, treat it as compromised and read ARCHITECTURE.md §11.2.", r.name());
         } else {
             LOG.error("{} was released by the hub operator and is no longer yours.", r.name());
         }
@@ -317,7 +317,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return m;
     }
 
-    /** Hourly: renew domain certificates that have a third of their lifetime left (DESIGN.md §9.4). */
+    /** Hourly: renew domain certificates that have a third of their lifetime left (ARCHITECTURE.md §8.3). */
     private void renewLoop() {
         while (!closed) {
             try {
@@ -422,10 +422,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     /**
-     * DESIGN.md §12.3: connect to each open name as an ordinary visitor and check that the TLS
+     * ARCHITECTURE.md §11.3: connect to each open name as an ordinary visitor and check that the TLS
      * was terminated here. The keying material of a TLS 1.3 session is derivable by its two ends
      * and nobody else, so a value this node never recorded means something in between -- a hub
-     * holding the wildcard key can be that something. The §12.1 signing conditions do not help:
+     * holding the wildcard key can be that something. The §11.1 signing conditions do not help:
      * the hub enforces those, so they bind nodes, not the hub.
      */
     private void verify(Ipc.Reply reply) throws IOException {

@@ -10,7 +10,7 @@ import javax.net.ssl.SSLContext;
 
 /**
  * One-request HTTP/1.1 client over the same request/response code the hub and node already
- * carry (DESIGN.md §6.1): http or https (platform roots), no redirects, no keep-alive. Used for
+ * carry (ARCHITECTURE.md §5.1): http or https (platform roots), no redirects, no keep-alive. Used for
  * ACME so neither binary needs {@code java.net.http}.
  */
 public final class HttpCall {

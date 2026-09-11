@@ -5,7 +5,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A per-key token bucket for the work an unauthenticated caller can make the hub do
- * (DESIGN.md §12.4): opening a Noise handshake, and presenting a credential to register.
+ * (ARCHITECTURE.md §11.5): opening a Noise handshake, and presenting a credential to register.
  *
  * <p>Buckets are keyed by source address, so the map would grow without bound under an attacker
  * who rotates addresses. Once it passes {@link #MAX_KEYS} the refilled buckets are dropped; a

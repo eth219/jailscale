@@ -5,7 +5,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 
 /**
- * The minimal DER writer DESIGN.md §6.3 budgets: enough to build a PKCS#10 request. Every method
+ * The minimal DER writer ARCHITECTURE.md §7.2 budgets: enough to build a PKCS#10 request. Every method
  * returns a complete TLV.
  */
 public final class Der {

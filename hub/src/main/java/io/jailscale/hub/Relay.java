@@ -9,18 +9,18 @@ import java.net.Socket;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-/** Copies bytes between a visitor socket and a mux stream in both directions (DESIGN.md §9.1). */
+/** Copies bytes between a visitor socket and a mux stream in both directions (ARCHITECTURE.md §8.1). */
 final class Relay {
 
     private static final Log LOG = Log.get("relay");
     private static final int BUF = 16 * 1024;
     /**
      * How long the hub keeps a visitor socket after the node has finished with it. Both sides are
-     * half-closes (§8), so the hub waits for the visitor to close its own half before letting go.
+     * half-closes (§5.3), so the hub waits for the visitor to close its own half before letting go.
      * A visitor under no obligation to ever do that would otherwise pin the socket, the thread
      * reading it and the half-open stream for as long as it liked. The wait only starts once the
      * node has closed its side, so a stream that is meant to stay open -- WebSocket, SSE, a long
-     * download (§14 M3) -- never reaches it.
+     * download (§14) -- never reaches it.
      */
     static volatile long lingerMs = 10_000;
 

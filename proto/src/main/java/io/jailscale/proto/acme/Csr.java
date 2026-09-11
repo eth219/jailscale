@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * PKCS#10 (RFC 2986) for an EC P-256 key with a subjectAltName extension request, signed
- * ecdsa-with-SHA256. The JDK has no public CSR API (DESIGN.md §6.3).
+ * ecdsa-with-SHA256. The JDK has no public CSR API (ARCHITECTURE.md §7.2).
  */
 public final class Csr {
 

@@ -17,10 +17,10 @@ public final class Main {
                       certificate: built-in ACME (dns-01 via the hub's own DNS on --dns-listen 0.0.0.0:53)
                         [--acme-email you@example.com] [--acme-staging | --acme-directory URL] [--no-selfcheck]
                       or your own files: --tls-cert FILE --tls-key FILE
-                      [--port-range 10000-10999 | none]  ports for raw tcp/udp links (DESIGN.md §9.5)
-                      [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (DESIGN.md §9.4)
-                      [--proxy-protocol [--trusted-proxy CIDR,...]]  behind nginx stream / HAProxy (DESIGN.md §9.6)
-                      [--takeover]  replace a running jailhub without dropping nodes (DESIGN.md §7.7)
+                      [--port-range 10000-10999 | none]  ports for raw tcp/udp links (ARCHITECTURE.md §8.4)
+                      [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (ARCHITECTURE.md §8.3)
+                      [--proxy-protocol [--trusted-proxy CIDR,...]]  behind nginx stream / HAProxy (ARCHITECTURE.md §8.5)
+                      [--takeover]  replace a running jailhub without dropping nodes (ARCHITECTURE.md §13)
         jailhub status
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>

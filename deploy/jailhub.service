@@ -1,4 +1,4 @@
-# systemd unit for jailhub (DESIGN.md §6.3, §7.7).
+# systemd unit for jailhub (ARCHITECTURE.md §7.2, §13).
 #   install -m 0755 jailhub /usr/local/bin/jailhub
 #   useradd --system --home /var/lib/jailhub --create-home --shell /usr/sbin/nologin jailhub
 #   install -m 0644 jailhub.service /etc/systemd/system/

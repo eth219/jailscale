@@ -3,7 +3,7 @@ package io.jailscale.crypto;
 import java.util.Base64;
 
 /**
- * Text form of 32-byte keys: {@code <prefix>:<base64url, no padding>} (DESIGN.md §5).
+ * Text form of 32-byte keys: {@code <prefix>:<base64url, no padding>} (ARCHITECTURE.md §4).
  * The prefix names the key's role so a key pasted into the wrong place fails to parse
  * instead of silently working.
  */

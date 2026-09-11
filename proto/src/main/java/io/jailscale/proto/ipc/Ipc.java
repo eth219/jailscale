@@ -20,7 +20,7 @@ import java.util.EnumSet;
 import java.util.function.Consumer;
 
 /**
- * Local IPC between a CLI and its daemon (DESIGN.md §7.6, §10.5): AF_UNIX socket, one JSON
+ * Local IPC between a CLI and its daemon (ARCHITECTURE.md §6.3, §9.4): AF_UNIX socket, one JSON
  * object per line. A request gets either one reply line, or a stream of lines ending with
  * {@code {"done":true,...}}. The socket file's permissions are the authorisation.
  */
@@ -140,7 +140,7 @@ public final class Ipc {
         @Override
         public void close() throws IOException {
             ch.close();
-            // Delete only what we can prove is still our file: during a hand-off (DESIGN.md §7.7)
+            // Delete only what we can prove is still our file: during a hand-off (ARCHITECTURE.md §13)
             // the successor has already rebound this path, and unlinking its socket strands every
             // admin client. Windows reports no file key, so there we never delete -- harmless,
             // because serve() unlinks a stale socket before binding.

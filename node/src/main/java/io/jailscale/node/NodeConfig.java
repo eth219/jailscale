@@ -3,7 +3,7 @@ package io.jailscale.node;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** File locations for the node (DESIGN.md §5, §10.5). */
+/** File locations for the node (ARCHITECTURE.md §4, §9.4). */
 public record NodeConfig(Path configDir, Path socketPath) {
 
     public static NodeConfig defaults() {

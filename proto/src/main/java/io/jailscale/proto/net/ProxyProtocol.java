@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * The PROXY protocol (HAProxy, v1 text and v2 binary) as sent by nginx {@code proxy_protocol on}
- * and HAProxy {@code send-proxy(-v2)} (DESIGN.md §9.6). Only the header is consumed; the bytes
+ * and HAProxy {@code send-proxy(-v2)} (ARCHITECTURE.md §8.5). Only the header is consumed; the bytes
  * after it are left in the stream untouched.
  */
 public final class ProxyProtocol {
@@ -181,7 +181,7 @@ public final class ProxyProtocol {
         }
     }
 
-    /** The v1 line a node prepends for its local app (DESIGN.md §10.3). */
+    /** The v1 line a node prepends for its local app (ARCHITECTURE.md §9.3). */
     public static String v1Line(String srcIp, int srcPort, String dstIp, int dstPort) {
         boolean v6 = srcIp.contains(":");
         return "PROXY " + (v6 ? "TCP6" : "TCP4") + " " + srcIp + " " + dstIp + " " + srcPort + " " + dstPort + "\r\n";

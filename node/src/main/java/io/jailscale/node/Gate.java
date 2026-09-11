@@ -12,7 +12,7 @@ import java.util.HexFormat;
 import java.util.Locale;
 
 /**
- * The visitor gate (DESIGN.md §10.4): a link can require a visit token, carried once as
+ * The visitor gate (ARCHITECTURE.md §9.3): a link can require a visit token, carried once as
  * {@code ?jail=<token>} and then as a cookie. Only the first request head of a TLS connection is
  * inspected; the connection is then either relayed whole, redirected, or refused.
  */

@@ -8,7 +8,7 @@ import java.util.Locale;
 
 /**
  * Reads a TLS ClientHello off a raw socket without opening TLS and extracts the server_name
- * extension (DESIGN.md §9.1). The bytes consumed are returned so they can be replayed to
+ * extension (ARCHITECTURE.md §8.1). The bytes consumed are returned so they can be replayed to
  * whoever terminates the connection.
  */
 public final class Sni {

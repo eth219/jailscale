@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * DESIGN.md §7.5: the state directory carries the format version it was written with, and a hub
+ * ARCHITECTURE.md §6.2: the state directory carries the format version it was written with, and a hub
  * that does not understand it refuses to start. Snapshots always wrote the field; until this test
  * existed nothing read it, so an older binary replayed a newer snapshot as if it were its own.
  */

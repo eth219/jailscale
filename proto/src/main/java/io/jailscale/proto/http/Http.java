@@ -10,7 +10,7 @@ import java.util.Locale;
 
 /**
  * The minimal HTTP/1.1 the hub serves on its own name and the node speaks to it
- * (DESIGN.md §6.1). Request line + headers + Content-Length body, and the 101 Upgrade. No
+ * (ARCHITECTURE.md §5.1). Request line + headers + Content-Length body, and the 101 Upgrade. No
  * chunked encoding, no pipelining, no keep-alive: one request per connection, then either an
  * upgrade or close.
  *

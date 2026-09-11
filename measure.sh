@@ -1,5 +1,5 @@
 #!/bin/sh
-# Lightweight-budget measurement and gate (DESIGN.md §4): runs the native hub and two node
+# Lightweight-budget measurement and gate (ARCHITECTURE.md §14): runs the native hub and two node
 # daemons on loopback, joins them through the real CLI, opens a link, optionally throws LOAD
 # concurrent visitors at it, and reports binary size, RSS and CLI cold start.
 #
@@ -17,7 +17,7 @@ W=/tmp/jsm$$
 PORT=${PORT:-18443}
 CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 
-# Budget (DESIGN.md §4). Change only with a reason, in the same commit as the design table.
+# Budget (ARCHITECTURE.md §14). Change only with a reason, in the same commit as the design table.
 B_BINARY_MIB=30
 B_NODE_IDLE_MB=28
 B_HUB_IDLE_MB=30

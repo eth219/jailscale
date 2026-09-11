@@ -9,7 +9,7 @@ import java.util.List;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** Everything {@code jailhub serve} needs, parsed from the command line (DESIGN.md §6.3, §11.4). */
+/** Everything {@code jailhub serve} needs, parsed from the command line (ARCHITECTURE.md §7, §10). */
 public record HubConfig(
     URI baseUrl,
     Path stateDir,
@@ -34,14 +34,14 @@ public record HubConfig(
     boolean proxyProtocol,
     List<String> trustedProxies) {
 
-    /** DESIGN.md §9.6: behind nginx stream / HAProxy sending PROXY headers. */
+    /** ARCHITECTURE.md §8.5: behind nginx stream / HAProxy sending PROXY headers. */
     public HubConfig withProxyProtocol(boolean on, List<String> trusted) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, httpListenHost,
             httpListenPort, userDomainCa, on, trusted);
     }
 
-    /** True when port 80 is served, the precondition for user domains (DESIGN.md §9.4). */
+    /** True when port 80 is served, the precondition for user domains (ARCHITECTURE.md §8.3). */
     public boolean hasHttp() {
         return httpListenHost != null && httpListenPort >= 0;
     }
@@ -62,7 +62,7 @@ public record HubConfig(
     public static final int DEFAULT_PORT_LO = 10000;
     public static final int DEFAULT_PORT_HI = 10999;
 
-    /** True when raw TCP/UDP publishing is enabled (DESIGN.md §9.5). */
+    /** True when raw TCP/UDP publishing is enabled (ARCHITECTURE.md §8.4). */
     public boolean hasPortRange() {
         return portRangeLo > 0 && portRangeHi >= portRangeLo;
     }

@@ -28,7 +28,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-/** DESIGN.md §7.6: the admin page, logged in with a link the admin node obtained over the control channel. */
+/** ARCHITECTURE.md §6.3: the admin page, logged in with a link the admin node obtained over the control channel. */
 @Timeout(90)
 class AdminWebTest {
 

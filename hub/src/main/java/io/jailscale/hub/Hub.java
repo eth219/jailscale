@@ -21,7 +21,7 @@ import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
 
-/** The jailhub process: keys, store, TLS listener, node sessions, admin IPC (DESIGN.md §2). */
+/** The jailhub process: keys, store, TLS listener, node sessions, admin IPC (ARCHITECTURE.md §2). */
 public final class Hub implements AutoCloseable {
 
     private static final Log LOG = Log.get("hub");
@@ -58,7 +58,7 @@ public final class Hub implements AutoCloseable {
 
     /**
      * With {@code takeover}, a running server in the same state directory is asked to hand off
-     * first (DESIGN.md §7.7); without it, a held lock is an error.
+     * first (ARCHITECTURE.md §13); without it, a held lock is an error.
      */
     public Hub(HubConfig config, boolean takeover) throws IOException, GeneralSecurityException {
         this.config = config;
@@ -279,7 +279,7 @@ public final class Hub implements AutoCloseable {
     private volatile List<Cidr> trustedProxies;
 
     /**
-     * DESIGN.md §9.6: with --proxy-protocol, connections from a trusted proxy start with a PROXY
+     * ARCHITECTURE.md §8.5: with --proxy-protocol, connections from a trusted proxy start with a PROXY
      * header naming the real visitor. Returns it, or null when the feature is off. Untrusted
      * peers are refused outright (they must not be able to forge addresses).
      */
@@ -317,7 +317,7 @@ public final class Hub implements AutoCloseable {
     }
 
     /**
-     * Hand-off to a new process (DESIGN.md §7.7): stop accepting, persist and release the state,
+     * Hand-off to a new process (ARCHITECTURE.md §13): stop accepting, persist and release the state,
      * then ask nodes to reconnect while keeping their current streams. Returns once the new
      * process may take the lock; this process exits when drained (or after a minute).
      */

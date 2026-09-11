@@ -16,7 +16,7 @@ import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 
 /**
- * Proof of ownership for a user domain (DESIGN.md §9.4): a certificate chain for that exact
+ * Proof of ownership for a user domain (ARCHITECTURE.md §8.3): a certificate chain for that exact
  * name that validates to a public CA. Whoever holds such a certificate controls the domain,
  * so the hub routes the name to them without keeping any key of its own.
  */

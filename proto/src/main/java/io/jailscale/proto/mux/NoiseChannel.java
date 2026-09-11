@@ -11,7 +11,7 @@ import java.io.OutputStream;
 
 /**
  * The byte stream after the HTTP 101: {@code [2B len BE][Noise transport message]} frames, each
- * carrying exactly one {@link Frame} (DESIGN.md §6.1, §8). Handshake messages use the same
+ * carrying exactly one {@link Frame} (ARCHITECTURE.md §5.1, §5.3). Handshake messages use the same
  * length prefix.
  *
  * <p>Reads and writes are independently single-threaded: one reader thread, one writer thread.
@@ -72,7 +72,7 @@ public final class NoiseChannel implements AutoCloseable {
 
     /**
      * Responder that accepts message 1 under any of {@code candidates} (each built with a
-     * different static key), for the hub key rotation grace period (DESIGN.md §6.2). Message 1
+     * different static key), for the hub key rotation grace period (ARCHITECTURE.md §5.2). Message 1
      * encrypts the initiator's static key under the responder's static key, so only the matching
      * candidate decrypts it; the others fail authentication without side effects.
      */

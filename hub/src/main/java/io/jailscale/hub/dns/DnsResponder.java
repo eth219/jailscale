@@ -17,7 +17,7 @@ import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * The tiny authoritative DNS server behind {@code _acme-challenge.<hub>} (DESIGN.md §6.3). It
+ * The tiny authoritative DNS server behind {@code _acme-challenge.<hub>} (ARCHITECTURE.md §7.1). It
  * answers TXT (the current challenge values), SOA and NS for that one name, and REFUSED for
  * everything else. UDP and TCP, no EDNS, no compression beyond a pointer to the question name.
  */

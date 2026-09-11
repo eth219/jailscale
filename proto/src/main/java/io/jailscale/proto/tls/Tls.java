@@ -19,7 +19,7 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 
-/** SSLContext construction for the hub's listener and the node's client (DESIGN.md §6.1). */
+/** SSLContext construction for the hub's listener and the node's client (ARCHITECTURE.md §5.1). */
 public final class Tls {
 
     public static final String[] PROTOCOLS = {"TLSv1.3", "TLSv1.2"};

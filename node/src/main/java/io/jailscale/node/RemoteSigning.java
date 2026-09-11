@@ -20,7 +20,7 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.X509ExtendedKeyManager;
 
 /**
- * The node's half of DESIGN.md §9.3: a JCE provider whose {@code SHA256withECDSA} accepts an
+ * The node's half of ARCHITECTURE.md §9.2: a JCE provider whose {@code SHA256withECDSA} accepts an
  * opaque {@link RemotePrivateKey} and obtains the signature from the hub over the control
  * channel. JSSE picks it up through delayed provider selection, the same path PKCS#11 keys use.
  *

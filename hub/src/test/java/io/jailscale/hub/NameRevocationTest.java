@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * DESIGN.md §12.6: when a name moves to another node, the node that lost it is told. The point is
+ * ARCHITECTURE.md §11.4: when a name moves to another node, the node that lost it is told. The point is
  * that being offline is the common case -- a node is often offline precisely because that is when
  * someone else took the name -- so the notice has to survive until it reconnects.
  */
@@ -95,7 +95,7 @@ class NameRevocationTest {
         ok(cli("a", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "shared")));
         assertEquals(0, revoked("a").size());
 
-        // A second node of the same user opens the same name: the newest opener wins (§9.2).
+        // A second node of the same user opens the same name: the newest opener wins (§8.2).
         node("b");
         join("b");
         ok(cli("b", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "shared")));

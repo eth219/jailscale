@@ -18,9 +18,9 @@ public final class Main {
         jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate] [--proxy-protocol]
-        jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (DESIGN.md §9.5)
+        jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (ARCHITECTURE.md §8.4)
         jailscale open PORT --domain app.example.com [--acme-email E] [--acme-staging | --acme-directory URL]
-                                                              your own domain, CNAME'd to the hub (DESIGN.md §9.4)
+                                                              your own domain, CNAME'd to the hub (ARCHITECTURE.md §8.3)
         jailscale gate NAME [--new-link [--ttl 24h] | --off]
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | admin | daemon
@@ -280,7 +280,7 @@ public final class Main {
         throw new IOException("daemon did not start; see " + cfg.daemonLog());
     }
 
-    /** Opens a URL in the user's browser without AWT (DESIGN.md §4). */
+    /** Opens a URL in the user's browser without AWT (ARCHITECTURE.md §3.1). */
     static void openBrowser(String url) {
         List<String> cmd = switch (HubLink.osName()) {
             case "macos" -> List.of("open", url);

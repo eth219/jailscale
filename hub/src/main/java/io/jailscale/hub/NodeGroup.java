@@ -134,7 +134,7 @@ final class NodeGroup {
         return ((long) conn << CONN_SHIFT) | (localId & LOCAL_MASK);
     }
 
-    /** The four conditions of DESIGN.md §9.3, then the signature. */
+    /** The four conditions of ARCHITECTURE.md §9.2, then the signature. */
     Message sign(Message.SignRequest sr) {
         long id = sr.streamId();
         int conn = (int) (id >>> CONN_SHIFT);

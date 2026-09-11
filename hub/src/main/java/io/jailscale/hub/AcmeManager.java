@@ -21,7 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Certificate lifecycle (DESIGN.md §6.3): one wildcard certificate via dns-01 answered by the
+ * Certificate lifecycle (ARCHITECTURE.md §7): one wildcard certificate via dns-01 answered by the
  * hub's own {@link DnsResponder}, renewed when a third of its lifetime is left. Files live in
  * {@code <state>/tls/}.
  */
@@ -106,7 +106,7 @@ final class AcmeManager implements AutoCloseable {
     }
 
     /**
-     * DESIGN.md §6.3 step 2: prove the delegation reaches this process by asking public resolvers
+     * ARCHITECTURE.md §7.2: prove the delegation reaches this process by asking public resolvers
      * for a value only we know. Returns null when fine, otherwise a diagnosis.
      */
     String selfCheck() {

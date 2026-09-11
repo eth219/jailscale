@@ -23,9 +23,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * DESIGN.md §12.3. The two ends of a TLS 1.3 session derive the same RFC 5705 keying material and
+ * ARCHITECTURE.md §11.3. The two ends of a TLS 1.3 session derive the same RFC 5705 keying material and
  * nobody else can, so a node can tell whether it was the one that terminated a session carrying
- * its own name. The §12.1 signing conditions do not answer this: the hub enforces those.
+ * its own name. The §11.1 signing conditions do not answer this: the hub enforces those.
  */
 @Timeout(60)
 class SelfProbeTest {

@@ -4,13 +4,13 @@ import io.jailscale.proto.control.Message;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 
-/** Registration decisions (DESIGN.md §11.3 to §11.5). */
+/** Registration decisions (ARCHITECTURE.md §10). */
 final class Registrar {
 
     private static final Log LOG = Log.get("registrar");
     private static final int MAX_PENDING_PER_IP = 5;
     /**
-     * Credential attempts per source address (DESIGN.md §12.4): invite tokens, invite codes and
+     * Credential attempts per source address (ARCHITECTURE.md §11.5): invite tokens, invite codes and
      * auth-keys. An invite code is eight characters, so guessing has to be slow to be hopeless.
      * The burst lets a site onboard a batch of machines from one address in one go; the sustained
      * rate of twelve a minute is what a guesser is left with.

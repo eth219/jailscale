@@ -13,7 +13,7 @@ import java.net.Socket;
 import java.util.regex.Pattern;
 
 /**
- * Plain HTTP on port 80 (DESIGN.md §9.4): answers {@code /.well-known/acme-challenge/<token>}
+ * Plain HTTP on port 80 (ARCHITECTURE.md §8.3): answers {@code /.well-known/acme-challenge/<token>}
  * for user domains whose DNS points at the hub, redirects everything else to https.
  */
 final class HttpChallengeFront implements AutoCloseable {

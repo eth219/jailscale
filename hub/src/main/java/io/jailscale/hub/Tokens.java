@@ -8,7 +8,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Locale;
 
-/** Invite tokens, short codes, auth-keys and their stored hashes (DESIGN.md §11.2, §11.5). */
+/** Invite tokens, short codes, auth-keys and their stored hashes (ARCHITECTURE.md §10). */
 final class Tokens {
 
     private static final SecureRandom RNG = new SecureRandom();
