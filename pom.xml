@@ -151,6 +151,15 @@
             <buildArgs>
               <buildArg>-O2</buildArg>
               <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+              <!--
+                Cap the heap (DESIGN.md §4). The native-image default is 80% of physical memory,
+                which on a developer machine means the Serial GC grows the heap freely and never
+                gives it back: measured 94 MB RSS on the node after 1,000 visitors that had all
+                left. With this cap the same load settles at 66 MB and is no slower. The cliff is
+                well below: 32m still serves 1,000 but at half the speed, 24m dies with an
+                OutOfMemoryError. Override at run time with -Xmx when a node serves far more.
+              -->
+              <buildArg>-R:MaxHeapSize=64m</buildArg>
             </buildArgs>
           </configuration>
         </plugin>

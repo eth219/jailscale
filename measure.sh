@@ -21,8 +21,8 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 B_BINARY_MIB=30
 B_NODE_IDLE_MB=28
 B_HUB_IDLE_MB=30
-B_NODE_LOAD_MB=128
-B_HUB_LOAD_MB=128
+B_NODE_LOAD_MB=96
+B_HUB_LOAD_MB=96
 B_CLI_MS=50
 
 mkdir -p "$W/hub" "$W/app"
