@@ -247,6 +247,30 @@ class MuxSessionTest {
         p.node().close();
     }
 
+    @Test
+    void aFrameTypeThisBuildDoesNotKnowIsSkipped() throws Exception {
+        // The other half of §5.4: a newer peer may add a frame type, and dropping the session over
+        // one would make every added type a flag day. The frame is fully read before dispatch, so
+        // skipping it leaves the stream in sync -- which is what the traffic afterwards proves.
+        Pair p = pair();
+        java.lang.reflect.Field f = MuxSession.class.getDeclaredField("ch");
+        f.setAccessible(true);
+        NoiseChannel raw = (NoiseChannel) f.get(p.node());
+        raw.write(new Frame(0, 99, 0, "a payload from the future".getBytes()));
+
+        // Still alive, still in sync: control and a stream both work after the unknown frame.
+        p.node().control("{\"t\":\"Ping\",\"id\":1}".getBytes());
+        assertArrayEquals("{\"t\":\"Ping\",\"id\":1}".getBytes(), p.hubCtrl().poll(5, TimeUnit.SECONDS));
+        MuxStream hs = p.hub().open(JsonObject.builder().put("sni", "x.hub.test").build(), false);
+        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
+        assertNotNull(ns);
+        hs.out().write("hello".getBytes());
+        assertEquals("hello", new String(ns.in().readNBytes(5)));
+        assertEquals(null, p.hubClosed().getNow(null));
+        p.hub().close();
+        p.node().close();
+    }
+
     static InputStream nullIn() {
         return InputStream.nullInputStream();
     }

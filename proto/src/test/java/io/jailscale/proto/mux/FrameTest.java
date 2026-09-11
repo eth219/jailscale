@@ -1,6 +1,7 @@
 package io.jailscale.proto.mux;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -43,9 +44,14 @@ class FrameTest {
         byte[] lenMismatch = Frame.close(1).encode();
         lenMismatch[7] = 5;
         assertThrows(MuxException.class, () -> Frame.decode(lenMismatch));
-        byte[] badType = Frame.close(1).encode();
-        badType[4] = 99;
-        assertThrows(MuxException.class, () -> Frame.decode(badType));
+        // A type this build has no case for parses (ARCHITECTURE.md §5.4) and is skipped by the
+        // dispatcher; only a type that cannot be on the wire at all is refused here.
+        byte[] futureType = Frame.close(1).encode();
+        futureType[4] = 99;
+        assertEquals(99, assertDoesNotThrow(() -> Frame.decode(futureType)).type());
+        byte[] zeroType = Frame.close(1).encode();
+        zeroType[4] = 0;
+        assertThrows(MuxException.class, () -> Frame.decode(zeroType));
         assertThrows(IllegalArgumentException.class, () -> Frame.data(1, new byte[Frame.MAX_DATA + 1]));
         assertThrows(IllegalArgumentException.class, () -> new Frame(1, Frame.CTRL, 0, new byte[Frame.MAX_PAYLOAD + 1]));
         assertThrows(IllegalArgumentException.class, () -> Frame.window(1, 0));

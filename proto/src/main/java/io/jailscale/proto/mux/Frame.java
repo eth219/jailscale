@@ -29,8 +29,12 @@ public record Frame(long streamId, int type, int flags, byte[] payload) {
         if (streamId < 0 || streamId > 0xFFFFFFFFL) {
             throw new IllegalArgumentException("streamId out of range");
         }
-        if (type < OPEN || type > KEEPALIVE) {
-            throw new IllegalArgumentException("unknown frame type " + type);
+        // A type this build has no case for is still a well-formed frame (ARCHITECTURE.md §5.4):
+        // it must fit the one byte the header gives it, and whether it means anything is the
+        // dispatcher's business. Rejecting it here would make every frame type a newer peer adds a
+        // flag day, because the rejection happens in Frame.decode, before anyone can skip it.
+        if (type < OPEN || type > 0xFF) {
+            throw new IllegalArgumentException("frame type out of range: " + type);
         }
         if (flags < 0 || flags > 0xFF) {
             throw new IllegalArgumentException("flags out of range");

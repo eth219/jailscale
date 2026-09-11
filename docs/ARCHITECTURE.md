@@ -229,6 +229,40 @@ stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA fr
 - A second connection with the same MachineKey and `conn` index wins; the old one gets
   `Goodbye{shutdown}` and its streams are reset. `TCP_NODELAY` is set.
 
+### 5.4 Changing the protocol
+
+A node and a hub are updated separately and by different people, so every wire change has to say
+what it does to the pair that is now mismatched. Two numbers carry that. `Message.PROTO` is what
+this build speaks and rises with any wire change; `NodeSession.MIN_PROTO` and
+`HubLink.MIN_HUB_PROTO` are the oldest each side will talk to, and they move only when talking to
+an older peer would be unsafe or impossible. A peer below the floor gets
+`Goodbye{upgrade-required}` naming the version it needs, which is the one failure mode here that
+explains itself.
+
+**What is compatible.** Adding a field to an existing message: the decoder reads by name and
+ignores what it does not recognise, so an older build reads the message as it always did. Adding a
+message type: an unrecognised `"t"` decodes to `Message.Unknown`, which the receiver logs and
+answers with `Error{unknown-type}` instead of dropping the channel. Adding a mux frame type: a
+frame carries its own length, so one with an unknown type is skipped and the stream stays in sync.
+The last two are tolerances in the *receiver*, which is why they had to be in the first release —
+they do nothing for a peer that already shipped without them.
+
+**What is not.** Renaming a field, removing one, or changing what it means. A missing required
+field throws in the decoder and takes the control connection with it, and the rename is symmetric
+in our own code, so nothing in the build catches it: `WireFormatTest` pins one example of every
+message type as a literal string for that reason, and it is where a rename should stop. If a
+rename is genuinely wanted, the field is added under the new name and the old one kept.
+
+**What can never be compatible** is a check that was missing. Protocol 2's signing rules (§9.2,
+§11.1) could not be made to accept a protocol 1 `SignRequest`, because accepting one means signing
+something the hub cannot verify — which is the vulnerability, not a compatibility shim. That class
+of change moves `MIN_PROTO` and costs every node an upgrade, and is the reason the floor exists.
+
+**Two strings never change**: the Noise prologue and the HTTP upgrade token, both
+`jailscale-control-v1`. They are mixed into the handshake hash, so a peer that disagrees fails the
+handshake with nothing to read; evolution belongs in the `proto` number, where the mismatch can be
+explained in a sentence the operator sees.
+
 ---
 
 ## 6. Control API and hub state

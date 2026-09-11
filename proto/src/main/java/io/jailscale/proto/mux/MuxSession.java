@@ -41,6 +41,8 @@ public final class MuxSession implements AutoCloseable {
     private final Map<Long, MuxStream> streams = new ConcurrentHashMap<>();
     private final AtomicLong nextId;
     private volatile boolean closed;
+    /** Frames of a type this build has no case for; only the first one is logged. */
+    private int unknownFrames;
     private Thread reader;
     private Thread keepalive;
 
@@ -217,7 +219,15 @@ public final class MuxSession implements AutoCloseable {
                     s.onReset(f.payload().length > 0 ? f.payload()[0] & 0xff : 0);
                 }
             }
-            default -> throw new MuxException("unknown frame type " + f.type());
+            // Skipped, not fatal (ARCHITECTURE.md §5.4). The frame was fully read before dispatch,
+            // so a type this build has no case for costs nothing to drop, and dropping the session
+            // instead would make every added frame type a flag day. Logged once per session: the
+            // peer that sends one type usually sends many.
+            default -> {
+                if (unknownFrames++ == 0) {
+                    LOG.info("ignoring frame type {}, which this build does not know", f.type());
+                }
+            }
         }
     }
 

@@ -477,6 +477,8 @@ final class HubLink implements AutoCloseable {
                     LOG.warn("hub error: {}", e.reason());
                 }
             }
+            // A newer hub sending something this jailscale has no case for (ARCHITECTURE.md §5.4).
+            case Message.Unknown u -> LOG.info("ignoring {} from the hub: this jailscale does not know that message type", u.type());
             default -> LOG.warn("unexpected {} from hub", m.type());
         }
         return true;

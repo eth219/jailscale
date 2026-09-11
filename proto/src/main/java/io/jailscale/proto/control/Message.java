@@ -185,4 +185,16 @@ public sealed interface Message {
     record Ack(String inReplyTo) implements Message {
         @Override public String type() { return "Ack"; }
     }
+
+    /**
+     * A message type this build does not know (ARCHITECTURE.md §5.4). Decoding one is deliberately
+     * not an error: the peer is authenticated, so this is a newer jailscale sending something this
+     * one has no case for, and tearing the control channel down over it would make every added
+     * message type a flag day. The receiver logs it and answers {@code Error{unknown-type}}; the
+     * sender is the side that must gate anything load-bearing on the peer's {@code proto} number,
+     * because an ignored message looks exactly like a delivered one from here.
+     *
+     * <p>It is never encoded: a build that does not understand a type cannot forward it either.
+     */
+    record Unknown(String type) implements Message {}
 }

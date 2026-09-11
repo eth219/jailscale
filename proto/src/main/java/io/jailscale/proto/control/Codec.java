@@ -8,6 +8,9 @@ import java.nio.charset.StandardCharsets;
 /** Hand-written JSON codec for {@link Message}; no reflection (ARCHITECTURE.md §3.1). */
 public final class Codec {
 
+    /** How much of an unrecognised {@code "t"} is kept for the log line. */
+    private static final int MAX_TYPE_CHARS = 40;
+
     private Codec() {}
 
     public static byte[] encode(Message m) {
@@ -49,6 +52,9 @@ public final class Codec {
             case Message.ChallengeSet x -> b.put("domain", x.domain()).put("token", x.token()).put("keyAuthorization", x.keyAuthorization());
             case Message.ChallengeClear x -> b.put("token", x.token());
             case Message.Ack x -> b.put("inReplyTo", x.inReplyTo());
+            // Unknown exists only on the receiving side (Message §5.4). Encoding one would mean
+            // relaying a message whose fields this build never parsed.
+            case Message.Unknown x -> throw new IllegalArgumentException("cannot encode an unknown message type '" + x.type() + "'");
         }
         return b.toJson();
     }
@@ -94,7 +100,10 @@ public final class Codec {
                 case "ChallengeSet" -> new Message.ChallengeSet(o.optString("domain", null), o.string("token"), o.string("keyAuthorization"));
                 case "ChallengeClear" -> new Message.ChallengeClear(o.string("token"));
                 case "Ack" -> new Message.Ack(o.optString("inReplyTo", null));
-                default -> throw new CodecException("unknown message type '" + t + "'");
+                // Not an error (ARCHITECTURE.md §5.4): a peer speaking a newer protocol may add
+                // message types, and this build has to stay on the channel when it does. The type
+                // is truncated because it reaches a log line and comes off the wire.
+                default -> new Message.Unknown(t.length() <= MAX_TYPE_CHARS ? t : t.substring(0, MAX_TYPE_CHARS) + "...");
             };
         } catch (JsonException e) {
             throw new CodecException("bad control message: " + e.getMessage(), e);

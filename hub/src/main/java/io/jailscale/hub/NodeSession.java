@@ -196,6 +196,13 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 return false;
             }
             case Message.SignRequest sr -> send(group.sign(sr));
+            // A newer node sending something this hub has no case for (ARCHITECTURE.md §5.4). The
+            // Error is the point: the node learns the message did not happen, rather than assuming
+            // silence means success.
+            case Message.Unknown u -> {
+                LOG.info("node {} conn {}: ignoring {}, a message type this hub does not know", mkey, conn, u.type());
+                send(new Message.Error(u.type(), "unknown-type"));
+            }
             default -> {
                 if (conn != 0) {
                     LOG.warn("node {} conn {}: {} is only valid on the control connection", mkey, conn, m.type());

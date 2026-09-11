@@ -80,7 +80,9 @@ class CodecTest {
 
     @Test
     void rejectsUnknownAndMalformed() {
-        assertThrows(CodecException.class, () -> Codec.decode("{\"t\":\"Nope\"}"));
+        // An unrecognised type is not in this list on purpose: it decodes to Message.Unknown so the
+        // control channel survives a newer peer (ARCHITECTURE.md §5.4, WireFormatTest). Malformed
+        // is still malformed.
         assertThrows(CodecException.class, () -> Codec.decode("{\"proto\":1}"));
         assertThrows(CodecException.class, () -> Codec.decode("{\"t\":\"Hello\",\"proto\":\"one\",\"version\":\"v\"}"));
         assertThrows(CodecException.class, () -> Codec.decode("not json"));
