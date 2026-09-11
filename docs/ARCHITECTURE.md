@@ -881,7 +881,9 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.
 - **Windows virtual threads can stall on bidirectional loopback reads** (§3.2). Not fixable from
-  here; the keepalive and read timeout turn it into a reconnect.
+  here; the keepalive and read timeout turn it into a reconnect. In CI it shows up as a
+  Windows-only timeout with no assertion failure, seen in both `MuxSessionTest` and `RawPortTest`,
+  and any end-to-end test that moves bytes both ways is exposed.
 - **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at.** Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), so the remaining levers are a wider build-time
   initialisation whitelist and removing unused TLS suites and protocols.

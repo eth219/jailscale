@@ -57,5 +57,12 @@ mux socket, and `MuxSession` sends a KEEPALIVE every 25 seconds. If this happens
 in production the session closes with `peer idle too long` and the node
 reconnects. Visitors on that connection lose up to 60 seconds and then recover.
 
-In CI, `MuxSessionTest` fails on 1 to 2% of Windows runs. The test is neither
-disabled nor wrapped in a retry. When it fails, read this page.
+In CI it is not only `MuxSessionTest`. `RawPortTest.tcpAndUdpThroughAssignedPorts`
+has hit the same thing: a 90 second timeout on Windows alone, parked in
+`readNBytes` on a loopback socket while another thread wrote the other
+direction, on a commit whose Windows job had passed one run earlier. Any test
+that moves bytes both ways over loopback is exposed, which is most of the
+end-to-end ones.
+
+Neither test is disabled or wrapped in a retry. When one fails this way, read
+this page: a Windows-only hang, with no assertion failure, is this.
