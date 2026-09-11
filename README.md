@@ -60,13 +60,17 @@ jailhub serve --base-url https://jailscale.example.com --acme-email you@example.
 
 The first run prints an invite. Whoever joins with it becomes the administrator.
 
-Binaries for Linux, macOS and Windows are on the
-[releases page](https://github.com/eth219/jailscale/releases). Container images:
+Container images are published for linux/amd64 and linux/arm64:
 
 ```
-ghcr.io/eth219/jailhub:latest
-ghcr.io/eth219/jailscale:latest
+docker pull ghcr.io/eth219/jailhub:edge
+docker pull ghcr.io/eth219/jailscale:edge
 ```
+
+Native binaries for Linux, macOS and Windows are built for every commit and are
+attached to [releases](https://github.com/eth219/jailscale/releases) once a
+version is tagged. Until then, `./native.sh` builds them from source with
+GraalVM.
 
 ## Resource usage
 
@@ -122,6 +126,8 @@ What a compromised hub can and cannot do is written out in
 - Idle memory is 24.7 MB against a 20 MB goal. Most of the gap is JSSE standing
   up a TLS client.
 - No standby hub, no state replication, no OIDC.
+- No tagged release yet, so there are no downloadable binaries. The container
+  images are current.
 
 ## Credit
 
