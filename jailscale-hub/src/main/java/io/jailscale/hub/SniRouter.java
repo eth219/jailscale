@@ -70,7 +70,7 @@ final class SniRouter {
                 return;
             }
             if (sni.equals(hub.config().hostname())) {
-                hub.front().serve(layer(socket, peek.consumed(), hub.tls().context().getSocketFactory()));
+                hub.front().serve(layer(socket, peek.consumed(), hub.tls().context().getSocketFactory()), ip);
                 return;
             }
             name = hub.links().nameOf(sni);

@@ -38,10 +38,10 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private volatile boolean closed;
     private volatile boolean draining;
 
-    NodeSession(Hub hub, Socket socket) {
+    NodeSession(Hub hub, Socket socket, String remoteIp) {
         this.hub = hub;
         this.socket = socket;
-        this.remoteIp = socket.getInetAddress().getHostAddress();
+        this.remoteIp = remoteIp;
     }
 
     String machineKey() {

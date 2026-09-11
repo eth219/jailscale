@@ -23,15 +23,27 @@ final class HttpFront {
     static final String UPGRADE_PROTOCOL = "jailscale-control-v1";
     private static final int HTTP_TIMEOUT_MS = 15_000;
     private static final int MAX_BODY = 64 * 1024;
+    /**
+     * Unauthenticated Noise handshakes per source address (DESIGN.md §12.4). A node opens up to
+     * four connections and retries with backoff, and a NAT'd site puts many nodes behind one
+     * address, so the burst is roomy; the sustained rate is what caps a flood.
+     */
+    static final int HANDSHAKE_BURST = 30;
+    static final double HANDSHAKE_PER_SECOND = 1.0;
 
     private final Hub hub;
+    private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
 
     HttpFront(Hub hub) {
         this.hub = hub;
     }
 
-    /** Serves one TLS connection to completion. */
-    void serve(Socket socket) {
+    /**
+     * Serves one TLS connection to completion. {@code ip} is the caller's address as resolved by
+     * {@link SniRouter}, which is the PROXY header's address when the hub sits behind a proxy
+     * (DESIGN.md §9.6) and the socket's peer otherwise.
+     */
+    void serve(Socket socket, String ip) {
         try (socket) {
             socket.setSoTimeout(HTTP_TIMEOUT_MS);
             if (socket instanceof javax.net.ssl.SSLSocket ssl) {
@@ -48,15 +60,20 @@ final class HttpFront {
             } catch (EOFException e) {
                 return;
             }
-            LOG.debug("{} {} from {}", req.method(), req.path(), socket.getInetAddress().getHostAddress());
+            LOG.debug("{} {} from {}", req.method(), req.path(), ip);
             String path = req.path();
             if (path.equals("/v1/noise")) {
                 if (!req.method().equals("POST") || !req.wantsUpgrade(UPGRADE_PROTOCOL)) {
                     HttpResponse.text(426, "expected Upgrade: " + UPGRADE_PROTOCOL).writeTo(out);
                     return;
                 }
+                if (!handshakes.allow(ip)) {
+                    LOG.warn("too many handshakes from {}, refusing", ip);
+                    HttpResponse.text(429, "too many handshakes").writeTo(out);
+                    return;
+                }
                 HttpResponse.upgrade(UPGRADE_PROTOCOL).writeTo(out);
-                new NodeSession(hub, socket).run(in, out);
+                new NodeSession(hub, socket, ip).run(in, out);
                 return;
             }
             route(req).writeTo(out);

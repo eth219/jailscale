@@ -9,9 +9,18 @@ final class Registrar {
 
     private static final Log LOG = Log.get("registrar");
     private static final int MAX_PENDING_PER_IP = 5;
+    /**
+     * Credential attempts per source address (DESIGN.md §12.4): invite tokens, invite codes and
+     * auth-keys. An invite code is eight characters, so guessing has to be slow to be hopeless.
+     * The burst lets a site onboard a batch of machines from one address in one go; the sustained
+     * rate of twelve a minute is what a guesser is left with.
+     */
+    static final int CREDENTIAL_BURST = 20;
+    static final double CREDENTIAL_PER_SECOND = 0.2;
 
     private final HubConfig config;
     private final Store store;
+    private final RateLimiter credentials = new RateLimiter(CREDENTIAL_BURST, CREDENTIAL_PER_SECOND);
 
     Registrar(HubConfig config, Store store) {
         this.config = config;
@@ -30,6 +39,11 @@ final class Registrar {
         String os = clean(req.os(), 32, "");
         String self = req.user() == null ? null : clean(req.user(), 64, null);
 
+        // A node the hub already knows returned above, so this only ever throttles new arrivals.
+        if ((req.invite() != null || req.code() != null || req.authKey() != null) && !credentials.allow(ip)) {
+            LOG.warn("too many credential attempts from {}, refusing", ip);
+            return rejected("rate-limited");
+        }
         if (req.invite() != null) {
             Store.InviteRec inv = store.consumeInvite(req.invite());
             return inv == null ? rejected("invite-invalid") : register(mkey, inv.user() != null ? inv.user() : self, hostname, os, inv.admin());
