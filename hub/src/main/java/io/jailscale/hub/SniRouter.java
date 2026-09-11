@@ -136,7 +136,7 @@ final class SniRouter {
             // Drain the request line so the client gets a clean response.
             io.jailscale.proto.http.Http.readRequest(s.getInputStream(), 4096);
             HttpResponse.html(404, "<!doctype html><meta charset=utf-8><title>jailscale</title>"
-                + "<p><b>" + HttpFront.escape(name) + "</b> 링크는 지금 열려 있지 않습니다.</p>").writeTo(s.getOutputStream());
+                + "<p><b>" + HttpFront.escape(name) + "</b> is not open right now.</p>").writeTo(s.getOutputStream());
         } catch (io.jailscale.proto.http.HttpException e) {
             // not HTTP; nothing to say
         }

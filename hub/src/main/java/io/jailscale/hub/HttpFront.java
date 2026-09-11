@@ -107,21 +107,32 @@ final class HttpFront {
             }
             // Viewing the page never consumes the invite (DESIGN.md §11.3).
             String url = hub.config().baseUrl() + "/join/" + escape(token);
-            return HttpResponse.html(200, page("jailscale 초대",
-                "<p>이 hub에 참여하려면 노드에서 다음을 실행하세요.</p>"
+            return HttpResponse.html(200, page("jailscale invitation",
+                "<p>Run this on the machine you want to join:</p>"
                 + "<pre>jailscale up --invite " + url + "</pre>"
-                + "<p>jailscale이 없다면 먼저 설치하세요. 이 페이지를 여는 것만으로는 초대가 소모되지 않습니다.</p>"));
+                + "<p>Install jailscale first if you do not have it. Opening this page does not use "
+                + "the invitation up.</p>"));
         }
         if (path.equals("/")) {
+            // Say what this hub actually accepts. It used to claim an invitation was always
+            // required, which is wrong on any hub whose operator opened registration.
+            boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
+            String how = open
+                ? "<p>To join, run <code>jailscale up --hub " + escape(hub.config().hostname())
+                    + "</code>. Your machine then waits for the operator to approve it.</p>"
+                : "<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>.</p>";
             return HttpResponse.html(200, page("jailscale hub",
-                "<p>" + escape(hub.config().hostname()) + " 은(는) jailscale hub입니다.</p>"
-                + "<p>가입하려면 초대 링크가 필요합니다. 초대는 멤버가 <code>jailscale invite</code>로 만듭니다.</p>"));
+                "<p><code>" + escape(hub.config().hostname()) + "</code> is a jailscale hub.</p>"
+                + how
+                + "<p>jailscale publishes a port on your machine over HTTPS without opening an inbound "
+                + "port. This hub relays the bytes; your machine terminates the TLS. "
+                + "<a href=\"https://github.com/eth219/jailscale\">What this is</a>.</p>"));
         }
         return HttpResponse.text(404, "not found");
     }
 
     private static String page(String title, String body) {
-        return "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>" + escape(title) + "</title>"
+        return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>" + escape(title) + "</title>"
             + "<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;line-height:1.6}"
             + "pre{background:#f4f4f4;padding:1rem;overflow-x:auto}</style></head><body><h1>" + escape(title) + "</h1>"
             + body + "</body></html>";

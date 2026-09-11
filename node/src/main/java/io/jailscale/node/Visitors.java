@@ -147,7 +147,7 @@ final class Visitors {
                     }
                     case Gate.Decision.Refuse r -> {
                         HttpResponse.html(403, "<!doctype html><meta charset=utf-8><title>jailscale</title>"
-                            + "<p>이 링크는 방문 링크가 있어야 열립니다.</p>").writeTo(tls.plainOut());
+                            + "<p>This link needs a visit link to open.</p>").writeTo(tls.plainOut());
                         tls.close();
                         stream.close();
                         return;
