@@ -17,10 +17,19 @@ final class Registrar {
      */
     static final int CREDENTIAL_BURST = 20;
     static final double CREDENTIAL_PER_SECOND = 0.2;
+    /**
+     * New registrations per source address when the operator has opened registration. Nothing is
+     * presented in that case, so the credential bucket never sees these: without a limit of its
+     * own, one address can register nodes without bound and claim public names under the hub
+     * domain. Five at once, then one every twelve minutes.
+     */
+    static final int OPEN_BURST = 5;
+    static final double OPEN_PER_SECOND = 1.0 / 720;
 
     private final HubConfig config;
     private final Store store;
     private final RateLimiter credentials = new RateLimiter(CREDENTIAL_BURST, CREDENTIAL_PER_SECOND);
+    private final RateLimiter openRegistrations = new RateLimiter(OPEN_BURST, OPEN_PER_SECOND);
 
     Registrar(HubConfig config, Store store) {
         this.config = config;
@@ -65,6 +74,10 @@ final class Registrar {
             return rejected("knock-disabled");
         }
         if ("open".equals(store.setting(Store.SETTING_REGISTRATION, "invite"))) {
+            if (!openRegistrations.allow(ip)) {
+                LOG.warn("too many open registrations from {}, refusing", ip);
+                return rejected("rate-limited");
+            }
             return register(mkey, self != null ? self : hostname, hostname, os, false);
         }
         if (store.pending(mkey) == null) {

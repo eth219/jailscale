@@ -54,10 +54,9 @@ on the visitor side, mobile clients.
 - **The hub only reads SNI.** It peeks the ClientHello on 443 and hands the byte stream to the node
   that owns the name. It never parses visitor HTTP, so its internet-facing attack surface is a
   TCP-level parser and it sees only ciphertext.
-- **The node terminates TLS without holding the key.** Every name under the hub domain is covered by
-  one `*.hub.example.com` wildcard whose private key never leaves the hub. The node asks for the one
-  handshake signature, and the hub signs only when the request is bound to a stream it delivered to
-  that node (§9.2).
+- **The node terminates TLS without holding the key.** One `*.hub.example.com` wildcard covers every
+  name, and its private key never leaves the hub. The node asks for the one handshake signature, and
+  the hub signs only when the request is bound to a stream it delivered to that node (§9.2).
 - **The node does not parse HTTP either.** It strips TLS and copies plaintext to the local port, so
   HTTP/1.1, WebSocket, SSE and chunked bodies all pass. The only HTTP parsers in the system are a
   small one for the control channel and the first-request-head read the visitor gate needs.
@@ -65,7 +64,7 @@ on the visitor side, mobile clients.
 TCP 443 carries everything and UDP/TCP 53 carries the ACME DNS-01 answers. TCP 80 is optional (HTTPS
 redirect and the http-01 relay user domains need), and raw TCP/UDP publishing adds one port range.
 The node needs outbound 443 and nothing else. A local port exposed to the internet is a **link**;
-invite links (§10) and visit links (§9.4) are different things.
+invite links (§10) and visit links (§9.3) are different things.
 
 ---
 
@@ -98,10 +97,8 @@ reachability metadata and no third-party jars.
 | ACME client, DNS responder | Own. Only the PKCS#10 DER and the DNS answers are genuinely hand-written |
 | Logging | Own small logger over `System.Logger`. SLF4J plus logback means ServiceLoader and reflection |
 | Cryptography | JDK JCE for X25519 and ChaCha20-Poly1305; own BLAKE2s, HMAC and HKDF. BouncyCastle is large and awkward here, and those three are forced: the JDK has no BLAKE2s, and Noise defines HMAC and HKDF over the chosen hash. Noise's HKDF also differs from RFC 5869 (an output counter byte instead of salt and info, at most three chained outputs) |
-| AWT, `java.awt.Desktop` | Forbidden; browsers open through `ProcessBuilder` |
-| IPC | AF_UNIX everywhere. Windows 10 1803+ supports it; named pipes have no public JDK API |
-| Threading | Virtual threads throughout. There is no packet hot path (§12) |
-| Build-time initialisation | Whitelisted carefully; JCE initialises at run time, so no SecureRandom seed is frozen into the image |
+| AWT and `java.awt.Desktop`; IPC | Forbidden, so browsers open through `ProcessBuilder`; AF_UNIX everywhere, since Windows 10 1803+ supports it and named pipes have no public JDK API |
+| Threading; build-time initialisation | Virtual threads throughout, because there is no packet hot path (§12); whitelisted carefully, with JCE initialising at run time so no SecureRandom seed is frozen into the image |
 
 ### 3.2 Build and toolchain
 
@@ -113,17 +110,15 @@ fetches is pinned with `distributionSha256Sum`. Keeping the supply-chain surface
 of this section. `-Pnative` produces the binaries, CI covers linux and macos on amd64 and arm64 plus
 windows-amd64, and each release also ships `jailscale.jar` and `jailhub.jar` for JVM 25.
 
-**JDK 25.0.0 through 25.0.2 must not be used.** Moving virtual-thread timed park onto ForkJoinPool
-delayed tasks (JDK-8351927) introduced two regressions: cancelling a delayed task corrupts the
-scheduler heap so other threads' `Thread.sleep` wakes late or never (JDK-8370887), and virtual
-threads get stuck PARKED (JDK-8369227). Both are fixed in 25.0.3, and hand-off cancels the old
-connection's keepalive sleep by interrupt, which is exactly that path, so the release workflow builds
-on Liberica NIK (JDK 25.0.4+).
-
-**On Windows, virtual threads can miss a bidirectional loopback read**: the reader parks and never
-wakes. It reproduces without any jailscale code, so it is handled by detection and recovery, and the
-60 s socket read timeout (§5.1) and 25 s keepalive (§5.3) turn it into `peer idle too long` and a
-reconnect. Repro in `docs/windows-virtual-thread-stall/`.
+Two toolchain hazards are load-bearing. **JDK 25.0.0 to 25.0.2 must not be used**: moving
+virtual-thread timed park onto ForkJoinPool delayed tasks (JDK-8351927) made cancelling a delayed
+task corrupt the scheduler heap, so other threads' `Thread.sleep` wakes late or never (JDK-8370887),
+and virtual threads get stuck PARKED (JDK-8369227). Hand-off cancels the old connection's keepalive
+sleep by interrupt, which is exactly that path, so the release workflow builds on Liberica NIK (JDK
+25.0.4+). And **on Windows a virtual thread can miss a bidirectional loopback read**, parking and
+never waking; it reproduces without any jailscale code, so it is handled by detection and recovery,
+with the 60 s socket read timeout (§5.1) and 25 s keepalive (§5.3) turning it into `peer idle too
+long` and a reconnect. Repro in `docs/windows-virtual-thread-stall/`.
 
 ---
 
@@ -158,17 +153,17 @@ TCP 443, SNI = hub.example.com
              └─ [2B len BE][Noise transport message]    <- one mux frame in each
 ```
 
-Both HTTP ends are hand-written (§3.1); the hub's front is about 300 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*` and a root page, the node's client about 40. The socket
-read timeout is 60 s. WebSocket was rejected as the carrier: its 4-byte client-to-server masking
-would touch every visitor byte again, frame headers and close semantics come with it, and it would
-only help behind proxies passing `Upgrade: websocket` when SNI passthrough already rules out an HTTP
-proxy in front of the hub (§7.2). ALPN is pinned to `http/1.1`, because HTTP/2 has no Upgrade.
+Both HTTP ends are hand-written (§3.1): the hub's front is about 300 lines serving `/v1/key`,
+`/v1/noise`, `/join/<token>`, `/admin/*` and a root page, the node's client about 40, and the socket
+read timeout is 60 s. WebSocket was rejected as the carrier because its 4-byte client-to-server
+masking would touch every visitor byte again, frame headers and close semantics come with it, and it
+would only help behind proxies passing `Upgrade: websocket` when SNI passthrough already rules out an
+HTTP proxy in front of the hub (§7.2). ALPN is pinned to `http/1.1`, because HTTP/2 has no Upgrade.
 
 **Noise parameters.** `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `jailscale-control-v1`. The
 version string is mixed into the handshake hash, so incompatible versions fail the handshake itself
-rather than something later. A Noise transport message is at most 65535 bytes, which is why the
-length prefix is two bytes.
+rather than something later. A transport message is at most 65535 bytes, which is why the length
+prefix is two bytes.
 
 **Why keep the TLS.** Noise alone authenticates the channel, but the hub-key bootstrap needs some
 reason to trust a first contact and web PKI is it, `/join` and `/admin` are browser paths, and
@@ -185,8 +180,8 @@ authentication that does not depend on a CA.
 
 A node needs one hostname, which the invite link carries. It fetches `GET /v1/key` over ordinary
 verified TLS, pins the returned `hkey:`, and every later handshake uses the pinned key; a mismatch is
-a hard failure with a warning. `jailhub key rotate --grace 30d` generates a next key and announces it
-as `HubKeyRotation` inside a channel already authenticated by the old key, so it needs no separate
+a hard failure. `jailhub key rotate --grace 30d` generates a next key and announces it as
+`HubKeyRotation` inside a channel already authenticated by the old key, so it needs no separate
 signature. During the grace period the hub's responder tries each candidate static key against
 message 1 and only the right one decrypts, while the node tries current then next. A node that never
 connected during the grace period fails with both keys, and only then is the operator asked to
@@ -203,17 +198,14 @@ the wrong one.
 One Noise channel carries many byte streams, one per visitor connection, in a protocol at roughly the
 level of yamux and about 500 lines. Frames are `[4B streamId][1B type][1B flags][2B len][payload]`,
 exactly one per Noise message. DATA payloads are capped at 16 KB, because filling 65535 would let one
-stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA frame as one datagram
-(§8.4).
+stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA frame as one datagram.
 
 | Type | Payload | Meaning |
 |---|---|---|
 | `OPEN` | `{linkId, kind, sni, visitorAddr, visitorPort, keyId}` | Hub to node: a visitor connection is delivered |
-| `DATA` | bytes | Stream data |
-| `WINDOW` | `[4B delta]` | Flow-control window increase |
+| `DATA` / `WINDOW` | bytes / `[4B delta]` | Stream data / flow-control window increase |
 | `CLOSE` / `RST` | none / `[1B reason]` | Half close (a FIN) / forced teardown |
-| `CTRL` | JSON | **Stream 0 only.** The messages of §6.1 |
-| `KEEPALIVE` | none | Every 25 s |
+| `CTRL` / `KEEPALIVE` | JSON / none | **Stream 0 only**, the messages of §6.1 / every 25 s |
 
 - **Flow control** is per stream: a 256 KB receive window refilled once half has been consumed. A
   sender out of credit stops, which keeps one slow visitor from stalling the others. There is no
@@ -245,7 +237,7 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 | `RegisterRequest` / `RegisterResponse` | hostname, os, self-chosen user, and one of `invite` / `code` / `authKey` or none to knock. Reply is `approved{nodeId, user}`, `pending` or `rejected{reason}` |
 | `CertUpdate` | Wildcard chain (public part) and its `keyId`, on connect and on renewal |
 | `LinkOpen` / `LinkOpened` | `kind: https\|tcp\|udp`, optional name, domain, port, local target, and for user domains the certificate chain. Reply carries `linkId` and a URL or hub port, or a reason |
-| `LinkClose` / `LinkRevoked` | Stop serving (ownership survives) / this node no longer serves that name, domain or port (§11.4) |
+| `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name, domain or port (§11.4) |
 | `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `digest`; then a signature or a reason (§9.2) |
 | `ChallengeSet` / `ChallengeClear` | Register or drop a user-domain http-01 token (§8.3) |
 | `InviteCreate` / `InviteCreated`, `AdminLinkRequest` / `AdminLink` | A member node issuing an invite; a one-shot `/admin` login URL for an admin node |
@@ -275,8 +267,8 @@ $JAILHUB_STATE/            (default /var/lib/jailhub, else ~/.local/share/jailhu
 └── tls/                   account.key, wildcard.key, wildcard.pem, wildcard.key.prev (0600)
 ```
 
-**Format version.** The snapshot carries a `v`, and the hub **refuses to start** when it is higher
-than the version it understands. Adding fields or events within a version is compatible both ways and
+The snapshot carries a format version `v`, and the hub **refuses to start** when it is higher than
+the version it understands. Adding fields or events within a version is compatible both ways and
 unknown events are skipped with a warning, so a rollback is safe in that range; `v` is bumped only
 for changes that would make an older binary *misread existing data*. A hub that cannot read its state
 should stop rather than come up holding part of it. In memory the state is plain maps (nodes, names,
@@ -286,20 +278,19 @@ simplest thing that works up to thousands of names.
 ### 6.3 Admin IPC and admin web
 
 Admin commands are separate processes and the state is in memory, so they talk to the running server
-over an AF_UNIX socket at `$JAILHUB_STATE/jailhub.sock`, mode 0600. **The socket file permission is
-the authorisation.** The protocol is line-delimited JSON reusing the `proto` codec, covering `node`,
-`name`, `domain`, `user`, `invite`, `authkey`, `admin`, `key rotate`, `setting`, `status` and
-`handoff`. Settings that change at run time (invite policy, registration mode, knocking) live in the
-store; `serve` flags only seed them on first start.
+over an AF_UNIX socket at `$JAILHUB_STATE/jailhub.sock`, mode 0600, exchanging line-delimited JSON
+through the `proto` codec. **The socket file permission is the authorisation.** Settings that change
+at run time (invite policy, registration mode, knocking) live in the store, and `serve` flags only
+seed them on first start.
 
 `/admin` exists because an approval queue that can only be drained from a shell on the hub violates
 the usability principle. There is no password and no IdP: **an admin node's MachineKey is the
 identity**. `jailscale admin` asks for an `AdminLink` over stream 0, the hub returns a 60-second
 one-shot URL, and the CLI opens a browser; the visit sets a `__Host-` prefixed session cookie
-(`HttpOnly; Secure; SameSite=Lax`, 12 hours). With no node available there is `jailhub admin
-login-link` on the hub shell. The pages approve or deny the queue, manage nodes, names and domains,
-issue invites and auth-keys, and toggle the three settings. It is server-rendered HTML with no
-JavaScript, inline CSS, no template engine, and a session-bound CSRF token on every form.
+(`HttpOnly; Secure; SameSite=Lax`, 12 hours), and `jailhub admin login-link` covers the case with no
+node available. The pages approve or deny the queue, manage nodes, names and domains, issue invites
+and auth-keys, and toggle the three settings, as server-rendered HTML with no JavaScript, no template
+engine, and a session-bound CSRF token on every form.
 
 ---
 
@@ -343,20 +334,22 @@ through temporary files, opens 443 and pushes the chain to every connected node 
 Renewal is checked daily and runs when less than a third of the lifetime is left; the previous key
 stays usable for 24 hours so in-flight handshakes complete.
 
-- **JWS and CSR.** The JDK's `SHA256withECDSA` produces DER while JWS wants the raw 64-byte `R||S`,
-  and without that conversion the CA rejects every request. The JDK also has no public PKCS#10 API,
-  so a small DER writer builds the `CertificationRequestInfo` with both SANs and signs it.
-- **Why ECDSA.** So the delegated private-key operation is exactly one signature. RSA key exchange
-  would need a decryption, and the key type excludes those suites (§9.2).
-- **Scope.** ACME v2, dns-01 only, no External Account Binding. `--tls-cert/--tls-key` covers
-  internal CAs and hosts that cannot open 53; that certificate must be ECDSA with the wildcard SAN.
-- **Privileged ports.** On Linux 443 and 53 need root or `CAP_NET_BIND_SERVICE`; the reference
-  systemd unit uses a dedicated user with `AmbientCapabilities`. macOS binds unprivileged.
-- **No HTTP proxy in front, TCP proxy is fine.** SNI passthrough needs raw TCP 443, so nginx `http`,
-  Caddy or Cloudflare Proxied cannot work; a layer-4 proxy that only copies bytes is supported (§8.5).
-- A node started with `--ca-file` keeps that path in its state and will not recover on its own if the
-  hub later serves a certificate from a different CA. Re-running `jailscale up --hub <name>` without
-  the flag clears it. This is the usual snag moving from ACME staging to production.
+Details that had to be written by hand: the JDK's `SHA256withECDSA` produces DER while JWS wants the
+raw 64-byte `R||S`, and without that conversion the CA rejects every request; and the JDK has no
+public PKCS#10 API, so a small DER writer builds the `CertificationRequestInfo` with both SANs and
+signs it. The certificate is **ECDSA** so that the delegated private-key operation is exactly one
+signature, since RSA key exchange would need a decryption (§9.2). Scope is ACME v2 and dns-01 only,
+with no External Account Binding; `--tls-cert/--tls-key` covers internal CAs and hosts that cannot
+open 53, and that certificate must also be ECDSA with the wildcard SAN. On Linux, 443 and 53 need
+root or `CAP_NET_BIND_SERVICE`, which the reference systemd unit grants to a dedicated user through
+`AmbientCapabilities`.
+
+Two operational traps. SNI passthrough needs raw TCP 443, so **no TLS-terminating HTTP proxy can sit
+in front** (nginx `http`, Caddy, Cloudflare Proxied); a layer-4 proxy that only copies bytes is
+supported (§8.5). And a node started with `--ca-file` keeps that path in its state, so it will not
+recover on its own if the hub later serves a certificate from a different CA; re-running
+`jailscale up --hub <name>` without the flag clears it, which is the usual snag moving from ACME
+staging to production.
 
 ---
 
@@ -382,10 +375,10 @@ SNI reaches a name, so `psql "sslmode=require host=db.hub.example.com"`, MQTT ov
 as they are; only clients that cannot speak TLS need the raw ports of §8.4.
 
 **Limits.** 64 concurrent connections per visitor IP, 1,024 per name (`SniRouter.MAX_PER_NAME`),
-5 seconds to produce a ClientHello, listen backlog 1,024 capped by `somaxconn`. SYN flood defence is
+5 seconds to produce a ClientHello, listen backlog 1,024 capped by `somaxconn`; SYN flood defence is
 the kernel's job. Loopback is exempt from the per-IP limit, because behind a local proxy without
-PROXY protocol every visitor folds into one address; `--proxy-protocol` (§8.5) is the right answer
-there and this exemption is the safety net.
+PROXY protocol every visitor folds into one address, and while `--proxy-protocol` (§8.5) is the right
+answer there this exemption is the safety net.
 
 **Visitors that never close.** Both directions are half closes, so the hub would wait for a visitor
 under no obligation to close its own half. A 10-second timer therefore starts **when the node closes
@@ -400,11 +393,11 @@ starting or ending with a hyphen, with reserved labels (`hub`, `admin`, `www`, `
 `_acme-challenge`, `join` and others) refused. `jailscale open 3000` gets a five-character random
 name from a 30-character alphabet with look-alikes removed, and the same node reopening the same
 local target gets the same name back, so the URL survives restarts. `--name myapp` binds the name to
-the first requester's *user*, so that user's other nodes may use it while another user gets `taken`;
-an admin moves it with `name reassign`. A name routes only while the node holds the link open and is
-connected; otherwise it stays claimed and visitors see the "not open" page. Opening a name costs one
-`LinkOpen` round trip because the wildcard already covers it, and a node may hold at most 20 name and
-domain links.
+the first requester's *user*, so that user's other nodes may use it while another user gets `taken`,
+and an admin moves it with `name reassign`. A name routes only while the node holds the link open and
+is connected; otherwise it stays claimed and visitors see the "not open" page. Opening a name costs
+one `LinkOpen` round trip because the wildcard already covers it, and a node may hold at most 20 name
+and domain links.
 
 ### 8.3 User domains
 
@@ -458,13 +451,11 @@ says so in its output. A client that can speak TLS should use the 443 path.
 ### 8.5 Behind a TCP proxy, and PROXY protocol
 
 An operator whose server already runs nginx or HAProxy on 443 can put the hub behind it, provided the
-proxy **forwards TCP bytes without opening TLS**. Reference configs ship in
-`deploy/nginx-stream.conf` and `deploy/haproxy.cfg`, including an `ssl_preread` example that routes
-only the hub's names to the hub.
-
-The hub runs as `--listen 127.0.0.1:8443 --proxy-protocol` and reads a PROXY v1 or v2 header at the
-start of each connection to learn the visitor address. Because the header is only trustworthy from a
-trusted proxy, `--proxy-protocol` is accepted only when `--listen` is on loopback or
+proxy **forwards TCP bytes without opening TLS**; reference configs are in `deploy/nginx-stream.conf`
+and `deploy/haproxy.cfg`, including an `ssl_preread` example that routes only the hub's names to it.
+The hub then runs as `--listen 127.0.0.1:8443 --proxy-protocol` and reads a PROXY v1 or v2 header at
+the start of each connection to learn the visitor address. Because the header is only trustworthy
+from a trusted proxy, `--proxy-protocol` is accepted only when `--listen` is on loopback or
 `--trusted-proxy <cidr>` is given, and connections from untrusted peers are refused outright;
 otherwise anyone could forge a visitor address. The parser takes v1 text and v2 binary (IPv4, IPv6,
 LOCAL), and v1 addresses must be **literals**, because allowing hostnames would put a DNS lookup on
@@ -482,7 +473,7 @@ queue and the session logs use, so nodes behind one proxy are not collapsed into
 ```sh
 $ jailscale open 3000                      # https://q7x2k.hub.example.com -> 127.0.0.1:3000
 $ jailscale open 3000 --name myapp         # chosen name
-$ jailscale open 3000 --gate               # visitor gate; prints a visit link too (§9.4)
+$ jailscale open 3000 --gate               # visitor gate; prints a visit link too (§9.3)
 $ jailscale open 3000 --domain myapp.com   # user domain (§8.3)
 $ jailscale open 22 --tcp                  # raw TCP, hub assigns a port (§8.4)
 $ jailscale open 8080 --host 192.168.1.20  # another machine on the same LAN
@@ -535,45 +526,37 @@ tickets are generated by the node and kept in memory, so a resumed handshake nev
 0-RTT is off, and ALPN offers only `http/1.1`, because negotiating h2 would break a local app that
 speaks h1. `CertUpdate` carries a `keyId` (a certificate fingerprint) that the node echoes in
 `SignRequest`, and the hub keeps the previous key for 24 hours so a handshake begun just before a
-renewal still completes.
+renewal still completes. Each first handshake from a visitor adds one node-to-hub round trip, the
+same cost Cloudflare Keyless SSL pays. A user-domain stream arrives with `keyId = domain:<domain>`
+and is terminated with the node's own real key, with no hub involvement.
 
-Each first handshake from a visitor adds one node-to-hub round trip, the same cost Cloudflare Keyless
-SSL pays. A user-domain stream arrives with `keyId = domain:<domain>` and is terminated with the
-node's own real key, with no hub involvement.
-
-### 9.3 Relaying
+### 9.3 Relaying and the visitor gate
 
 Once TLS is off the node **copies bytes**: visitor plaintext to `127.0.0.1:<port>` and local
-responses back. HTTP/1.1 keep-alive, chunked bodies, WebSocket upgrades and SSE all pass through
+responses back, so HTTP/1.1 keep-alive, chunked bodies, WebSocket upgrades and SSE all pass through
 because the local app handles them. `open --proxy-protocol` prepends a PROXY v1 line so the local app
 learns the visitor address, using the `visitorAddr` and `visitorPort` the hub put in the stream
-metadata; raw TCP links behave the same way.
+metadata, and raw TCP links behave the same way. A refused or reset local connection is retried five
+times with 50 ms doubling (about 1.5 s) before the visitor gets a 502 page, because a burst of
+visitors really does overflow a small listen backlog (macOS defaults to 128) and it surfaces as an
+immediate refusal. That page and the gate are the only two places where the node *writes* HTTP, and
+only on https links.
 
-A refused or reset local connection is retried five times with 50 ms doubling (about 1.5 s) before
-giving up, because a burst of visitors really does overflow a small listen backlog (macOS defaults to
-128) and it surfaces as an immediate refusal. Only after that does the visitor get a 502 page. That
-page and the gate are the only two places where the node *writes* HTTP, and only on https links: a
-raw TCP stream copies bytes with no TLS, and a raw UDP stream turns one DATA frame into one datagram.
-
-### 9.4 Visitor gate
-
-A link that should not be public is locked behind a visit link, with the same capability model as
-invites. `jailscale open 3000 --gate` prints `https://q7x2k.hub.example.com/?jail=<token>` alongside
-the public URL, and `jailscale gate <name> --new-link --ttl 7d` or `--off` manages it afterwards.
-
+A link that should not be public is locked behind a visit link, the same capability model as invites.
+`jailscale open 3000 --gate` prints `https://q7x2k.hub.example.com/?jail=<token>` alongside the
+public URL, and `jailscale gate <name> --new-link --ttl 7d` or `--off` manages it afterwards.
 Immediately after TLS termination the node reads only **the first request head** of the connection
-(request line and headers, at most 16 KB). A valid `Cookie: jail=<token>` lets the whole connection
-through, because the same TCP connection is the same client. A valid `?jail=<token>` query gets
+(request line and headers, at most 16 KB): a valid `Cookie: jail=<token>` lets the whole connection
+through, because the same TCP connection is the same client; a valid `?jail=<token>` query gets
 `Set-Cookie: jail=...; Path=/; Secure; HttpOnly; SameSite=Lax` and a 302 to the same path without the
-token, then closes. Neither one gets a 403 page and a close. Tokens are 128-bit and the node stores
-only a SHA-256 hash. The hub knows nothing about gates, because it only sees ciphertext; keeping the
-gate on the node is the position consistent with end-to-end encryption. Bodies are never read, so
-HTTP parsing stops at the blank line.
+token, then closes; neither one gets a 403 page and a close. Tokens are 128-bit and the node stores
+only a SHA-256 hash. The hub knows nothing about gates, because it only sees ciphertext, and keeping
+the gate on the node is the position consistent with end-to-end encryption.
 
-### 9.5 Daemon and CLI
+### 9.4 Daemon and CLI
 
 `jailscale` is one binary with two roles. `jailscale daemon`, or a registered service, stays resident;
-every other subcommand talks to it over **local IPC**: an AF_UNIX socket at
+every other subcommand talks to it over **local IPC**, an AF_UNIX socket at
 `$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600), Windows included, carrying
 line-delimited JSON with streaming replies for progress output. Commands are `up`, `down`, `status`,
 `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify` (§11.3), `leave` and
@@ -610,7 +593,7 @@ unattended form for CI jobs, containers and servers, optionally bound to a tag i
 
 **Joining.** `jailscale up --invite <link>` takes the hostname from the link, pins the hub key
 through `/v1/key` (§5.2), opens the Noise channel, negotiates versions, asks for a name only when the
-invite does not fix one, and sends `RegisterRequest`. The hub matches the token hash, checks expiry
+invite does not fix one, and sends `RegisterRequest`; the hub matches the token hash, checks expiry
 and remaining uses, decrements, assigns a node id, and replies `approved` followed by `CertUpdate`.
 No browser opens, so a headless server runs the same command, and opening `/join/<token>` in a
 browser shows install instructions without consuming a use. An attacker can hand out an invite to
@@ -641,7 +624,7 @@ Four axes. None of them implies any other.
 |---|---|---|
 | **Transport** | Who can read between visitor and node | Nobody, the hub included. It sees SNI, IP, byte counts, timing (§8.1) |
 | **Right to publish** | Who can open a name | Only nodes that joined through an invite, auth-key or approval. No open registration by default |
-| **Right to visit** | Who can reach a published link | Public by default; with `--gate`, only holders of the visit link (§9.4) |
+| **Right to visit** | Who can reach a published link | Public by default; with `--gate`, only holders of the visit link (§9.3) |
 | **Name identity** | Who vouches that `myapp.hub.example.com` is alice's node | **The hub.** It owns the routing table and the wildcard key (§11.2) |
 
 ### 11.1 The boundary of signature delegation
@@ -682,27 +665,30 @@ the command is `jailscale verify`. The mechanism is RFC 5705 exported keying mat
 TLS 1.3 session derive the same bytes from a label, and a third party that did not terminate the
 session cannot.
 
-1. The node records the exported value of every visitor session it terminates, immediately after the
-   handshake, keeping the last 120 seconds and at most 4,096 entries.
+1. The node records the exported value of every visitor session it terminates, keeping the last 120
+   seconds and at most 4,096 entries. It records **on the first application bytes from the peer**,
+   not when `handshake()` returns: on the server side of TLS 1.3 the peer's Finished may not have
+   been processed yet, and JSSE will not export until it has, so recording earlier can silently skip
+   a session this node really did terminate. A false report of a compromised hub is the worst
+   failure this feature can have, and application bytes cannot arrive before the Finished.
 2. `jailscale verify` connects to each open https link **by its public name**, at the hub address, so
    it genuinely traverses the hub.
-3. It sends `GET /` and waits for the response. A response means the server side already finished its
-   handshake and recorded it, which removes the race between steps 1 and 4.
+3. It sends `GET /` and waits for the response. A response means the server side has already read
+   application bytes and recorded them, which removes the race between steps 1 and 4.
 4. If the exported value is in the record the verdict is `terminated by this node`; otherwise
    `TERMINATED ELSEWHERE`. The comparison uses `MessageDigest.isEqual`.
 
 If a hub holding the wildcard key terminates the name itself or hands it to another node, the
 certificate the visitor sees is still valid but the session is a different one, so its exported value
-is not in the record; a hub that decrypts and re-encrypts is caught for the same reason.
+is not in the record; a hub that decrypts and re-encrypts is caught for the same reason. The probe
+leaves the node's own address, so a hub that singles those connections out and routes only them
+correctly is not caught, though doing so requires discriminating between visitors, which is itself
+detectable; `--tls-insecure` or a stale `--ca-file` blinds the probe, and TLS 1.2 and below cannot
+export the material, giving the verdict `keying material unavailable`.
 
-**Limits.** The probe leaves the node's own address, so a hub that singles those connections out and
-routes only them correctly is not caught, though doing so requires discriminating between visitors,
-which is itself detectable. `--tls-insecure` or a stale `--ca-file` blinds the probe, and TLS 1.2 and
-below cannot export the material, giving the verdict `keying material unavailable`.
-
-**Relation to §11.1.** The four signing conditions are enforced by **the hub**, so they stop a rogue
-*node* and say nothing about a rogue *hub*. The self-probe runs on **the node**. They do not overlap;
-they face opposite directions.
+The four signing conditions are enforced by **the hub**, so they stop a rogue *node* and say nothing
+about a rogue *hub*. The self-probe runs on **the node**. They do not overlap; they face opposite
+directions.
 
 ### 11.4 Name revocation notices
 
@@ -719,15 +705,14 @@ MachineKey changing and notifies the previous one; domains and raw ports use the
 their own records.
 
 A connected node gets the notice immediately, otherwise it is stored and handed over on the node's
-next connection, then cleared. Clearing happens only after everything has been sent, so a node that
-dies mid-delivery hears it again, and a node that never returns is capped at 20 stored notices,
-oldest dropped first. On receipt the node removes the name from local state, because leaving it would
-silently reopen it on the next reconnect and make the notice pointless, and records it under
-`revoked` so `status` keeps saying so after the log line has scrolled away; deliberately reopening
-the name clears the warning, since that is the answer to it. `name release` and `domain release` take
-the live link down and send the notice rather than quietly clearing ownership while the old node
-keeps serving. Release is not a ban, so the same node may reopen the name; banning a node is
-`node remove`.
+next connection, then cleared; clearing happens only after everything has been sent, so a node that
+dies mid-delivery hears it again, and a node that never returns is capped at 20 stored notices. On
+receipt the node removes the name from local state, because leaving it would silently reopen it on
+the next reconnect and make the notice pointless, and records it under `revoked` so `status` keeps
+saying so after the log line has scrolled away; deliberately reopening the name clears the warning,
+since that is the answer to it. `name release` and `domain release` take the live link down and send
+the notice rather than quietly clearing ownership while the old node keeps serving. Release is not a
+ban, so the same node may reopen the name; banning a node is `node remove`.
 
 ### 11.5 Abuse and rate limits
 
@@ -761,11 +746,11 @@ and admin login URLs are never written to logs.
 ## 12. Threading and memory
 
 There is no packet hot path, so there is no reason to insist on platform threads. The hub's 443
-accept loop is the one platform thread. A visitor connection uses two virtual threads, one per
-direction, at both ends. Each mux connection has a virtual reader plus a virtual keepalive, and
-writes run on the producing thread under a lock, because the Noise nonce counter must advance in wire
-order. The hub's own HTTP, ACME, port 80, DNS and both IPC servers use one virtual thread per
-request, and remote signing blocks on the calling thread, which is free on a virtual thread. Buffers
+accept loop is the one platform thread; a visitor connection uses two virtual threads, one per
+direction, at both ends; each mux connection has a virtual reader plus a virtual keepalive, with
+writes running on the producing thread under a lock because the Noise nonce counter must advance in
+wire order; and the hub's own HTTP, ACME, port 80, DNS and both IPC servers use one virtual thread
+per request. Remote signing blocks on the calling thread, which is free on a virtual thread. Buffers
 are 16 KB per direction, allocated per stream, and the per-stream flow-control window is 256 KB.
 
 Memory is bounded by the connection limits, not by a heap cap, and the images deliberately set **no
