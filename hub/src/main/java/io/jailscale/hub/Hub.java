@@ -34,6 +34,7 @@ public final class Hub implements AutoCloseable {
     static final long DRAIN_TIMEOUT_MS = 60_000;
     private volatile boolean handingOff;
     private final Registrar registrar;
+    private final Bans bans;
     private final Invites invites;
     private final HttpFront front;
     private final HubTls tls;
@@ -90,7 +91,8 @@ public final class Hub implements AutoCloseable {
         }
         this.store = new Store(config.stateDir());
         this.keys = new HubKeys(config.stateDir());
-        this.registrar = new Registrar(config, store);
+        this.bans = new Bans(store);
+        this.registrar = new Registrar(config, store, bans);
         this.invites = new Invites(config, store);
         this.front = new HttpFront(this);
         this.tls = new HubTls(config.hostname());
@@ -246,6 +248,10 @@ public final class Hub implements AutoCloseable {
 
     Registry registry() {
         return registry;
+    }
+
+    Bans bans() {
+        return bans;
     }
 
     Registrar registrar() {

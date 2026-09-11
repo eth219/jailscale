@@ -55,8 +55,8 @@ class JsonTest {
     @Test
     void controlCharactersAndUnicodeAreEscaped() {
         assertEquals("\"\\u0001\\t\\\\\\/x\"".replace("\\/", "/"), Json.write("\u0001\t\\/x"));
-        assertEquals("\"한글\"", Json.write("한글"));
-        assertEquals("한글", Json.parse("\"\\ud55c\\uae00\""));
+        assertEquals("\"\uD55C\uAE00\"", Json.write("\uD55C\uAE00"));
+        assertEquals("\uD55C\uAE00", Json.parse("\"\\ud55c\\uae00\""));
     }
 
     @Test

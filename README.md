@@ -1,6 +1,8 @@
 # jailscale
 
-**Tailscale's control plane, plus portal-tunnel's keyless TLS, written with Claude.**
+**[Tailscale](https://tailscale.com)'s control plane, plus reverse
+[keyless TLS](https://blog.cloudflare.com/keyless-ssl-the-nitty-gritty-technical-details/),
+in Java, written with [Claude](https://claude.com/claude-code).**
 
 A self-hosted HTTPS tunnel. Nodes dial out to a hub you run and get a public
 `https://name.your-domain` address. The hub never sees plaintext: it forwards
@@ -8,18 +10,61 @@ the TLS bytes untouched and the node terminates the session, using a wildcard
 certificate whose private key stays on the hub and is used only to sign the
 handshake.
 
+Keyless TLS keeps the private key at the origin and terminates at the edge.
+jailscale turns that around. The key stays at the edge, on the hub, and
+termination moves to the origin, on your machine. The edge signs one handshake
+digest and never holds a session key, so the party you are trusting least is
+also the one that can read least.
+
 Two binaries, no runtime dependencies, nothing to install underneath them. No
 TUN device, no root, no inbound ports on the node.
 
 Full design and architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## What Java bought, and what it cost
+
+The interesting question was whether a JVM language can carry this kind of
+product without apologising for itself. Four things were the target.
+
+**Light.** 25 MiB per binary, 25 MB idle, 7 ms for a CLI round trip. That needs
+GraalVM Native Image, and Native Image needs discipline: no reflection, no
+dependency injection, no dynamic class loading, no third-party runtime
+dependency at all. JSON, HTTP/1.1, ACME, DNS, the multiplexer and the Noise
+handshake are all written here. The cost is real. Those are all things you would
+normally take off a shelf.
+
+**Easy.** `jailscale open 3000` and the link is live. On the hub side the
+operator creates three DNS records and opens two ports; the wildcard
+certificate arrives on its own, because the hub is the authoritative DNS server
+for its own `_acme-challenge` name and answers its own ACME challenge. No DNS
+provider API token anywhere.
+
+**Portable.** No root, no TUN device, no kernel module, no inbound port, no UDP
+on the node. Five native platforms plus a pure-JVM fallback JAR for anything
+else. Virtual threads throughout, so a thread per direction per stream is an
+ordinary thing to write rather than something to optimise away.
+
+**Secure, and specifically how.** The hub reads the TLS SNI and nothing else, so
+it never parses visitor HTTP and never holds plaintext. The wildcard private key
+stays on the hub and signs one handshake digest per visitor, and the hub refuses
+to sign unless the request is bound to a stream it itself delivered to that node.
+Domains you bring yourself never involve the hub's key at all. The node then
+checks the hub's honesty from its own side: `jailscale verify` opens a session to
+its own public name and compares RFC 5705 exported keying material against what
+it recorded, which catches a hub that terminated the TLS itself. The control
+channel is Noise IK inside TLS, so a compromised certificate authority still does
+not get you the control plane.
+
+What it did not buy: idle memory is 24.7 MB against a 20 MB goal, and roughly
+7.6 MB of that is JSSE standing up a single TLS client.
+
 ## Usage
 
-A hub is running at **`jailscale.sinabro.io`**. You can point a node at it
-today. Joining puts you in an approval queue, so ask the operator to let you in.
+A hub is running at **`jailscale.sinabro.io`**. Registration is open, so you can
+point a node at it and start.
 
 ```sh
-# 1. Join. The node knocks and waits for the hub operator to approve it.
+# 1. Join. Registration is open on this hub, so it takes effect immediately.
 jailscale up --hub jailscale.sinabro.io
 
 # 2. Publish a local port.
@@ -131,16 +176,13 @@ What a compromised hub can and cannot do is written out in
 
 ## Credit
 
-- [Tailscale](https://tailscale.com) for the control plane shape: a coordination
-  server, joining by invite rather than by identity provider, and nodes that
-  only dial out.
-- [gosuda/portal-tunnel](https://github.com/gosuda/portal-tunnel) for the
-  keyless TLS relay, and for the self-probe, which jailscale did not have until
-  reading that project.
+- [Tailscale](https://tailscale.com) for the control plane: a coordination
+  server, joining by invite instead of by identity provider, nodes that only
+  dial out.
 - [Keyless SSL](https://blog.cloudflare.com/keyless-ssl-the-nitty-gritty-technical-details/)
   for separating the private key from the server that uses it.
-
-Built with [Claude Code](https://claude.com/claude-code).
+- [gosuda/portal-tunnel](https://github.com/gosuda/portal-tunnel) for applying
+  that to a tunnel, and for the self-probe.
 
 ## License
 

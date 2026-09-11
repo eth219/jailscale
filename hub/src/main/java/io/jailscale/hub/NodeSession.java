@@ -75,6 +75,12 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     /** Runs to completion on the connection's virtual thread. */
     void run(InputStream in, OutputStream out) {
         try {
+            if (hub.bans().isBanned(remoteIp)) {
+                // Refused before the Noise handshake, so a banned address cannot make the hub do
+                // any crypto. Nothing is sent back: there is nothing useful to say.
+                hub.bans().logRefusal(remoteIp, "control connection");
+                return;
+            }
             socket.setSoTimeout(IDLE_TIMEOUT_MS);
             boolean[] rejected = new boolean[1];
             NoiseChannel ch = NoiseChannel.respond(in, out, hub.keys().responders(), (p1, hs) -> {

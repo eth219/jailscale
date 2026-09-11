@@ -40,9 +40,11 @@ final class AdminIpc implements Ipc.Handler {
             case "node-list" -> {
                 List<Object> rows = new ArrayList<>();
                 for (Store.NodeRec n : store.nodes()) {
+                    NodeGroup g = hub.registry().get(n.mkey());
                     rows.add(JsonObject.builder().put("id", n.id()).put("mkey", n.mkey()).put("user", n.user())
                         .put("hostname", n.hostname()).put("os", n.os())
-                        .put("online", hub.registry().get(n.mkey()) != null).build().asMap());
+                        .put("ip", g == null ? null : g.remoteIp())
+                        .put("online", g != null).build().asMap());
                 }
                 List<Object> pend = new ArrayList<>();
                 for (Store.PendingRec p : store.pending()) {
@@ -110,6 +112,34 @@ final class AdminIpc implements Ipc.Handler {
             case "domain-release" -> {
                 store.releaseDomain(req.string("domain"));
                 hub.links().releasedByOperator(req.string("domain"), true);
+                reply.ok();
+            }
+            case "ban-list" -> {
+                List<Object> rows = new ArrayList<>();
+                for (Store.BanRec b : store.bans()) {
+                    rows.add(JsonObject.builder().put("cidr", b.cidr()).put("reason", b.reason()).put("at", b.at()).build().asMap());
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("bans", rows));
+            }
+            case "ban-add" -> {
+                String cidr = req.string("cidr");
+                if (Bans.parse(cidr, null, 0) == null) {
+                    reply.error("not an address or CIDR block: " + cidr);
+                    return;
+                }
+                store.addBan(cidr, req.optString("reason", null));
+                // Disconnect whatever that address currently has, or the ban only applies next time.
+                int dropped = 0;
+                for (NodeGroup g : hub.registry().all()) {
+                    if (hub.bans().isBanned(g.remoteIp())) {
+                        g.goodbyeAll(io.jailscale.proto.control.Message.Goodbye.BANNED);
+                        dropped++;
+                    }
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("cidr", cidr).put("disconnected", dropped));
+            }
+            case "ban-remove" -> {
+                store.removeBan(req.string("cidr"));
                 reply.ok();
             }
             case "user-list" -> reply.done(JsonObject.builder().put("ok", true).put("users", new ArrayList<>(store.users())));
@@ -226,6 +256,8 @@ final class AdminIpc implements Ipc.Handler {
         switch (cmd) {
             case "node-approve", "node-deny", "node-remove", "node-rename" -> b.put("mkey", need(a.positional(2), "<node>")).put("user", a.get("user"));
             case "user-remove" -> b.put("user", need(a.positional(2), "<user>"));
+            case "ban-add" -> b.put("cidr", need(a.positional(2), "<ip|cidr>")).put("reason", a.get("reason"));
+            case "ban-remove" -> b.put("cidr", need(a.positional(2), "<ip|cidr>"));
             case "name-reassign" -> b.put("name", need(a.positional(2), "<name>")).put("user", a.require("user"));
             case "name-release" -> b.put("name", need(a.positional(2), "<name>"));
             case "domain-release" -> b.put("domain", need(a.positional(2), "<domain>"));

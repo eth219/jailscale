@@ -30,6 +30,8 @@ public sealed interface Message {
 
         public static final String UPGRADE_REQUIRED = "upgrade-required";
         public static final String REVOKED = "revoked";
+        /** The hub bars this address. The node keeps its registration; it just cannot get in from here. */
+        public static final String BANNED = "banned";
         public static final String SHUTDOWN = "shutdown";
         /** Hand-off: reconnect now, keep this connection only for streams already on it. */
         public static final String DRAINING = "draining";

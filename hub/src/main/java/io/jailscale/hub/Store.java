@@ -48,6 +48,9 @@ final class Store implements AutoCloseable {
     /** A raw port assigned to a node's local target (ARCHITECTURE.md §8.4); stable across restarts. */
     record PortRec(int port, String kind, String user, String mkey, String local, long at) {}
 
+    /** An address or CIDR block barred from the control plane (ARCHITECTURE.md §11.5). */
+    record BanRec(String cidr, String reason, long at) {}
+
     /**
      * A name a node lost while it was not listening (ARCHITECTURE.md §11.4). Kept until the node
      * reconnects and is told, so the notice survives the node being offline -- which is the
@@ -73,6 +76,8 @@ final class Store implements AutoCloseable {
     private final Map<String, DomainRec> domains = new LinkedHashMap<>();
     /** mkey -> notices waiting for that node to reconnect. */
     private final Map<String, List<NoticeRec>> notices = new LinkedHashMap<>();
+    /** cidr text -> ban. Small enough that a list scan per check is cheaper than an index. */
+    private final Map<String, BanRec> bans = new LinkedHashMap<>();
 
     static final String SETTING_INVITE_POLICY = "invitePolicy";
     static final String SETTING_REGISTRATION = "registration";
@@ -221,6 +226,22 @@ final class Store implements AutoCloseable {
     synchronized void releaseName(String name) throws IOException {
         if (names.containsKey(name)) {
             append(JsonObject.builder().put("e", "name-released").put("name", name));
+        }
+    }
+
+    synchronized List<BanRec> bans() {
+        return List.copyOf(bans.values());
+    }
+
+    /** Bars an address or block. Overwrites an existing entry with the same text. */
+    synchronized void addBan(String cidr, String reason) throws IOException {
+        append(JsonObject.builder().put("e", "ban-added").put("cidr", cidr).put("reason", reason)
+            .put("at", System.currentTimeMillis()));
+    }
+
+    synchronized void removeBan(String cidr) throws IOException {
+        if (bans.containsKey(cidr)) {
+            append(JsonObject.builder().put("e", "ban-removed").put("cidr", cidr));
         }
     }
 
@@ -504,6 +525,9 @@ final class Store implements AutoCloseable {
                 l.add(r);
             }
             case "notices-cleared" -> notices.remove(ev.string("mkey"));
+            case "ban-added" -> bans.put(ev.string("cidr"),
+                new BanRec(ev.string("cidr"), ev.optString("reason", null), ev.lng("at")));
+            case "ban-removed" -> bans.remove(ev.string("cidr"));
             case "hubkey-rotation" -> {
                 nextHubKey = ev.string("next");
                 hubKeyActivatesAt = ev.lng("activatesAt");
@@ -605,6 +629,10 @@ final class Store implements AutoCloseable {
                 events.add(JsonObject.builder().put("e", "notice-added").put("mkey", r.mkey()).put("linkId", r.linkId())
                     .put("name", r.name()).put("reason", r.reason()).put("at", r.at()).build().asMap());
             }
+        }
+        for (BanRec b : bans.values()) {
+            events.add(JsonObject.builder().put("e", "ban-added").put("cidr", b.cidr())
+                .put("reason", b.reason()).put("at", b.at()).build().asMap());
         }
         for (Map.Entry<String, String> e : settings.entrySet()) {
             events.add(JsonObject.builder().put("e", "setting").put("key", e.getKey()).put("value", e.getValue()).build().asMap());

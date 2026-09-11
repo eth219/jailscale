@@ -78,6 +78,12 @@ final class NodeGroup {
         return sessions.isEmpty();
     }
 
+    /** The address the control connection came from, or null when there is none right now. */
+    String remoteIp() {
+        NodeSession p = primary();
+        return p == null ? null : p.remoteIp();
+    }
+
     int connections() {
         return sessions.size();
     }

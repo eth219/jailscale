@@ -21,7 +21,8 @@ final class AdminWeb {
 
     private record Login(String user, boolean shell, long expiresAt) {}
 
-    private record Session(String user, boolean shell, long expiresAt, String csrf) {}
+    /** Package-private so the status page can render admin controls for a signed-in admin. */
+    record Session(String user, boolean shell, long expiresAt, String csrf) {}
 
     private final Hub hub;
     private final Map<String, Login> logins = new ConcurrentHashMap<>();
@@ -64,7 +65,7 @@ final class AdminWeb {
         if (path.startsWith("/admin/login/")) {
             Login l = logins.remove(path.substring("/admin/login/".length()));
             if (l == null || System.currentTimeMillis() > l.expiresAt()) {
-                return HttpResponse.html(403, page("로그인 링크가 만료되었습니다", "<p>노드에서 <code>jailscale admin</code>을 다시 실행하세요.</p>"));
+                return HttpResponse.html(403, page("login link expired", "<p>Run <code>jailscale admin</code> on the node again.</p>"));
             }
             String sid = Tokens.inviteToken();
             sessions.put(sid, new Session(l.user(), l.shell(), System.currentTimeMillis() + SESSION_TTL_MS, Tokens.inviteToken()));
@@ -73,7 +74,7 @@ final class AdminWeb {
         }
         Session s = session(req);
         if (s == null) {
-            return HttpResponse.html(403, page("jailhub 관리", "<p>관리자 노드에서 <code>jailscale admin</code>을 실행하면 로그인 링크가 열립니다.</p>"));
+            return HttpResponse.html(403, page("jailhub admin", "<p>Run <code>jailscale admin</code> on an admin node to open a login link.</p>"));
         }
         // Admin rights are checked again on every request, not only when the link was issued.
         // Without this, `admin remove` left the removed admin's browser working until the twelve
@@ -81,7 +82,7 @@ final class AdminWeb {
         if (!authorized(s)) {
             sessions.values().removeIf(v -> v == s);
             LOG.warn("session for {} is no longer an admin; signed out", s.user());
-            return HttpResponse.html(403, page("권한이 없습니다", "<p>이 계정은 더 이상 관리자가 아닙니다.</p>"))
+            return HttpResponse.html(403, page("not authorised", "<p>This account is no longer an admin.</p>"))
                 .header("Set-Cookie", cookie("", 0));
         }
         if (req.method().equals("POST")) {
@@ -97,9 +98,11 @@ final class AdminWeb {
             try {
                 act(path, f, s);
             } catch (IllegalArgumentException e) {
-                return HttpResponse.html(400, page("오류", "<p>" + HttpFront.escape(e.getMessage()) + "</p><p><a href=\"/admin\">돌아가기</a></p>"));
+                return HttpResponse.html(400, page("error", "<p>" + HttpFront.escape(e.getMessage()) + "</p><p><a href=\"/admin\">Back</a></p>"));
             }
-            return HttpResponse.redirect("/admin");
+            // A form on the status page should not dump the admin on /admin afterwards.
+            String back = f.get("back");
+            return HttpResponse.redirect("/".equals(back) ? "/" : "/admin");
         }
         if (!path.equals("/admin") && !path.equals("/admin/")) {
             return HttpResponse.text(404, "not found");
@@ -107,9 +110,70 @@ final class AdminWeb {
         return HttpResponse.html(200, render(s));
     }
 
+    /**
+     * The session behind this request when it belongs to a current admin, otherwise null. The
+     * status page uses it to decide whether to render node controls; rights are re-checked here
+     * rather than trusted from the cookie, the same as on {@code /admin} itself.
+     */
+    Session adminSession(HttpRequest req) {
+        Session s = session(req);
+        return s != null && authorized(s) ? s : null;
+    }
+
     /** The local shell is authorised by the IPC socket's permissions; everyone else by the list. */
     private boolean authorized(Session s) {
         return s.shell() || hub.store().isAdmin(s.user());
+    }
+
+    /**
+     * Registered nodes with the controls an admin has over them, and the current bans. Rendered
+     * on {@code /admin} and, for a signed-in admin, on the status page; {@code back} is where the
+     * POST returns to so a button pressed on one page does not land on the other.
+     */
+    String nodesAndBans(String csrf, String back) {
+        StringBuilder b = new StringBuilder();
+        Store store = hub.store();
+        String backField = "<input type=hidden name=back value=\"" + HttpFront.escape(back) + "\">";
+
+        b.append("<h2>Nodes</h2><table><tr><th>#</th><th>User</th><th>Host</th><th>Key</th><th>Address</th>")
+            .append("<th>Status</th><th></th></tr>");
+        for (Store.NodeRec n : store.nodes()) {
+            NodeGroup g = hub.registry().get(n.mkey());
+            String ip = g == null ? null : g.remoteIp();
+            b.append("<tr><td>").append(n.id()).append("</td><td>").append(HttpFront.escape(n.user())).append("</td><td>")
+                .append(HttpFront.escape(n.hostname())).append("</td><td><code>")
+                .append(HttpFront.escape(n.mkey().substring(0, 17))).append("…</code></td><td>")
+                .append(ip == null ? "—" : "<code>" + HttpFront.escape(ip) + "</code>").append("</td><td>")
+                .append(g == null ? "offline" : "online (" + g.connections() + ")").append("</td><td>")
+                .append("<form method=post action=/admin/node/remove style=\"display:inline\">").append(csrf).append(backField)
+                .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(n.mkey()))
+                .append("\"><button>Remove</button></form>");
+            if (ip != null) {
+                // Banning the address is separate from removing the node: removing it alone lets
+                // the same machine walk back in, since a new machine key is free to make.
+                b.append(" <form method=post action=/admin/ban/add style=\"display:inline\">").append(csrf).append(backField)
+                    .append("<input type=hidden name=cidr value=\"").append(HttpFront.escape(ip))
+                    .append("\"><input type=hidden name=reason value=\"banned from the node list\">")
+                    .append("<button>Ban address</button></form>");
+            }
+            b.append("</td></tr>");
+        }
+        b.append("</table>");
+
+        b.append("<h2>Bans</h2><p>Barred from registering and from reconnecting. Visitors are not affected.</p>");
+        b.append("<table><tr><th>Address or block</th><th>Reason</th><th></th></tr>");
+        for (Store.BanRec ban : store.bans()) {
+            b.append("<tr><td><code>").append(HttpFront.escape(ban.cidr())).append("</code></td><td>")
+                .append(ban.reason() == null ? "" : HttpFront.escape(ban.reason())).append("</td><td>")
+                .append("<form method=post action=/admin/ban/remove>").append(csrf).append(backField)
+                .append("<input type=hidden name=cidr value=\"").append(HttpFront.escape(ban.cidr()))
+                .append("\"><button>Lift</button></form></td></tr>");
+        }
+        b.append("</table>");
+        b.append("<form method=post action=/admin/ban/add>").append(csrf).append(backField)
+            .append("<label>Address or CIDR <input name=cidr placeholder=\"203.0.113.0/24\" required></label> ")
+            .append("<label>Reason <input name=reason></label> <button>Ban</button></form>");
+        return b.toString();
     }
 
     /** {@code __Host-} forbids a Domain attribute and requires Path=/ and Secure. */
@@ -154,6 +218,20 @@ final class AdminWeb {
                     g.goodbyeAll("revoked");
                 }
             }
+            case "/admin/ban/add" -> {
+                String cidr = need(f, "cidr").trim();
+                if (Bans.parse(cidr, null, 0) == null) {
+                    throw new IllegalArgumentException("not an address or CIDR block: " + cidr);
+                }
+                store.addBan(cidr, blankToNull(f.get("reason")));
+                // Disconnect what that address has open now, or the ban only bites next time.
+                for (NodeGroup g : hub.registry().all()) {
+                    if (hub.bans().isBanned(g.remoteIp())) {
+                        g.goodbyeAll(io.jailscale.proto.control.Message.Goodbye.BANNED);
+                    }
+                }
+            }
+            case "/admin/ban/remove" -> store.removeBan(need(f, "cidr"));
             case "/admin/invite/create" -> {
                 int uses = f.getOrDefault("uses", "1").isBlank() ? 1 : Integer.parseInt(f.get("uses").trim());
                 long ttl = f.getOrDefault("ttl", "24h").isBlank() ? 86400 : io.jailscale.proto.util.Args.parseSeconds(f.get("ttl"));
@@ -165,7 +243,7 @@ final class AdminWeb {
                 String owner = blankToNull(f.get("owner"));
                 String tag = blankToNull(f.get("tag"));
                 if ((owner == null) == (tag == null)) {
-                    throw new IllegalArgumentException("owner 또는 tag 중 하나만 입력하세요");
+                    throw new IllegalArgumentException("enter either owner or tag, not both");
                 }
                 String secret = Tokens.authKey();
                 store.createAuthKey(secret, owner, tag, Integer.parseInt(f.getOrDefault("uses", "1")),
@@ -198,105 +276,96 @@ final class AdminWeb {
     private String render(Session s) {
         Store store = hub.store();
         StringBuilder b = new StringBuilder(8192);
-        b.append("<p>").append(HttpFront.escape(hub.config().hostname())).append(" · 로그인: <b>").append(HttpFront.escape(s.user())).append("</b>")
-            .append(" · 노드 ").append(store.nodes().size()).append(" · 온라인 ").append(hub.registry().size())
-            .append(" · 링크 ").append(hub.links().all().size()).append("</p>");
+        b.append("<p>").append(HttpFront.escape(hub.config().hostname())).append(" · signed in: <b>").append(HttpFront.escape(s.user())).append("</b>")
+            .append(" · nodes ").append(store.nodes().size()).append(" · online ").append(hub.registry().size())
+            .append(" · links ").append(hub.links().all().size()).append("</p>");
         String csrf = "<input type=hidden name=csrf value=\"" + s.csrf() + "\">";
-        b.append("<form method=post action=/admin/logout>").append(csrf).append("<button>로그아웃</button></form>");
+        b.append("<form method=post action=/admin/logout>").append(csrf).append("<button>Sign out</button></form>");
 
-        b.append("<h2>승인 대기</h2>");
+        b.append("<h2>Pending approval</h2>");
         if (store.pending().isEmpty()) {
-            b.append("<p>없음</p>");
+            b.append("<p>None</p>");
         }
         for (Store.PendingRec p : store.pending()) {
             b.append("<form method=post action=/admin/approve class=row>").append(csrf)
                 .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(p.mkey())).append("\">")
                 .append("<code>").append(HttpFront.escape(p.mkey().substring(0, 17))).append("…</code> ")
                 .append(HttpFront.escape(p.hostname())).append(" (").append(HttpFront.escape(p.os())).append(", ").append(HttpFront.escape(String.valueOf(p.ip()))).append(") ")
-                .append("이름 <input name=user value=\"").append(HttpFront.escape(p.user() == null ? p.hostname() : p.user())).append("\" size=12> ")
-                .append("<button>승인</button></form>")
+                .append("Name <input name=user value=\"").append(HttpFront.escape(p.user() == null ? p.hostname() : p.user())).append("\" size=12> ")
+                .append("<button>Approve</button></form>")
                 .append("<form method=post action=/admin/deny class=row>").append(csrf)
-                .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(p.mkey())).append("\"><button>거부</button></form>");
+                .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(p.mkey())).append("\"><button>Deny</button></form>");
         }
 
-        b.append("<h2>노드</h2><table><tr><th>#</th><th>사용자</th><th>호스트</th><th>키</th><th>상태</th><th></th></tr>");
-        for (Store.NodeRec n : store.nodes()) {
-            NodeGroup g = hub.registry().get(n.mkey());
-            b.append("<tr><td>").append(n.id()).append("</td><td>").append(HttpFront.escape(n.user())).append("</td><td>")
-                .append(HttpFront.escape(n.hostname())).append("</td><td><code>").append(HttpFront.escape(n.mkey().substring(0, 17))).append("…</code></td><td>")
-                .append(g == null ? "오프라인" : "온라인 (" + g.connections() + ")").append("</td><td>")
-                .append("<form method=post action=/admin/node/remove>").append(csrf)
-                .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(n.mkey())).append("\"><button>제거</button></form></td></tr>");
-        }
-        b.append("</table>");
+        b.append(nodesAndBans(csrf, "/admin"));
 
-        b.append("<h2>이름</h2><table><tr><th>이름</th><th>소유자</th><th>대상</th><th>상태</th><th></th></tr>");
+        b.append("<h2>Names</h2><table><tr><th>Name</th><th>Owner</th><th>Target</th><th>Status</th><th></th></tr>");
         for (Store.NameRec n : store.names()) {
             b.append("<tr><td>").append(HttpFront.escape(n.name())).append("</td><td>").append(HttpFront.escape(n.user())).append("</td><td>")
-                .append(HttpFront.escape(String.valueOf(n.local()))).append("</td><td>").append(hub.links().byName(n.name()) != null ? "열림" : "닫힘").append("</td><td>")
+                .append(HttpFront.escape(String.valueOf(n.local()))).append("</td><td>").append(hub.links().byName(n.name()) != null ? "open" : "closed").append("</td><td>")
                 .append("<form method=post action=/admin/name/release>").append(csrf)
-                .append("<input type=hidden name=name value=\"").append(HttpFront.escape(n.name())).append("\"><button>해제</button></form></td></tr>");
+                .append("<input type=hidden name=name value=\"").append(HttpFront.escape(n.name())).append("\"><button>Release</button></form></td></tr>");
         }
         b.append("</table>");
 
         if (!store.domains().isEmpty()) {
-            b.append("<h2>사용자 도메인</h2><table><tr><th>도메인</th><th>소유자</th><th>상태</th><th></th></tr>");
+            b.append("<h2>User domains</h2><table><tr><th>Domain</th><th>Owner</th><th>Status</th><th></th></tr>");
             for (Store.DomainRec d : store.domains()) {
                 b.append("<tr><td>").append(HttpFront.escape(d.domain())).append("</td><td>").append(HttpFront.escape(d.user()))
-                    .append("</td><td>").append(hub.links().byDomain(d.domain()) != null ? "열림" : "닫힘").append("</td><td>")
+                    .append("</td><td>").append(hub.links().byDomain(d.domain()) != null ? "open" : "closed").append("</td><td>")
                     .append("<form method=post action=/admin/domain/release>").append(csrf)
-                    .append("<input type=hidden name=domain value=\"").append(HttpFront.escape(d.domain())).append("\"><button>해제</button></form></td></tr>");
+                    .append("<input type=hidden name=domain value=\"").append(HttpFront.escape(d.domain())).append("\"><button>Release</button></form></td></tr>");
             }
             b.append("</table>");
         }
 
-        b.append("<h2>초대</h2>");
+        b.append("<h2>Invites</h2>");
         if (lastInvite != null) {
-            b.append("<p class=new>새 초대: <code>").append(HttpFront.escape(lastInvite.url())).append("</code> · 코드 <code>")
+            b.append("<p class=new>New invite: <code>").append(HttpFront.escape(lastInvite.url())).append("</code> · code <code>")
                 .append(HttpFront.escape(lastInvite.code())).append("</code></p>");
             lastInvite = null;
         }
         b.append("<form method=post action=/admin/invite/create class=row>").append(csrf)
-            .append("이름 <input name=user size=10> 횟수 <input name=uses value=1 size=3> 기간 <input name=ttl value=24h size=5> <button>초대 만들기</button></form>");
-        b.append("<table><tr><th>id</th><th>이름</th><th>남은 횟수</th><th>만료</th><th>발급자</th><th></th></tr>");
+            .append("Name <input name=user size=10> Uses <input name=uses value=1 size=3> TTL <input name=ttl value=24h size=5> <button>Create invite</button></form>");
+        b.append("<table><tr><th>id</th><th>Name</th><th>Uses left</th><th>Expires</th><th>Created by</th><th></th></tr>");
         for (Store.InviteRec r : store.invites()) {
             b.append("<tr><td><code>").append(HttpFront.escape(r.id())).append("</code></td><td>").append(HttpFront.escape(String.valueOf(r.user())))
                 .append("</td><td>").append(r.usesLeft()).append("</td><td>").append(new java.util.Date(r.expiresAt())).append("</td><td>")
                 .append(HttpFront.escape(String.valueOf(r.createdBy()))).append("</td><td><form method=post action=/admin/invite/revoke>").append(csrf)
-                .append("<input type=hidden name=id value=\"").append(HttpFront.escape(r.id())).append("\"><button>취소</button></form></td></tr>");
+                .append("<input type=hidden name=id value=\"").append(HttpFront.escape(r.id())).append("\"><button>Revoke</button></form></td></tr>");
         }
         b.append("</table>");
 
         b.append("<h2>auth-key</h2>");
         if (lastAuthKey != null) {
-            b.append("<p class=new>새 auth-key (지금만 표시): <code>").append(HttpFront.escape(lastAuthKey)).append("</code></p>");
+            b.append("<p class=new>New auth-key (shown only now): <code>").append(HttpFront.escape(lastAuthKey)).append("</code></p>");
             lastAuthKey = null;
         }
         b.append("<form method=post action=/admin/authkey/create class=row>").append(csrf)
-            .append("소유자 <input name=owner size=10> 또는 태그 <input name=tag size=8> 횟수 <input name=uses value=1 size=3> 기간 <input name=ttl value=7d size=5> <button>만들기</button></form>");
-        b.append("<table><tr><th>id</th><th>소유자/태그</th><th>남은 횟수</th><th>만료</th><th></th></tr>");
+            .append("Owner <input name=owner size=10> or tag <input name=tag size=8> Uses <input name=uses value=1 size=3> TTL <input name=ttl value=7d size=5> <button>Create</button></form>");
+        b.append("<table><tr><th>id</th><th>Owner/tag</th><th>Uses left</th><th>Expires</th><th></th></tr>");
         for (Store.AuthKeyRec r : store.authKeys()) {
             b.append("<tr><td><code>").append(HttpFront.escape(r.id())).append("</code></td><td>")
                 .append(HttpFront.escape(r.owner() != null ? r.owner() : "tag:" + r.tag())).append("</td><td>").append(r.usesLeft())
                 .append("</td><td>").append(new java.util.Date(r.expiresAt())).append("</td><td><form method=post action=/admin/authkey/revoke>").append(csrf)
-                .append("<input type=hidden name=id value=\"").append(HttpFront.escape(r.id())).append("\"><button>취소</button></form></td></tr>");
+                .append("<input type=hidden name=id value=\"").append(HttpFront.escape(r.id())).append("\"><button>Revoke</button></form></td></tr>");
         }
         b.append("</table>");
 
-        b.append("<h2>설정</h2><form method=post action=/admin/settings>").append(csrf)
-            .append("<p>초대 발급: ").append(radio("invitePolicy", "members", "멤버 누구나", store.setting(Store.SETTING_INVITE_POLICY, "members")))
-            .append(radio("invitePolicy", "admins", "관리자만", store.setting(Store.SETTING_INVITE_POLICY, "members"))).append("</p>")
-            .append("<p>가입: ").append(radio("registration", "invite", "초대 필요", store.setting(Store.SETTING_REGISTRATION, "invite")))
-            .append(radio("registration", "open", "두드리면 즉시 승인 (주의)", store.setting(Store.SETTING_REGISTRATION, "invite"))).append("</p>")
-            .append("<p>두드리기: ").append(radio("knock", "on", "허용", store.setting(Store.SETTING_KNOCK, "on")))
-            .append(radio("knock", "off", "차단", store.setting(Store.SETTING_KNOCK, "on"))).append("</p>")
-            .append("<button>저장</button></form>");
-        b.append("<p><small>hub 키 <code>").append(HttpFront.escape(hub.keys().publicText())).append("</code>");
+        b.append("<h2>Settings</h2><form method=post action=/admin/settings>").append(csrf)
+            .append("<p>Invite creation: ").append(radio("invitePolicy", "members", "Any member", store.setting(Store.SETTING_INVITE_POLICY, "members")))
+            .append(radio("invitePolicy", "admins", "Admins only", store.setting(Store.SETTING_INVITE_POLICY, "members"))).append("</p>")
+            .append("<p>Registration: ").append(radio("registration", "invite", "Invite required", store.setting(Store.SETTING_REGISTRATION, "invite")))
+            .append(radio("registration", "open", "Approve knocks immediately (careful)", store.setting(Store.SETTING_REGISTRATION, "invite"))).append("</p>")
+            .append("<p>Knocking: ").append(radio("knock", "on", "Allow", store.setting(Store.SETTING_KNOCK, "on")))
+            .append(radio("knock", "off", "Block", store.setting(Store.SETTING_KNOCK, "on"))).append("</p>")
+            .append("<button>Save</button></form>");
+        b.append("<p><small>hub key <code>").append(HttpFront.escape(hub.keys().publicText())).append("</code>");
         if (hub.tls().isLoaded()) {
-            b.append(" · 인증서 만료 ").append(hub.tls().leaf().getNotAfter());
+            b.append(" · cert expires ").append(hub.tls().leaf().getNotAfter());
         }
         b.append("</small></p>");
-        return page("jailhub 관리", b.toString());
+        return page("jailhub admin", b.toString());
     }
 
     private static String radio(String name, String value, String label, String current) {
@@ -304,7 +373,7 @@ final class AdminWeb {
     }
 
     private static String page(String title, String body) {
-        return "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>" + HttpFront.escape(title) + "</title>"
+        return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>" + HttpFront.escape(title) + "</title>"
             + "<style>body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #ddd}"
             + "form{display:inline}form.row{display:block;margin:.25rem 0}.new{background:#eef;padding:.5rem}code{font-size:.9em}</style>"

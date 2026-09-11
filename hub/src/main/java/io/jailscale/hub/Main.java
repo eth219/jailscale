@@ -25,6 +25,7 @@ public final class Main {
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
         jailhub domain list | release <domain>
+        jailhub ban list | add <ip|cidr> [--reason R] | remove <ip|cidr>
         jailhub invite create [--user NAME] [--uses N] [--ttl 24h] [--admin] | list | revoke <id>
         jailhub authkey create (--owner USER | --tag TAG) [--uses N] [--ttl 7d] | list | revoke <id>
         jailhub admin add <user> | remove <user> | login-link

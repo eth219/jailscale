@@ -114,27 +114,63 @@ final class HttpFront {
                 + "the invitation up.</p>"));
         }
         if (path.equals("/")) {
-            // Say what this hub actually accepts. It used to claim an invitation was always
-            // required, which is wrong on any hub whose operator opened registration.
-            boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
-            String how = open
-                ? "<p>To join, run <code>jailscale up --hub " + escape(hub.config().hostname())
-                    + "</code>. Your machine then waits for the operator to approve it.</p>"
-                : "<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>.</p>";
-            return HttpResponse.html(200, page("jailscale hub",
-                "<p><code>" + escape(hub.config().hostname()) + "</code> is a jailscale hub.</p>"
-                + how
-                + "<p>jailscale publishes a port on your machine over HTTPS without opening an inbound "
-                + "port. This hub relays the bytes; your machine terminates the TLS. "
-                + "<a href=\"https://github.com/eth219/jailscale\">What this is</a>.</p>"));
+            return HttpResponse.html(200, page("jailscale hub", home(req))).header("Cache-Control", "no-store");
         }
         return HttpResponse.text(404, "not found");
+    }
+
+    /**
+     * The hub's own page: what it is, how to join it, and how it is doing. Counts and resource
+     * use are public; they describe the service, not the people on it. Per-node detail and the
+     * controls over it appear only for a signed-in admin, since that is who and where.
+     */
+    private String home(HttpRequest req) {
+        StringBuilder b = new StringBuilder();
+        String host = escape(hub.config().hostname());
+        b.append("<p><code>").append(host).append("</code> is a jailscale hub. It publishes a port on your")
+            .append(" machine over HTTPS without opening an inbound port: the hub relays the bytes and your")
+            .append(" machine terminates the TLS. <a href=\"https://github.com/eth219/jailscale\">What this is</a>.</p>");
+
+        // Say what this hub actually accepts rather than assuming a default.
+        boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
+        if (open) {
+            b.append("<p>Registration is open. To join:</p><pre>jailscale up --hub ").append(host).append("</pre>");
+        } else {
+            b.append("<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>.</p>");
+        }
+
+        int online = hub.registry().size();
+        long rss = Resources.rssBytes();
+        b.append("<h2>Status</h2><table>");
+        row(b, "Version", escape(Hub.version()));
+        row(b, "Uptime", Resources.humanDuration(Resources.uptimeMillis()));
+        row(b, "Nodes", online + " online of " + hub.store().nodes().size() + " registered");
+        row(b, "Links open", String.valueOf(hub.links().all().size()));
+        row(b, "Certificate", hub.tls().isLoaded() ? "loaded" : "not loaded yet");
+        row(b, "Memory", rss < 0 ? Resources.humanBytes(Resources.heapUsedBytes()) + " heap"
+            : Resources.humanBytes(rss) + " resident");
+        b.append("</table>");
+
+        AdminWeb.Session s = hub.adminWeb().adminSession(req);
+        if (s != null) {
+            b.append("<p>Signed in as <b>").append(escape(s.user())).append("</b>. ")
+                .append("<a href=\"/admin\">Full admin page</a>.</p>");
+            b.append(hub.adminWeb().nodesAndBans(
+                "<input type=hidden name=csrf value=\"" + escape(s.csrf()) + "\">", "/"));
+        }
+        return b.toString();
+    }
+
+    private static void row(StringBuilder b, String label, String value) {
+        b.append("<tr><td>").append(label).append("</td><td>").append(value).append("</td></tr>");
     }
 
     private static String page(String title, String body) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>" + escape(title) + "</title>"
             + "<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;line-height:1.6}"
-            + "pre{background:#f4f4f4;padding:1rem;overflow-x:auto}</style></head><body><h1>" + escape(title) + "</h1>"
+            + "pre{background:#f4f4f4;padding:1rem;overflow-x:auto}"
+            + "table{border-collapse:collapse;margin:1rem 0}td,th{padding:.25rem .75rem .25rem 0;text-align:left;"
+            + "border-bottom:1px solid #eee;font-weight:normal}th{font-weight:600}</style></head><body><h1>" + escape(title) + "</h1>"
             + body + "</body></html>";
     }
 

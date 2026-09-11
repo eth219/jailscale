@@ -113,7 +113,7 @@ class AdminWebTest {
         HttpResponse page = http("GET", "/admin", cookie, null);
         assertEquals(200, page.status());
         String html = page.bodyText();
-        assertTrue(html.contains("승인 대기"), html);
+        assertTrue(html.contains("Pending approval"), html);
         assertTrue(html.contains("bob") || html.contains("mkey:"), html);
         Matcher m = Pattern.compile("name=csrf value=\"([^\"]+)\"").matcher(html);
         assertTrue(m.find());

@@ -275,7 +275,7 @@ should stop rather than come up holding part of it. In memory the state is plain
 domains, ports, credential hashes, admins, the pending queue, undelivered notices), which is the
 simplest thing that works up to thousands of names.
 
-### 6.3 Admin IPC and admin web
+### 6.3 Admin IPC, the status page, and the admin web
 
 Admin commands are separate processes and the state is in memory, so they talk to the running server
 over an AF_UNIX socket at `$JAILHUB_STATE/jailhub.sock`, mode 0600, exchanging line-delimited JSON
@@ -291,6 +291,16 @@ one-shot URL, and the CLI opens a browser; the visit sets a `__Host-` prefixed s
 node available. The pages approve or deny the queue, manage nodes, names and domains, issue invites
 and auth-keys, and toggle the three settings, as server-rendered HTML with no JavaScript, no template
 engine, and a session-bound CSRF token on every form.
+
+The hub's own page at `/` is the same machinery seen from the other side. It states what the hub is,
+how to join *this* hub (read from the stored registration setting rather than assumed), and how it
+is doing: version, uptime, nodes online against nodes registered, links open, whether a certificate
+is loaded, and resident memory. Those are properties of the service, so they are public. The node
+list, the addresses nodes connect from, and the controls over them are rendered only when the
+request carries a current admin session, and the rights are re-checked on that request rather than
+trusted from the cookie. Resident set size is read from `/proc/self/status` where it exists and
+omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
+occupies.
 
 ---
 
@@ -742,6 +752,23 @@ subdomain under `*.<hub>` cannot plant an admin cookie. Auth-keys, invite tokens
 and admin login URLs are never written to logs.
 
 ---
+
+**Address bans.** An operator can bar an address or a CIDR block, v4 or v6, from the control plane:
+`jailhub ban add 203.0.113.0/24`, or the button beside a node on the status page. Matching is on
+the raw address bytes with a prefix mask, so a v4 rule never matches a v6 address and no text
+parsing happens per check. A hostname is refused rather than resolved, since that would be a DNS
+lookup driven by admin input.
+
+It is enforced twice on purpose. `NodeSession` refuses a banned address before the Noise handshake,
+so a banned peer cannot make the hub do any crypto, and `Registrar` refuses before it looks at
+whether the node is already known, so banning covers a node an operator has just removed. Either
+alone is sufficient; both together mean a mistake in one is not a hole.
+
+Placing a ban also disconnects what that address currently has open, with `Goodbye{banned}` rather
+than `Goodbye{revoked}`: the node's registration on the hub is untouched, and telling it "revoked"
+would make it erase a registration the hub still holds. A ban is not a firewall and does not touch
+visitors. The point is to stop someone running nodes here, not to stop them reading a page.
+
 
 ## 12. Threading and memory
 

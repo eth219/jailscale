@@ -65,7 +65,7 @@ public final class Main {
                 case "admin" -> {
                     JsonObject r = call(cfg, JsonObject.builder().put("cmd", "admin").build(), false);
                     String url = r.string("url");
-                    System.out.println("관리 페이지 (60초 안에 열어야 합니다): " + url);
+                    System.out.println("admin page (open it within 60 seconds): " + url);
                     openBrowser(url);
                 }
                 case "gate" -> {
@@ -80,9 +80,9 @@ public final class Main {
                     JsonObject r = call(cfg, b.build(), false);
                     if (r.optBool("gate", false)) {
                         String v = r.string("visitUrl");
-                        System.out.println("방문 링크: " + v + (copyToClipboard(v) ? "        (클립보드에 복사됨)" : ""));
+                        System.out.println("visit link: " + v + (copyToClipboard(v) ? "        (copied to clipboard)" : ""));
                     } else {
-                        System.out.println("게이트를 껐습니다. 누구나 " + name + " 에 접근할 수 있습니다.");
+                        System.out.println("turned the gate off. anyone can now reach " + name + ".");
                     }
                 }
                 case "close" -> {
@@ -165,24 +165,24 @@ public final class Main {
             if (a.has("acme-email")) {
                 b.put("acmeEmail", a.get("acme-email"));
             }
-            System.out.println(a.get("domain") + " 의 인증서를 확인하는 중… (처음이면 ACME 발급에 수십 초가 걸립니다)");
+            System.out.println(a.get("domain") + ": checking the certificate… (the first ACME issuance takes tens of seconds)");
         }
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
         if (!kind.equals("https")) {
             System.out.println(url + "  ->  " + r.string("local"));
-            System.out.println("(hub 포트 " + r.integer("hubPort") + ". 앱이 스스로 암호화하지 않는 평문 프로토콜은 hub가 볼 수 있습니다; "
-                + "SSH·WireGuard·TLS를 켠 DB는 hub가 암호문만 봅니다)");
+            System.out.println("(hub port " + r.integer("hubPort") + ". the hub can see any plaintext protocol the app does not encrypt itself; "
+                + "with SSH, WireGuard or a DB with TLS on, the hub sees only ciphertext)");
             return;
         }
         String visit = r.optString("visitUrl", null);
         String copied = visit != null ? visit : url;
-        System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (게이트 켜짐)" : ""));
+        System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (gate on)" : ""));
         if (visit != null) {
-            System.out.println("방문 링크: " + visit);
+            System.out.println("visit link: " + visit);
         }
         if (copyToClipboard(copied)) {
-            System.out.println("(" + (visit != null ? "방문 링크가" : "링크가") + " 클립보드에 복사됨)");
+            System.out.println("(" + (visit != null ? "visit link" : "link") + " copied to clipboard)");
         }
     }
 
@@ -190,7 +190,7 @@ public final class Main {
         JsonObject r = call(cfg, JsonObject.builder().put("cmd", "ls").build(), false);
         java.util.List<Object> links = r.array("links");
         if (links.isEmpty()) {
-            System.out.println("열린 링크가 없습니다. jailscale open <port> 로 여세요.");
+            System.out.println("no open links. open one with: jailscale open <port>");
             return;
         }
         for (Object o : links) {
@@ -198,7 +198,7 @@ public final class Main {
             java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
             String warn = "";
             if (m.get("certExpiresAt") instanceof Long exp && exp - System.currentTimeMillis() < 7 * 86400_000L) {
-                warn = "  (인증서 만료 " + new java.util.Date(exp) + ")";
+                warn = "  (cert expires " + new java.util.Date(exp) + ")";
             }
             System.out.printf("%-8s %-40s -> %-22s %s%s%n", m.get("name"), m.get("url"), m.get("local"),
                 Boolean.TRUE.equals(m.get("open")) ? "open" : "offline", warn);
@@ -213,12 +213,12 @@ public final class Main {
         }
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
-        System.out.println("초대를 만들었습니다.");
-        System.out.println("  링크:  " + url + (copyToClipboard(url) ? "        <- 클립보드에 복사됨" : ""));
+        System.out.println("created an invite.");
+        System.out.println("  link:  " + url + (copyToClipboard(url) ? "        <- copied to clipboard" : ""));
         if (r.has("code")) {
-            System.out.println("  코드:  " + r.string("code") + "                             <- 전화로 불러줄 때 (10분)");
+            System.out.println("  code:  " + r.string("code") + "                             <- for reading out over the phone (10 min)");
         }
-        System.out.println("상대는: jailscale up --invite " + url);
+        System.out.println("the other side runs: jailscale up --invite " + url);
     }
 
     /** Sends a request to the daemon, starting it if needed. Progress lines are printed as they arrive. */

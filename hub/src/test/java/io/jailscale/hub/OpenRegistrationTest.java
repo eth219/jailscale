@@ -29,7 +29,7 @@ class OpenRegistrationTest {
         store = new Store(root.resolve("hub"));
         store.setSetting(Store.SETTING_REGISTRATION, "open");
         store.setSetting(Store.SETTING_KNOCK, "on");
-        registrar = new Registrar(null, store);
+        registrar = new Registrar(null, store, new Bans(store));
     }
 
     @AfterEach

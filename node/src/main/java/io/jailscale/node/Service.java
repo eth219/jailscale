@@ -77,17 +77,17 @@ final class Service {
                 if (exec("launchctl", "bootstrap", domain, plist.toString()) != 0) {
                     exec("launchctl", "load", "-w", plist.toString()); // older launchctl
                 }
-                System.out.println("launchd 에이전트를 등록했습니다: " + plist);
-                System.out.println("로그인할 때마다 jailscale 데몬이 뜹니다. 해제: jailscale service uninstall");
+                System.out.println("installed the launchd agent: " + plist);
+                System.out.println("the jailscale daemon now starts at every login. to undo: jailscale service uninstall");
             }
             case "uninstall" -> {
                 exec("launchctl", "bootout", domain + "/" + LABEL);
                 Files.deleteIfExists(plist);
-                System.out.println("launchd 에이전트를 제거했습니다.");
+                System.out.println("removed the launchd agent.");
             }
             case "status" -> {
                 boolean loaded = exec("launchctl", "print", domain + "/" + LABEL) == 0;
-                System.out.println(Files.exists(plist) ? (loaded ? "등록됨, 실행 중 (" + plist + ")" : "등록됨, 로드 안 됨 (" + plist + ")") : "등록 안 됨");
+                System.out.println(Files.exists(plist) ? (loaded ? "installed, running (" + plist + ")" : "installed, not loaded (" + plist + ")") : "not installed");
             }
             default -> throw new IllegalArgumentException("service install | uninstall | status");
         }
@@ -123,20 +123,20 @@ final class Service {
                     """.formatted(exec, root ? "multi-user.target" : "default.target"));
                 exec(cat(ctl, "daemon-reload"));
                 int rc = exec(cat(ctl, "enable", "--now", "jailscale"));
-                System.out.println("systemd 유닛을 등록했습니다: " + unit + (rc == 0 ? "" : " (systemctl 실패 " + rc + ")"));
+                System.out.println("installed the systemd unit: " + unit + (rc == 0 ? "" : " (systemctl failed " + rc + ")"));
                 if (!root) {
-                    System.out.println("로그아웃해도 살리려면: loginctl enable-linger " + System.getProperty("user.name"));
+                    System.out.println("to keep it running after you log out: loginctl enable-linger " + System.getProperty("user.name"));
                 }
             }
             case "uninstall" -> {
                 exec(cat(ctl, "disable", "--now", "jailscale"));
                 Files.deleteIfExists(unit);
                 exec(cat(ctl, "daemon-reload"));
-                System.out.println("systemd 유닛을 제거했습니다.");
+                System.out.println("removed the systemd unit.");
             }
             case "status" -> {
                 if (!Files.exists(unit)) {
-                    System.out.println("등록 안 됨");
+                    System.out.println("not installed");
                 } else {
                     exec(cat(ctl, "--no-pager", "status", "jailscale"));
                 }
@@ -157,15 +157,15 @@ final class Service {
                 int rc = exec("schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", "jailscale", "/TR", tr.toString());
                 if (rc == 0) {
                     exec("schtasks", "/Run", "/TN", "jailscale");
-                    System.out.println("로그온 시 실행되는 작업 'jailscale'을 등록했습니다.");
+                    System.out.println("installed the task 'jailscale', which runs at logon.");
                 } else {
-                    System.out.println("schtasks 실패 (" + rc + ")");
+                    System.out.println("schtasks failed (" + rc + ")");
                 }
             }
             case "uninstall" -> {
                 exec("schtasks", "/End", "/TN", "jailscale");
                 exec("schtasks", "/Delete", "/F", "/TN", "jailscale");
-                System.out.println("작업 'jailscale'을 제거했습니다.");
+                System.out.println("removed the task 'jailscale'.");
             }
             case "status" -> exec("schtasks", "/Query", "/TN", "jailscale");
             default -> throw new IllegalArgumentException("service install | uninstall | status");

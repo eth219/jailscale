@@ -28,18 +28,26 @@ final class Registrar {
 
     private final HubConfig config;
     private final Store store;
+    private final Bans bans;
     private final RateLimiter credentials = new RateLimiter(CREDENTIAL_BURST, CREDENTIAL_PER_SECOND);
     private final RateLimiter openRegistrations = new RateLimiter(OPEN_BURST, OPEN_PER_SECOND);
 
-    Registrar(HubConfig config, Store store) {
+    Registrar(HubConfig config, Store store, Bans bans) {
         this.config = config;
         this.store = store;
+        this.bans = bans;
     }
 
     /** Result of a registration attempt: the response plus the node record if approved. */
     record Decision(Message.RegisterResponse response, Store.NodeRec node) {}
 
     Decision decide(String mkey, Message.RegisterRequest req, String ip) throws IOException {
+        // Before anything else, including the check for a node we already know: a ban has to
+        // cover the node an operator just removed, or removing it would achieve nothing.
+        if (bans != null && bans.isBanned(ip)) {
+            bans.logRefusal(ip, "registration");
+            return new Decision(Message.RegisterResponse.rejected("banned"), null);
+        }
         Store.NodeRec existing = store.node(mkey);
         if (existing != null) {
             return approved(existing);
