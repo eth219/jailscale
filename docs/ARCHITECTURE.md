@@ -976,15 +976,19 @@ platforms CI can run the gate on; the budgets differ per platform for the reason
 | RSS with 1,000 visitor sessions held open | node 93 MB, hub 80 MB | node 90 MB, hub 90 MB | node 192 MB, hub 160 MB |
 | CLI cold start | about 7 ms (`jailscale status`, median of 10, IPC round trip included) | about 4.5 ms | 50 ms |
 
-**Linux is not 15 MB heavier; it counts differently.** The live hub, a GCP e2-micro with 969 MB of
-RAM, reports 41.1 MB of RSS, and its `smaps_rollup` splits that into **15.0 MB anonymous** —
-the heap, the stacks, everything the process actually owns — and 26.2 MB of file-backed pages, of
-which 25.7 MB is the `jailhub` binary's own mapped text and rodata: clean, shared with the page
-cache and reclaimable under pressure. macOS's `ps` attributes far fewer of those pages to the
-process, and the amd64 binary is 6.5 MiB larger than the arm64 one to begin with. The same figure
-came off a 16 GB CI runner as off the 969 MB instance, so this is the accounting, not heap sizing.
-`measure.sh` prints the anonymous share on Linux next to RSS, and still gates on RSS so that the
-two platforms are gated on the same measurement.
+**Linux is not 15 MB heavier; it counts differently.** Of the hub's 40.1 MB there, **6.1 MB is
+anonymous** — the heap, the stacks, everything the process actually owns — and the rest is the
+31.6 MiB binary's own text and rodata mapped in: clean pages, shared with the page cache, which the
+kernel can take back. macOS's `ps` attributes far fewer of those to the process, and the amd64
+binary is 6.5 MiB larger than the arm64 one to begin with.
+
+The live hub shows what that means under pressure. On a GCP e2-micro with 969 MB of RAM, after a
+day of service, `smaps_rollup` reports 41.1 MB of RSS split into 15.0 MB anonymous and 26.2 MB of
+file-backed pages — and only 25.7 MB of the 31.6 MiB binary is still resident, the kernel having
+already dropped the rest with no effect anyone can see. The same RSS total came off a 16 GB CI
+runner as off the 969 MB instance, so this is accounting and not heap sizing. `measure.sh` prints
+the anonymous share on Linux next to RSS, and still gates on RSS so that the two platforms are
+gated on the same measurement.
 
 `./measure.sh --check` fails when a number exceeds its budget. The budget values live at the top of
 the script and must match this table; they change only by a PR that states a reason. The `budget` job
@@ -1034,7 +1038,7 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   Windows-only timeout with no assertion failure, seen in both `MuxSessionTest` and `RawPortTest`,
   and any end-to-end test that moves bytes both ways is exposed.
 - **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at**, and about 39.7 MB as
-  Linux counts it (§14: mostly the mapped binary, 15 MB of it anonymous). Roughly 7.6 MB is JSSE
+  Linux counts it (§14: mostly the mapped binary, 5 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), so the remaining levers are a wider build-time
   initialisation whitelist and removing unused TLS suites and protocols.
 - **Per-visitor memory is about 60 KB on the node**, mostly the three `ByteBuffer`s a `TlsEndpoint`

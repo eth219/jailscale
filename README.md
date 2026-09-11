@@ -28,7 +28,7 @@ The interesting question was whether a JVM language can carry this kind of
 product without apologising for itself. Four things were the target.
 
 **Light.** 25 MiB per binary and 25 MB idle on arm64 macOS, 32 MiB and 40 MB on
-linux-amd64 — of which 15 MB is memory the process actually owns and the rest is
+linux-amd64 — of which 6 MB is memory the process actually owns and the rest is
 the binary's own pages, which the kernel can take back. 7 ms for a CLI round
 trip. That needs
 GraalVM Native Image, and Native Image needs discipline: no reflection, no
@@ -61,7 +61,7 @@ not get you the control plane.
 
 What it did not buy: idle memory is 24.7 MB against a 20 MB goal, and roughly
 7.6 MB of that is JSSE standing up a single TLS client. On Linux the number to
-compare is the 15 MB of anonymous memory, not the 40 MB `ps` prints.
+compare is the 6 MB of anonymous memory, not the 40 MB `ps` prints.
 
 ## Usage
 
@@ -139,9 +139,11 @@ binary's own mapped pages in RSS where macOS largely does not.
 | Peak RSS, 1,000 visitors held open at once | 80 / 90 MB | 93 / 90 MB |
 | CLI cold start | — | 7 / 4.5 ms |
 
-*arm64 macOS / linux-amd64.* On Linux, 25 MB of that idle RSS is the binary
-mapped into the process — clean pages the kernel reclaims under pressure. The
-anonymous memory, which is the part that is really the process's, is 15 MB.
+*arm64 macOS / linux-amd64.* On Linux most of that idle RSS is the binary mapped
+into the process — clean pages the kernel takes back when it needs them. The
+anonymous memory, the part that is really the process's, is 6 MB. The hub above
+has been up long enough to grow to 15 MB of it, on a machine with 969 MB of RAM
+that has already reclaimed 6 MB of the binary's pages.
 
 The hub above runs on a GCP e2-micro: 2 shared vCPU, 1 GB of memory, Debian 12.
 That is the smallest instance Google sells, and it is not the constraint.
@@ -182,7 +184,7 @@ What a compromised hub can and cannot do is written out in
 - Windows nodes occasionally need to reconnect, costing that connection's
   visitors up to 60 seconds. It is a JDK bug, not ours:
   [docs/windows-virtual-thread-stall](docs/windows-virtual-thread-stall/).
-- Idle memory is 24.7 MB against a 20 MB goal (39.7 MB as Linux counts it, 15 MB
+- Idle memory is 24.7 MB against a 20 MB goal (39.7 MB as Linux counts it, 5 MB
   of it anonymous). Most of the gap is JSSE standing up a TLS client.
 - No standby hub, no state replication, no OIDC.
 - v0.1.0 is the first tagged release, so there is no upgrade path to have got
