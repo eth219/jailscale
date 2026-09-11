@@ -113,11 +113,15 @@ final class Visitors {
         }
         TlsEndpoint tls = new TlsEndpoint(ctx, stream.in(), stream.out());
         try {
+            // Remember that this node, and not the hub or another node, terminated it (§12.5).
+            // Not after handshake(): on the server side of TLS 1.3 the exporter is not usable
+            // until the peer's Finished has been processed, and that has not necessarily happened
+            // when the handshake loop returns. Recording nothing would later read as a compromised
+            // hub, so this waits for the first application bytes instead.
+            tls.onFirstApplicationRead(() -> probe.record(SelfProbe.material(tls.session())));
             RemoteSigning.enter(new RemoteSigning.Context(link, session, HubLink.fullStreamId(conn, stream.id()), keyId));
             try {
                 tls.handshake();
-                // Remember that this node, and not the hub or another node, terminated it (§12.5).
-                probe.record(SelfProbe.material(tls.session()));
             } finally {
                 RemoteSigning.exit();
             }

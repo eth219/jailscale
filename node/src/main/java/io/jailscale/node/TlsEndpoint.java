@@ -29,6 +29,7 @@ final class TlsEndpoint implements AutoCloseable {
     private final ByteBuffer netOutBuf;
     private final Object writeLock = new Object();
     private boolean netEof;
+    private volatile Runnable onFirstApplicationRead;
 
     TlsEndpoint(SSLContext ctx, InputStream netIn, OutputStream netOut) {
         this.engine = ctx.createSSLEngine();
@@ -92,6 +93,7 @@ final class TlsEndpoint implements AutoCloseable {
                         if (appInBuf.hasRemaining()) {
                             int n = Math.min(len, appInBuf.remaining());
                             appInBuf.get(b, off, n);
+                            firstApplicationRead();
                             return n;
                         }
                     }
@@ -215,8 +217,28 @@ final class TlsEndpoint implements AutoCloseable {
         }
     }
 
-    /** The negotiated session, for {@link SelfProbe} keying material after the handshake. */
+    /** The negotiated session, for {@link SelfProbe} keying material. */
     SSLSession session() {
         return engine.getSession();
+    }
+
+    /**
+     * Runs once, the first time application bytes arrive from the peer.
+     *
+     * <p>{@link #handshake} returning is not enough for the RFC 5705 exporter on the server side
+     * of TLS 1.3: the peer's Finished may not have been processed yet, and until it is, JSSE
+     * refuses to export. Application data cannot arrive before that, so this is the first moment
+     * the exporter is certain to work.
+     */
+    void onFirstApplicationRead(Runnable r) {
+        this.onFirstApplicationRead = r;
+    }
+
+    private void firstApplicationRead() {
+        Runnable r = onFirstApplicationRead;
+        if (r != null) {
+            onFirstApplicationRead = null;
+            r.run();
+        }
     }
 }
