@@ -47,6 +47,8 @@ public final class MuxStream {
             }
             byte[] chunk;
             int pos;
+            int n;
+            int refill = 0;
             synchronized (lock) {
                 while (current == null && inbound.isEmpty() && !remoteClosed && error == null) {
                     try {
@@ -68,7 +70,7 @@ public final class MuxStream {
                 }
                 chunk = current;
                 pos = currentPos;
-                int n = Math.min(len, chunk.length - pos);
+                n = Math.min(len, chunk.length - pos);
                 System.arraycopy(chunk, pos, b, off, n);
                 currentPos += n;
                 if (currentPos == chunk.length) {
@@ -76,16 +78,13 @@ public final class MuxStream {
                 }
                 inboundBytes -= n;
                 consumedSinceWindow += n;
-                int refill = 0;
                 if (consumedSinceWindow >= WINDOW / 2) {
                     refill = consumedSinceWindow;
                     consumedSinceWindow = 0;
                 }
-                if (refill > 0) {
-                    session.sendWindow(id, refill);
-                }
-                return n;
             }
+            sendRefill(refill);
+            return n;
         }
     };
 
@@ -154,12 +153,27 @@ public final class MuxStream {
         return in;
     }
 
+    /**
+     * Sends a flow-control refill, never while holding {@link #lock}. {@code sendWindow} ends in a
+     * blocking socket write under the session's write lock, so a reader that refilled inside the
+     * lock stalled its own stream whenever the send buffer was full -- and when both directions
+     * congested at once, each side's reader sat on the lock its peer's writer needed. Deltas are
+     * additive, so emitting them after the lock cannot lose or reorder credit.
+     */
+    private void sendRefill(int refill) throws IOException {
+        if (refill > 0) {
+            session.sendWindow(id, refill);
+        }
+    }
+
     public OutputStream out() {
         return out;
     }
 
     /** Datagram streams: the next whole datagram, or null when the peer closed. */
     public byte[] receive() throws IOException {
+        byte[] d;
+        int refill = 0;
         synchronized (lock) {
             while (inbound.isEmpty() && !remoteClosed && error == null) {
                 try {
@@ -169,21 +183,22 @@ public final class MuxStream {
                     throw new IOException("interrupted");
                 }
             }
-            if (!inbound.isEmpty()) {
-                byte[] d = inbound.poll();
-                inboundBytes -= d.length;
-                consumedSinceWindow += d.length;
-                if (consumedSinceWindow >= WINDOW / 2) {
-                    session.sendWindow(id, consumedSinceWindow);
-                    consumedSinceWindow = 0;
+            if (inbound.isEmpty()) {
+                if (error != null) {
+                    throw error;
                 }
-                return d;
+                return null;
             }
-            if (error != null) {
-                throw error;
+            d = inbound.poll();
+            inboundBytes -= d.length;
+            consumedSinceWindow += d.length;
+            if (consumedSinceWindow >= WINDOW / 2) {
+                refill = consumedSinceWindow;
+                consumedSinceWindow = 0;
             }
-            return null;
         }
+        sendRefill(refill);
+        return d;
     }
 
     /** Datagram streams: sends one datagram (at most {@link Frame#MAX_DATA} bytes). */
