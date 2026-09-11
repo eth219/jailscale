@@ -23,10 +23,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # Liberica NIK rather than GraalVM CE, and JDK 25.0.3 or newer, on purpose (DESIGN.md §4).
+      # JDK 25.0.0-25.0.2 lose timed virtual-thread wake-ups once a delayed task is cancelled
+      # (JDK-8370887, with JDK-8369227 next to it); a hand-off cancels the old connections'
+      # keepalive sleeps, and HandoffTest then stalled on one or two runners per run. Both fixes
+      # are in 25.0.3. This action's graalvm-community line stops at jdk-25.0.2 and has no macOS
+      # x64 build after 25.0.1, so it cannot deliver a fixed JDK to all five targets; its liberica
+      # line resolves '25' to the newest jdk-25.0.x tag (25.0.4 today) and ships every target.
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'graalvm-community'
+          distribution: 'liberica'
           native-image-job-reports: 'true'
       - name: Set version from the tag
         # Without this the binaries report the pom's 0.x.y-SNAPSHOT no matter which tag built them.

@@ -259,6 +259,10 @@ class HandoffTest {
      */
     private String state(String what) {
         StringBuilder b = new StringBuilder(what);
+        // The JDK build decided the last stall: 25.0.0-25.0.2 lose timed virtual-thread wake-ups
+        // (JDK-8370887), so a dump that does not say which JDK it came from cannot be compared.
+        b.append(" | jvm ").append(System.getProperty("java.vm.version"))
+            .append(" cpus=").append(Runtime.getRuntime().availableProcessors());
         try {
             b.append(" | old: handingOff=").append(old.isHandingOff())
                 .append(" liveSessions=").append(old.registry().liveSessions())

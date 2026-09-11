@@ -159,7 +159,17 @@ v3에 있던 `jailscale-wire`(WireGuard)와 `jailscale-netstack`(userspace TCP/I
 
 - `brew install graalvm` → GraalVM CE 25.3.x (JDK 25.0.x, GPL+CPE, native-image 포함). keg-only라
   PATH에 오르지 않으므로 native 빌드 시 `JAVA_HOME=/opt/homebrew/opt/graalvm/libexec/graalvm.jdk/Contents/Home`
-  으로 실행한다 (`./native.sh` 참조). 일반 빌드와 테스트는 어떤 JDK 25든 된다.
+  으로 실행한다 (`./native.sh` 참조). 일반 빌드와 테스트는 JDK 25.0.3 이상이면 된다.
+- **JDK 25.0.0~25.0.2는 쓰지 않는다.** JDK 25가 가상 스레드의 timed park를 ForkJoinPool의 지연
+  작업으로 옮기면서(JDK-8351927) 두 회귀가 들어왔다. 지연 작업을 취소하면 스케줄러의 힙이 깨져
+  다른 스레드의 `Thread.sleep`이 몇 배 늦거나 한참 안 깨어나고(JDK-8370887), 가상 스레드가
+  PARKED에 갇힌다(JDK-8369227). 둘 다 25.0.3에서 고쳐졌다. hand-off는 옛 연결의 keepalive
+  sleep을 interrupt로 취소하므로 정확히 그 경로를 밟으며, `HandoffTest`가 GraalVM CE 25.0.2 +
+  3코어에서 30회 중 5회 그 모양(응답이 4~5 조각에서 멈추고 앱의 `sleep(250)`이 19초째
+  TIMED_WAITING)으로 실패했다. 25.0.4.1에서는 30회 이상 무재현. 릴리스 워크플로가 이 때문에
+  Liberica NIK(`setup-graalvm`의 `distribution: liberica`, JDK 25.0.4+)를 쓴다: 그 액션의
+  `graalvm-community`는 `jdk-25.0.2` 태그 줄기만 보고(Innovation 빌드는 못 고른다) macOS x64는
+  25.0.1 이후 빌드가 없다. Homebrew의 graalvm(25.3.x)은 JDK 25.0.3 이상이라 로컬은 무관하다.
 - native-maven-plugin의 reachability metadata 저장소는 끈다. 외부 의존성이 없고 리플렉션도
   없으므로 가져올 것이 없다.
 - Linux에서는 `gcc`, `zlib` 개발 헤더 필요
