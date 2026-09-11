@@ -96,6 +96,7 @@ final class AdminIpc implements Ipc.Handler {
             }
             case "name-release" -> {
                 store.releaseName(req.string("name"));
+                hub.links().releasedByOperator(req.string("name"), false); // §12.6
                 reply.ok();
             }
             case "domain-list" -> {
@@ -108,6 +109,7 @@ final class AdminIpc implements Ipc.Handler {
             }
             case "domain-release" -> {
                 store.releaseDomain(req.string("domain"));
+                hub.links().releasedByOperator(req.string("domain"), true);
                 reply.ok();
             }
             case "user-list" -> reply.done(JsonObject.builder().put("ok", true).put("users", new ArrayList<>(store.users())));

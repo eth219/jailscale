@@ -97,7 +97,7 @@ public final class Hub implements AutoCloseable {
         this.rawPorts = new RawPorts(this);
         this.challenges = new Challenges();
         try {
-            this.links = new Links(config, store, rawPorts, new DomainVerifier(config.userDomainCa()));
+            this.links = new Links(config, store, rawPorts, new DomainVerifier(config.userDomainCa()), registry);
         } catch (GeneralSecurityException e) {
             throw new IOException("trust store: " + e.getMessage(), e);
         }

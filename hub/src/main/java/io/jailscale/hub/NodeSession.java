@@ -120,6 +120,9 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             if (conn == 0 && node != null && hub.tls().isLoaded()) {
                 send(hub.tls().certUpdate());
             }
+            if (conn == 0 && node != null) {
+                deliverNotices();
+            }
             mux.run();
         } catch (NoiseException e) {
             LOG.warn("handshake with {} failed: {}", remoteIp, e.getMessage());
@@ -267,6 +270,22 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         } catch (IOException e) {
             close();
         }
+    }
+
+    /**
+     * Hands over the names this node lost while it was away (DESIGN.md §12.6), then forgets them.
+     * Cleared only after every one is on the wire, so a node that dies mid-delivery is told again.
+     */
+    private void deliverNotices() throws IOException {
+        java.util.List<Store.NoticeRec> pending = hub.store().notices(mkey);
+        if (pending.isEmpty()) {
+            return;
+        }
+        for (Store.NoticeRec r : pending) {
+            send(new Message.LinkRevoked(r.linkId(), r.name(), r.reason(), r.at()));
+        }
+        hub.store().clearNotices(mkey);
+        LOG.info("told {} about {} name(s) it lost while away", mkey, pending.size());
     }
 
     /** Pushes a certificate change to a registered node. */

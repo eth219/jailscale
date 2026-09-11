@@ -26,6 +26,8 @@ final class Store implements AutoCloseable {
 
     private static final Log LOG = Log.get("store");
     private static final int SNAPSHOT_EVERY = 1000;
+    /** A node that never reconnects must not grow the state without bound. */
+    static final int MAX_NOTICES_PER_NODE = 20;
 
     record NodeRec(long id, String mkey, String user, String hostname, String os, long createdAt) {}
 
@@ -46,6 +48,13 @@ final class Store implements AutoCloseable {
     /** A raw port assigned to a node's local target (DESIGN.md §9.5); stable across restarts. */
     record PortRec(int port, String kind, String user, String mkey, String local, long at) {}
 
+    /**
+     * A name a node lost while it was not listening (DESIGN.md §12.6). Kept until the node
+     * reconnects and is told, so the notice survives the node being offline -- which is the
+     * common case, since being offline is often why the name was reassigned.
+     */
+    record NoticeRec(String mkey, String linkId, String name, String reason, long at) {}
+
     private final Path dir;
     private final Path logPath;
     private final Path snapshotPath;
@@ -62,6 +71,8 @@ final class Store implements AutoCloseable {
     private final Map<String, String> settings = new LinkedHashMap<>();
     private final Map<Integer, PortRec> ports = new LinkedHashMap<>();
     private final Map<String, DomainRec> domains = new LinkedHashMap<>();
+    /** mkey -> notices waiting for that node to reconnect. */
+    private final Map<String, List<NoticeRec>> notices = new LinkedHashMap<>();
 
     static final String SETTING_INVITE_POLICY = "invitePolicy";
     static final String SETTING_REGISTRATION = "registration";
@@ -143,6 +154,10 @@ final class Store implements AutoCloseable {
         return null;
     }
 
+    synchronized NameRec name(String name) {
+        return names.get(name);
+    }
+
     synchronized List<NameRec> names() {
         return new ArrayList<>(names.values());
     }
@@ -206,6 +221,33 @@ final class Store implements AutoCloseable {
     synchronized void releaseName(String name) throws IOException {
         if (names.containsKey(name)) {
             append(JsonObject.builder().put("e", "name-released").put("name", name));
+        }
+    }
+
+    /** Notices waiting for this node, oldest first. Empty when there are none. */
+    synchronized List<NoticeRec> notices(String mkey) {
+        List<NoticeRec> l = notices.get(mkey);
+        return l == null ? List.of() : List.copyOf(l);
+    }
+
+    synchronized int noticeCount() {
+        int n = 0;
+        for (List<NoticeRec> l : notices.values()) {
+            n += l.size();
+        }
+        return n;
+    }
+
+    /** Remembers that {@code mkey} lost {@code name}, to tell it when it next connects. */
+    synchronized void addNotice(String mkey, String linkId, String name, String reason) throws IOException {
+        append(JsonObject.builder().put("e", "notice-added").put("mkey", mkey).put("linkId", linkId)
+            .put("name", name).put("reason", reason).put("at", System.currentTimeMillis()));
+    }
+
+    /** Drops every notice for this node, after they have been delivered. */
+    synchronized void clearNotices(String mkey) throws IOException {
+        if (notices.containsKey(mkey)) {
+            append(JsonObject.builder().put("e", "notices-cleared").put("mkey", mkey));
         }
     }
 
@@ -452,6 +494,16 @@ final class Store implements AutoCloseable {
             case "domain-claimed" -> domains.put(ev.string("domain"), new DomainRec(ev.string("domain"), ev.string("user"),
                 ev.string("mkey"), ev.lng("at")));
             case "domain-released" -> domains.remove(ev.string("domain"));
+            case "notice-added" -> {
+                List<NoticeRec> l = notices.computeIfAbsent(ev.string("mkey"), k -> new ArrayList<>());
+                NoticeRec r = new NoticeRec(ev.string("mkey"), ev.optString("linkId", null), ev.string("name"),
+                    ev.string("reason"), ev.lng("at"));
+                if (l.size() >= MAX_NOTICES_PER_NODE) {
+                    l.remove(0); // a node that never comes back must not grow the state without bound
+                }
+                l.add(r);
+            }
+            case "notices-cleared" -> notices.remove(ev.string("mkey"));
             case "hubkey-rotation" -> {
                 nextHubKey = ev.string("next");
                 hubKeyActivatesAt = ev.lng("activatesAt");
@@ -547,6 +599,12 @@ final class Store implements AutoCloseable {
         for (PortRec r : ports.values()) {
             events.add(JsonObject.builder().put("e", "port-assigned").put("port", r.port()).put("kind", r.kind()).put("user", r.user())
                 .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
+        }
+        for (List<NoticeRec> l : notices.values()) {
+            for (NoticeRec r : l) {
+                events.add(JsonObject.builder().put("e", "notice-added").put("mkey", r.mkey()).put("linkId", r.linkId())
+                    .put("name", r.name()).put("reason", r.reason()).put("at", r.at()).build().asMap());
+            }
         }
         for (Map.Entry<String, String> e : settings.entrySet()) {
             events.add(JsonObject.builder().put("e", "setting").put("key", e.getKey()).put("value", e.getValue()).build().asMap());

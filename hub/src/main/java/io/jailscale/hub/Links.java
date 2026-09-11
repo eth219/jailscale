@@ -43,16 +43,18 @@ final class Links {
     private final Store store;
     private final RawPorts raw;
     private final DomainVerifier domains;
+    private final Registry registry;
     private final Map<String, Link> byName = new ConcurrentHashMap<>();
     private final Map<String, Link> byDomain = new ConcurrentHashMap<>();
     private final Map<Integer, Link> byPort = new ConcurrentHashMap<>();
     private final Map<String, Link> byId = new ConcurrentHashMap<>();
 
-    Links(HubConfig config, Store store, RawPorts raw, DomainVerifier domains) {
+    Links(HubConfig config, Store store, RawPorts raw, DomainVerifier domains, Registry registry) {
         this.config = config;
         this.store = store;
         this.raw = raw;
         this.domains = domains;
+        this.registry = registry;
     }
 
     Link byDomain(String domain) {
@@ -118,12 +120,18 @@ final class Links {
             if (!NAME.matcher(name).matches() || RESERVED.contains(name)) {
                 return new Message.LinkOpened(null, null, null, null, "bad-name");
             }
-            String owner = store.nameOwner(name);
-            if (owner != null && !owner.equals(node.user())) {
+            Store.NameRec prior = store.name(name);
+            if (prior != null && !prior.user().equals(node.user())) {
                 return new Message.LinkOpened(null, null, null, null, "taken");
             }
-            if (owner == null) {
+            if (prior == null || !prior.mkey().equals(node.mkey())) {
                 store.claimName(name, node.user(), node.mkey(), req.local());
+                if (prior != null) {
+                    // The name moved between this user's nodes (DESIGN.md §12.6). Driven by the
+                    // stored claim, not by a live link: the node that loses a name is usually the
+                    // one that is offline, and that is exactly when there is no link to look at.
+                    notifyRevoked(prior.mkey(), null, name, Message.LinkRevoked.REASSIGNED);
+                }
             }
         } else {
             name = store.nameFor(node.mkey(), req.local());
@@ -166,7 +174,11 @@ final class Links {
         if (existing != null && existing.group() != s.group()) {
             byId.remove(existing.linkId());
         }
+        Store.DomainRec prior = store.domain(domain);
         store.claimDomain(domain, node.user(), node.mkey());
+        if (prior != null && !prior.mkey().equals(node.mkey())) {
+            notifyRevoked(prior.mkey(), null, domain, Message.LinkRevoked.REASSIGNED);
+        }
         Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
         byDomain.put(domain, link);
         byId.put(link.linkId(), link);
@@ -231,6 +243,10 @@ final class Links {
             if (rec == null || !rec.mkey().equals(node.mkey()) || !rec.kind().equals(req.kind()) || !rec.local().equals(req.local())) {
                 store.assignPort(port, req.kind(), node.user(), node.mkey(), req.local());
             }
+            if (rec != null && !rec.mkey().equals(node.mkey())) {
+                notifyRevoked(rec.mkey(), existing == null ? null : existing.linkId(), req.kind() + "/" + port,
+                    Message.LinkRevoked.REASSIGNED);
+            }
             byPort.put(port, link);
             byId.put(link.linkId(), link);
             return new Message.LinkOpened(link.linkId(), link.name(), req.kind() + "://" + config.hostname() + ":" + port, port, null);
@@ -250,6 +266,54 @@ final class Links {
                 byName.remove(l.name(), l);
             }
             LOG.info("link {} closed", l.name());
+        }
+    }
+
+    /**
+     * An operator released a name or domain (DESIGN.md §12.6): take the live link down and tell
+     * the node. Without this the name keeps serving from the old node until it closes the link.
+     */
+    void releasedByOperator(String name, boolean domain) {
+        Link l = domain ? byDomain.remove(name) : byName.remove(name);
+        if (l == null) {
+            return;
+        }
+        byId.remove(l.linkId(), l);
+        notifyRevoked(l.mkey(), l.linkId(), l.name(), Message.LinkRevoked.RELEASED);
+    }
+
+    /** As above for a raw port. */
+    void portReleasedByOperator(int port) {
+        Link l = byPort.remove(port);
+        if (l == null) {
+            return;
+        }
+        raw.stop(l);
+        byId.remove(l.linkId(), l);
+        notifyRevoked(l.mkey(), l.linkId(), l.name(), Message.LinkRevoked.RELEASED);
+    }
+
+    /**
+     * Tells the node that lost a name: now if it is connected, on its next connection if not
+     * (DESIGN.md §12.6). Being offline is often why the name was taken, so the stored notice is
+     * the common path, not the exception.
+     */
+    private void notifyRevoked(String mkey, String linkId, String name, String reason) {
+        LOG.info("{} revoked from {}: {}", name, mkey, reason);
+        Message.LinkRevoked m = new Message.LinkRevoked(linkId, name, reason, System.currentTimeMillis());
+        NodeGroup g = registry.get(mkey);
+        if (g != null) {
+            try {
+                g.send(m);
+                return;
+            } catch (IOException | RuntimeException e) {
+                // Connected but on its way out: fall through and store it for the next connection.
+            }
+        }
+        try {
+            store.addNotice(mkey, linkId, name, reason);
+        } catch (IOException e) {
+            LOG.warn("cannot record that {} lost {}: {}", mkey, name, e.getMessage());
         }
     }
 

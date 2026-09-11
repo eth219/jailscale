@@ -173,8 +173,16 @@ final class AdminWeb {
                 lastAuthKey = secret;
             }
             case "/admin/authkey/revoke" -> store.revokeAuthKey(need(f, "id"));
-            case "/admin/name/release" -> store.releaseName(need(f, "name"));
-            case "/admin/domain/release" -> store.releaseDomain(need(f, "domain"));
+            case "/admin/name/release" -> {
+                String name = need(f, "name");
+                store.releaseName(name);
+                hub.links().releasedByOperator(name, false); // take it down now, and tell the node (§12.6)
+            }
+            case "/admin/domain/release" -> {
+                String domain = need(f, "domain");
+                store.releaseDomain(domain);
+                hub.links().releasedByOperator(domain, true);
+            }
             case "/admin/settings" -> {
                 store.setSetting(Store.SETTING_INVITE_POLICY, "admins".equals(f.get("invitePolicy")) ? "admins" : "members");
                 store.setSetting(Store.SETTING_REGISTRATION, "open".equals(f.get("registration")) ? "open" : "invite");

@@ -41,6 +41,9 @@ final class HubLink implements AutoCloseable {
 
         void onCert(Message.CertUpdate cert);
 
+        /** The hub says this node no longer serves a name it opened (DESIGN.md §12.6). */
+        void onRevoked(Message.LinkRevoked revoked);
+
         void onVisitor(HubLink link, Session session, MuxStream stream);
     }
 
@@ -434,6 +437,7 @@ final class HubLink implements AutoCloseable {
                 return false;
             }
             case Message.CertUpdate c -> events.onCert(c);
+            case Message.LinkRevoked r -> events.onRevoked(r);
             case Message.Pong p -> complete("Pong", m);
             case Message.InviteCreated ic -> complete("InviteCreated", m);
             case Message.AdminLink al -> complete("AdminLink", m);

@@ -34,6 +34,11 @@ final class NodeState {
     String user;
     String dnsSuffix;
     final java.util.List<LinkRec> links = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** Names the hub said are no longer ours (DESIGN.md §12.6). Kept so `status` can repeat it. */
+    final java.util.List<RevokedRec> revoked = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** One revocation the hub reported. Survives a restart, and is cleared by reopening the name. */
+    record RevokedRec(String name, String reason, long at) {}
 
     /** A link this node keeps open (DESIGN.md §10.1). {@code linkId}/{@code url} are per hub session. */
     static final class LinkRec {
@@ -134,6 +139,13 @@ final class NodeState {
                     s.links.add(rec);
                 }
             }
+            if (o.has("revoked")) {
+                for (Object r : o.array("revoked")) {
+                    @SuppressWarnings("unchecked")
+                    JsonObject ro = Json.parseObject(Json.write((java.util.Map<String, Object>) r));
+                    s.revoked.add(new RevokedRec(ro.string("name"), ro.string("reason"), ro.lng("at")));
+                }
+            }
         } else {
             s.machineKey = X25519.generate();
             s.save();
@@ -156,6 +168,10 @@ final class NodeState {
                 .put("domain", l.domain).put("acmeDirectory", l.acmeDirectory).put("acmeEmail", l.acmeEmail)
                 .put("proxyProtocol", l.proxyProtocol).build().asMap());
         }
+        java.util.List<Object> rs = new java.util.ArrayList<>();
+        for (RevokedRec r : revoked) {
+            rs.add(JsonObject.builder().put("name", r.name()).put("reason", r.reason()).put("at", r.at()).build().asMap());
+        }
         String json = JsonObject.builder()
             .put("machineKey", KeyText.format(PRIVATE_PREFIX, machineKey.privateKey()))
             .put("hub", hub.build())
@@ -163,6 +179,7 @@ final class NodeState {
             .put("nodeId", nodeId > 0 ? Long.valueOf(nodeId) : null)
             .put("user", user)
             .put("links", ls)
+            .put("revoked", rs.isEmpty() ? null : rs)
             .toJson();
         Files.createDirectories(file.getParent());
         Path tmp = file.resolveSibling("node.json.tmp");

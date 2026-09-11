@@ -40,6 +40,8 @@ public final class Codec {
             case Message.LinkOpened x -> b.put("linkId", x.linkId()).put("name", x.name()).put("url", x.url())
                 .put("hubPort", x.hubPort()).put("reason", x.reason());
             case Message.LinkClose x -> b.put("linkId", x.linkId());
+            case Message.LinkRevoked x -> b.put("linkId", x.linkId()).put("name", x.name())
+                .put("reason", x.reason()).put("at", x.at());
             case Message.SignRequest x -> b.put("streamId", x.streamId()).put("keyId", x.keyId()).put("alg", x.alg())
                 .putBytes("digest", x.digest());
             case Message.SignResponse x -> b.put("streamId", x.streamId()).putBytes("sig", x.sig()).put("reason", x.reason());
@@ -82,6 +84,8 @@ public final class Codec {
                 case "LinkOpened" -> new Message.LinkOpened(o.optString("linkId", null), o.optString("name", null),
                     o.optString("url", null), o.has("hubPort") ? o.integer("hubPort") : null, o.optString("reason", null));
                 case "LinkClose" -> new Message.LinkClose(o.string("linkId"));
+                case "LinkRevoked" -> new Message.LinkRevoked(o.optString("linkId", null), o.string("name"),
+                    o.string("reason"), o.lng("at"));
                 case "SignRequest" -> new Message.SignRequest(o.lng("streamId"), o.string("keyId"), o.string("alg"), o.bytes("digest"));
                 case "SignResponse" -> new Message.SignResponse(o.lng("streamId"), o.optBytes("sig"), o.optString("reason", null));
                 case "ChallengeSet" -> new Message.ChallengeSet(o.string("token"), o.string("keyAuthorization"));

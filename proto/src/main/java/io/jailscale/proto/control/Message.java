@@ -125,6 +125,19 @@ public sealed interface Message {
         @Override public String type() { return "LinkClose"; }
     }
 
+    /**
+     * The hub telling a node that one of its names is no longer served by it (DESIGN.md §12.6).
+     * Sent when another node opens the same name, or when an operator releases it. An honest hub
+     * sends this; a compromised one will not, which is what the self-probe (§12.5) is for.
+     */
+    record LinkRevoked(String linkId, String name, String reason, long at) implements Message {
+        /** Another node opened the same name; the newest opener won (§9.2). */
+        public static final String REASSIGNED = "reassigned";
+        /** An operator released the name, domain or port on the hub. */
+        public static final String RELEASED = "released";
+        @Override public String type() { return "LinkRevoked"; }
+    }
+
     record SignRequest(long streamId, String keyId, String alg, byte[] digest) implements Message {
         @Override public String type() { return "SignRequest"; }
     }

@@ -78,6 +78,44 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         visitors.serve(l, session, stream);
     }
 
+    /**
+     * A name this node opened is no longer served by it (DESIGN.md §12.6). Drop it from the state
+     * so the next reconnect does not silently reopen it, and say so loudly: if the node did not
+     * expect this, someone else is now answering for that name.
+     */
+    @Override
+    public synchronized void onRevoked(Message.LinkRevoked r) {
+        // Match by name first: a reopen racing this notice would carry a new linkId. Raw ports
+        // have no name of ours ("tcp/1234" is the hub's label), so fall back to the link id.
+        NodeState.LinkRec rec = state.linkByName(r.name());
+        if (rec == null && r.linkId() != null) {
+            for (NodeState.LinkRec l : state.links) {
+                if (r.linkId().equals(l.linkId)) {
+                    rec = l;
+                }
+            }
+        }
+        if (rec != null) {
+            if (rec.domain != null) {
+                visitors.removeDomain(rec.domain);
+            }
+            state.links.remove(rec);
+        }
+        state.revoked.add(new NodeState.RevokedRec(r.name(), r.reason(), r.at()));
+        try {
+            state.save();
+        } catch (IOException e) {
+            LOG.warn("cannot record that {} was revoked: {}", r.name(), e.getMessage());
+        }
+        if (Message.LinkRevoked.REASSIGNED.equals(r.reason())) {
+            LOG.error("{} was reassigned: the hub now serves that name from another node. If you did not "
+                + "move it, treat it as compromised and read DESIGN.md §12.3.", r.name());
+        } else {
+            LOG.error("{} was released by the hub operator and is no longer yours.", r.name());
+        }
+        LOG.error("`jailscale status` repeats this.");
+    }
+
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
         List<String> chain = null;
         if (rec.domain != null) {
@@ -218,6 +256,15 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return rows;
     }
 
+    /** Names the hub took away, so `status` keeps saying it after the log line has scrolled. */
+    private List<Object> revokedRows() {
+        List<Object> rows = new ArrayList<>();
+        for (NodeState.RevokedRec r : state.revoked) {
+            rows.add(JsonObject.builder().put("name", r.name()).put("reason", r.reason()).put("at", r.at()).build().asMap());
+        }
+        return rows;
+    }
+
     private JsonObject.Builder status() {
         JsonObject.Builder b = JsonObject.builder().put("ok", true)
             .put("machineKey", state.machineKeyText())
@@ -232,6 +279,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("user", state.user)
             .put("dnsSuffix", state.dnsSuffix)
             .put("links", linkRows())
+            .put("revoked", revokedRows())
             .put("lastError", link.lastError());
         Message.RegisterResponse r = link.lastRegister();
         if (r != null) {
@@ -323,6 +371,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 && java.util.Objects.equals(domain, l.domain)) {
                 rec = l;
             }
+        }
+        // Opening a name deliberately answers the warning about it, so stop repeating it.
+        if (name != null || domain != null) {
+            String wanted = domain != null ? domain : name;
+            state.revoked.removeIf(r -> r.name().equals(wanted) || r.name().equals(wanted + "." + state.dnsSuffix));
         }
         boolean fresh = rec == null;
         if (fresh) {
