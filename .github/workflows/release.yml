@@ -1,4 +1,4 @@
-# Release build (ARCHITECTURE.md §14): native binaries for five platforms plus the fallback JARs,
+# Release build (ARCHITECTURE.md §14): native binaries for four platforms plus the fallback JARs,
 # attached to the GitHub release of the pushed tag. Triggered by tags like v0.1.0.
 name: release
 on:
