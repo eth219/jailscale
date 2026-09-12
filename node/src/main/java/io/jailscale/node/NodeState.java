@@ -58,6 +58,7 @@ final class NodeState {
         volatile String acmeDirectory; // ACME directory used for the domain, or null for Let's Encrypt
         volatile String acmeEmail;
         volatile long certExpiresAt;   // not persisted: from the loaded certificate
+        volatile ProbeResult lastProbe; // not persisted: the last self-probe of this name (§11.3)
         volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (ARCHITECTURE.md §9.3)
 
         LinkRec(String kind, String host, int port, String name) {

@@ -24,8 +24,9 @@ public sealed interface Message {
     /**
      * {@code host} is the name this node resolved to reach the hub, or null when it was told an
      * address directly and DNS was never asked (§7.2). A handshake that completes against the
-     * pinned hub key is itself the proof that the name points at this hub, which is the one thing
-     * the hub cannot check about its own A records from where it stands.
+     * pinned hub key proves that this node's resolver sends the name to that hub -- evidence about
+     * the public address records only when the node is somewhere those are all it could have used,
+     * which is the hub's call to make from the address it sees.
      */
     record Hello(int proto, String version, String os, int conn, String host) implements Message {
         @Override public String type() { return "Hello"; }

@@ -65,7 +65,7 @@ final class Updates {
             if (r.status() != 200) {
                 return new Result(running, null, false, now, "the release index answered HTTP " + r.status());
             }
-            JsonObject o = Json.parseObject(new String(r.body(), java.nio.charset.StandardCharsets.UTF_8));
+            JsonObject o = Json.parseObject(r.bodyText());
             String tag = o.optString("tag_name", null);
             if (tag == null) {
                 return new Result(running, null, false, now, "the release index carried no tag_name");

@@ -113,11 +113,10 @@ final class AcmeManager implements AutoCloseable {
         String probe = "selftest-" + Tokens.inviteToken();
         dns.setTxt(List.of(probe));
         try {
-            String[] resolvers = {"1.1.1.1", "8.8.8.8"};
             String last = null;
-            for (String r : resolvers) {
+            for (String r : DnsQuery.PUBLIC_RESOLVERS) {
                 try {
-                    List<String> got = DnsQuery.txt(r, 53, dns.zone(), 5000);
+                    List<String> got = DnsQuery.txt(r, 53, dns.zone(), DnsQuery.PUBLIC_TIMEOUT_MS);
                     if (got.contains(probe)) {
                         return null;
                     }

@@ -87,15 +87,32 @@ class EndToEndTest {
     }
 
     @Test
-    void aNodeArrivingByNameProvesTheNameResolvesHere() throws Exception {
-        // ARCHITECTURE.md §7.2: the hub cannot check its own A records from behind a translated
-        // address, and does not have to -- a node that resolved the name and completed the
-        // handshake against the pinned hub key has already proved it from outside.
-        assertEquals(java.util.Map.of(), hub.reachedByNames());
+    void aNodeArrivingByNameFromOutsideIsEvidenceAndOneFromLoopbackIsNot() throws Exception {
+        // ARCHITECTURE.md §7.2: the hub cannot check its own address records from behind a
+        // translated address, and a node that resolved the name and completed the handshake
+        // against the pinned hub key can answer from outside -- but only from outside. A node on
+        // this host reached "localhost" through its own resolver, which says nothing about what
+        // the world is told, so the end-to-end arrival below must leave the record untouched.
+        assertEquals(0, hub.reachedFromOutsideAt());
         Invites.Created boot = hub.invites().create(null, 1, 3600, "test", true);
         node("alice");
         up("alice", JsonObject.builder().put("invite", boot.url()).put("user", "alice"));
-        assertTrue(hub.reachedByNames().containsKey("localhost"), hub.reachedByNames().toString());
+        assertEquals(0, hub.reachedFromOutsideAt(), "a loopback arrival is not proof about public records");
+        // The same Hello from a public address is, and only for this hub's own name.
+        hub.reachedBy("other.example.com", "203.0.113.5");
+        assertEquals(0, hub.reachedFromOutsideAt());
+        hub.reachedBy("LOCALHOST", "203.0.113.5");
+        assertTrue(hub.reachedFromOutsideAt() > 0);
+    }
+
+    @Test
+    void onlyPublicAddressesCountAsOutside() {
+        assertTrue(Hub.isPublicAddress("203.0.113.5"));
+        assertTrue(Hub.isPublicAddress("2001:db8::1"));
+        for (String local : new String[] {"127.0.0.1", "::1", "10.0.0.7", "172.16.4.4", "192.168.1.9", "169.254.1.1",
+            "fe80::1", "fc00::1", "fd12::1", "100.64.3.3", "0.0.0.0", "::", null, "not-an-address"}) {
+            assertTrue(!Hub.isPublicAddress(local), local + " should not count as outside");
+        }
     }
 
     @Test

@@ -121,7 +121,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                     return Codec.encode(new Message.Goodbye("bad-connection-index"));
                 }
                 LOG.info("node {} conn {} from {} (v{}, {})", mkey, conn, remoteIp, hello.version(), hello.os());
-                hub.reachedBy(hello.host());
+                hub.reachedBy(hello.host(), remoteIp);
                 return Codec.encode(new Message.HelloResponse(Message.PROTO, MIN_PROTO, Hub.version(), hub.config().dnsSuffix()));
             });
             if (rejected[0]) {

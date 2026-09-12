@@ -104,6 +104,51 @@ class DnsQueryTest {
         assertThrows(IOException.class, () -> DnsQuery.parse(cut, 13, A));
     }
 
+    @Test
+    void aNameThatDoesNotExistHasNoRecordsRatherThanBeingAnError() throws Exception {
+        // NXDOMAIN is what public resolvers answer for a name under a zone with no wildcard, and
+        // "no address record for *.host" is the diagnosis that misconfiguration needs; an error
+        // here would turn it into "no resolver answered".
+        byte[] m = response(15);
+        m[3] |= 3;
+        assertEquals(List.of(), DnsQuery.parse(m, 15, A));
+        byte[] servfail = response(16);
+        servfail[3] |= 2;
+        assertThrows(IOException.class, () -> DnsQuery.parse(servfail, 16, A));
+    }
+
+    @Test
+    void aReplyCutAnywhereIsAnIoExceptionNotACrash() {
+        // The datagram is whatever arrived with the right id. Cut inside the record header, inside
+        // the question name, or claiming more answers than it carries: each must be the exception
+        // the caller planned for, not an ArrayIndexOutOfBoundsException that ends the thread.
+        byte[] m = response(17, answer(A, 203, 0, 113, 10));
+        for (int cut : new int[] {m.length - 8, m.length - 12, 14, 12}) {
+            byte[] c = java.util.Arrays.copyOf(m, cut);
+            assertThrows(IOException.class, () -> DnsQuery.parse(c, 17, A), "cut at " + cut);
+        }
+        byte[] lies = response(18, answer(A, 203, 0, 113, 10));
+        lies[7] = 9; // ancount 9, one answer present
+        assertThrows(IOException.class, () -> DnsQuery.parse(lies, 18, A));
+        byte[] truncated = response(19, answer(A, 203, 0, 113, 10));
+        truncated[2] |= 0x02; // TC
+        assertThrows(IOException.class, () -> DnsQuery.parse(truncated, 19, A));
+    }
+
+    @Test
+    void anIpv6AddressIsReadAsSixteenBytes() throws Exception {
+        int[] v6 = new int[16];
+        v6[0] = 0x20;
+        v6[1] = 0x01;
+        v6[2] = 0x0d;
+        v6[3] = 0xb8;
+        v6[15] = 1;
+        byte[] m = response(21, answer(28, v6), answer(A, 203, 0, 113, 10));
+        List<byte[]> rd = DnsQuery.parse(m, 21, 28);
+        assertEquals(1, rd.size());
+        assertEquals("2001:db8:0:0:0:0:0:1", java.net.InetAddress.getByAddress(rd.get(0)).getHostAddress());
+    }
+
     private static String dotted(byte[] rd) {
         return (rd[0] & 0xff) + "." + (rd[1] & 0xff) + "." + (rd[2] & 0xff) + "." + (rd[3] & 0xff);
     }

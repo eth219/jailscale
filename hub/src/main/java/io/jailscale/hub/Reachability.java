@@ -1,9 +1,11 @@
 package io.jailscale.hub;
 
+import io.jailscale.hub.dns.DnsQuery;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpException;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.json.Json;
+import io.jailscale.proto.json.JsonException;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
@@ -18,33 +20,36 @@ import javax.net.ssl.SSLSocket;
 
 /**
  * Does this hub's name actually point at this hub (ARCHITECTURE.md §7.2)? The dns-01 self-check
- * proves the `_acme-challenge` delegation reaches this process and says nothing about the A records
- * that carry every visitor, so a deployment where the apex and the wildcard disagree, or where both
- * point at somebody else, was caught only by the first visitor handshake failing.
+ * proves the `_acme-challenge` delegation reaches this process and says nothing about the address
+ * records that carry every visitor, so a deployment where the apex and the wildcard disagree, or
+ * where both point at somebody else, was caught only by the first visitor handshake failing.
  *
  * <p>Three questions, in the order they can be answered without the previous one:
  *
  * <ol>
- *   <li>Do public resolvers have A records for the hub's name and for a name under its wildcard?
- *       Missing ones are a misconfiguration on their own.
- *   <li>Do the two agree? They must, or some names reach this hub and others do not -- the case
- *       where only the wildcard is proxied.
- *   <li>Does the address answer {@code /v1/key} with <b>this process's</b> hub key? That is the
- *       proof, and it needs no PKI: the hub key is what a node pins, so an address that returns a
- *       different one is a different hub whatever certificate it presents.
+ *   <li>Do public resolvers have an address (A or AAAA) for the hub's name and for a name under
+ *       its wildcard? Missing ones are a misconfiguration on their own.
+ *   <li>Do the two agree? They must share an address, or some names reach this hub and others do
+ *       not -- the case where only the wildcard is proxied. Sharing one, rather than being equal,
+ *       is the test because the two lookups are not equally fresh: the apex is a name resolvers
+ *       have cached, the wildcard probe is a label nobody has ever asked for, so during a record
+ *       change the apex can still carry the old address next to the new one.
+ *   <li>Does an address both names point at answer {@code /v1/key} with <b>this process's</b> hub
+ *       key? That is the proof, and it needs no PKI: the hub key is what a node pins, so an address
+ *       that returns a different one is a different hub whatever certificate it presents.
  * </ol>
  *
  * <p>Question 3 needs the host to be able to reach its own public address, which plenty of networks
  * do not allow -- a cloud instance whose public address is translated in front of it usually cannot.
- * A connection that fails is therefore <b>inconclusive and never an alarm</b>: it means this vantage
- * point cannot answer, not that the records are wrong. What a node reports on arrival (§10) answers
- * the same question from outside, where the failure mode does not exist.
+ * A connection that <b>does not complete</b> is therefore inconclusive and never an alarm: it means
+ * this vantage point cannot answer, not that the records are wrong. A connection that completes and
+ * finds something that is not a hub is the opposite: that is the TLS-terminating proxy §7.2 says
+ * cannot sit in front, and it is reported as the fault it is. A node arriving from a public address
+ * (§10) answers question 3 from outside, where the translated-address failure mode does not exist.
  */
 final class Reachability {
 
     private static final Log LOG = Log.get("reach");
-    private static final String[] RESOLVERS = {"1.1.1.1", "8.8.8.8"};
-    private static final int DNS_TIMEOUT_MS = 5000;
     private static final int TLS_TIMEOUT_MS = 5000;
     private static final int MAX_BODY = 64 * 1024;
 
@@ -68,9 +73,24 @@ final class Reachability {
         String at(String address, String host, int port) throws IOException, GeneralSecurityException, HttpException;
     }
 
+    /**
+     * The TLS handshake completed and what answered is not a hub: no {@code /v1/key}, or not the
+     * JSON a hub serves there. Distinct from a connection that failed, because it means the
+     * opposite thing -- something is reachable at the name, and it is not us.
+     */
+    static final class NotAHub extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        NotAHub(String message) {
+            super(message);
+        }
+    }
+
     static Result check(HubConfig config, HubKeys keys) {
-        return check(config.hostname(), keys.publicText(), config.listenPort(),
-            Reachability::resolve, Reachability::hubKeyAt);
+        // The port visitors use is the base URL's, not the one this process listens on: behind a
+        // layer-4 proxy (§8.5) those differ, and dialing the listen port from outside proves nothing.
+        int port = config.baseUrl().getPort() > 0 ? config.baseUrl().getPort() : 443;
+        return check(config.hostname(), keys.publicText(), port, Reachability::resolve, Reachability::hubKeyAt);
     }
 
     /**
@@ -90,51 +110,74 @@ final class Reachability {
             return new Result(INCONCLUSIVE, "no resolver answered for " + host + ": " + e.getMessage(), List.of());
         }
         if (apex.isEmpty()) {
-            return new Result(MISCONFIGURED, "no A record for " + host
+            return new Result(MISCONFIGURED, "no address record for " + host
                 + ": visitors have nowhere to go. Point it at this host's public address.", List.of());
         }
         if (wildcard.isEmpty()) {
-            return new Result(MISCONFIGURED, "no A record for *." + host
+            return new Result(MISCONFIGURED, "no address record for *." + host
                 + ": the hub's own name resolves but no published name will. Add the wildcard.", new ArrayList<>(apex));
         }
-        if (!apex.equals(wildcard)) {
+        List<String> shared = new ArrayList<>(apex);
+        shared.retainAll(wildcard);
+        if (shared.isEmpty()) {
             return new Result(MISCONFIGURED, host + " resolves to " + apex + " but *." + host + " to " + wildcard
                 + ": names would reach different places, which is what a proxy in front of one of them does.",
                 new ArrayList<>(apex));
         }
-        List<String> addresses = new ArrayList<>(apex);
-        String lastFailure = null;
-        for (String address : addresses) {
+        String foreign = null;
+        String notAHub = null;
+        String unreachable = null;
+        for (String address : shared) {
             String seen;
             try {
                 seen = keyAt.at(address, host, port);
+            } catch (NotAHub e) {
+                notAHub = address + ": " + e.getMessage();
+                continue;
             } catch (IOException | GeneralSecurityException | HttpException | RuntimeException e) {
-                lastFailure = address + ": " + e.getMessage();
+                unreachable = address + ": " + e.getMessage();
                 continue;
             }
             if (ourKey.equals(seen)) {
-                return new Result(PROVEN, null, addresses);
+                return new Result(PROVEN, null, shared);
             }
-            return new Result(ELSEWHERE, host + " resolves to " + address + ", and what answers there is a different"
-                + " hub: it presented " + seen + " where this process holds " + ourKey
-                + ". Nodes will pin whatever that is.", addresses);
+            foreign = address + " presented " + seen;
         }
-        return new Result(INCONCLUSIVE, "could not reach " + addresses + " from this host (" + lastFailure
+        // Nothing answered with our key. Say the worst thing that was actually seen: another hub
+        // outranks a non-hub, and both outrank not being able to look.
+        if (foreign != null) {
+            return new Result(ELSEWHERE, host + " resolves to " + shared + ", and what answers there is a different"
+                + " hub: " + foreign + " where this process holds " + ourKey + ". Nodes will pin whatever that is.",
+                shared);
+        }
+        if (notAHub != null) {
+            return new Result(MISCONFIGURED, host + " resolves to " + shared + " and something that is not a hub"
+                + " answers there (" + notAHub + "). A TLS-terminating proxy in front of the hub is the usual cause;"
+                + " it cannot sit there, only a layer-4 proxy that copies bytes can (§8.5).", shared);
+        }
+        return new Result(INCONCLUSIVE, "could not reach " + shared + " from this host (" + unreachable
             + "). That is normal where a public address is translated in front of the machine; it does not mean the"
-            + " records are wrong, only that they cannot be checked from here.", addresses);
+            + " records are wrong, only that they cannot be checked from here.", shared);
     }
 
-    /** The union of what the public resolvers answer, so one lagging resolver cannot hide a record. */
+    /**
+     * The union of what the public resolvers answer, A and AAAA, so one lagging resolver cannot
+     * hide a record and a hub published only over IPv6 is not told it has no address.
+     */
     static Set<String> resolve(String name) throws IOException {
         Set<String> out = new LinkedHashSet<>();
         IOException last = null;
         boolean answered = false;
-        for (String r : RESOLVERS) {
+        for (String r : DnsQuery.PUBLIC_RESOLVERS) {
             try {
-                out.addAll(DnsQueryA(r, name));
+                out.addAll(DnsQuery.a(r, 53, name, DnsQuery.PUBLIC_TIMEOUT_MS));
+                out.addAll(DnsQuery.aaaa(r, 53, name, DnsQuery.PUBLIC_TIMEOUT_MS));
                 answered = true;
             } catch (IOException e) {
                 last = e;
+            } catch (RuntimeException e) {
+                // A datagram the parser did not plan for is a bad answer, not a reason to die.
+                last = new IOException("bad answer from " + r + ": " + e, e);
             }
         }
         if (!answered) {
@@ -143,26 +186,32 @@ final class Reachability {
         return out;
     }
 
-    private static List<String> DnsQueryA(String resolver, String name) throws IOException {
-        return io.jailscale.hub.dns.DnsQuery.a(resolver, 53, name, DNS_TIMEOUT_MS);
-    }
-
     /**
      * The hub key {@code address} serves for {@code host}. The certificate is deliberately not
      * verified: the hub key is the thing a node pins and the thing being compared, so a valid
-     * certificate for the name would prove nothing here that the key does not prove better.
+     * certificate for the name would prove nothing here that the key does not prove better. Once
+     * the handshake has completed, anything but a hub's answer is {@link NotAHub}.
      */
     static String hubKeyAt(String address, String host, int port)
         throws IOException, GeneralSecurityException, HttpException {
         SSLContext ctx = Tls.clientContext(null, true);
         try (SSLSocket s = Tls.connect(ctx, host, address, port, false, TLS_TIMEOUT_MS)) {
             Http.writeRequest(s.getOutputStream(), "GET", host, "/v1/key", null, null);
-            HttpResponse r = Http.readResponse(s.getInputStream(), MAX_BODY);
-            if (r.status() != 200) {
-                throw new IOException("/v1/key answered HTTP " + r.status());
+            HttpResponse r;
+            try {
+                r = Http.readResponse(s.getInputStream(), MAX_BODY);
+            } catch (HttpException e) {
+                throw new NotAHub("not an HTTP answer a hub gives: " + e.getMessage());
             }
-            JsonObject o = Json.parseObject(new String(r.body(), java.nio.charset.StandardCharsets.UTF_8));
-            return o.string("hubKey");
+            if (r.status() != 200) {
+                throw new NotAHub("/v1/key answered HTTP " + r.status());
+            }
+            try {
+                JsonObject o = Json.parseObject(r.bodyText());
+                return o.string("hubKey");
+            } catch (JsonException e) {
+                throw new NotAHub("/v1/key did not answer with a hub key: " + e.getMessage());
+            }
         }
     }
 
@@ -174,8 +223,8 @@ final class Reachability {
                 config.hostname(), r.addresses());
             case ELSEWHERE -> LOG.error("address check FAILED: {}", r.problem());
             case MISCONFIGURED -> LOG.error("address check failed: {}", r.problem());
-            default -> LOG.info("address check inconclusive: {}. The next node to arrive answers it from"
-                + " outside, where this failure mode does not exist.", r.problem());
+            default -> LOG.info("address check inconclusive: {}. A node arriving from a public address answers"
+                + " it from outside, where this failure mode does not exist.", r.problem());
         }
     }
 }

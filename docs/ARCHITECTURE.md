@@ -405,22 +405,29 @@ root or `CAP_NET_BIND_SERVICE`, which the reference systemd unit grants to a ded
 `AmbientCapabilities`.
 
 **The address check.** The self-check above proves the `_acme-challenge` delegation reaches this
-process and says nothing about the A records every visitor actually follows, so a hub started with
-ACME also asks, once, in the background: do public resolvers have an address for `hub.example.com`
-and for a name under `*.hub.example.com`, do those two agree, and does that address answer
-`/v1/key` with **this process's** hub key? The last question needs no PKI — the hub key is what a
-node pins, so an address returning a different one is a different hub whatever certificate it
-presents — and the middle one is the case where only the wildcard is proxied, where the hub's own
-name and the names it serves arrive in different places.
+process and says nothing about the address records every visitor actually follows, so a hub started
+with ACME also asks, once, in the background: do public resolvers have an address (A or AAAA) for
+`hub.example.com` and for a name under `*.hub.example.com`, do those two share one, and does that
+address answer `/v1/key` on the base URL's port with **this process's** hub key? The last question
+needs no PKI — the hub key is what a node pins, so an address returning a different one is a
+different hub whatever certificate it presents — and the middle one is the case where only the
+wildcard is proxied, where the hub's own name and the names it serves arrive in different places.
+"Share one" rather than "are equal" because the two lookups are not equally fresh: the hub's name is
+one resolvers have cached, the wildcard probe is a label nobody has ever asked for, so mid-change the
+apex can still carry the old address next to the new one and that is propagation, not a fault.
 
 It can fail to answer, and that is not an alarm. Reaching your own public address from the host
 behind it is something many networks do not allow, a cloud instance with a translated address
-typically among them, so a connection that does not complete is reported as inconclusive and never
-as a fault. What settles it instead is a node: `Hello` carries the name the node resolved to get
-here (null when it was given an address with `--hub-addr` and never asked DNS), and a handshake that
-completed against the pinned hub key is proof from outside that the name points at this hub. The hub
-records that only for its own name, compared against what it already knows rather than stored from
-the wire.
+typically among them, so a connection that **does not complete** is reported as inconclusive and
+never as a fault. A connection that completes and finds something that is not a hub — a 403 page, an
+HTML index — is the opposite: that is the TLS-terminating proxy the trap below says cannot sit in
+front, and it is reported as the fault it is. From outside, a node adds one more view: `Hello`
+carries the name the node resolved to get here (null when it was given an address with `--hub-addr`
+and never asked DNS), and a handshake that completed against the pinned hub key proves that name led
+*that node's resolver* here. The hub counts it only when the node arrived from a public address — a
+node on the hub's own host or LAN may have the name from `/etc/hosts` or a split-horizon resolver,
+which says nothing about what the world is told — and only for its own name, compared against what
+it already knows rather than stored from the wire.
 
 Two operational traps. SNI passthrough needs raw TCP 443, so **no TLS-terminating HTTP proxy can sit
 in front** (nginx `http`, Caddy, Cloudflare Proxied); a layer-4 proxy that only copies bytes is
@@ -876,11 +883,11 @@ off: the traffic goes to this node's own name through its own hub and reaches no
 
 ### 11.4 Name revocation notices
 
-The self-probe only runs when someone types `jailscale verify`, so an **honest hub announces a name
-change in advance** with `LinkRevoked{linkId, name, reason, at}`, where `reason` is `reassigned`
-(another node opened the same name) or `released` (an operator took it back). A compromised hub simply
-does not send it: this is incident notification, not attack detection, and catching a compromised hub
-is §11.3.
+The self-probe finds a move after the fact, and a name's turn can be hours away (§11.3), so an
+**honest hub announces a name change in advance** with `LinkRevoked{linkId, name, reason, at}`, where
+`reason` is `reassigned` (another node opened the same name) or `released` (an operator took it
+back). A compromised hub simply does not send it: this is incident notification, not attack
+detection, and catching a compromised hub is §11.3.
 
 **The trigger is stored ownership, not a live link.** That distinction is the whole design. A node
 losing a name is usually **offline**, and being offline is exactly why someone else took the name, so

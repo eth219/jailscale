@@ -16,8 +16,6 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
@@ -40,8 +38,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private volatile boolean closed;
     /** The last release check, for {@code status}; null until the first one has run. */
     private volatile Updates.Result lastUpdate;
-    /** The last self-probe per name, so `status` shows it without anyone running `verify`. */
-    private final Map<String, Probe> lastProbe = new ConcurrentHashMap<>();
     static final URI LETS_ENCRYPT = URI.create("https://acme-v02.api.letsencrypt.org/directory");
     static final long RENEW_CHECK_MS = 3600_000;
     static final long UPDATE_CHECK_MS = 24 * 3600_000L;
@@ -282,18 +278,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             rows.add(JsonObject.builder().put("name", l.name).put("kind", l.kind).put("local", l.local())
                 .put("url", l.url).put("gate", l.gateHash != null).put("open", l.linkId != null && link.isConnected())
                 .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
-                .put("probe", probeRow(l)).build().asMap());
+                .put("probe", l.lastProbe == null ? null : l.lastProbe.json()).build().asMap());
         }
         return rows;
-    }
-
-    /** The last self-probe of this link's public name, or null if it has not been probed yet. */
-    private JsonObject probeRow(NodeState.LinkRec l) {
-        if (l.url == null) {
-            return null;
-        }
-        Probe p = lastProbe.get(URI.create(l.url).getHost());
-        return p == null ? null : p.json().build();
     }
 
     /** Names the hub took away, so `status` keeps saying it after the log line has scrolled. */
@@ -495,43 +482,46 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         List<Object> rows = new ArrayList<>();
         boolean allOk = true;
         for (NodeState.LinkRec rec : state.links) {
-            Probe p = probe(rec);
+            ProbeResult p = probe(rec);
             if (p == null) {
                 continue; // raw ports carry no TLS of ours to compare
             }
             allOk &= p.ok();
-            rows.add(p.json().build().asMap());
+            rows.add(p.json().asMap());
         }
         reply.done(JsonObject.builder().put("ok", allOk).put("checked", rows.size()).put("results", rows));
     }
 
-    /** What one probe of one name concluded, and when. */
-    private record Probe(String name, boolean ok, String verdict, long at) {
-
-        JsonObject.Builder json() {
-            return JsonObject.builder().put("name", name).put("ok", ok).put("verdict", verdict).put("at", at / 1000);
-        }
-    }
-
     /**
-     * Probes one link, or null when it carries no TLS this node terminates. Records the result for
-     * {@code status} and shouts on the one verdict that means something is wrong, so a probe from
-     * the loop below is as loud as one the operator asked for.
+     * Probes one link, or null when it carries no TLS this node terminates. Records the result on
+     * the link for {@code status} and shouts on the one verdict that means something is wrong, so
+     * a probe from the loop below is as loud as one the operator asked for.
+     *
+     * <p>Nothing in here throws. The URL is the hub's word (§11.2), so parsing it is inside the
+     * same net as connecting to it: a hub that sends a name Java's {@code URI} will not parse must
+     * get a verdict saying so, not end the loop that exists to catch a dishonest hub.
      */
-    private Probe probe(NodeState.LinkRec rec) {
+    private ProbeResult probe(NodeState.LinkRec rec) {
         if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
             return null;
         }
-        URI u = URI.create(rec.url);
-        String host = u.getHost();
-        int port = u.getPort() > 0 ? u.getPort() : 443;
+        String host = rec.url;
         String verdict;
         boolean ok = false;
         try {
+            URI u = URI.create(rec.url);
+            if (u.getHost() == null) {
+                throw new IllegalArgumentException("no host in " + rec.url);
+            }
+            host = u.getHost();
+            int port = u.getPort() > 0 ? u.getPort() : 443;
             SSLContext ctx = Tls.clientContext(state.caFile == null ? null : Path.of(state.caFile), state.tlsInsecure);
             try (SSLSocket s = Tls.connect(ctx, host, state.hubAddr, port, !state.tlsInsecure, VERIFY_TIMEOUT_MS)) {
                 Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
-                Http.readResponse(s.getInputStream(), 1 << 16);
+                // Headers only. The node records the exporter on the first application byte of
+                // the request (Visitors), so once a status line is back the comparison is ready,
+                // and the local app's page -- whatever its size -- is not what is being checked.
+                Http.readResponse(s.getInputStream(), 1 << 16, true);
                 String material = SelfProbe.material(s.getSession());
                 ok = visitors.probe().terminatedHere(material);
                 verdict = material == null ? "keying material unavailable (needs TLS 1.3)"
@@ -540,11 +530,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         } catch (IOException | GeneralSecurityException | io.jailscale.proto.http.HttpException | RuntimeException e) {
             verdict = "unreachable: " + e.getMessage();
         }
-        if (!ok && verdict.startsWith("TERMINATED")) {
+        if (verdict.startsWith("TERMINATED")) {
             visitors.probe().warn(host);
         }
-        Probe p = new Probe(host, ok, verdict, System.currentTimeMillis());
-        lastProbe.put(host, p);
+        ProbeResult p = new ProbeResult(host, ok, verdict, System.currentTimeMillis());
+        rec.lastProbe = p;
         return p;
     }
 
@@ -577,7 +567,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 continue;
             }
             next = (i + 1) % links.size();
-            probe(links.get(i));
+            try {
+                probe(links.get(i));
+            } catch (RuntimeException e) {
+                // probe() is written not to throw; if it ever does, one bad tick must not be the
+                // last one. Say so, at the volume of a thing that should not happen.
+                LOG.error("self-probe of {} failed unexpectedly: {}", links.get(i).name, e.toString());
+            }
         }
     }
 

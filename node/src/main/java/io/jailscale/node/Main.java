@@ -59,10 +59,10 @@ public final class Main {
                     // In this process rather than through the daemon: a node that is down is exactly
                     // when someone asks, and the check needs nothing the daemon holds.
                     Updates.Result r = Updates.check(Version.string());
-                    System.out.println(r.line());
                     if (r.error() != null) {
-                        System.exit(1);
+                        throw new IOException(r.line()); // like every other command: stderr, exit 1
                     }
+                    System.out.println(r.line());
                 }
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);

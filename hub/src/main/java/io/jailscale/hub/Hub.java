@@ -20,8 +20,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** The jailhub process: keys, store, TLS listener, node sessions, admin IPC (ARCHITECTURE.md §2). */
 public final class Hub implements AutoCloseable {
@@ -32,8 +30,8 @@ public final class Hub implements AutoCloseable {
     private final HubConfig config;
     private final Store store;
     private final HubKeys keys;
-    /** Names a node reached this hub by, and when it last did. */
-    private final Map<String, Long> reachedBy = new ConcurrentHashMap<>();
+    /** When a node from a public address last arrived by this hub's own name; 0 until one has. */
+    private volatile long reachedFromOutsideAt;
     private final Registry registry = new Registry(this);
     static final long DRAIN_TIMEOUT_MS = 60_000;
     private volatile boolean handingOff;
@@ -254,23 +252,59 @@ public final class Hub implements AutoCloseable {
 
     /**
      * A node says in its {@code Hello} which name it resolved to get here (§7.2). A handshake that
-     * completed against the pinned hub key proves that name points at this process, which is the
-     * part of the address check this host cannot answer about itself from behind a translated
-     * address. Only this hub's own name is recorded: the value comes off the wire, so it is
-     * compared against what we already know rather than stored and shown back.
+     * completed against the pinned hub key proves that <i>the node's resolver</i> sends that name
+     * here -- which is only evidence about the public address record when the node is somewhere
+     * the public records are all it could have used. A node on this host or its LAN may have got
+     * the name from {@code /etc/hosts} or a split-horizon resolver, so only arrivals from a public
+     * address count, and even then it is one node's view: the part of the address check this host
+     * cannot answer about itself from behind a translated address, not more. Only this hub's own
+     * name is considered: the value comes off the wire, so it is compared against what we already
+     * know rather than stored and shown back.
      */
-    void reachedBy(String name) {
-        if (name == null || !name.equalsIgnoreCase(config.hostname())) {
+    void reachedBy(String name, String remoteIp) {
+        if (name == null || !name.equalsIgnoreCase(config.hostname()) || !isPublicAddress(remoteIp)) {
             return;
         }
-        if (reachedBy.put(config.hostname(), System.currentTimeMillis()) == null) {
-            LOG.info("a node resolved {} and arrived here, so its A record points at this hub", config.hostname());
+        boolean first = reachedFromOutsideAt == 0;
+        reachedFromOutsideAt = System.currentTimeMillis();
+        if (first) {
+            LOG.info("a node at {} resolved {} and arrived here: from where it stands, the address record points"
+                + " at this hub", remoteIp, config.hostname());
         }
     }
 
-    /** When a node last arrived by each name, for the address check and the status page. */
-    Map<String, Long> reachedByNames() {
-        return Map.copyOf(reachedBy);
+    /** When a node from a public address last arrived by this hub's own name; 0 until one has. */
+    long reachedFromOutsideAt() {
+        return reachedFromOutsideAt;
+    }
+
+    /**
+     * Whether {@code ip} is one only the public internet could have handed us: not loopback, not a
+     * private or link-local range, not the unspecified address. A resolver on such a host cannot
+     * have been told about the name by this machine's own configuration.
+     */
+    static boolean isPublicAddress(String ip) {
+        if (ip == null) {
+            return false;
+        }
+        InetAddress a;
+        try {
+            a = InetAddress.getByName(ip);
+        } catch (java.net.UnknownHostException e) {
+            return false;
+        }
+        if (a.isAnyLocalAddress() || a.isLoopbackAddress() || a.isLinkLocalAddress() || a.isSiteLocalAddress()
+            || a.isMulticastAddress()) {
+            return false;
+        }
+        byte[] b = a.getAddress();
+        if (b.length == 16 && (b[0] & 0xfe) == 0xfc) {
+            return false; // fc00::/7, unique local: isSiteLocalAddress only knows the deprecated fec0::/10
+        }
+        if (b.length == 4 && (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 0x40) {
+            return false; // 100.64.0.0/10, carrier-grade NAT: a LAN behind an ISP, not the internet
+        }
+        return true;
     }
 
     HubKeys keys() {

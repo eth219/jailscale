@@ -58,6 +58,7 @@ class ReachabilityTest {
         assertEquals(Reachability.ELSEWHERE, r.verdict());
         assertTrue(r.problem().contains("hkey:somebody-else"), r.problem());
         assertTrue(r.problem().contains(OURS), r.problem());
+        assertTrue(r.problem().contains("203.0.113.10"), r.problem());
     }
 
     @Test
@@ -77,11 +78,11 @@ class ReachabilityTest {
     void aMissingRecordIsNamedForWhatItBreaks() {
         Reachability.Result none = check(Map.of(), (a, h, p) -> OURS);
         assertEquals(Reachability.MISCONFIGURED, none.verdict());
-        assertTrue(none.problem().contains("no A record for " + HOST), none.problem());
+        assertTrue(none.problem().contains("no address record for " + HOST), none.problem());
 
         Reachability.Result noWildcard = check(Map.of(HOST, set("203.0.113.10")), (a, h, p) -> OURS);
         assertEquals(Reachability.MISCONFIGURED, noWildcard.verdict());
-        assertTrue(noWildcard.problem().contains("no A record for *." + HOST), noWildcard.problem());
+        assertTrue(noWildcard.problem().contains("no address record for *." + HOST), noWildcard.problem());
     }
 
     @Test
@@ -104,6 +105,53 @@ class ReachabilityTest {
             (a, h, p) -> OURS);
         assertEquals(Reachability.INCONCLUSIVE, r.verdict());
         assertTrue(r.problem().contains("network is unreachable"), r.problem());
+    }
+
+    @Test
+    void aStaleCachedApexNextToTheNewAddressIsNotADisagreement() {
+        // Mid-change: a resolver still has the old address cached for the apex, while the wildcard
+        // probe is a label nobody ever asked for and so comes back fresh. The names still share an
+        // address, and that address answering with our key is the proof.
+        Reachability.Result r = check(
+            Map.of(HOST, set("198.51.100.7", "203.0.113.10"), "*." + HOST, set("203.0.113.10")),
+            (address, host, port) -> address.equals("203.0.113.10") ? OURS : "hkey:previous-hub");
+        assertEquals(Reachability.PROVEN, r.verdict(), r.problem());
+        assertEquals(java.util.List.of("203.0.113.10"), r.addresses());
+    }
+
+    @Test
+    void anotherHubAtOneAddressDoesNotHideOursAtAnother() {
+        Reachability.Result r = check(
+            Map.of(HOST, set("198.51.100.7", "203.0.113.10"), "*." + HOST, set("198.51.100.7", "203.0.113.10")),
+            (address, host, port) -> address.equals("198.51.100.7") ? "hkey:previous-hub" : OURS);
+        assertEquals(Reachability.PROVEN, r.verdict(), r.problem());
+    }
+
+    @Test
+    void somethingThatIsNotAHubAnsweringIsAFaultNotAnExcuse() {
+        // The handshake completed and a 403 page came back: a TLS-terminating proxy is in front,
+        // which §7.2 says cannot be. Calling that "cannot check from here" would hide the one
+        // misconfiguration the check was written to catch.
+        Reachability.Result r = check(Map.of(HOST, set("203.0.113.10"), "*." + HOST, set("203.0.113.10")),
+            (address, host, port) -> {
+                throw new Reachability.NotAHub("/v1/key answered HTTP 403");
+            });
+        assertEquals(Reachability.MISCONFIGURED, r.verdict());
+        assertTrue(r.problem().contains("not a hub"), r.problem());
+        assertTrue(r.problem().contains("HTTP 403"), r.problem());
+    }
+
+    @Test
+    void aNonHubAnswerOutranksAnUnreachableAddress() {
+        Reachability.Result r = check(
+            Map.of(HOST, set("203.0.113.10", "203.0.113.11"), "*." + HOST, set("203.0.113.10", "203.0.113.11")),
+            (address, host, port) -> {
+                if (address.equals("203.0.113.10")) {
+                    throw new IOException("timed out");
+                }
+                throw new Reachability.NotAHub("/v1/key answered HTTP 404");
+            });
+        assertEquals(Reachability.MISCONFIGURED, r.verdict());
     }
 
     @Test
