@@ -1100,10 +1100,26 @@ needs more gets it on the unit's `ExecStart`. The node is the awkward one: `jail
 daemon with a fixed command, so raising its ceiling means editing the unit `service install` wrote
 or starting `jailscale daemon --home` by hand.
 
-Serial is the only GC available here, which suits it: the distribution is Liberica NIK, and
-`native-image --gc=` offers `serial` (default), `parallel` and `epsilon` — G1 is Oracle GraalVM only
-and Linux-only, and it is the wrong lever anyway, since `MaximumHeapSizePercent` applies to serial,
-parallel and epsilon alike and the fix is the ceiling rather than the collector.
+**Serial is the collector, and G1 was measured rather than argued about.** Liberica NIK offers
+`serial` (default), `parallel` and `epsilon`; G1 needs Oracle GraalVM and Linux, so it could only
+ever cover two of the five targets. It was built and measured anyway, on Oracle GraalVM 25.0.4 with
+the same ceilings, against the same toolchain's serial build: the binaries went from 31.8 and
+32.0 MiB to **39.9 and 40.3**, over the 36 MiB budget; idle anonymous memory went from 5.0 and
+4.1 MB to **11.1 and 10.9**; and peak RSS with 1,000 visitors held open went from 68.0 and 58.2 MB
+to **110.3 and 92.7**, about 60% more. The ramp was unchanged at 2.4s against 2.5s. So G1 is a cost
+here, not a bonus — Native Image's own documentation calls the serial GC the one "optimized for low
+memory footprint and small Java heap sizes", and at a 96 MB ceiling that is the whole requirement.
+Swapping collectors was never the fix for the drift either: `MaximumHeapSizePercent` applies to
+serial, parallel and epsilon alike, so the ceiling is what bounds it.
+
+That same comparison priced the edition. Oracle GraalVM 25.0.4 has `compressed references` where
+Liberica NIK 25.0.4 does not, and it is the only toolchain CI can fetch that does
+(`setup-graalvm`'s community line still resolves 25 to 25.0.2, which §3.2 forbids). On this source
+it is worth about 1.2 MB of idle anonymous memory and nothing else measurable: binary size within
+0.1 MiB, load peaks and CLI start inside run-to-run noise. Against that, GFTC would put Oracle's
+terms on binaries this repository ships under Apache-2.0, and every toolchain bump becomes a licence
+review, so it stays on Liberica. PGO is the one Oracle feature that might matter and it is
+unmeasurable here for now: it pays in throughput, and nothing in §14 measures throughput.
 
 `./measure.sh --check` fails when a number exceeds its budget. The budget values live at the top of
 the script and must match this table; they change only by a PR that states a reason. The `budget` job
