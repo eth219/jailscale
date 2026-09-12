@@ -132,7 +132,12 @@ class SignatureCapTest {
                     try {
                         armed.await();
                     } catch (InterruptedException e) {
+                        // Nobody interrupts these, but a racer that left without starting the race
+                        // would leave the other fifteen spinning on every core for the life of the
+                        // JVM. Release them, and let the round fail on its count.
                         Thread.currentThread().interrupt();
+                        go.set(true);
+                        done.countDown();
                         return;
                     }
                     if (spinning.incrementAndGet() == racers) {

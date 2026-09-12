@@ -14,18 +14,18 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Which precondition does the Windows stall need? SockLoop.java showed that Windows + virtual
- * threads + bidirectional traffic stalls and that removing any one of the three does not. This
- * narrows the third: "bidirectional" in SockLoop means one socket is parked for read and for
- * write at the same time, which on Windows means the same handle sits in the read wepoll instance
- * and the write wepoll instance at once (Poller.readPoller/writePoller, WEPollPoller does
- * EPOLL_CTL_ADD per park).
+ * Which precondition does the Windows stall need? The first reproducer here showed that Windows +
+ * virtual threads + traffic in both directions stalls and that removing any one of the three does
+ * not. This narrows the third, because traffic in both directions over one socket pair also means
+ * one socket is parked for read and for write at the same time -- and on Windows that means the
+ * same handle sits in the read wepoll instance and the write wepoll instance at once
+ * (Poller.readPoller/writePoller, WEPollPoller does EPOLL_CTL_ADD per park).
  *
  * Variants keep the traffic identical and move only which thread is virtual, or which socket
  * carries the window updates:
  *
- *   uni       no window updates at all (the SockLoop control)
- *   bidi      window updates back over the same socket pair (the SockLoop baseline)
+ *   uni       no window updates at all, so only one direction carries traffic
+ *   bidi      window updates back over the same socket pair: the baseline that stalls
  *   split     window updates over a SECOND socket pair, so no socket is ever parked for both
  *             directions, everything still virtual and still bidirectional
  *   pwriter   bidi, but the writer is a platform thread: the data socket never enters the write
@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   packs     bidi, but the ack reader is a platform thread: the data socket never enters the
  *             read poller
  *   preader   bidi, but the frame reader is a platform thread (the other side of the pair)
- *   platform  every thread platform (the second SockLoop control)
+ *   platform  every thread platform, which was the first workaround considered
  *
  * On a stall it prints what each thread is parked in and, decisively, available() on the socket
  * the stalled reader is waiting on: bytes sitting in the receive buffer of a parked reader is a

@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -188,16 +189,18 @@ class UserDomainTest {
         // record to come back cannot end early the same way: it is the restarted node's own
         // LinkOpen that puts it there, over the session the request needs.
         node.close();
-        long deadline = System.currentTimeMillis() + 15_000;
-        while (hub.links().byDomain(DOMAIN) != null && System.currentTimeMillis() < deadline) {
+        long gone = System.currentTimeMillis() + 15_000;
+        while (hub.links().byDomain(DOMAIN) != null && System.currentTimeMillis() < gone) {
             Thread.sleep(50);
         }
         assertNull(hub.links().byDomain(DOMAIN), "the hub kept the domain after the node left");
         node = new Daemon(NodeConfig.in(root.resolve("node")));
         node.start();
-        while (hub.links().byDomain(DOMAIN) == null && System.currentTimeMillis() < deadline) {
+        long back = System.currentTimeMillis() + 15_000;
+        while (hub.links().byDomain(DOMAIN) == null && System.currentTimeMillis() < back) {
             Thread.sleep(50);
         }
+        assertNotNull(hub.links().byDomain(DOMAIN), "the domain did not come back after the restart");
         assertEquals(1, ca.orders);
         assertEquals("200 hello from " + DOMAIN, get(DOMAIN, "/"));
         JsonObject ls = Ipc.call(sock, JsonObject.builder().put("cmd", "ls").build());
