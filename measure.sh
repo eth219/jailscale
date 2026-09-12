@@ -9,6 +9,8 @@
 #   --check      exit 1 when a number exceeds the budget below (the CI gate)
 #   RATE=8       also measure throughput, 8s per phase (tools/throughput.py); reported, not gated.
 #                RATE_HANDSHAKES= offered handshakes a second (400), RATE_CONNS= warm ones (32)
+#   HUB_OPTS=    runtime options for the hub, and JAILSCALE_DAEMON_OPTS for the node's daemon:
+#                -XX:MaxHeapSize= to lift the build's ceiling, -XX:ProfilesDumpFile= to profile
 set -eu
 R=$(cd "$(dirname "$0")" && pwd)
 HUB=$R/hub/target/jailhub
@@ -83,7 +85,10 @@ anon_note() {
   printf '   (%.1f anonymous)' "$(echo "$(awk '/^RssAnon:/{print $2}' "/proc/$1/status") / 1024" | bc -l)"
 }
 
-"$HUB" serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
+# HUB_OPTS is the hub's half of JAILSCALE_DAEMON_OPTS (which the CLI gives the node's daemon):
+# runtime options the native image reads before main, deliberately unquoted so several split.
+# shellcheck disable=SC2086
+"$HUB" ${HUB_OPTS:-} serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
   --state "$W/hub" --port-range none --http-listen none > "$W/hub.log" 2>&1 &
 HUBPID=$!
 sleep 1.5
