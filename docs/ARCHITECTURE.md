@@ -1062,7 +1062,7 @@ platforms CI can run the gate on; the budgets differ per platform for the reason
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
-| Binary size | 25.2 MiB (`jailhub`), 25.3 MiB (`jailscale`) — but the release ships 29.8 and 30.1, see below | 31.6 MiB, 31.9 MiB | 30 / 36 MiB |
+| Binary size | 25.2 MiB (`jailhub`), 25.3 MiB (`jailscale`) — but the release ships 29.8 and 30.1, see below | 31.6 MiB, 31.9 MiB | 32 / 36 MiB |
 | Node idle RSS | about 24.7 MB | about 39.7 MB | 28 / 46 MB |
 | Hub idle RSS | about 24.7 MB | about 40.0 MB | 30 / 46 MB |
 | RSS with 1,000 visitor sessions held open | node 68.6 MB, hub 52.7 MB | node 60.3 MB, hub 68.6 MB | node 192 MB, hub 160 MB |
@@ -1117,13 +1117,16 @@ numbers above come from `brew`'s GraalVM CE, `25.3.4.1-dev` today, whose banner 
 platform and the same source: v0.1.0 ships `jailhub-darwin-arm64` at 29.8 MiB and
 `jailscale-darwin-arm64` at 30.1 MiB, against the 25.2 and 25.3 measured here, and the released
 `jailscale` is therefore already over the 30 MiB budget in this table — invisibly, because the
-`budget` job only runs on linux-amd64. Two ways out, neither taken yet: raise the macOS budget to
-match what the release toolchain produces, or build releases on a GraalVM CE that has compressed
-references, which currently costs darwin-amd64 (`graalvm-ce-builds` 25.3.4.1 ships linux-x64,
-linux-aarch64, macos-aarch64 and windows-x64, and no macOS x64 — the same gap §3.2 chose Liberica
-over). Measured on Liberica in CI, the linux-amd64 column is unaffected, and Oracle GraalVM 25.0.4
-(which does have compressed references) built the same source to within 0.1 MiB of Liberica's
-binary size while using about 1.2 MB less anonymous memory at idle.
+`budget` job only runs on linux-amd64. The macOS budget is now 32 MiB for that reason: a budget has to describe what
+ships, and 30 described this machine. Moving releases to a GraalVM CE with compressed references
+was the alternative and it is blocked twice over -- `graalvm-ce-builds` 25.3.4.1 ships linux-x64,
+linux-aarch64, macos-aarch64 and windows-x64 and no macOS x64, the same gap §3.2 chose Liberica
+over, and `setup-graalvm`'s community line still resolves 25 to **25.0.2**, the release §3.2
+forbids. No distribution resolves a native-image for JDK 26 at all yet. Oracle GraalVM 25.0.4 is
+the only toolchain CI can fetch that has compressed references, and its measured gain on this
+source is about 1.2 MB of idle anonymous memory. The linux-amd64 column is unaffected: it is measured on the toolchain that builds it. And the
+macOS budget is not enforced anywhere yet — a `budget` job on macOS would need the runner to raise
+its file-descriptor limit, which it refuses, so only 600 of the 1,000 visitors can be held there.
 
 **Load is measured with the connections held open.** An earlier gate fired 1,000 short requests with
 `curl --parallel` and finished, which means 1,000 were never alive at once and the figure was roughly

@@ -16,6 +16,9 @@
     <native.skip>false</native.skip>
     <native.imageName>jailscale</native.imageName>
     <native.mainClass>io.jailscale.node.Main</native.mainClass>
+    <!-- Same as the parent's fallback, said here on purpose: a binary's heap ceiling should be
+         readable in its own pom rather than inherited from a default that happens to match. -->
+    <native.maxHeap>64m</native.maxHeap>
   </properties>
 
   <dependencies>

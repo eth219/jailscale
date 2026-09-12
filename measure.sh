@@ -30,7 +30,14 @@ B_HUB_LOAD_MB=160
 B_CLI_MS=50
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
-    B_BINARY_MIB=30; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=30 ;;
+    # 32, not 30: the release does not use this machine's toolchain. `brew`'s GraalVM CE (25.3 line)
+    # builds jailhub at 25.2 MiB and jailscale at 25.3 here, while the release workflow's Liberica
+    # NIK 25.0.4 builds the same commit at 29.9 and 30.2 -- so v0.1.0 shipped darwin-arm64 binaries
+    # of 29.8 and 30.1 MiB, over the 30 the budget used to say, and nothing noticed because the
+    # `budget` job only runs on linux-amd64. The number now describes what ships, with about 2 MiB
+    # of headroom, and §14 records that the two toolchains differ by 4.7 MiB for reasons not
+    # isolated (it is not compressed references, which changed no size on linux).
+    B_BINARY_MIB=32; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=30 ;;
   Linux-x86_64)
     B_BINARY_MIB=36; B_NODE_IDLE_MB=46; B_HUB_IDLE_MB=46 ;;
   *)
