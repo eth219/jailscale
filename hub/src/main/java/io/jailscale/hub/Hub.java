@@ -20,6 +20,8 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** The jailhub process: keys, store, TLS listener, node sessions, admin IPC (ARCHITECTURE.md §2). */
 public final class Hub implements AutoCloseable {
@@ -30,6 +32,8 @@ public final class Hub implements AutoCloseable {
     private final HubConfig config;
     private final Store store;
     private final HubKeys keys;
+    /** Names a node reached this hub by, and when it last did. */
+    private final Map<String, Long> reachedBy = new ConcurrentHashMap<>();
     private final Registry registry = new Registry(this);
     static final long DRAIN_TIMEOUT_MS = 60_000;
     private volatile boolean handingOff;
@@ -153,6 +157,12 @@ public final class Hub implements AutoCloseable {
         listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 1024); // capped by somaxconn
         running = true;
         Thread.ofPlatform().name("accept").daemon(false).start(this::acceptLoop);
+        if (config.acme() && config.selfCheck()) {
+            // After the listener is up, or the one connection that proves the records reach this
+            // process would arrive with nothing to answer it. Off the startup path: the answer is a
+            // diagnosis for the operator, never a reason to refuse to serve.
+            Thread.ofVirtual().name("address-check").start(() -> Reachability.report(config, keys));
+        }
         if (config.hasHttp()) {
             try {
                 http = new HttpChallengeFront(this, config.httpListenHost(), config.httpListenPort());
@@ -240,6 +250,27 @@ public final class Hub implements AutoCloseable {
 
     Store store() {
         return store;
+    }
+
+    /**
+     * A node says in its {@code Hello} which name it resolved to get here (§7.2). A handshake that
+     * completed against the pinned hub key proves that name points at this process, which is the
+     * part of the address check this host cannot answer about itself from behind a translated
+     * address. Only this hub's own name is recorded: the value comes off the wire, so it is
+     * compared against what we already know rather than stored and shown back.
+     */
+    void reachedBy(String name) {
+        if (name == null || !name.equalsIgnoreCase(config.hostname())) {
+            return;
+        }
+        if (reachedBy.put(config.hostname(), System.currentTimeMillis()) == null) {
+            LOG.info("a node resolved {} and arrived here, so its A record points at this hub", config.hostname());
+        }
+    }
+
+    /** When a node last arrived by each name, for the address check and the status page. */
+    Map<String, Long> reachedByNames() {
+        return Map.copyOf(reachedBy);
     }
 
     HubKeys keys() {

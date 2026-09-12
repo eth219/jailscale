@@ -261,7 +261,10 @@ final class HubLink implements AutoCloseable {
         if (state.nextHubKey != null) {
             keys.add(state.nextHubKey);
         }
-        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn);
+        // Only when DNS was actually asked: with --hub-addr the name never resolved, and a hub
+        // reading this as proof that its A record works would be reading our configuration file.
+        String resolved = state.hubAddr == null ? state.hubHost : null;
+        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn, resolved);
         HubClient.Connected c = HubClient.connect(state.hubHost, state.hubAddr, state.hubPort, ctx, verify, state.machineKey, keys, hello);
         if (c.hello().proto() < MIN_HUB_PROTO) {
             // There is no older encoding to fall back to: the first SignRequest, domain claim or

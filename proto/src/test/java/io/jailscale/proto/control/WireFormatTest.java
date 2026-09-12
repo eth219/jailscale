@@ -24,7 +24,7 @@ class WireFormatTest {
 
     /** One fully populated example of every message type, exactly as v0.1.0 puts it on the wire. */
     private static final String[] GOLDEN = {
-        "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.0\",\"os\":\"linux\",\"conn\":2}",
+        "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.0\",\"os\":\"linux\",\"conn\":2,\"host\":\"hub.example.com\"}",
         "{\"t\":\"HelloResponse\",\"proto\":1,\"minProto\":1,\"version\":\"0.1.0\",\"dnsSuffix\":\"hub.example.com\"}",
         "{\"t\":\"Goodbye\",\"reason\":\"upgrade-required\",\"detail\":\"update jailscale and run `jailscale up` again\"}",
         "{\"t\":\"Ping\",\"id\":7}",
@@ -102,12 +102,23 @@ class WireFormatTest {
     }
 
     @Test
+    void theWireBeforeAFieldWasAddedStillReadsTheSame() throws Exception {
+        // Hello.host was added after v0.1.0 shipped (§7.2), which is the additive case §5.4 permits.
+        // A v0.1.0 node sends the line below; it has to keep decoding, and re-encoding it has to
+        // keep producing the same bytes rather than inventing a field that peer never sent.
+        String before = "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.0\",\"os\":\"linux\",\"conn\":2}";
+        Message m = Codec.decode(before);
+        assertEquals(new Message.Hello(1, "0.1.0", "linux", 2, null), m);
+        assertEquals(before, Codec.encodeToString(m));
+    }
+
+    @Test
     void aFieldThisBuildDoesNotKnowIsIgnored() throws Exception {
         // The additive case, which is the one compatibility rests on: a newer peer adds a field and
         // an older build reads the message anyway.
         Message m = Codec.decode("{\"t\":\"Hello\",\"proto\":1,\"version\":\"9.9.9\",\"os\":\"plan9\",\"conn\":0,"
             + "\"somethingAdded\":{\"deep\":[1,2,3]}}");
-        assertEquals(new Message.Hello(1, "9.9.9", "plan9", 0), m);
+        assertEquals(new Message.Hello(1, "9.9.9", "plan9", 0, null), m);
     }
 
     @Test
@@ -115,7 +126,7 @@ class WireFormatTest {
         // Nobody may promote an optional field to a required one: that breaks every peer that does
         // not send it yet. (SignRequest without serverHello decodes; refusing to sign it is
         // NodeGroup.sign's job, not the codec's.)
-        assertEquals(new Message.Hello(1, "0.1.0", "", 0), Codec.decode("{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.0\"}"));
+        assertEquals(new Message.Hello(1, "0.1.0", "", 0, null), Codec.decode("{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.0\"}"));
         Message.SignRequest bare = assertInstanceOf(Message.SignRequest.class,
             Codec.decode("{\"t\":\"SignRequest\",\"streamId\":1,\"keyId\":\"k\",\"alg\":\"a\",\"content\":\"AQID\"}"));
         assertEquals(null, bare.serverHello());

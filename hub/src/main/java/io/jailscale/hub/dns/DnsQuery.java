@@ -10,15 +10,53 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
 
-/** A stub resolver for one thing: TXT lookups over UDP (self-check, tests). */
+/** A stub resolver for what the self-check asks public resolvers: TXT and A over UDP. */
 public final class DnsQuery {
 
     private static final SecureRandom RNG = new SecureRandom();
 
     private DnsQuery() {}
 
+    private static final int TYPE_A = 1;
+    private static final int TYPE_TXT = 16;
+
     /** Sends a TXT query for {@code name} to {@code server} and returns the TXT strings (empty if none). */
     public static List<String> txt(String server, int port, String name, int timeoutMs) throws IOException {
+        List<String> out = new ArrayList<>();
+        for (byte[] rd : query(server, port, name, TYPE_TXT, timeoutMs)) {
+            // TXT rdata is a sequence of length-prefixed character-strings; a long record is split
+            // across several and means the concatenation.
+            StringBuilder sb = new StringBuilder();
+            int i = 0;
+            while (i < rd.length) {
+                int l = rd[i++] & 0xff;
+                if (i + l > rd.length) {
+                    throw new IOException("truncated TXT record");
+                }
+                sb.append(new String(rd, i, l, StandardCharsets.US_ASCII));
+                i += l;
+            }
+            out.add(sb.toString());
+        }
+        return out;
+    }
+
+    /**
+     * Sends an A query for {@code name} and returns the addresses as dotted quads (empty if none).
+     * Used by the self-check to ask what the world is told this hub's name resolves to (§7.2).
+     */
+    public static List<String> a(String server, int port, String name, int timeoutMs) throws IOException {
+        List<String> out = new ArrayList<>();
+        for (byte[] rd : query(server, port, name, TYPE_A, timeoutMs)) {
+            if (rd.length != 4) {
+                throw new IOException("A record with " + rd.length + " bytes of rdata");
+            }
+            out.add((rd[0] & 0xff) + "." + (rd[1] & 0xff) + "." + (rd[2] & 0xff) + "." + (rd[3] & 0xff));
+        }
+        return out;
+    }
+
+    private static List<byte[]> query(String server, int port, String name, int type, int timeoutMs) throws IOException {
         int id = RNG.nextInt(0x10000);
         ByteArrayOutputStream q = new ByteArrayOutputStream(64);
         q.write(id >>> 8);
@@ -32,7 +70,7 @@ public final class DnsQuery {
         }
         q.writeBytes(DnsResponder.encodeName(name));
         q.write(0);
-        q.write(16); // TXT
+        q.write(type);
         q.write(0);
         q.write(1);  // IN
         byte[] query = q.toByteArray();
@@ -42,11 +80,12 @@ public final class DnsQuery {
             byte[] buf = new byte[4096];
             DatagramPacket r = new DatagramPacket(buf, buf.length);
             s.receive(r);
-            return parseTxt(java.util.Arrays.copyOf(buf, r.getLength()), id);
+            return parse(java.util.Arrays.copyOf(buf, r.getLength()), id, type);
         }
     }
 
-    static List<String> parseTxt(byte[] m, int expectedId) throws IOException {
+    /** The rdata of every answer of {@code type}, in order. */
+    static List<byte[]> parse(byte[] m, int expectedId, int type) throws IOException {
         if (m.length < 12 || (((m[0] & 0xff) << 8) | (m[1] & 0xff)) != expectedId) {
             throw new IOException("bad DNS response");
         }
@@ -60,22 +99,17 @@ public final class DnsQuery {
         for (int i = 0; i < qd; i++) {
             p = skipName(m, p) + 4;
         }
-        List<String> out = new ArrayList<>();
+        List<byte[]> out = new ArrayList<>();
         for (int i = 0; i < an; i++) {
             p = skipName(m, p);
-            int type = ((m[p] & 0xff) << 8) | (m[p + 1] & 0xff);
+            int answerType = ((m[p] & 0xff) << 8) | (m[p + 1] & 0xff);
             int rdlen = ((m[p + 8] & 0xff) << 8) | (m[p + 9] & 0xff);
             int rdStart = p + 10;
-            if (type == 16) {
-                int rd = rdStart;
-                int e = rdStart + rdlen;
-                StringBuilder sb = new StringBuilder();
-                while (rd < e) {
-                    int l = m[rd++] & 0xff;
-                    sb.append(new String(m, rd, l, StandardCharsets.US_ASCII));
-                    rd += l;
-                }
-                out.add(sb.toString());
+            if (rdStart + rdlen > m.length) {
+                throw new IOException("truncated DNS answer");
+            }
+            if (answerType == type) {
+                out.add(java.util.Arrays.copyOfRange(m, rdStart, rdStart + rdlen));
             }
             p = rdStart + rdlen;
         }

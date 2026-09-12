@@ -404,6 +404,24 @@ open 53, and that certificate must also be ECDSA with the wildcard SAN. On Linux
 root or `CAP_NET_BIND_SERVICE`, which the reference systemd unit grants to a dedicated user through
 `AmbientCapabilities`.
 
+**The address check.** The self-check above proves the `_acme-challenge` delegation reaches this
+process and says nothing about the A records every visitor actually follows, so a hub started with
+ACME also asks, once, in the background: do public resolvers have an address for `hub.example.com`
+and for a name under `*.hub.example.com`, do those two agree, and does that address answer
+`/v1/key` with **this process's** hub key? The last question needs no PKI — the hub key is what a
+node pins, so an address returning a different one is a different hub whatever certificate it
+presents — and the middle one is the case where only the wildcard is proxied, where the hub's own
+name and the names it serves arrive in different places.
+
+It can fail to answer, and that is not an alarm. Reaching your own public address from the host
+behind it is something many networks do not allow, a cloud instance with a translated address
+typically among them, so a connection that does not complete is reported as inconclusive and never
+as a fault. What settles it instead is a node: `Hello` carries the name the node resolved to get
+here (null when it was given an address with `--hub-addr` and never asked DNS), and a handshake that
+completed against the pinned hub key is proof from outside that the name points at this hub. The hub
+records that only for its own name, compared against what it already knows rather than stored from
+the wire.
+
 Two operational traps. SNI passthrough needs raw TCP 443, so **no TLS-terminating HTTP proxy can sit
 in front** (nginx `http`, Caddy, Cloudflare Proxied); a layer-4 proxy that only copies bytes is
 supported (§8.5). And a node started with `--ca-file` keeps that path in its state, so it will not
@@ -1033,10 +1051,6 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 ## 15. Limits
 
-- **The self-check does not verify A records.** It proves the `_acme-challenge` delegation reaches
-  this process, but not that `hub.example.com` and `*.hub.example.com` resolve to this hub, because
-  the hub does not know its own public address. A deployment where only the wildcard record is proxied
-  is caught today only by the first visitor handshake failing.
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
 - **Delegated signing depends on reconstructing JSSE's ServerHello and EncryptedExtensions** (§9.2).

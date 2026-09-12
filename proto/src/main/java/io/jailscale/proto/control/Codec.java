@@ -20,7 +20,8 @@ public final class Codec {
     public static String encodeToString(Message m) {
         JsonObject.Builder b = JsonObject.builder().put("t", m.type());
         switch (m) {
-            case Message.Hello x -> b.put("proto", x.proto()).put("version", x.version()).put("os", x.os()).put("conn", x.conn());
+            case Message.Hello x -> b.put("proto", x.proto()).put("version", x.version()).put("os", x.os())
+                .put("conn", x.conn()).put("host", x.host());
             case Message.HelloResponse x -> b.put("proto", x.proto()).put("minProto", x.minProto())
                 .put("version", x.version()).put("dnsSuffix", x.dnsSuffix());
             case Message.Goodbye x -> b.put("reason", x.reason()).put("detail", x.detail());
@@ -68,7 +69,8 @@ public final class Codec {
             JsonObject o = Json.parseObject(json);
             String t = o.string("t");
             return switch (t) {
-                case "Hello" -> new Message.Hello(o.integer("proto"), o.string("version"), o.optString("os", ""), o.optInt("conn", 0));
+                case "Hello" -> new Message.Hello(o.integer("proto"), o.string("version"), o.optString("os", ""),
+                    o.optInt("conn", 0), o.optString("host", null));
                 case "HelloResponse" -> new Message.HelloResponse(o.integer("proto"), o.integer("minProto"),
                     o.string("version"), o.optString("dnsSuffix", null));
                 case "Goodbye" -> new Message.Goodbye(o.string("reason"), o.optString("detail", null));

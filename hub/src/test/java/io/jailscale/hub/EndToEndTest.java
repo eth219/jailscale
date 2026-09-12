@@ -87,6 +87,18 @@ class EndToEndTest {
     }
 
     @Test
+    void aNodeArrivingByNameProvesTheNameResolvesHere() throws Exception {
+        // ARCHITECTURE.md §7.2: the hub cannot check its own A records from behind a translated
+        // address, and does not have to -- a node that resolved the name and completed the
+        // handshake against the pinned hub key has already proved it from outside.
+        assertEquals(java.util.Map.of(), hub.reachedByNames());
+        Invites.Created boot = hub.invites().create(null, 1, 3600, "test", true);
+        node("alice");
+        up("alice", JsonObject.builder().put("invite", boot.url()).put("user", "alice"));
+        assertTrue(hub.reachedByNames().containsKey("localhost"), hub.reachedByNames().toString());
+    }
+
+    @Test
     void inviteFlowsAndKeyRotation() throws Exception {
         // Bootstrap: the hub printed a first invite; fetch one the same way (admin=true).
         Invites.Created boot = hub.invites().create(null, 1, 3600, "test", true);
