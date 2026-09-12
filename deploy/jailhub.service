@@ -13,12 +13,23 @@
 # down with the cgroup. Tried it: the hub went inactive. The hand-off is for operators who run
 # jailhub outside a unit; Type=notify below does not change that, it only reports readiness.
 #
-# Type=notify means `systemctl start` returns when the hub is serving rather than when the process
-# exists, which on a first boot is minutes of ACME apart. jailhub sends the notification by running
-# systemd-notify, because the JDK cannot open an AF_UNIX datagram socket, so NotifyAccess=all is
-# required: the notification comes from a child process. If a notification never arrives systemd
-# waits out TimeoutStartSec and calls the unit failed, so on a host without systemd-notify use
-# Type=simple and drop NotifyAccess.
+# Readiness reporting is available and is deliberately not turned on here. jailhub can tell systemd
+# when it is actually serving, so that `systemctl start` returns then rather than as soon as the
+# process exists -- on a first boot those are minutes of ACME apart. Turning it on is three lines:
+#
+#   Type=notify
+#   NotifyAccess=all
+#   TimeoutStartSec=infinity
+#
+# All three, or it is worse than not doing it. jailhub does not return from startup until it has a
+# certificate, and issuance retries for as long as that takes: one failed self-check is 60s and one
+# validation is up to 120s, so an ordinary first boot is already past systemd's 90s default
+# TimeoutStartSec. Without `infinity` systemd kills the hub part-way through getting its first
+# certificate, and Restart=on-failure below does it again, forever.
+#
+# NotifyAccess=all is needed because the notification comes from a child process: NOTIFY_SOCKET is
+# an AF_UNIX datagram socket and the JDK will not open one, so jailhub runs systemd-notify. On a
+# host without systemd-notify the unit stays in `activating` although the hub is serving normally.
 
 [Unit]
 Description=jailhub — jailscale hub (SNI router, control channel, ACME)
@@ -27,8 +38,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-NotifyAccess=all
+Type=simple
 User=jailhub
 Group=jailhub
 Environment=JAILHUB_STATE=/var/lib/jailhub

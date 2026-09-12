@@ -1016,13 +1016,17 @@ went inactive. Under systemd the upgrade is `systemctl restart`, which costs a f
 nodes reconnect. `deploy/jailhub.service` therefore has no `ExecReload`. Making the two work
 together would need the listening sockets handed over rather than rebound, which is not implemented.
 
-**Readiness is reported, which is a different thing.** The unit is `Type=notify`, so `systemctl
-start` returns when the hub is serving rather than when the process exists; on a first boot those
-are minutes of ACME apart, and until now systemd called the unit active while there was no
-certificate. The notification is sent by running `systemd-notify`, because `NOTIFY_SOCKET` is an
-AF_UNIX *datagram* socket and the JDK will not open one, which is why the unit carries
-`NotifyAccess=all`: the notification arrives from a child process. It says the hub is up. It does
-not make the hand-off compose with a unit, and nothing about the upgrade path changes.
+**Readiness can be reported, and the reference unit does not ask for it.** The hub speaks the
+readiness half of `sd_notify`, so under `Type=notify` `systemctl start` returns when it is serving
+rather than when the process exists; on a first boot those are minutes of ACME apart. It is off by
+default because it is not free: `start` does not return until a certificate is installed and
+issuance retries for as long as that takes, so an ordinary first boot outlives systemd's 90-second
+`TimeoutStartSec` and the unit has to say `TimeoutStartSec=infinity` as well, or systemd kills the
+hub part-way through its first issuance and `Restart=on-failure` does it again forever. The
+notification is sent by running `systemd-notify`, because `NOTIFY_SOCKET` is an AF_UNIX *datagram*
+socket and the JDK will not open one, so the unit also needs `NotifyAccess=all`.
+`deploy/jailhub.service` lists the three lines and what each is for. None of it makes the hand-off
+compose with a unit.
 
 ---
 
@@ -1098,7 +1102,7 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
   nobody hears from, and its domain goes dark when the certificate runs out.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
-  is not zero-downtime. Readiness is reported (`Type=notify`), which is only about when systemd
+  is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
   calls the unit started; the listening sockets are still rebound rather than handed over.
 - **There is no standby hub.** Recovery is restoring one directory and changing DNS (§13).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node

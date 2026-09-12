@@ -10,6 +10,15 @@ import java.util.concurrent.TimeUnit;
  * is a certificate; under {@code Type=notify} it is active when this says so, and anything ordered
  * after the unit waits for the real thing.
  *
+ * <p><b>Opt-in, and the reference unit does not take it.</b> {@code Hub.start} does not return until
+ * a certificate is installed, and issuance retries for as long as it takes: one failed self-check is
+ * 60 s and one validation is up to 120 s, so an ordinary first boot is already past systemd's
+ * 90-second {@code TimeoutStartSec}. A unit that says {@code Type=notify} without also saying
+ * {@code TimeoutStartSec=infinity} therefore kills the hub part-way through getting its first
+ * certificate and, with {@code Restart=on-failure}, does it again forever. Turning a hub that would
+ * have come up in three minutes into a restart loop is a poor trade for a better `systemctl status`,
+ * so the switch belongs to operators who read what it costs.
+ *
  * <p><b>Why a subprocess.</b> {@code NOTIFY_SOCKET} is an AF_UNIX <i>datagram</i> socket, and the
  * JDK does not open those: {@code DatagramChannel.open(StandardProtocolFamily.UNIX)} throws
  * {@code UnsupportedOperationException: Protocol family not supported} on 25. Writing the datagram
@@ -27,9 +36,18 @@ final class SystemdNotify {
 
     private SystemdNotify() {}
 
+    /**
+     * Whether systemd asked to be told. Blank counts as no: an empty {@code NOTIFY_SOCKET} is a
+     * unit that does not want a notification, and running a subprocess to send one nowhere is a
+     * confusing log line on every start.
+     */
+    static boolean asked(String notifySocket) {
+        return notifySocket != null && !notifySocket.isBlank();
+    }
+
     /** Says the hub is up, when systemd asked to be told. A no-op everywhere else. */
     static void ready() {
-        if (System.getenv("NOTIFY_SOCKET") == null) {
+        if (!asked(System.getenv("NOTIFY_SOCKET"))) {
             return; // not under a Type=notify unit, which is the ordinary case
         }
         try {
