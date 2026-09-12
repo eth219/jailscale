@@ -1132,21 +1132,32 @@ workflow on `ubuntu-24.04`, three measured runs each, spread within an arm under
 Oracle on its own is 6 to 10% less CPU per operation, which is real and consistent across four
 metrics but close to the 7% seen between jobs on different runner instances.
 
-**PGO's size and memory gains reproduce; its CPU gain does not, and that is unexplained.** The
-column above came from one run. A second run, four arms in one workflow, reproduced the `plain`
-baseline exactly (2,350 against 2,362 µs of hub CPU per handshake) and reproduced PGO's binaries and
-memory exactly (24.7 MiB and 31.7 MB idle against 24.8 and 31.9) -- and measured the CPU gain at 7
-to 12% rather than 50%, with 9,105 warm requests a second rather than 19,169. Same runner type, same
-measurement command, same binary size, twice the CPU. The one difference between the two profiling
-runs is that the first collected its profile with `LOAD=300` -- 300 visitors arriving and being held
--- alongside the throughput phases, and the second collected it from the throughput phases alone.
-Whether profile coverage is really worth a factor of two, or whether the first number was an
-artefact, is not yet known. **Do not plan on 50%.**
+**PGO's size and memory gains are dependable; its CPU gain is not.** That column came from one
+run, and chasing it took three more. What holds up:
 
-That second run answered the question it was built for, though: the profile's workload does not seem
-to matter much. Profiled from warm requests only, from handshakes only, or from both, the three arms
-came out within 1% of each other on both phases -- so whatever PGO is buying here, it is not
-narrowly tied to the shape that was profiled.
+- **Size and memory, every time.** Every PGO build measured, on either platform, lands at 24.1 to
+  24.8 MiB against 31.1 to 31.8 plain, with idle RSS down about a fifth. On macOS that is 24.3 MiB
+  against 31.1, which would put the darwin binaries back inside the 30 MiB budget on its own.
+- **CPU, anywhere between nothing and half.** Four PGO builds of the same source gave hub CPU per
+  handshake of 1,225, 1,756, 2,094 and 2,244 µs against a plain baseline of 2,225 to 2,369 -- and
+  **two builds from the identical configuration gave 1,756 and 2,094**, with the three measured runs
+  inside each build within 1% of each other. So the variance is between builds, not between
+  measurements: the same profiling recipe does not produce the same profile twice. A profile
+  collected without the load phase (visitors arriving) gave no handshake gain at all, 2,244 against
+  2,225, while profiles taken from warm requests only, handshakes only, or both landed within 1% of
+  each other -- so coverage of *kinds* of work matters and the particular throughput shape does not.
+- **Cross-platform, for size only.** A profile collected on linux-amd64 builds on macOS without
+  complaint, as the FAQ says it should ("in most cases, the PGO profiles are sufficiently
+  cross-platform"), and carries the size and memory gains over. It carries no measurable CPU gain:
+  1,788 µs of hub CPU per handshake either way, warm requests within the runner's own ±11%.
+
+So an adoption that committed one linux profile to the repository -- the shape Go's PGO is designed
+around, and the cheap one -- would buy 7 MiB and a fifth of idle RSS on all five targets, and CPU
+only where the profile was collected. Oracle GraalVM 25.0.4 does have the pieces for the other
+shape: `--pgo-sampling` builds and runs, `-H:PGOPerfSourceMappings` exists to profile with `perf`,
+and `-H:AdoptedPGOEnabled` says the toolchain caches profiles of commonly used code -- which is a
+candidate explanation for the 6 to 10% Oracle shows without any profile of ours, and not one that
+has been tested.
 
 What it costs is not performance. GFTC puts Oracle's terms on binaries this repository ships under
 Apache-2.0: free for us, since we charge nothing and Native Image output counts as unmodified
