@@ -52,6 +52,21 @@ jobs:
       - run: ./mvnw -B -ntp package
         shell: bash
 
+  # Static analysis (pom.xml, profile `analyze`). Its own job because it is the one thing here that
+  # downloads a third-party tool: keeping it off `package` is what lets someone build jailscale
+  # from source with nothing but a JDK, which §3.2 argues for. Every exclusion in
+  # spotbugs-exclude.xml carries its reason, so a red gate here means a finding nobody has answered.
+  analyze:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'liberica'
+      - run: ./mvnw -B -ntp -Panalyze verify -DskipTests
+        shell: bash
+
   # The lightweight budget of §14. It needs the native binaries, so it costs a native-image build
   # and does not belong on a pull request; main and the nightly run are enough to catch a drift.
   budget:

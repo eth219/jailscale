@@ -110,6 +110,16 @@ fetches is pinned with `distributionSha256Sum`. Keeping the supply-chain surface
 of this section. `-Pnative` produces the binaries, CI covers linux and macos on amd64 and arm64 plus
 windows-amd64, and each release also ships `jailscale.jar` and `jailhub.jar` for JVM 25.
 
+**Static analysis is a job, not a build step.** `-Xlint:all -Werror` runs in every build, because
+it is a compiler already on the machine. SpotBugs is a third party with a dependency tree of its
+own, and the supply-chain argument above does not stop at runtime dependencies, so it lives behind
+`./mvnw -Panalyze verify` and runs as its own CI job: building from source still needs nothing but
+a JDK. It reads bytecode, so it sees the class of mistake `-Xlint` cannot — a field written by one
+thread and read by another without a lock, a stream never closed, a return value dropped — which is
+the class this project's threading makes easy to write. Its exclusions are in
+`spotbugs-exclude.xml` and each one states its reason, because an exclusion with no reason and a
+finding nobody answered look identical six months later.
+
 **Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu and macos for
 every push and pull request, the §14 budget on main and nightly, and Windows nightly rather than
 per push, because the Windows stall below fails about 2% of runs through no fault of ours and a

@@ -43,6 +43,8 @@
     <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
     <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
 
+    <spotbugs-maven-plugin.version>4.9.8.5</spotbugs-maven-plugin.version>
+
     <!-- Modules that produce a native binary override these (see node, hub). -->
     <native.skip>true</native.skip>
     <native.imageName>${project.artifactId}</native.imageName>
@@ -159,6 +161,46 @@
   </build>
 
   <profiles>
+    <!--
+      ./mvnw -Panalyze verify
+
+      Static analysis, and deliberately not part of `package`. -Xlint:all -Werror is what every
+      build runs and what every contributor has to satisfy; it is a compiler already on the
+      machine and costs nothing to keep. SpotBugs is a third-party tool with a dependency tree of
+      its own, and §3.2's argument about supply-chain surface does not stop at runtime
+      dependencies, so building jailscale from source must not need it. CI runs this as a job of
+      its own, where the jars it fetches never touch a released binary.
+
+      It reads bytecode, so it sees what -Xlint cannot: a stream that is never closed, a field
+      written by one thread and read by another without synchronisation, an ignored return value.
+      That is the class of defect this project's threading makes easy to write and hard to spot.
+    -->
+    <profile>
+      <id>analyze</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.github.spotbugs</groupId>
+            <artifactId>spotbugs-maven-plugin</artifactId>
+            <version>${spotbugs-maven-plugin.version}</version>
+            <configuration>
+              <effort>Max</effort>
+              <threshold>Medium</threshold>
+              <includeTests>false</includeTests>
+              <excludeFilterFile>${session.executionRootDirectory}/spotbugs-exclude.xml</excludeFilterFile>
+            </configuration>
+            <executions>
+              <execution>
+                <id>spotbugs-check</id>
+                <phase>verify</phase>
+                <goals><goal>check</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!--
       ./mvnw -Pnative package
       Requires GraalVM for JDK 25 with native-image on PATH (brew install graalvm).

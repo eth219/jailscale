@@ -20,7 +20,7 @@ public final class DnsQuery {
      * The resolvers the self-checks ask (ARCHITECTURE.md §7.2), in one place so the dns-01 check
      * and the address check cannot drift apart on which answers they trust or how long they wait.
      */
-    public static final String[] PUBLIC_RESOLVERS = {"1.1.1.1", "8.8.8.8"};
+    public static final List<String> PUBLIC_RESOLVERS = List.of("1.1.1.1", "8.8.8.8");
     public static final int PUBLIC_TIMEOUT_MS = 5000;
 
     private DnsQuery() {}
