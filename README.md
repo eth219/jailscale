@@ -223,6 +223,12 @@ was found at 78 MB of RSS, 54 MB of it anonymous, after 20 idle hours. It is not
 a leak — the plateau follows the ceiling rather than the workload — and
 [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has the measurements both ways.
 
+Speed, from the same script: on connections already open the pair moves about
+38,000 requests a second here and 9,000 on a four-core Linux runner. A fresh TLS
+handshake costs much more than a request, since it opens a stream and takes a
+signature, and the hub signs at most 1,000 a second for any one node — the
+ceiling that matters when visitors arrive rather than when they stay.
+
 The hub above runs on a GCP e2-micro: 2 shared vCPU, 1 GB of memory, Debian 12.
 That is the smallest instance Google sells, and it is not the constraint.
 
@@ -236,7 +242,8 @@ Requirements:
 | TUN device | no | no |
 | Runtime to install | none | none |
 
-A hub accepts 1,024 concurrent visitors per name, and 20 names per node.
+A hub accepts 1,024 concurrent visitors per name and 20 names per node, and signs at most 1,000
+TLS handshakes a second for any one node, with a burst of 2,000.
 
 ## Trust
 
