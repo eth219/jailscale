@@ -54,12 +54,11 @@ stays on the hub and signs one handshake digest per visitor, and the hub refuses
 to sign unless the request is bound to a stream it itself delivered to that node.
 Domains you bring yourself never involve the hub's key at all. The node then
 checks the hub's honesty from its own side: the daemon opens a session to one of
-its own public names every half hour (`jailscale verify` does all of them now)
-and compares RFC 5705 exported keying material against what it recorded, which
-catches a hub that terminated the TLS itself; `status` shows each name's last
-verdict. The control
-channel is Noise IK inside TLS, so a compromised certificate authority still does
-not get you the control plane.
+its own public names every half hour, and `jailscale verify` does all of them at
+once. Either way it compares RFC 5705 exported keying material against what it
+recorded, which catches a hub that terminated the TLS itself, and `status` keeps
+each name's last verdict. The control channel is Noise IK inside TLS, so a
+compromised certificate authority still does not get you the control plane.
 
 What it did not buy: idle memory is 24.7 MB against a 20 MB goal, and roughly
 7.6 MB of that is JSSE standing up a single TLS client. On Linux the number to
@@ -146,7 +145,7 @@ jailscale open 3000 --gate                    # visitors need a one-time link
 jailscale open 22 --tcp                       # a raw TCP port, no TLS
 jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
 jailscale verify                              # check that this node, not the hub, terminated the TLS
-jailscale update                              # say whether a newer release is out; never installs it (status carries the daily answer)
+jailscale update                              # say whether a newer release is out; never installs it
 jailscale ls | close NAME | status | down
 jailscale service install                     # keep the daemon running across logins
 ```
@@ -210,9 +209,10 @@ A hub accepts 1,024 concurrent visitors per name, and 20 names per node.
 
 The hub holds the wildcard private key. A compromised hub cannot read traffic to
 a healthy node, but it can move a name to a node of its own and sign for it. The
-node's self-probe detects that afterwards, on its schedule or when you type
-`jailscale verify`, and an honest hub reports the move on its own. Names you bring yourself are not exposed this way: the key
-stays on the node and the hub only routes.
+node's self-probe detects that afterwards, on its own schedule or when you type
+`jailscale verify`, and an honest hub reports the move on its own. Names you
+bring yourself are not exposed this way: the key stays on the node and the hub
+only routes.
 
 What a compromised hub can and cannot do is written out in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

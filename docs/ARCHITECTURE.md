@@ -273,7 +273,7 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 
 | Message | Role |
 |---|---|
-| `Hello` / `HelloResponse` | Version negotiation: `proto`, `version`, `os`, `conn`; the reply adds `minProto` and `dnsSuffix` |
+| `Hello` / `HelloResponse` | Version negotiation: `proto`, `version`, `os`, `conn`, and `host`, the name the node resolved to reach the hub or null when it was handed an address (§7.2); the reply adds `minProto` and `dnsSuffix` |
 | `Goodbye` | `upgrade-required`, `revoked`, `shutdown`, `draining`, plus an optional human `detail` |
 | `RegisterRequest` / `RegisterResponse` | hostname, os, self-chosen user, and one of `invite` / `code` / `authKey` or none to knock. Reply is `approved{nodeId, user}`, `pending` or `rejected{reason}` |
 | `CertUpdate` | Wildcard chain (public part) and its `keyId`, on connect and on renewal |
@@ -385,7 +385,7 @@ Otherwise the hub starts the port 53 responder (TXT, NS and SOA for `_acme-chall
 for everything else, UDP and TCP), runs the self-check, then issues. The **self-check** must pass
 first and retries every 60 seconds on failure: it sets a random TXT value and asks 1.1.1.1 and
 8.8.8.8 for it, which separates a missing NS delegation from a blocked port 53 from a cached answer.
-`--no-selfcheck` skips it where hairpinning does not work.
+`--no-selfcheck` skips it, and the address check below with it, where hairpinning does not work.
 
 Issuance creates an EC P-256 account key if absent, orders both names, publishes each dns-01 token as
 `base64url(SHA-256(keyAuthorization))` in a TXT record, polls the authorizations, generates a new EC
@@ -406,15 +406,16 @@ root or `CAP_NET_BIND_SERVICE`, which the reference systemd unit grants to a ded
 
 **The address check.** The self-check above proves the `_acme-challenge` delegation reaches this
 process and says nothing about the address records every visitor actually follows, so a hub started
-with ACME also asks, once, in the background: do public resolvers have an address (A or AAAA) for
-`hub.example.com` and for a name under `*.hub.example.com`, do those two share one, and does that
-address answer `/v1/key` on the base URL's port with **this process's** hub key? The last question
-needs no PKI — the hub key is what a node pins, so an address returning a different one is a
-different hub whatever certificate it presents — and the middle one is the case where only the
-wildcard is proxied, where the hub's own name and the names it serves arrive in different places.
-"Share one" rather than "are equal" because the two lookups are not equally fresh: the hub's name is
-one resolvers have cached, the wildcard probe is a label nobody has ever asked for, so mid-change the
-apex can still carry the old address next to the new one and that is propagation, not a fault.
+with ACME, unless `--no-selfcheck` turned both off, also asks once in the background: do public
+resolvers have an address (A or AAAA) for `hub.example.com` and for a name under
+`*.hub.example.com`, do those two share one, and does that address answer `/v1/key` on the base
+URL's port with **this process's** hub key? The last question needs no PKI — the hub key is what a
+node pins, so an address returning a different one is a different hub whatever certificate it
+presents — and the middle one is the case where only the wildcard is proxied, where the hub's own
+name and the names it serves arrive in different places. "Share one" rather than "are equal" because
+the two lookups are not equally fresh: the hub's name is one resolvers have cached, the wildcard
+probe is a label nobody has ever asked for, so mid-change the apex can still carry the old address
+next to the new one and that is propagation, not a fault.
 
 It can fail to answer, and that is not an alarm. Reaching your own public address from the host
 behind it is something many networks do not allow, a cloud instance with a translated address
@@ -697,13 +698,14 @@ by an older build cannot serve a phantom one.
 
 ### 9.4 Daemon and CLI
 
-`jailscale` is one binary with two roles. `jailscale daemon`, or a registered service, stays resident;
-every other subcommand talks to it over **local IPC**, an AF_UNIX socket at
-`$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600), Windows included, carrying
-line-delimited JSON with streaming replies for progress output. Commands are `up`, `down`, `status`,
-`open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify` (§11.3), `leave`,
-`update` and `service install|uninstall|status`; service registration uses only what the OS already
-has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with no service wrapper.
+`jailscale` is one binary with two roles. `jailscale daemon`, or a registered service, stays
+resident; every other subcommand except `version` and `update` talks to it over **local IPC**, an
+AF_UNIX socket at `$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600), Windows
+included, carrying line-delimited JSON with streaming replies for progress output. Commands are
+`up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify`
+(§11.3), `leave`, `update` and `service install|uninstall|status`; service registration uses only
+what the OS already has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with
+no service wrapper.
 
 **`update` reports; it does not install.** It reads the published release index and prints the
 version and where to get it, and the daemon does the same once a day so `status` carries the answer
@@ -713,7 +715,9 @@ replace a running `.exe` in place, a package manager or a container image must n
 owner of its file, and a downloaded binary is only worth as much as the signature checked over it —
 a checksum published beside it by the same account proves corruption did not happen, not that the
 publisher was not compromised. Until that is answered, saying "0.2.0 is out" is the honest amount to
-do. The check runs in the CLI process, so it answers while the daemon is down.
+do. The check runs in the CLI process, so it answers while the daemon is down, and a check that could
+not be made is an error like any other command's: the reason goes to stderr and the exit status is 1,
+so a script can tell "up to date" from "could not tell".
 
 **The URL is compiled in and the hub cannot name it.** The hub already sends its own version in
 `HelloResponse`, and it would be a short step to let it say where the update is; that step hands a
@@ -1060,6 +1064,13 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
+- **The self-probe reaches one name every half hour** (§11.3), so at the 20-link ceiling a given name
+  is looked at about every ten hours, and a tick is skipped entirely while the node is not connected
+  to the hub. What bounds detection is that pass, not the tick.
+- **The address check runs once, at startup, and its answer is only a log line** (§7.2). Nothing
+  re-runs it and nothing keeps the verdict, so a record that changes afterwards -- a proxy switched
+  on in front of the name, an edited A record -- is never noticed, and an operator who missed the
+  line at boot has nowhere to look it up.
 - **Delegated signing depends on reconstructing JSSE's ServerHello and EncryptedExtensions** (§9.2).
   The binding of a signature to the visitor's handshake is only as good as the node's ability to
   say what JSSE wrote, which it derives from the ClientHello, a fixed configuration and the
@@ -1070,6 +1081,8 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 - **Raw TCP and UDP links are not end to end unless the app encrypts itself** (§8.4).
 - **User domains require port 80 on the hub.** The http-01 relay is the only verification path
   implemented; tls-alpn-01 would remove that requirement.
+- **Upgrading is manual.** `jailscale update`, and the daemon's daily check behind `status`, say that
+  a newer release exists and where it is; nothing installs it, for the reasons in §9.4.
 - **Certificate expiry is not warned about in advance.** Renewal is automatic on both sides at a
   third of the lifetime remaining, but a node that stays offline stops renewing and nothing counts
   down for the operator.
