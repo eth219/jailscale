@@ -55,9 +55,15 @@ jobs:
           ext=""; [ "${{ matrix.target }}" = windows-amd64 ] && ext=.exe
           cp node/target/jailscale$ext dist/jailscale-${{ matrix.target }}$ext
           cp hub/target/jailhub$ext   dist/jailhub-${{ matrix.target }}$ext
+          # The names to hash, built as they are produced rather than globbed afterwards. A glob
+          # that matches nothing is the shape of bug this step already had: it listed *.jar, which
+          # exists on one target of four, and 2>/dev/null turned the other three into a silent
+          # exit 1 after a green build.
+          names="jailscale-${{ matrix.target }}$ext jailhub-${{ matrix.target }}$ext"
           if [ "${{ matrix.target }}" = linux-amd64 ]; then
             cp node/target/jailscale.jar dist/jailscale.jar
             cp hub/target/jailhub.jar   dist/jailhub.jar
+            names="$names jailscale.jar jailhub.jar"
           fi
           # macOS ships shasum and no sha256sum; the Windows runner's bash is the other way
           # round. Both print the same "<hash>  <name>" that the release job concatenates.
@@ -74,11 +80,15 @@ jobs:
           } > "dist/BUILDINFO-${{ matrix.target }}.txt"
           cd dist
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum jailscale-* jailhub-* *.jar > "SHA256SUMS-${{ matrix.target }}.txt" 2>/dev/null
+            sha256sum $names > "SHA256SUMS-${{ matrix.target }}.txt"
           else
-            shasum -a 256 jailscale-* jailhub-* *.jar > "SHA256SUMS-${{ matrix.target }}.txt" 2>/dev/null
+            shasum -a 256 $names > "SHA256SUMS-${{ matrix.target }}.txt"
           fi
           cat "SHA256SUMS-${{ matrix.target }}.txt"
+          # BUILDINFO is deliberately not in its own checksum list; everything else must be.
+          want=$(echo $names | wc -w)
+          got=$(wc -l < "SHA256SUMS-${{ matrix.target }}.txt")
+          [ "$got" -eq "$want" ] || { echo "hashed $got of $want files"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
