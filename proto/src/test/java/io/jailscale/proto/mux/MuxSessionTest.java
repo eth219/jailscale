@@ -15,11 +15,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -230,6 +232,62 @@ class MuxSessionTest {
         assertEquals(1200, hs.receive().length);
         hs.close();
         assertEquals(null, ns.receive());
+        p.hub().close();
+        p.node().close();
+    }
+
+    /**
+     * A datagram send after this side half-closed is refused, the same as {@code out().write}.
+     * It used to be let through: the credit wait ends on localClosed as well as on credits
+     * arriving, and only {@code error} was re-checked afterwards, so the datagram went out on a
+     * closed stream and subtracted from `credits` on the way. A stream left with negative credits
+     * blocks every later send against a debt no WINDOW frame repays.
+     */
+    @Test
+    void sendingADatagramAfterHalfCloseIsRefused() throws Exception {
+        Pair p = pair();
+        MuxStream hs = p.hub().open(JsonObject.builder().put("linkId", "u1").build(), true);
+        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
+        hs.send(new byte[] {1});
+        assertArrayEquals(new byte[] {1}, ns.receive());
+        hs.close();
+        assertThrows(IOException.class, () -> hs.send(new byte[] {2}), "a half-closed stream may not send");
+        // And the peer sees the close, not a stray datagram after it.
+        assertEquals(null, ns.receive());
+        p.hub().close();
+        p.node().close();
+    }
+
+    /**
+     * The same when the close lands while a sender is parked for credits: the waiter must wake to
+     * a refusal rather than to permission it never had.
+     */
+    @Test
+    void aDatagramSenderParkedForCreditsIsRefusedWhenTheStreamCloses() throws Exception {
+        Pair p = pair();
+        MuxStream hs = p.hub().open(JsonObject.builder().put("linkId", "u1").build(), true);
+        assertNotNull(p.nodeOpened().poll(5, TimeUnit.SECONDS));
+        // Spend the window without the peer reading, so the next send has to wait for credits.
+        byte[] full = new byte[Frame.MAX_DATA];
+        for (int sent = 0; sent < MuxStream.WINDOW; sent += full.length) {
+            hs.send(full);
+        }
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        CountDownLatch parked = new CountDownLatch(1);
+        Thread w = Thread.ofVirtual().start(() -> {
+            parked.countDown();
+            try {
+                hs.send(new byte[] {9});
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        });
+        assertTrue(parked.await(5, TimeUnit.SECONDS));
+        Thread.sleep(200); // let it reach the wait
+        hs.close();
+        w.join(5000);
+        assertNotNull(thrown.get(), "the parked sender should have been refused, not released to send");
+        assertTrue(thrown.get() instanceof IOException, "expected an IOException, got " + thrown.get());
         p.hub().close();
         p.node().close();
     }

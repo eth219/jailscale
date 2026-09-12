@@ -231,6 +231,14 @@ public final class MuxStream {
             if (error != null) {
                 throw error;
             }
+            // The wait above also ends when this side closes, and that is not permission to send.
+            // Without this the close raced past the credit check: the datagram went out on a
+            // half-closed stream and took `credits` negative on the way, so every later send on
+            // it blocked against a debt no WINDOW frame was ever going to repay. `write` has
+            // always refused here; this is the same refusal for the datagram path.
+            if (localClosed) {
+                throw new IOException("stream closed");
+            }
             credits -= datagram.length;
         }
         session.sendData(id, datagram, true);
