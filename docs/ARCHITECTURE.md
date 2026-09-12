@@ -120,11 +120,13 @@ the class this project's threading makes easy to write. Its exclusions are in
 `spotbugs-exclude.xml` and each one states its reason, because an exclusion with no reason and a
 finding nobody answered look identical six months later.
 
-**Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu and macos for
-every push and pull request, the §14 budget on main and nightly, and Windows nightly rather than
-per push. Windows used to be nightly because the stall below failed about 2% of runs; that one is
-fixed, and it stays nightly only until it has the clean-run count ubuntu and macos were promoted on.
-`release` builds the five native targets on a tag. The container images build with `-DskipTests`, deliberately: they are packaging,
+**Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu, macos and
+Windows for every push and pull request, and the §14 budget on main and nightly. Windows was a
+nightly job until 2026-09-12, because the stall below failed about 2% of runs and a gate that is red
+2% of the time teaches people to ignore it; it is per-push now that the stall is fixed and measured
+at 0 in 3,000, and it costs 1.5 min against the other two at 1.2. The nightly run gates nothing any
+more and stays for drift in the runner images and in what `liberica` + `25` resolves to. `release`
+builds the five native targets on a tag. The container images build with `-DskipTests`, deliberately: they are packaging,
 not verification.
 
 Two toolchain hazards are load-bearing. **JDK 25.0.0 to 25.0.2 must not be used**: moving
