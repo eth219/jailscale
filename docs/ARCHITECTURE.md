@@ -98,7 +98,7 @@ reachability metadata and no third-party jars.
 | Logging | Own small logger over `System.Logger`. SLF4J plus logback means ServiceLoader and reflection |
 | Cryptography | JDK JCE for X25519 and ChaCha20-Poly1305; own BLAKE2s, HMAC and HKDF. BouncyCastle is large and awkward here, and those three are forced: the JDK has no BLAKE2s, and Noise defines HMAC and HKDF over the chosen hash. Noise's HKDF also differs from RFC 5869 (an output counter byte instead of salt and info, at most three chained outputs) |
 | AWT and `java.awt.Desktop`; IPC | Forbidden, so browsers open through `ProcessBuilder`; AF_UNIX everywhere, since Windows 10 1803+ supports it and named pipes have no public JDK API |
-| Threading; build-time initialisation | Virtual threads throughout, because there is no packet hot path (§12); whitelisted carefully, with JCE initialising at run time so no SecureRandom seed is frozen into the image |
+| Threading; build-time initialisation | Virtual threads throughout, because there is no packet hot path (§12). **Nothing is configured to initialise at build time**: the whole native configuration is `-O2` and `-H:+ReportExceptionStackTraces`, so the image takes native-image's own policy. Whatever is whitelisted later must leave JCE on the run-time side, or a `SecureRandom` seed is frozen into the image |
 
 ### 3.2 Build and toolchain
 
@@ -1116,8 +1116,16 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   and any end-to-end test that moves bytes both ways is exposed.
 - **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at**, and about 39.7 MB as
   Linux counts it (§14: mostly the mapped binary, 5 MB of it anonymous). Roughly 7.6 MB is JSSE
-  initialisation for a single TLS client (§12), so the remaining levers are a wider build-time
-  initialisation whitelist and removing unused TLS suites and protocols.
-- **Per-visitor memory is about 60 KB on the node**, mostly the three `ByteBuffer`s a `TlsEndpoint`
-  allocates per connection plus mux stream buffers. Buffer pooling and a smaller stream window are the
-  candidates for reducing it.
+  initialisation for a single TLS client (§12), and both levers against it are smaller than they
+  look. There is no build-time initialisation whitelist to widen, because the build configures none
+  (§3.1), so that work is introducing one — and the classes worth moving are JSSE's, which is the
+  neighbourhood JCE has to stay out of. Restricting suites and protocols is already done, but
+  through `SSLParameters` on each engine, which narrows what is negotiated and not what is
+  initialised.
+- **Per-visitor memory is about 60 KB on the node**, nearly all of it the three `ByteBuffer`s a
+  `TlsEndpoint` allocates per connection: JSSE asks for a 16,709-byte packet buffer twice and a
+  16,704-byte application buffer, which is 48.9 KiB before the 16 KB copy array. Buffer pooling is
+  the candidate for reducing it. **The 256 KB stream window is not.** It caps what may sit queued
+  (§5.3), not what is allocated, so a visitor whose reader keeps up holds none of it and the load
+  measurement in §14 never fills it; shrinking it would not move that figure, and it would lower
+  single-stream throughput, which is bounded by the window divided by the round-trip time.
