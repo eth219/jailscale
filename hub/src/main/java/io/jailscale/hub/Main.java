@@ -17,7 +17,7 @@ public final class Main {
                       certificate: built-in ACME (dns-01 via the hub's own DNS on --dns-listen 0.0.0.0:53)
                         [--acme-email you@example.com] [--acme-staging | --acme-directory URL]
                         [--no-selfcheck]  do not hold issuance on the dns-01 check
-                        [--no-address-check]  do not report whether the name points here (§7.2)
+                        [--no-address-check]  do not report whether the name points here (ARCHITECTURE.md §7.2)
                       or your own files: --tls-cert FILE --tls-key FILE
                       [--port-range 10000-10999 | none]  ports for raw tcp/udp links (ARCHITECTURE.md §8.4)
                       [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (ARCHITECTURE.md §8.3)
@@ -38,10 +38,17 @@ public final class Main {
 
     private Main() {}
 
+    /**
+     * Options that take no value. One list, because a flag missing from it is not a parse error:
+     * {@link Args#parse} then reads the next word as its value, so `--no-address-check serve` would
+     * lose the subcommand and leave the check on.
+     */
+    static final String[] FLAGS = {"debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover"};
+
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover");
+            a = Args.parse(argv, FLAGS);
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);

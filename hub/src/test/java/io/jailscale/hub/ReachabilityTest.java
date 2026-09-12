@@ -49,17 +49,15 @@ class ReachabilityTest {
         // needs the hub to start should not lose a report that can only write a log line. The
         // half that matters most to that operator -- do the records exist and agree -- asks
         // public resolvers and never needs to reach this host at all.
-        io.jailscale.proto.util.Args noSelfCheck = io.jailscale.proto.util.Args.parse(
-            new String[] {"serve", "--base-url", "https://hub.example.com", "--no-selfcheck"},
-            "debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover");
-        HubConfig a = HubConfig.fromArgs(noSelfCheck);
+        HubConfig a = HubConfig.fromArgs(io.jailscale.proto.util.Args.parse(
+            new String[] {"--no-selfcheck", "serve", "--base-url", "https://hub.example.com"}, Main.FLAGS));
         assertTrue(!a.selfCheck(), "--no-selfcheck still turns the dns-01 check off");
         assertTrue(a.addressCheck(), "--no-selfcheck must not turn the address check off");
 
-        io.jailscale.proto.util.Args noAddressCheck = io.jailscale.proto.util.Args.parse(
-            new String[] {"serve", "--base-url", "https://hub.example.com", "--no-address-check"},
-            "debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover");
-        HubConfig b = HubConfig.fromArgs(noAddressCheck);
+        // Main.FLAGS, and the flag placed before a positional word: that is the argv shape whose
+        // meaning depends on the flag being declared, so a flag the CLI forgot fails here too.
+        HubConfig b = HubConfig.fromArgs(io.jailscale.proto.util.Args.parse(
+            new String[] {"--no-address-check", "serve", "--base-url", "https://hub.example.com"}, Main.FLAGS));
         assertTrue(!b.addressCheck(), "--no-address-check turns the address check off");
         assertTrue(b.selfCheck(), "--no-address-check must not turn the dns-01 check off");
     }

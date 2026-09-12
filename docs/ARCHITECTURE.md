@@ -700,10 +700,10 @@ by an older build cannot serve a phantom one.
 ### 9.4 Daemon and CLI
 
 `jailscale` is one binary with two roles. `jailscale daemon`, or a registered service, stays
-resident; every other subcommand except `version` and `update` talks to it over **local IPC**, an
-AF_UNIX socket at `$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600), Windows
-included, carrying line-delimited JSON with streaming replies for progress output. Commands are
-`up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify`
+resident; every other subcommand except `version`, `update` and `service` talks to it over **local
+IPC**, an AF_UNIX socket at `$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600),
+Windows included, carrying line-delimited JSON with streaming replies for progress output. Commands
+are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify`
 (§11.3), `leave`, `update` and `service install|uninstall|status`; service registration uses only
 what the OS already has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with
 no service wrapper.
