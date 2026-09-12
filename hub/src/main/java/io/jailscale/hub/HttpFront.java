@@ -30,6 +30,8 @@ final class HttpFront {
      */
     static final int HANDSHAKE_BURST = 30;
     static final double HANDSHAKE_PER_SECOND = 1.0;
+    /** Where the page sends someone who does not have the binary yet. */
+    private static final String REPO = "https://github.com/eth219/jailscale";
 
     private final Hub hub;
     private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
@@ -129,15 +131,28 @@ final class HttpFront {
         String host = escape(hub.config().hostname());
         b.append("<p><code>").append(host).append("</code> is a jailscale hub. It publishes a port on your")
             .append(" machine over HTTPS without opening an inbound port: the hub relays the bytes and your")
-            .append(" machine terminates the TLS. <a href=\"https://github.com/eth219/jailscale\">What this is</a>.</p>");
+            .append(" machine terminates the TLS. <a href=\"").append(REPO).append("\">What this is</a>.</p>");
 
+        // In the order someone has to do it. The page used to say how to join and stop there, which
+        // leaves out both where the binary comes from and what joining was for.
+        b.append("<h2>Publish a port</h2>");
+        b.append("<p><a href=\"").append(REPO).append("/releases/latest\">Download <code>jailscale</code></a>")
+            .append(" for Linux, macOS or Windows: one file, no runtime to install underneath it, no root.</p>");
         // Say what this hub actually accepts rather than assuming a default.
         boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
         if (open) {
-            b.append("<p>Registration is open. To join:</p><pre>jailscale up --hub ").append(host).append("</pre>");
+            b.append("<p>Registration is open, so joining takes effect immediately:</p>")
+                .append("<pre>jailscale up --hub ").append(host).append("\njailscale open 3000</pre>");
         } else {
-            b.append("<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>.</p>");
+            b.append("<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>;")
+                .append(" with one in hand:</p>")
+                .append("<pre>jailscale up --invite &lt;url&gt;\njailscale open 3000</pre>");
         }
+        b.append("<p>That serves <code>127.0.0.1:3000</code> at <code>https://&lt;name&gt;.").append(host)
+            .append("</code>, with a certificate your own machine terminates. <code>--name myapp</code> asks for")
+            .append(" a particular name, <code>--tcp</code> forwards a raw port instead, and")
+            .append(" <code>--domain app.example.com</code> uses a domain of yours, whose key never leaves your")
+            .append(" machine.</p>");
 
         int online = hub.registry().size();
         long rss = Resources.rssBytes();
@@ -153,6 +168,26 @@ final class HttpFront {
             ? Resources.humanBytes(Resources.heapUsedBytes()) + " heap in use (resident size unavailable here)"
             : Resources.humanBytes(rss) + " resident");
         b.append("</table>");
+
+        // A public hub is asking people to route their traffic through a stranger's machine. What it
+        // can and cannot do with that traffic belongs on its own front page, not only in the docs.
+        b.append("<h2>What this hub can see</h2>");
+        b.append("<p>Not the traffic. It reads the TLS SNI to pick a node and forwards the rest untouched;")
+            .append(" the session key belongs to the machine at the other end. It does hold the wildcard")
+            .append(" private key for <code>*.").append(host).append("</code> and signs one handshake digest")
+            .append(" per visitor, so a dishonest hub could point a name at a machine of its own instead.")
+            .append(" That is what <code>jailscale verify</code> checks from your side, and what the daemon")
+            .append(" re-checks on its own every half hour. A domain you bring yourself never involves this")
+            .append(" hub's key at all.</p>");
+
+        b.append("<h2>Limits</h2><table>");
+        row(b, "Visitors per name", SniRouter.MAX_PER_NAME + " at once");
+        row(b, "Links per node", String.valueOf(Links.MAX_LINKS_PER_NODE));
+        row(b, "New control connections", HANDSHAKE_BURST + " per address, then "
+            + (long) HANDSHAKE_PER_SECOND + " a second");
+        b.append("</table>");
+        b.append("<p>The operator can remove a node or bar an address, so treat an open hub you do not run")
+            .append(" as a place to try this rather than one to depend on.</p>");
 
         AdminWeb.Session s = hub.adminWeb().adminSession(req);
         if (s != null) {

@@ -110,11 +110,40 @@ class HomePageTest {
 
     @Test
     void thePageSaysHowToJoinThisParticularHub() throws Exception {
-        assertTrue(http("GET", "/", null, null).bodyText().contains("needs an invitation"));
+        String invite = http("GET", "/", null, null).bodyText();
+        assertTrue(invite.contains("needs an invitation"), invite);
+        assertTrue(invite.contains("jailscale up --invite"), invite);
         hub.store().setSetting(Store.SETTING_REGISTRATION, "open");
         String html = http("GET", "/", null, null).bodyText();
         assertTrue(html.contains("Registration is open"), html);
         assertTrue(html.contains("jailscale up --hub hub.test"), html);
+    }
+
+    /**
+     * Either way round, the page has to answer the two questions that come before joining: where the
+     * binary is, and what joining is for. It used to answer neither.
+     */
+    @Test
+    void thePageSaysWhereTheBinaryIsAndWhatToDoWithIt() throws Exception {
+        String html = http("GET", "/", null, null).bodyText();
+        assertTrue(html.contains("github.com/eth219/jailscale/releases/latest"), html);
+        assertTrue(html.contains("jailscale open 3000"), html);
+        assertTrue(html.contains("https://&lt;name&gt;.hub.test"), html);
+    }
+
+    /**
+     * What the hub can do with the traffic, and what it allows, taken from the constants that
+     * enforce them rather than written out beside them.
+     */
+    @Test
+    void thePageSaysWhatItCanSeeAndWhatItLimits() throws Exception {
+        String html = http("GET", "/", null, null).bodyText();
+        assertTrue(html.contains("What this hub can see"), html);
+        assertTrue(html.contains("jailscale verify"), html);
+        assertTrue(html.contains("Limits"), html);
+        assertTrue(html.contains(SniRouter.MAX_PER_NAME + " at once"), html);
+        assertTrue(html.contains(">" + Links.MAX_LINKS_PER_NODE + "<"), html);
+        assertTrue(html.contains(HttpFront.HANDSHAKE_BURST + " per address"), html);
     }
 
     @Test
