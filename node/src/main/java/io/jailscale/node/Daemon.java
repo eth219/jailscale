@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
@@ -35,8 +36,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private final Visitors visitors;
     private final DomainCerts domainCerts;
     private volatile boolean closed;
+    /** The last release check, for {@code status}; null until the first one has run. */
+    private volatile Updates.Result lastUpdate;
     static final URI LETS_ENCRYPT = URI.create("https://acme-v02.api.letsencrypt.org/directory");
     static final long RENEW_CHECK_MS = 3600_000;
+    static final long UPDATE_CHECK_MS = 24 * 3600_000L;
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
@@ -54,6 +58,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             link.start(null);
         }
         Thread.ofVirtual().name("domain-renew").start(this::renewLoop);
+        Thread.ofVirtual().name("update-check").start(this::updateLoop);
     }
 
     // --- HubLink.Events --------------------------------------------------------------------------
@@ -299,7 +304,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("dnsSuffix", state.dnsSuffix)
             .put("links", linkRows())
             .put("revoked", revokedRows())
-            .put("lastError", link.lastError());
+            .put("lastError", link.lastError())
+            .put("update", lastUpdate == null ? null : lastUpdate.json().build());
         Message.RegisterResponse r = link.lastRegister();
         if (r != null) {
             b.put("registration", r.status());
@@ -334,6 +340,28 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         rec.certExpiresAt = m.notAfter();
         return m;
+    }
+
+    /**
+     * Daily: ask whether a newer jailscale has been published and keep the answer for {@code status}
+     * (ARCHITECTURE.md §9.4). The first check waits a random few minutes so that a fleet started
+     * together does not arrive in one burst, and a failure is kept rather than logged every day --
+     * a node with no way out to the internet should not fill its log saying so.
+     */
+    private void updateLoop() {
+        try {
+            Thread.sleep(ThreadLocalRandom.current().nextLong(60_000, 300_000));
+            while (!closed) {
+                Updates.Result r = Updates.check(Version.string());
+                if (r.newer()) {
+                    LOG.info("{}", r.line());
+                }
+                lastUpdate = r;
+                Thread.sleep(UPDATE_CHECK_MS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** Hourly: renew domain certificates that have a third of their lifetime left (ARCHITECTURE.md §8.3). */

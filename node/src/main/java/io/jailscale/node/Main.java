@@ -27,6 +27,7 @@ public final class Main {
         jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
         jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
+        jailscale update                                     say whether a newer release is out; never installs it
         jailscale version
         """;
 
@@ -54,6 +55,15 @@ public final class Main {
         try {
             switch (cmd) {
                 case "version" -> System.out.println("jailscale " + Version.string());
+                case "update" -> {
+                    // In this process rather than through the daemon: a node that is down is exactly
+                    // when someone asks, and the check needs nothing the daemon holds.
+                    Updates.Result r = Updates.check(Version.string());
+                    System.out.println(r.line());
+                    if (r.error() != null) {
+                        System.exit(1);
+                    }
+                }
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);

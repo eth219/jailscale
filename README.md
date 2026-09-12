@@ -144,6 +144,7 @@ jailscale open 3000 --gate                    # visitors need a one-time link
 jailscale open 22 --tcp                       # a raw TCP port, no TLS
 jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
 jailscale verify                              # check that this node, not the hub, terminated the TLS
+jailscale update                              # say whether a newer release is out; never installs it
 jailscale ls | close NAME | status | down
 jailscale service install                     # keep the daemon running across logins
 ```

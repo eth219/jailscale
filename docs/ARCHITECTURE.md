@@ -676,9 +676,24 @@ by an older build cannot serve a phantom one.
 every other subcommand talks to it over **local IPC**, an AF_UNIX socket at
 `$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600), Windows included, carrying
 line-delimited JSON with streaming replies for progress output. Commands are `up`, `down`, `status`,
-`open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify` (§11.3), `leave` and
-`service install|uninstall|status`; service registration uses only what the OS already has (a launchd
-agent, a `systemctl --user` unit, or a logon scheduled task) with no service wrapper.
+`open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify` (§11.3), `leave`,
+`update` and `service install|uninstall|status`; service registration uses only what the OS already
+has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with no service wrapper.
+
+**`update` reports; it does not install.** It reads the published release index and prints the
+version and where to get it, and the daemon does the same once a day so `status` carries the answer
+without anyone asking. Replacing the running binary is not implemented and is not a small thing:
+`/usr/local/bin` is root-owned while the daemon deliberately runs without root, Windows cannot
+replace a running `.exe` in place, a package manager or a container image must not find a second
+owner of its file, and a downloaded binary is only worth as much as the signature checked over it —
+a checksum published beside it by the same account proves corruption did not happen, not that the
+publisher was not compromised. Until that is answered, saying "0.2.0 is out" is the honest amount to
+do. The check runs in the CLI process, so it answers while the daemon is down.
+
+**The URL is compiled in and the hub cannot name it.** The hub already sends its own version in
+`HelloResponse`, and it would be a short step to let it say where the update is; that step hands a
+compromised hub (§11.2) every node's next binary. A version string from the hub is one thing, a
+download location is another.
 
 **What the node does not do:** no WireGuard, no userspace TCP/IP, no STUN, no SOCKS5, no MagicDNS.
 One outbound 443 connection, streams in, TLS off, plaintext to a local port. No inbound port, no
