@@ -74,4 +74,7 @@ jobs:
       - name: Budget gate
         # RATE also measures throughput, which nothing gates: it is only comparable against another
         # run on the same machine, and it is here so a build that trades CPU for footprint shows up.
-        run: LOAD=1000 RATE=8 ./measure.sh --check
+        # 200 handshakes a second rather than the default 400, because a handshake costs this runner
+        # about 5.6 ms of hub and node CPU together: at 400 the four cores were three-quarters busy
+        # and the per-operation figure was measuring contention as much as code.
+        run: LOAD=1000 RATE=8 RATE_HANDSHAKES=200 ./measure.sh --check
