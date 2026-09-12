@@ -1024,9 +1024,12 @@ issuance retries for as long as that takes, so an ordinary first boot outlives s
 `TimeoutStartSec` and the unit has to say `TimeoutStartSec=infinity` as well, or systemd kills the
 hub part-way through its first issuance and `Restart=on-failure` does it again forever. The
 notification is sent by running `systemd-notify`, because `NOTIFY_SOCKET` is an AF_UNIX *datagram*
-socket and the JDK will not open one, so the unit also needs `NotifyAccess=all`.
-`deploy/jailhub.service` lists the three lines and what each is for. None of it makes the hand-off
-compose with a unit.
+socket and the JDK will not open one, so the unit also needs `NotifyAccess=all` and the host needs
+**systemd 246 or newer** — a notification from a child that has already exited is one the manager
+cannot attribute to a unit and drops, and `systemd-notify` waiting for it to be processed is a 246
+feature (Ubuntu 20.04 has 245, RHEL 8 has 239). The exit status is 0 either way, so a hub cannot
+detect it; the unit just never leaves `activating`. `deploy/jailhub.service` lists the three lines
+and what each is for. None of it makes the hand-off compose with a unit.
 
 ---
 

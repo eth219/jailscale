@@ -24,7 +24,13 @@ import java.util.concurrent.TimeUnit;
  * {@code UnsupportedOperationException: Protocol family not supported} on 25. Writing the datagram
  * ourselves would mean a foreign-function call and its native-image configuration on five release
  * targets, to save one exec that happens once per process lifetime. The cost of the subprocess is
- * that the notification arrives from a child, so the unit needs {@code NotifyAccess=all}.
+ * that the notification arrives from a child, so the unit needs {@code NotifyAccess=all} and the
+ * host needs <b>systemd 246 or newer</b>: a message from a process that has already exited is one
+ * the manager cannot attribute to a unit and therefore drops, {@code NotifyAccess=all} or not, and
+ * waiting for it to be processed first is what {@code systemd-notify} gained in 246 (with
+ * {@code --no-block} to opt out). Ubuntu 20.04 has 245, Debian 10 has 241, RHEL 8 has 239. On those
+ * the exit status is still 0, so nothing here can tell the difference -- the unit simply never
+ * leaves {@code activating}, which with {@code TimeoutStartSec=infinity} is forever.
  *
  * <p>Nothing here fails the hub. A missing {@code systemd-notify} is a log line, because a hub that
  * refuses to serve over its own readiness reporting has the priority backwards.
