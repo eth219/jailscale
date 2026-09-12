@@ -3,6 +3,7 @@ package io.jailscale.node;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.net.ProxyProtocol;
 import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.util.Log;
@@ -233,7 +234,7 @@ final class Visitors {
             return;
         }
         byte[] proxyLine = proxyLine(stream, target);
-        Thread toLocal = Thread.ofVirtual().name("raw-in").start(() -> {
+        Thread toLocal = DuplexThread.start("raw-in", () -> {
             try {
                 if (proxyLine != null) {
                     local.getOutputStream().write(proxyLine);
@@ -270,7 +271,7 @@ final class Visitors {
             stream.reset(7);
             return;
         }
-        Thread back = Thread.ofVirtual().name("raw-udp-back").start(() -> {
+        Thread back = DuplexThread.start("raw-udp-back", () -> {
             byte[] buf = new byte[Frame.MAX_DATA];
             try {
                 while (true) {
@@ -340,7 +341,7 @@ final class Visitors {
      * view, holding whatever the gate read past the head.
      */
     private static void relay(TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream, byte[] replay) {
-        Thread toLocal = Thread.ofVirtual().name("visitor-in").start(() -> {
+        Thread toLocal = DuplexThread.start("visitor-in", () -> {
             try {
                 if (replay != null) {
                     local.getOutputStream().write(replay);

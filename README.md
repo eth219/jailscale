@@ -252,9 +252,6 @@ What a compromised hub can and cannot do is written out in
   outside CI.
 - Upgrading is manual. `jailscale update` says when a release is out; nothing
   installs it for you.
-- Windows nodes occasionally need to reconnect, costing that connection's
-  visitors up to 60 seconds. It is a JDK bug, not ours:
-  [docs/windows-virtual-thread-stall](docs/windows-virtual-thread-stall/).
 - Idle memory is 24.7 MB against a 20 MB goal (39.7 MB as Linux counts it, 5 MB
   of it anonymous). Most of the gap is JSSE standing up a TLS client.
 - No standby hub, no state replication.

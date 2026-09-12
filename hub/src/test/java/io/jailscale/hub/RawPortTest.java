@@ -9,6 +9,7 @@ import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.util.Log;
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -146,7 +147,10 @@ class RawPortTest {
         byte[] payload = new byte[200_000];
         new Random(7).nextBytes(payload);
         try (Socket v = new Socket("127.0.0.1", tcpPort)) {
-            Thread writer = Thread.ofVirtual().start(() -> {
+            // Windows cannot poll one socket for read and for write at once (DuplexThread): this
+            // thread writes the visitor socket while the test thread reads it, which is the shape
+            // that used to hang this test on Windows alone.
+            Thread writer = DuplexThread.start("rawport-writer", () -> {
                 try {
                     v.getOutputStream().write(payload);
                     v.getOutputStream().flush();

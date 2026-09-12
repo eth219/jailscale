@@ -122,8 +122,8 @@ finding nobody answered look identical six months later.
 
 **Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu and macos for
 every push and pull request, the §14 budget on main and nightly, and Windows nightly rather than
-per push, because the Windows stall below fails about 2% of runs through no fault of ours and a
-gate that is red 2% of the time teaches people to ignore it. `release` builds the five native
+per push. Windows used to be nightly because the stall below failed about 2% of runs; that is fixed,
+and it stays nightly only until it has the clean-run count ubuntu and macos were promoted on. `release` builds the five native
 targets on a tag. The container images build with `-DskipTests`, deliberately: they are packaging,
 not verification.
 
@@ -132,10 +132,14 @@ virtual-thread timed park onto ForkJoinPool delayed tasks (JDK-8351927) made can
 task corrupt the scheduler heap, so other threads' `Thread.sleep` wakes late or never (JDK-8370887),
 and virtual threads get stuck PARKED (JDK-8369227). Hand-off cancels the old connection's keepalive
 sleep by interrupt, which is exactly that path, so the release workflow builds on Liberica NIK (JDK
-25.0.4+). And **on Windows a virtual thread can miss a bidirectional loopback read**, parking and
-never waking; it reproduces without any jailscale code, so it is handled by detection and recovery,
-with the 60 s socket read timeout (§5.1) and 25 s keepalive (§5.3) turning it into `peer idle too
-long` and a reconnect. Repro in `docs/windows-virtual-thread-stall/`.
+25.0.4+). And **Windows cannot poll one socket for read and for write at the same
+time**: the JDK gives virtual threads one wepoll handle per direction, and with a thread parked on
+each direction of the same socket the AFD driver underneath completes the wrong one, leaving the
+thread that asked for the event asleep for good (JDK-8334574, open, and still present in 26). So one
+side of every socket two threads use at once runs on a platform thread, which enters no poller at
+all: `io.jailscale.proto.net.DuplexThread`, Windows only. The 60 s read timeout (§5.1) and 25 s
+keepalive (§5.3) stay as the backstop. Measured, with the variants that isolate the condition, in
+`docs/windows-virtual-thread-stall/`.
 
 ---
 
@@ -1125,10 +1129,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 - **There is no standby hub.** Recovery is restoring one directory and changing DNS (§13).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.
-- **Windows virtual threads can stall on bidirectional loopback reads** (§3.2). Not fixable from
-  here; the keepalive and read timeout turn it into a reconnect. In CI it shows up as a
-  Windows-only timeout with no assertion failure, seen in both `MuxSessionTest` and `RawPortTest`,
-  and any end-to-end test that moves bytes both ways is exposed.
+- **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
+  loses events when one socket is parked for read and for write together (JDK-8334574), so one side
+  of each of those sockets is kept off the poller there. Linux and macOS are untouched, but a
+  Windows node's memory grows with connection count faster than theirs does, and new code that
+  gives a socket two threads has to remember to do the same.
 - **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at**, and about 39.7 MB as
   Linux counts it (§14: mostly the mapped binary, 5 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they

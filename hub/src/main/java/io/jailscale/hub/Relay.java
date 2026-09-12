@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.tls.Tls13;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
@@ -41,7 +42,7 @@ final class Relay {
      */
     static void pump(Socket visitor, MuxStream stream, byte[] consumed, Tls13.Tap clientSide) {
         CountDownLatch visitorDone = new CountDownLatch(1);
-        Thread toVisitor = Thread.ofVirtual().name("relay-in").start(() -> {
+        Thread toVisitor = DuplexThread.start("relay-in", () -> {
             try {
                 copy(stream.in(), visitor.getOutputStream());
                 visitor.shutdownOutput();

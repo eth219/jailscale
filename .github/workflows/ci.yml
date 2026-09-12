@@ -36,10 +36,11 @@ jobs:
       - run: ./mvnw -B -ntp package
         shell: bash
 
-  # Windows is a nightly job, not a per-push one, and the reason is measured rather than assumed:
-  # a Windows virtual thread can lose a bidirectional loopback read wake-up (§3.2), which is a JDK
-  # bug we cannot fix and which fails about 2% of MuxSessionTest runs. Gating every push on it
-  # would teach us to ignore red. Once a day still catches a real Windows-only regression.
+  # Windows is a nightly job, not a per-push one. It used to be because a virtual thread there could
+  # lose a socket wake-up and fail about 2% of MuxSessionTest runs; that one is fixed (§3.2, and
+  # docs/windows-virtual-thread-stall has the before and after). It stays nightly until Windows has
+  # the run count that promoted the two platforms above, and once a day catches a Windows-only
+  # regression meanwhile.
   test-windows:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-2025

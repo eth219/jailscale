@@ -4,6 +4,7 @@ import io.jailscale.crypto.NoiseException;
 import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonException;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
@@ -54,14 +55,30 @@ public final class MuxSession implements AutoCloseable {
     }
 
     public void start() {
-        reader = Thread.ofVirtual().name("mux-reader").start(this::readLoop);
+        reader = DuplexThread.start("mux-reader", this::readLoop);
         keepalive = Thread.ofVirtual().name("mux-keepalive").start(this::keepaliveLoop);
     }
 
-    /** Runs the reader on the calling thread instead of starting one (for a session-owning thread). */
+    /**
+     * Runs the reader on the calling thread instead of starting one (for a session-owning thread).
+     *
+     * <p>Where the reader needs a thread of its own kind ({@link DuplexThread} -- every other
+     * thread here writes this same socket), it gets one and this waits for it, which is the same
+     * thing from the caller's side: it returns when the session is over either way.
+     */
     public void run() {
         keepalive = Thread.ofVirtual().name("mux-keepalive").start(this::keepaliveLoop);
-        readLoop();
+        if (!DuplexThread.needed()) {
+            readLoop();
+            return;
+        }
+        reader = DuplexThread.start("mux-reader", this::readLoop);
+        try {
+            reader.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            close();
+        }
     }
 
     public byte[] handshakeHash() {

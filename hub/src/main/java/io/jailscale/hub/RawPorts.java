@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import io.jailscale.proto.mux.Frame;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -164,7 +165,7 @@ final class RawPorts implements AutoCloseable {
             this.link = link;
             channel = DatagramChannel.open();
             channel.bind(new InetSocketAddress(hub.config().listenHost(), link.port()));
-            Thread.ofVirtual().name("raw-udp-" + link.port()).start(this::receive);
+            DuplexThread.start("raw-udp-" + link.port(), this::receive);
             Thread.ofVirtual().name("raw-udp-sweep-" + link.port()).start(this::sweep);
         }
 

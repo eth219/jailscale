@@ -10,6 +10,7 @@ import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.BufferedReader;
@@ -61,7 +62,9 @@ class ProxyProtocolEndToEndTest {
         try (c; Socket h = new Socket("127.0.0.1", port)) {
             h.getOutputStream().write(("PROXY TCP4 " + c.getInetAddress().getHostAddress() + " 127.0.0.1 " + c.getPort() + " 443\r\n")
                 .getBytes(StandardCharsets.US_ASCII));
-            Thread t = Thread.ofVirtual().start(() -> {
+            // One side of both sockets off the poller: each of them is read by one thread here and
+            // written by the other, which Windows cannot poll (DuplexThread).
+            Thread t = DuplexThread.start("proxy-forward", () -> {
                 try {
                     c.getInputStream().transferTo(h.getOutputStream());
                     h.shutdownOutput();
