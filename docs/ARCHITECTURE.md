@@ -1014,8 +1014,15 @@ listeners while the first exits, and under `Type=simple` the first process is th
 tracks: its exit stops the unit and the cgroup takes the new process with it. Tested, and the hub
 went inactive. Under systemd the upgrade is `systemctl restart`, which costs a few seconds while
 nodes reconnect. `deploy/jailhub.service` therefore has no `ExecReload`. Making the two work
-together would need the hub to speak the `sd_notify` protocol and hand the listening sockets over
-rather than rebind them, which is not implemented.
+together would need the listening sockets handed over rather than rebound, which is not implemented.
+
+**Readiness is reported, which is a different thing.** The unit is `Type=notify`, so `systemctl
+start` returns when the hub is serving rather than when the process exists; on a first boot those
+are minutes of ACME apart, and until now systemd called the unit active while there was no
+certificate. The notification is sent by running `systemd-notify`, because `NOTIFY_SOCKET` is an
+AF_UNIX *datagram* socket and the JDK will not open one, which is why the unit carries
+`NotifyAccess=all`: the notification arrives from a child process. It says the hub is up. It does
+not make the hand-off compose with a unit, and nothing about the upgrade path changes.
 
 ---
 
@@ -1084,11 +1091,15 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   implemented; tls-alpn-01 would remove that requirement.
 - **Upgrading is manual.** `jailscale update`, and the daemon's daily check behind `status`, say that
   a newer release exists and where it is; nothing installs it, for the reasons in §9.4.
-- **Certificate expiry is not warned about in advance.** Renewal is automatic on both sides at a
-  third of the lifetime remaining, but a node that stays offline stops renewing and nothing counts
-  down for the operator.
+- **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
+  sides at a third of the lifetime remaining. When it does not happen the node logs the name and
+  the time left once a day inside the last fortnight, the hub says how long the installed wildcard
+  has next to every issuance failure and on its status page, and `ls` marks the link. None of that
+  helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
+  nobody hears from, and its domain goes dark when the certificate runs out.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
-  is not zero-downtime.
+  is not zero-downtime. Readiness is reported (`Type=notify`), which is only about when systemd
+  calls the unit started; the listening sockets are still rebound rather than handed over.
 - **There is no standby hub.** Recovery is restoring one directory and changing DNS (§13).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.

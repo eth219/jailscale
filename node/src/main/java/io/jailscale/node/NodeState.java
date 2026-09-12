@@ -59,6 +59,7 @@ final class NodeState {
         volatile String acmeEmail;
         volatile long certExpiresAt;   // not persisted: from the loaded certificate
         volatile ProbeResult lastProbe; // not persisted: the last self-probe of this name (§11.3)
+        volatile long certWarnedAt;    // not persisted: when the expiry warning was last logged
         volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (ARCHITECTURE.md §9.3)
 
         LinkRec(String kind, String host, int port, String name) {

@@ -8,19 +8,27 @@
 # the hub is back inside a few seconds.
 #
 # Not `systemctl reload`, and there is deliberately no ExecReload here. `serve --takeover` works by
-# starting a second process that takes the listeners and lets the first exit. Under a Type=simple
-# unit that first process is the one systemd tracks, so its exit stops the unit and takes the new
-# process down with the cgroup. Tried it: the hub went inactive. The hand-off is for operators who
-# run jailhub outside a unit.
+# starting a second process that takes the listeners and lets the first exit. Under a unit that
+# first process is the one systemd tracks, so its exit stops the unit and takes the new process
+# down with the cgroup. Tried it: the hub went inactive. The hand-off is for operators who run
+# jailhub outside a unit; Type=notify below does not change that, it only reports readiness.
+#
+# Type=notify means `systemctl start` returns when the hub is serving rather than when the process
+# exists, which on a first boot is minutes of ACME apart. jailhub sends the notification by running
+# systemd-notify, because the JDK cannot open an AF_UNIX datagram socket, so NotifyAccess=all is
+# required: the notification comes from a child process. If a notification never arrives systemd
+# waits out TimeoutStartSec and calls the unit failed, so on a host without systemd-notify use
+# Type=simple and drop NotifyAccess.
 
 [Unit]
 Description=jailhub — jailscale hub (SNI router, control channel, ACME)
-Documentation=https://github.com/jailscale/jailscale
+Documentation=https://github.com/eth219/jailscale
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=all
 User=jailhub
 Group=jailhub
 Environment=JAILHUB_STATE=/var/lib/jailhub

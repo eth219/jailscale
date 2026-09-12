@@ -77,6 +77,21 @@ final class AcmeManager implements AutoCloseable {
         renewer = Thread.ofVirtual().name("acme-renew").start(this::renewLoop);
     }
 
+    /**
+     * What the certificate now installed still has, said next to a message about one that is not
+     * arriving. A retry line on its own does not tell an operator whether to act tonight or next
+     * month, and this is the only place that knows (ARCHITECTURE.md §15).
+     */
+    private String remaining() {
+        if (!tls.isLoaded()) {
+            return "nothing is installed, so the hub is not serving yet";
+        }
+        long left = tls.leaf().getNotAfter().getTime() - System.currentTimeMillis();
+        return left <= 0
+            ? "the installed certificate EXPIRED " + Resources.humanDuration(-left) + " ago: every name under this hub is down"
+            : "the installed certificate still has " + Resources.humanDuration(left);
+    }
+
     static boolean needsRenewal(X509Certificate leaf) {
         long lifetime = leaf.getNotAfter().getTime() - leaf.getNotBefore().getTime();
         long left = leaf.getNotAfter().getTime() - System.currentTimeMillis();
@@ -90,7 +105,8 @@ final class AcmeManager implements AutoCloseable {
                 if (config.selfCheck()) {
                     String problem = selfCheck();
                     if (problem != null) {
-                        LOG.error("self-check failed: {}. Retrying in {}s (skip with --no-selfcheck)", problem, SELF_CHECK_RETRY_MS / 1000);
+                        LOG.error("self-check failed: {}. Retrying in {}s (skip with --no-selfcheck); {}",
+                            problem, SELF_CHECK_RETRY_MS / 1000, remaining());
                         Thread.sleep(SELF_CHECK_RETRY_MS);
                         continue;
                     }
@@ -98,7 +114,7 @@ final class AcmeManager implements AutoCloseable {
                 issue();
                 return;
             } catch (AcmeException | IOException | GeneralSecurityException e) {
-                LOG.error("certificate issuance failed: {}. Retrying in {}s", e.getMessage(), backoff / 1000);
+                LOG.error("certificate issuance failed: {}. Retrying in {}s; {}", e.getMessage(), backoff / 1000, remaining());
                 Thread.sleep(backoff);
                 backoff = Math.min(backoff * 2, 3600_000);
             }

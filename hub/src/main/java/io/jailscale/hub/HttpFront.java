@@ -146,7 +146,7 @@ final class HttpFront {
         row(b, "Uptime", Resources.humanDuration(Resources.uptimeMillis()));
         row(b, "Nodes", online + " online of " + hub.store().nodes().size() + " registered");
         row(b, "Links open", String.valueOf(hub.links().all().size()));
-        row(b, "Certificate", hub.tls().isLoaded() ? "loaded" : "not loaded yet");
+        row(b, "Certificate", certificateRow());
         // Heap is a small part of what a native image occupies, so where RSS is unavailable say
         // that rather than let a two-megabyte heap read as the process footprint.
         row(b, "Memory", rss < 0
@@ -162,6 +162,21 @@ final class HttpFront {
                 "<input type=hidden name=csrf value=\"" + escape(s.csrf()) + "\">", "/"));
         }
         return b.toString();
+    }
+
+    /**
+     * The wildcard's remaining life, not just "loaded". Its expiry takes every name under the hub
+     * down at once, and until now the only place that number appeared was a log line at install
+     * time (ARCHITECTURE.md §15).
+     */
+    private String certificateRow() {
+        if (!hub.tls().isLoaded()) {
+            return "not loaded yet";
+        }
+        long left = hub.tls().leaf().getNotAfter().getTime() - System.currentTimeMillis();
+        return left <= 0
+            ? "EXPIRED " + Resources.humanDuration(-left) + " ago"
+            : escape(hub.tls().leaf().getNotAfter().toString()) + " (" + Resources.humanDuration(left) + " left)";
     }
 
     private static void row(StringBuilder b, String label, String value) {

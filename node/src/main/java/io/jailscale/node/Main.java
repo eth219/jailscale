@@ -207,7 +207,7 @@ public final class Main {
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
             String warn = "";
-            if (m.get("certExpiresAt") instanceof Long exp && exp - System.currentTimeMillis() < 7 * 86400_000L) {
+            if (m.get("certExpiresAt") instanceof Long exp && exp - System.currentTimeMillis() < Daemon.CERT_WARN_MS) {
                 warn = "  (cert expires " + new java.util.Date(exp) + ")";
             }
             System.out.printf("%-8s %-40s -> %-22s %s%s%n", m.get("name"), m.get("url"), m.get("local"),

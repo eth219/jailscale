@@ -42,6 +42,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     static final long RENEW_CHECK_MS = 3600_000;
     static final long UPDATE_CHECK_MS = 24 * 3600_000L;
     static final long PROBE_INTERVAL_MS = 30 * 60_000L;
+    /** How close to its end a certificate has to be before anyone is told (ARCHITECTURE.md §15). */
+    static final long CERT_WARN_MS = 14 * 86400_000L;
+    private static final long CERT_WARN_REPEAT_MS = 86400_000L;
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
@@ -367,7 +370,14 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
     }
 
-    /** Hourly: renew domain certificates that have a third of their lifetime left (ARCHITECTURE.md §8.3). */
+/**
+     * Hourly: renew domain certificates that have a third of their lifetime left
+     * (ARCHITECTURE.md §8.3), and say so when one is running out anyway.
+     *
+     * <p>The warning is not conditional on being connected, which is the whole point: renewal needs
+     * the hub, so the node that cannot renew is exactly the node nobody is going to hear from. §15
+     * called this out as nothing counting down for the operator.
+     */
     private void renewLoop() {
         while (!closed) {
             try {
@@ -376,11 +386,14 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 return;
             }
             for (NodeState.LinkRec rec : state.links) {
-                if (rec.domain == null || !link.isConnected()) {
+                if (rec.domain == null) {
                     continue;
                 }
                 DomainCerts.Material m = domainCerts.load(rec.domain);
-                if (m == null || m.dueForRenewal()) {
+                if (m != null) {
+                    rec.certExpiresAt = m.notAfter();
+                }
+                if (link.isConnected() && (m == null || m.dueForRenewal())) {
                     try {
                         LOG.info("renewing certificate for {}", rec.domain);
                         reopen(rec);
@@ -388,8 +401,54 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                         LOG.warn("renewal of {} failed: {}", rec.domain, e.getMessage());
                     }
                 }
+                warnIfExpiring(rec);
             }
         }
+    }
+
+    /** Logs {@link #expiryWarning} at most once a day per name, so a fortnight is not 336 lines. */
+    private void warnIfExpiring(NodeState.LinkRec rec) {
+        long now = System.currentTimeMillis();
+        String w = expiryWarning(rec.domain, rec.certExpiresAt, now);
+        if (w == null) {
+            rec.certWarnedAt = 0;
+            return;
+        }
+        if (now - rec.certWarnedAt < CERT_WARN_REPEAT_MS) {
+            return;
+        }
+        rec.certWarnedAt = now;
+        LOG.warn("{}", w);
+    }
+
+    /**
+     * What to say about a certificate close to its end, or null while there is nothing to say.
+     * Separate from the logging so the wording of the one message an operator may act on can be
+     * checked without a clock or a daemon.
+     */
+    static String expiryWarning(String domain, long expiresAt, long now) {
+        if (expiresAt <= 0) {
+            return null;
+        }
+        long left = expiresAt - now;
+        if (left > CERT_WARN_MS) {
+            return null;
+        }
+        if (left <= 0) {
+            return "the certificate for " + domain + " EXPIRED " + days(-left) + " ago: visitors now see a warning"
+                + " instead of your site. Renewal needs this node connected to its hub.";
+        }
+        return "the certificate for " + domain + " expires in " + days(left) + " and has not renewed."
+            + " Renewal needs this node connected to its hub.";
+    }
+
+    private static String days(long millis) {
+        long d = millis / 86400_000L;
+        if (d >= 2) {
+            return d + " days";
+        }
+        long h = Math.max(1, millis / 3600_000L);
+        return h == 1 ? "an hour" : h + " hours";
     }
 
     /** {@code jailscale open <port>}: ask the hub for a name and remember the link. */
