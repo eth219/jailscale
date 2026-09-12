@@ -30,25 +30,29 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 # at the moment this script measures. (A hub left running grows that anonymous share -- the live one
 # is at 15 MB after a day -- which is why the budget is on RSS and the anonymous figure is only
 # printed. ARCHITECTURE.md §14 has both numbers and which is which.)
-B_NODE_LOAD_MB=192
-B_HUB_LOAD_MB=160
+# Re-set 2026-09-13, when both the gate and this machine started building what the release builds
+# (Liberica NIK, no profile-guided optimization). Measured then: binaries 29.9 to 32.0 MiB, idle
+# 29.0 to 40.3 MB, peak with 1,000 held 49.1 to 68.6 MB, CLI 4.4 to 6.2 ms. A profile-guided build
+# (-Ppgo) comes out about 10 MiB smaller with a fifth less idle RSS and passes all of these with
+# room to spare; the budgets describe what ships, not the best build available.
+# The load budget is the one with teeth: without the heap ceilings the peak is 91.7 (hub) and
+# 94.0 (node), so a build that lost them fails here.
+B_NODE_LOAD_MB=88
+B_HUB_LOAD_MB=88
 B_CLI_MS=50
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
-    # 32, not 30: the release does not use this machine's toolchain. `brew`'s GraalVM CE (25.3 line)
-    # builds jailhub at 25.2 MiB and jailscale at 25.3 here, while the release workflow's Liberica
-    # NIK 25.0.4 builds the same commit at 29.9 and 30.2 -- so v0.1.0 shipped darwin-arm64 binaries
-    # of 29.8 and 30.1 MiB, over the 30 the budget used to say, and nothing noticed because the
-    # `budget` job only runs on linux-amd64. The number now describes what ships, with about 2 MiB
-    # of headroom, and §14 records that the two toolchains differ by 4.7 MiB for reasons not
-    # isolated (it is not compressed references, which changed no size on linux).
-    B_BINARY_MIB=32; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=30 ;;
+    # These are the release toolchain's, which they were not until 2026-09-13: the binary budget was
+    # 30 while the release shipped 30.1 MiB darwin-arm64 binaries, and the idle budget was 28 while
+    # the released binary idles at 29.0. Both had been set against a Community Edition build this
+    # machine happened to have, and the gate only runs on linux, so neither could fail.
+    B_BINARY_MIB=32; B_NODE_IDLE_MB=32; B_HUB_IDLE_MB=32 ;;
   Linux-x86_64)
-    B_BINARY_MIB=36; B_NODE_IDLE_MB=46; B_HUB_IDLE_MB=46 ;;
+    B_BINARY_MIB=34; B_NODE_IDLE_MB=44; B_HUB_IDLE_MB=44 ;;
   *)
     # An unmeasured platform gets the loosest of the measured ones rather than a guess of its own.
     echo "note: no budget measured for $(uname -s)-$(uname -m); using the widest known"
-    B_BINARY_MIB=36; B_NODE_IDLE_MB=46; B_HUB_IDLE_MB=46 ;;
+    B_BINARY_MIB=34; B_NODE_IDLE_MB=44; B_HUB_IDLE_MB=44 ;;
 esac
 
 mkdir -p "$W/hub" "$W/app"

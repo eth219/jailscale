@@ -66,6 +66,19 @@
     -->
     <native.maxHeap>64m</native.maxHeap>
     <!--
+      Which profile -Ppgo builds against. Defaults to the one committed for this binary; override
+      with -Dnative.pgoProfile=/path/to/mine.iprof to build against a profile of your own traffic
+      (profiles/README.md).
+    -->
+    <native.pgoProfile>${maven.multiModuleProjectDirectory}/profiles/${project.artifactId}.iprof</native.pgoProfile>
+    <!--
+      native-image's optimization level. 2 is its default and what the release ships. 3 was measured
+      against it on 2026-09-13: a 0.9 MiB smaller binary and 2% less CPU per warm request, but
+      `jailscale status` starts 20% slower, which is the wrong way round for a command a person
+      types (§14). Override with -Dnative.optLevel=3.
+    -->
+    <native.optLevel>2</native.optLevel>
+    <!--
       The `pgo` and `pgo-instrument` profiles below each restate the whole buildArgs list. They have
       to: the plugin passes every <buildArg> element as one argument and does not split it on
       whitespace, so one property holding several arguments arrives as a single argument and
@@ -174,7 +187,7 @@
               <enabled>false</enabled>
             </metadataRepository>
             <buildArgs>
-              <buildArg>-O2</buildArg>
+              <buildArg>-O${native.optLevel}</buildArg>
               <buildArg>-H:+ReportExceptionStackTraces</buildArg>
               <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
             </buildArgs>
@@ -186,13 +199,13 @@
 
   <profiles>
     <!--
-      ./mvnw -Pnative,pgo package
+      ./mvnw -Pnative,pgo package     (or ./native.sh -Ppgo, which finds the right toolchain)
 
-      Builds with the profile committed for this binary (§14). Measured: every PGO build comes out
-      about 7 MiB smaller with a fifth less idle RSS, on either platform, and the CPU gain is
-      between nothing and half depending on the profile, which is why the profile in the repository
-      is merged from three runs rather than taken from one. Needs Oracle GraalVM: PGO is not in the
-      Community Edition.
+      Profile-guided, against the profile committed for this binary. A local option and not what
+      the release ships (§14, profiles/README.md): it is worth 10 MiB and a fifth of the idle RSS
+      on every platform, but CPU only on the platform the profile was collected on, and it needs
+      Oracle GraalVM (PGO is in neither the Community Edition nor Liberica NIK), which would put
+      the GraalVM Free Terms and Conditions on every released binary.
     -->
     <profile>
       <id>pgo</id>
@@ -204,10 +217,10 @@
               <artifactId>native-maven-plugin</artifactId>
               <configuration>
                 <buildArgs>
-                  <buildArg>-O2</buildArg>
+                  <buildArg>-O${native.optLevel}</buildArg>
                   <buildArg>-H:+ReportExceptionStackTraces</buildArg>
                   <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
-                <buildArg>--pgo=${maven.multiModuleProjectDirectory}/profiles/${project.artifactId}.iprof</buildArg>
+                <buildArg>--pgo=${native.pgoProfile}</buildArg>
               </buildArgs>
             </configuration>
             </plugin>
@@ -234,7 +247,7 @@
               <artifactId>native-maven-plugin</artifactId>
               <configuration>
                 <buildArgs>
-                  <buildArg>-O2</buildArg>
+                  <buildArg>-O${native.optLevel}</buildArg>
                   <buildArg>-H:+ReportExceptionStackTraces</buildArg>
                   <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
                 <buildArg>--pgo-instrument</buildArg>

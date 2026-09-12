@@ -1060,13 +1060,17 @@ Measured with the native binaries by `./measure.sh`, which starts a real hub and
 loopback, joins them with the real CLI and opens a link. Both columns are measured, on the two
 platforms CI can run the gate on; the budgets differ per platform for the reason below the table.
 
+Both columns are the toolchain and options the release uses: Liberica NIK for JDK 25, `-O2`, no
+profile-guided optimization. That was not true of the macOS column until 2026-09-13, and the cost of
+it is below the table.
+
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
-| Binary size | 25.2 MiB (`jailhub`), 25.3 MiB (`jailscale`) — but the release ships 29.8 and 30.1, see below | 31.6 MiB, 31.9 MiB | 32 / 36 MiB |
-| Node idle RSS | about 24.7 MB | about 39.7 MB | 28 / 46 MB |
-| Hub idle RSS | about 24.7 MB | about 40.0 MB | 30 / 46 MB |
-| RSS with 1,000 visitor sessions held open | node 68.6 MB, hub 52.7 MB | node 60.3 MB, hub 68.6 MB | node 192 MB, hub 160 MB |
-| CLI cold start | about 7 ms (`jailscale status`, median of 10, IPC round trip included) | about 4.5 ms | 50 ms |
+| Binary size | 29.9 MiB (`jailhub`), 30.2 MiB (`jailscale`) | 31.7 MiB, 32.0 MiB | 32 / 34 MiB |
+| Node idle RSS | about 29.0 MB | about 39.9 MB | 32 / 44 MB |
+| Hub idle RSS | about 29.0 MB | about 40.3 MB | 32 / 44 MB |
+| RSS with 1,000 visitor sessions held open | node 51.8 MB, hub 49.1 MB | node 60.3 MB, hub 68.6 MB | node 88 MB, hub 88 MB |
+| CLI cold start | about 6 ms (`jailscale status`, median of 10, IPC round trip included) | about 4.5 ms | 50 ms |
 
 **Linux is not 15 MB heavier; it counts differently.** Of the hub's 40.1 MB there, **6.1 MB is
 anonymous** — the heap, the stacks, everything the process actually owns — and the rest is the
@@ -1106,7 +1110,7 @@ nothing measured so far asks for a different ceiling.
 `serial` (default), `parallel` and `epsilon`; G1 needs Oracle GraalVM and Linux, so it could only
 ever cover two of the five targets. It was built and measured anyway, on Oracle GraalVM 25.0.4 with
 the same ceilings, against the same toolchain's serial build: the binaries went from 31.8 and
-32.0 MiB to **39.9 and 40.3**, over the 36 MiB budget; idle anonymous memory went from 5.0 and
+32.0 MiB to **39.9 and 40.3**, over the linux binary budget; idle anonymous memory went from 5.0 and
 4.1 MB to **11.1 and 10.9**; and peak RSS with 1,000 visitors held open went from 68.0 and 58.2 MB
 to **110.3 and 92.7**, about 60% more. The ramp was unchanged at 2.4s against 2.5s. So G1 is a cost
 here, not a bonus — Native Image's own documentation calls the serial GC the one "optimized for low
@@ -1114,81 +1118,92 @@ memory footprint and small Java heap sizes", and at a 96 MB ceiling that is the 
 Swapping collectors was never the fix for the drift either: `MaximumHeapSizePercent` applies to
 serial, parallel and epsilon alike, so the ceiling is what bounds it.
 
-**The edition question, measured once there was something to measure it with.** An earlier version
-of this section said Oracle GraalVM was worth "about 1.2 MB of idle anonymous memory and nothing
-else measurable" -- which was true of everything §14 measured at the time, and wrong as a
-conclusion, because nothing measured CPU. With `RATE=` in place, all three choices ran in one
-workflow on `ubuntu-24.04`, three measured runs each, spread within an arm under 1%:
+**The edition question, measured once there was something to measure it with, and answered
+"neither".** An earlier version of this section said Oracle GraalVM was worth "about 1.2 MB of idle
+anonymous memory and nothing else measurable" -- which was true of everything §14 measured at the
+time, and wrong as a conclusion, because nothing measured CPU. With `RATE=` in place, all three
+choices ran in one workflow on `ubuntu-24.04`, three measured runs each, spread within an arm under
+1%:
 
 | | Liberica NIK 25.0.4 | Oracle GraalVM 25.0.4 | Oracle + PGO |
 |---|---|---|---|
-| `jailhub`, `jailscale` binary | 31.7, 32.0 MiB | 31.8, 32.0 | **24.8, 24.6** |
-| Idle RSS (anonymous) | 40.6 (6.2), 40.1 (5.0) MB | 39.4 (5.0), 38.6 (4.0) | **31.9 (4.8), 31.4 (3.9)** |
-| Peak RSS, 1,000 held | 71.7, 61.0 MB | 64.7, 58.4 | **57.3, 50.2** |
-| Handshake CPU | 2,525, 3,025 µs | 2,362, 2,750 | **1,225, 1,375** |
+| `jailhub`, `jailscale` binary | 31.7, 32.0 MiB | 31.8, 32.0 | **21.9, 21.9** |
+| Idle RSS (anonymous) | 40.6 (6.2), 40.1 (5.0) MB | 39.4 (5.0), 38.6 (4.0) | **32.4 (4.8), 32.0 (3.9)** |
+| Peak RSS, 1,000 held | 71.7, 61.0 MB | 64.7, 58.4 | **61.3, 51.6** |
+| Handshake CPU | 2,525, 3,025 µs | 2,362, 2,750 | **1,962, 2,300** |
 | Warm request CPU | 163, 181 µs | 149, 163 | **66, 70** |
 | Warm requests a second | 7,697 | 8,419 | **19,169** |
 
 Oracle on its own is 6 to 10% less CPU per operation, which is real and consistent across four
-metrics but close to the 7% seen between jobs on different runner instances.
+metrics but close to the 7% seen between jobs on different runner instances. **Releases build with
+Liberica NIK and no profile, which is the left-hand column.** PGO was adopted on 2026-09-13 and
+dropped again the same day, once it could be measured on both platforms rather than one. The
+profiles stay in the repository as a local option (`profiles/README.md`); the rest of this section
+is why.
 
-**PGO's size and memory gains are dependable; its CPU gain is not.** That column came from one
-run, and chasing it took three more. What holds up:
+**PGO's size and memory gains are dependable. Its CPU gain lands only where the profile came
+from.** What holds up, across nine builds:
 
-- **Size and memory, every time.** Every PGO build measured, on either platform, lands at 24.1 to
-  24.8 MiB against 31.1 to 31.8 plain, with idle RSS down about a fifth. On macOS that is 24.3 MiB
-  against 31.1, which would put the darwin binaries back inside the 30 MiB budget on its own.
-- **CPU, anywhere between nothing and half.** Four PGO builds of the same source gave hub CPU per
-  handshake of 1,225, 1,756, 2,094 and 2,244 µs against a plain baseline of 2,225 to 2,369 -- and
-  **two builds from the identical configuration gave 1,756 and 2,094**, with the three measured runs
-  inside each build within 1% of each other. So the variance is between builds, not between
-  measurements: the same profiling recipe does not produce the same profile twice. A profile
-  collected without the load phase (visitors arriving) gave no handshake gain at all, 2,244 against
-  2,225, while profiles taken from warm requests only, handshakes only, or both landed within 1% of
-  each other -- so coverage of *kinds* of work matters and the particular throughput shape does not.
-- **Cross-platform, for size only.** A profile collected on linux-amd64 builds on macOS without
-  complaint, as the FAQ says it should ("in most cases, the PGO profiles are sufficiently
-  cross-platform"), and carries the size and memory gains over. It carries no measurable CPU gain:
-  1,788 µs of hub CPU per handshake either way, warm requests within the runner's own ±11%.
-
-So an adoption that committed one linux profile to the repository -- the shape Go's PGO is designed
-around, and the cheap one -- would buy 7 MiB and a fifth of idle RSS on all five targets, and CPU
-only where the profile was collected. Oracle GraalVM 25.0.4 does have the pieces for the other
-shape: `--pgo-sampling` builds and runs, `-H:PGOPerfSourceMappings` exists to profile with `perf`,
-and `-H:AdoptedPGOEnabled` says the toolchain caches profiles of commonly used code -- which is a
-candidate explanation for the 6 to 10% Oracle shows without any profile of ours, and not one that
-has been tested.
+- **Size and memory, every time.** Every PGO build measured, on either platform, lands at 21.6 to
+  21.9 MiB against 29.9 to 32.0 plain, with idle RSS down about a fifth. That is 10 MiB, the largest
+  single effect anything in this section measured.
+- **CPU on the profile's own platform: real.** On linux-amd64, where these profiles were collected,
+  warm throughput went from 8,419 to 19,169 requests a second and handshake CPU from 2,362 to
+  1,962 µs.
+- **CPU on any other platform: a loss.** The same profiles on arm64 macOS gave 862 µs of hub CPU per
+  handshake against 747 plain and 28,976 warm requests a second against 34,780 -- 11% and 16% the
+  wrong way. Per-platform profiles were then collected on macOS and measured: no better, slightly
+  worse. The FAQ's "in most cases, the PGO profiles are sufficiently cross-platform" holds for size
+  and memory and not for CPU.
+- **The same recipe does not produce the same profile twice.** Four PGO builds of the same source
+  gave hub CPU per handshake of 1,225, 1,756, 2,094 and 2,244 µs, and **two builds from the
+  identical configuration gave 1,756 and 2,094**, with the three measured runs inside each build
+  within 1% of each other. So the variance is between builds, not between measurements. A profile
+  collected without the load phase (visitors arriving) gave no handshake gain at all, while profiles
+  from warm requests only, handshakes only, and both landed within 1% of each other -- coverage of
+  *kinds* of work matters, the particular throughput shape does not.
 
 What it costs is not performance. GFTC puts Oracle's terms on binaries this repository ships under
 Apache-2.0: free for us, since we charge nothing and Native Image output counts as unmodified
 Program, but a downstream that wants to sell a bundle is blocked and every toolchain bump becomes a
-licence review. And PGO is a two-phase build -- instrument, run a workload, rebuild -- per target,
-which doubles the release build and needs a workload driver on each platform: `measure.sh` is a
-POSIX script that wants `pgrep`, so **windows-amd64 has no way to be profiled today**. Neither is
-decided here; both numbers are, which is the point.
+licence review. And a profile is only collectable where a workload driver runs: `measure.sh` is a
+POSIX script that wants `pgrep`, `pkill`, `bc` and `/proc`, none of which the Windows runner has, so
+**windows-amd64 could not be profiled from its own traffic today** (it does have `python3`,
+`tasklist` and `powershell`, so a driver is possible; none is written). Weighing that against a gain
+that only reaches one of five targets is what decided it. Almost no project of this size ships
+profile-guided binaries, and the ones that do -- Firefox, Chrome, CPython, the Go compiler, rustc --
+each run a build bot whose job is keeping the profile current.
+
+**`-O3` was measured too, and is not adopted.** It needs no Oracle GraalVM and no profile, so it was
+the one remaining free knob. Three runs of each on arm64 macOS: the binary is 0.9 MiB smaller (29.1
+and 29.3 against 29.9 and 30.2), warm request CPU is about 2% lower (101 µs against 104), handshake
+CPU and warm throughput do not move (722/741/778 µs against 747/744/741), and **`jailscale status`
+takes 20% longer to start** -- 7.6, 7.9 and 7.6 ms median against 6.2, 6.5 and 6.1, thirty samples
+an arm, well outside anything else here that moved. `status` is a command a person types, so that
+trade is the wrong way round. `-Dnative.optLevel=3` is the knob if a future measurement disagrees.
+Note that `--pgo` turns `-O3` on by itself, which is one reason the PGO numbers above are not
+comparable to a plain `-O2` build on size alone.
 
 `./measure.sh --check` fails when a number exceeds its budget. The budget values live at the top of
 the script and must match this table; they change only by a PR that states a reason. The `budget` job
 of the `ci` workflow runs it with `LOAD=1000` on linux-amd64 for every push to main and once a
 night; the macOS column is what `./measure.sh` reports on the machine this is developed on.
 
-**The macOS column is this machine's toolchain, and the release's is not the same one.** The
-numbers above come from `brew`'s GraalVM CE, `25.3.4.1-dev` today, whose banner reads
-`serial gc, compressed references`; the release workflow builds every target with Liberica NIK
-25.0.4 (§3.2), whose banner has no compressed references. That is a 4.6 MiB difference on the same
-platform and the same source: v0.1.0 ships `jailhub-darwin-arm64` at 29.8 MiB and
-`jailscale-darwin-arm64` at 30.1 MiB, against the 25.2 and 25.3 measured here, and the released
-`jailscale` is therefore already over the 30 MiB budget in this table — invisibly, because the
-`budget` job only runs on linux-amd64. The macOS budget is now 32 MiB for that reason: a budget has to describe what
-ships, and 30 described this machine. Moving releases to a GraalVM CE with compressed references
-was the alternative and it is blocked twice over -- `graalvm-ce-builds` 25.3.4.1 ships linux-x64,
-linux-aarch64, macos-aarch64 and windows-x64 and no macOS x64, the same gap §3.2 chose Liberica
-over, and `setup-graalvm`'s community line still resolves 25 to **25.0.2**, the release §3.2
-forbids. No distribution resolves a native-image for JDK 26 at all yet. Oracle GraalVM 25.0.4 is
-the only toolchain CI can fetch that has compressed references, and its measured gain on this
-source is about 1.2 MB of idle anonymous memory. The linux-amd64 column is unaffected: it is measured on the toolchain that builds it. And the
-macOS budget is not enforced anywhere yet — a `budget` job on macOS would need the runner to raise
-its file-descriptor limit, which it refuses, so only 600 of the 1,000 visitors can be held there.
+**The macOS column used to be a different toolchain's, and that is how two numbers here were
+wrong.** Until 2026-09-13 it came from whatever GraalVM the development machine happened to have --
+`brew`'s Community Edition -- while every release was built with Liberica NIK (§3.2). On the same
+source that is a 4.6 MiB difference: v0.1.0 shipped `jailhub-darwin-arm64` at 29.8 MiB and
+`jailscale-darwin-arm64` at 30.1 against the 25.2 and 25.3 this table claimed, so the released
+`jailscale` was over its own 30 MiB budget from the first release, and idle RSS was 24.7 here
+against 29.0 for the binary people actually download. Neither could be caught, because the `budget`
+job only runs on linux-amd64. `native.sh` now looks for the release's toolchain, says which one it
+found, and refuses to guess; the budgets above were re-set against it. Installing Liberica NIK for
+JDK 25 locally takes a download from `bell-sw/LibericaNIK`'s GitHub releases -- it is not on
+Homebrew, and BellSoft's own release API serves NIK only up to JDK 21, so the JDK 25 line is
+published there and nowhere else.
+
+The macOS column is still not enforced anywhere: a `budget` job there would need the runner to
+raise its file-descriptor limit, which it refuses, so only 600 of the 1,000 visitors can be held.
 
 **Throughput, added 2026-09-13, reported and not gated.** Everything else here is memory, size or
 one cold start, so a build that traded CPU for footprint had nothing to move, and whether Oracle
@@ -1202,11 +1217,11 @@ warm requests, which nothing limits, keep the rate as capacity.
 
 | | arm64 macOS (14 cores) | linux-amd64 (4-core runner) |
 |---|---|---|
-| Handshake, hub CPU | 700 µs | 2,356 µs |
-| Handshake, node CPU | 1,090 µs | 2,975 µs |
-| Warm request, hub CPU | 96 µs | 142 µs |
-| Warm request, node CPU | 108 µs | 156 µs |
-| Warm requests a second | about 38,000 | about 9,000 |
+| Handshake, hub CPU | 744 µs | 2,356 µs |
+| Handshake, node CPU | 1,138 µs | 2,975 µs |
+| Warm request, hub CPU | 104 µs | 142 µs |
+| Warm request, node CPU | 114 µs | 156 µs |
+| Warm requests a second | about 35,000 | about 9,000 |
 
 A handshake costs seven times a warm request or more on either side, which is the shape the design
 predicts: one opens a stream, asks the hub for a signature bound to that stream (§9.2) and finishes
@@ -1221,7 +1236,7 @@ is an event loop that honours `Connection: close`: with keep-alive and a thread 
 1,000 held visitors became 1,000 Python threads, 900 of 1,000 were held instead of all, the peaks
 rose from 53 and 69 MB to 76 and 100, and a four-core runner stopped finishing the phase at all.
 Taking that server out of the path then showed how much of the warm figure had been the harness:
-38,000 requests a second against 18,000, at 96 µs of hub CPU against 132. And
+35,000 requests a second against 18,000, at 104 µs of hub CPU against 132. And
 `tools/hold-visitors.py` times out every step now -- without that, a saturated node left it waiting
 for a reply that never came, which is how a measurement becomes a hang instead of a number.
 
@@ -1276,7 +1291,7 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
-- **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at**, and about 39.7 MB as
+- **Node idle RSS is about 29.0 MB, not the 20 MB originally aimed at**, and about 39.9 MB as
   Linux counts it (§14: mostly the mapped binary, 5 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they
   look. There is no build-time initialisation whitelist to widen, because the build configures none

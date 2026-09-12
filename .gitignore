@@ -7,3 +7,5 @@ target/
 .DS_Store
 /run/
 profiles/*.iprof
+# An instrumented binary writes its profile to the working directory unless told otherwise.
+default.iprof

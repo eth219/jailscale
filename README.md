@@ -52,9 +52,9 @@ Things *missing* rather than excluded are under [Not done yet](#not-done-yet).
 The interesting question was whether a JVM language can carry this kind of
 product without apologising for itself. Four things were the target.
 
-**Light.** 25 MiB per binary and 25 MB idle on arm64 macOS, 32 MiB and 40 MB on
+**Light.** 30 MiB per binary and 29 MB idle on arm64 macOS, 32 MiB and 40 MB on
 linux-amd64 — of which 6 MB is memory the process actually owns and the rest is
-the binary's own pages, which the kernel can take back. 7 ms for a CLI round
+the binary's own pages, which the kernel can take back. 6 ms for a CLI round
 trip. That needs
 GraalVM Native Image, and Native Image needs discipline: no reflection, no
 dependency injection, no dynamic class loading, no third-party runtime
@@ -85,7 +85,7 @@ recorded, which catches a hub that terminated the TLS itself, and `status` keeps
 each name's last verdict. The control channel is Noise IK inside TLS, so a
 compromised certificate authority still does not get you the control plane.
 
-What it did not buy: idle memory is 24.7 MB against a 20 MB goal, and roughly
+What it did not buy: idle memory is 29 MB against a 20 MB goal, and roughly
 7.6 MB of that is JSSE standing up a single TLS client. On Linux the number to
 compare is the 6 MB of anonymous memory, not the 40 MB `ps` prints.
 
@@ -206,15 +206,20 @@ binary's own mapped pages in RSS where macOS largely does not.
 
 | | jailhub | jailscale |
 |---|---|---|
-| Binary, as released | 29.8 / 31.6 MiB | 30.1 / 31.9 MiB |
-| Idle RSS | 24.7 / 40.0 MB | 24.7 / 39.7 MB |
-| Peak RSS, 1,000 visitors held open at once | 52.7 / 68.6 MB | 68.6 / 60.3 MB |
-| CLI cold start | — | 7 / 4.5 ms |
+| Binary, as released | 29.9 / 31.7 MiB | 30.2 / 32.0 MiB |
+| Idle RSS | 29.0 / 40.3 MB | 29.0 / 39.9 MB |
+| Peak RSS, 1,000 visitors held open at once | 49.1 / 68.6 MB | 51.8 / 60.3 MB |
+| CLI cold start | — | 6 / 4.5 ms |
 
 *arm64 macOS / linux-amd64.* On Linux most of that idle RSS is the binary mapped
 into the process — clean pages the kernel takes back when it needs them. The
 anonymous memory, the part that is really the process's, is 6 MB for the hub and
 5 MB for the node.
+
+These are the released binaries. Building them yourself with profile-guided
+optimization takes about 10 MiB off each and a fifth off the idle figures;
+[profiles/](profiles/) has the profiles and one command to use them, and
+[ARCHITECTURE.md §14](docs/ARCHITECTURE.md) says why the release does not.
 
 Idle is a fresh start, not a steady state. The heap has a ceiling, 96 MB for the
 hub and 64 MB for the node, and a long-running process drifts up towards it:
@@ -224,7 +229,7 @@ a leak — the plateau follows the ceiling rather than the workload — and
 [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has the measurements both ways.
 
 Speed, from the same script: on connections already open the pair moves about
-38,000 requests a second here and 9,000 on a four-core Linux runner. A fresh TLS
+35,000 requests a second here and 9,000 on a four-core Linux runner. A fresh TLS
 handshake costs much more than a request, since it opens a stream and takes a
 signature, and the hub signs at most 1,000 a second for any one node — the
 ceiling that matters when visitors arrive rather than when they stay.
@@ -267,7 +272,7 @@ What a compromised hub can and cannot do is written out in
   outside CI.
 - Upgrading is manual. `jailscale update` says when a release is out; nothing
   installs it for you.
-- Idle memory is 24.7 MB against a 20 MB goal (39.7 MB as Linux counts it, 5 MB
+- Idle memory is 29 MB against a 20 MB goal (39.9 MB as Linux counts it, 5 MB
   of it anonymous). Most of the gap is JSSE standing up a TLS client.
 - No standby hub, no state replication.
 - v0.1.0 is the first tagged release, so there is no upgrade path to have got

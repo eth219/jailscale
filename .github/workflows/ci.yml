@@ -63,20 +63,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # The same toolchain and profiles the release uses, so the gate measures what ships. It did
-      # not until 2026-09-13, and the cost of that was §14 claiming macOS binaries 4.7 MiB smaller
+      # The same toolchain and options the release uses, so the gate measures what ships. A gate on
+      # a different build than the release is worse than no gate: until 2026-09-13 this ran on a
+      # toolchain nobody released with, and §14 ended up claiming macOS binaries 4.7 MiB smaller
       # than the ones v0.1.0 actually published.
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'graalvm'
+          distribution: 'liberica'
       - name: measure.sh needs bc, which the runner image does not ship
         run: sudo apt-get update && sudo apt-get install -y bc
-      - name: Build the binaries, against the committed profiles
-        run: |
-          for gz in profiles/*.iprof.gz; do gunzip -c "$gz" > "${gz%.gz}"; done
-          ./mvnw -B -ntp -Pnative,pgo package | tee /tmp/build.log
-          grep -c "PGO: user-provided" /tmp/build.log
+      - name: Build the binaries
+        run: ./mvnw -B -ntp -Pnative package
       - name: Budget gate
         # RATE also measures throughput, which nothing gates: it is only comparable against another
         # run on the same machine, and it is here so a build that trades CPU for footprint shows up.
