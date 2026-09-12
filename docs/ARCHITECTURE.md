@@ -1044,7 +1044,7 @@ platforms CI can run the gate on; the budgets differ per platform for the reason
 | Binary size | 25.2 MiB (`jailhub`), 25.3 MiB (`jailscale`) | 31.6 MiB, 31.9 MiB | 30 / 36 MiB |
 | Node idle RSS | about 24.7 MB | about 39.7 MB | 28 / 46 MB |
 | Hub idle RSS | about 24.7 MB | about 40.0 MB | 30 / 46 MB |
-| RSS with 1,000 visitor sessions held open | node 93 MB, hub 80 MB | node 90 MB, hub 90 MB | node 192 MB, hub 160 MB |
+| RSS with 1,000 visitor sessions held open | node 85 MB, hub 78 MB | node 90 MB, hub 90 MB | node 192 MB, hub 160 MB |
 | CLI cold start | about 7 ms (`jailscale status`, median of 10, IPC round trip included) | about 4.5 ms | 50 ms |
 
 **Linux is not 15 MB heavier; it counts differently.** Of the hub's 40.1 MB there, **6.1 MB is
@@ -1122,10 +1122,25 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   neighbourhood JCE has to stay out of. Restricting suites and protocols is already done, but
   through `SSLParameters` on each engine, which narrows what is negotiated and not what is
   initialised.
-- **Per-visitor memory is about 60 KB on the node**, nearly all of it the three `ByteBuffer`s a
-  `TlsEndpoint` allocates per connection: JSSE asks for a 16,709-byte packet buffer twice and a
-  16,704-byte application buffer, which is 48.9 KiB before the 16 KB copy array. Buffer pooling is
-  the candidate for reducing it. **The 256 KB stream window is not.** It caps what may sit queued
+- **Per-visitor memory is about 60 KB on the node**: a 16,709-byte packet buffer and a 16,704-byte
+  application buffer that a `TlsEndpoint` holds for the life of the connection, plus the two 16 KB
+  copy arrays, one per direction. A **gated** link (§9.3) adds a 4 KB buffer for the request head,
+  so 4 MB at the 1,024-visitor ceiling; against an ungated link under the same load it does not
+  rise above the run-to-run variance of the figure in §14.
+
+  It used to be about 67 KB, because the wrap destination was a third per-connection buffer. That
+  one was **not** per-connection work: `wrapAndWrite` clears it on entry and has written every byte
+  out before it returns, so it belongs to the wrap, and instrumenting the 1,000-visitor load showed
+  256 wraps in flight at the busiest moment. The other 744 connections were each holding 16,709
+  bytes they were not using. Sharing them through a small pool moved the node's figure in §14 from
+  a mean of 91.8 MB over seven runs to 84.8 MB, and — the larger effect — from a 14.6 MB spread
+  between runs to 1.1 MB, because the heap high-water no longer depends on where the GC happened to
+  fall during the ramp. What remains is genuinely per-connection: a partly-arrived TLS record and
+  plaintext nobody has read yet both have to survive between calls.
+
+  **Pooling the other two would not work, and the 256 KB stream window is not the lever either.**
+  Buffers a connection holds between calls are needed by every open connection at once, so a pool
+  of them is the same memory with a free list in front. The window caps what may sit queued
   (§5.3), not what is allocated, so a visitor whose reader keeps up holds none of it and the load
   measurement in §14 never fills it; shrinking it would not move that figure, and it would lower
   single-stream throughput, which is bounded by the window divided by the round-trip time.

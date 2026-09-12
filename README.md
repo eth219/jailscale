@@ -179,9 +179,9 @@ binary's own mapped pages in RSS where macOS largely does not.
 
 | | jailhub | jailscale |
 |---|---|---|
-| Binary | 25.0 / 31.6 MiB | 25.3 / 31.9 MiB |
+| Binary | 25.2 / 31.6 MiB | 25.3 / 31.9 MiB |
 | Idle RSS | 24.7 / 40.0 MB | 24.7 / 39.7 MB |
-| Peak RSS, 1,000 visitors held open at once | 80 / 90 MB | 93 / 90 MB |
+| Peak RSS, 1,000 visitors held open at once | 78 / 90 MB | 85 / 90 MB |
 | CLI cold start | — | 7 / 4.5 ms |
 
 *arm64 macOS / linux-amd64.* On Linux most of that idle RSS is the binary mapped

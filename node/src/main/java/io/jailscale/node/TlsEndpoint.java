@@ -40,7 +40,8 @@ final class TlsEndpoint implements AutoCloseable {
     private final Tls13.Tap serverSide = new Tls13.Tap();
     private final ByteBuffer netInBuf;
     private final ByteBuffer appInBuf;
-    private final ByteBuffer netOutBuf;
+    /** Size of a wrap destination for this engine; the buffer itself comes from {@link OutBuffers}. */
+    private final int packetSize;
     private final Object writeLock = new Object();
     private boolean netEof;
     private volatile Runnable onFirstApplicationRead;
@@ -62,8 +63,85 @@ final class TlsEndpoint implements AutoCloseable {
         int app = engine.getSession().getApplicationBufferSize();
         this.netInBuf = ByteBuffer.allocate(pkt);
         this.appInBuf = ByteBuffer.allocate(app);
-        this.netOutBuf = ByteBuffer.allocate(pkt);
+        this.packetSize = pkt;
         appInBuf.flip(); // start empty in read mode
+    }
+
+    /**
+     * The wrap destinations, shared by every endpoint in the process (§15).
+     *
+     * <p>{@code netInBuf} and {@code appInBuf} belong to a connection: one holds a TLS record that
+     * has not all arrived, the other plaintext nobody has read yet, and both have to survive
+     * between calls. The wrap destination does not. {@link #wrapAndWrite} clears it on entry and
+     * has written every byte out before it returns, and both consumers copy — {@code Tls13.Tap}
+     * into a {@code ByteArrayOutputStream}, {@code MuxStream.write} into a chunk of its own — so
+     * nothing outlives the call. It is a buffer that belongs to the work, and it was being
+     * allocated per connection: measured against the 1,000-visitor load of §14, 256 of the 1,000
+     * were ever in a wrap at once, so about 12 MB of the 16 MB was held by connections doing
+     * nothing with it.
+     *
+     * <p>An exhausted pool allocates rather than waits. Waiting would be the worse bug: the write
+     * inside {@code writeLock} blocks when the mux stream is out of flow-control credit (§5.3), so
+     * a borrowed buffer can be held for as long as a slow visitor likes, and making others queue
+     * behind it would couple connections that share nothing. Allocating instead means the worst
+     * case is what the code did before — a buffer per concurrent wrap — and the common case is
+     * {@link #MAX_IDLE} of them.
+     *
+     * <p>Not a {@code ThreadLocal}, which is the obvious shape and the wrong one here: a visitor
+     * owns two virtual threads (§12), so thread-locals would hold <em>more</em> buffers than the
+     * per-connection fields they replace, not fewer.
+     */
+    private static final class OutBuffers {
+
+        /** Buffers kept for reuse. Beyond this, a returned buffer is dropped for the GC to take. */
+        static final int MAX_IDLE = 64;
+
+        private static final java.util.Queue<ByteBuffer> IDLE = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        private static final java.util.concurrent.atomic.AtomicInteger IDLE_COUNT =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+        private OutBuffers() {}
+
+        static ByteBuffer acquire(int size) {
+            ByteBuffer b = IDLE.poll();
+            if (b != null) {
+                IDLE_COUNT.decrementAndGet();
+                if (b.capacity() >= size) {
+                    return b;
+                }
+                // An engine wanting a larger record than the pooled buffers were sized for: drop it.
+            }
+            return ByteBuffer.allocate(size);
+        }
+
+        static void release(ByteBuffer b) {
+            // Claim the slot before taking it: a plain get-then-increment lets every releaser in a
+            // burst read the same under-cap value and keep its buffer, so the cap holds only when
+            // nobody contends for it -- which is exactly when it does not matter.
+            int n;
+            do {
+                n = IDLE_COUNT.get();
+                if (n >= MAX_IDLE) {
+                    return;
+                }
+            } while (!IDLE_COUNT.compareAndSet(n, n + 1));
+            IDLE.add(b);
+        }
+
+        /** Buffers held for reuse right now. Tests assert the cap; nothing else reads it. */
+        static int idle() {
+            return IDLE_COUNT.get();
+        }
+    }
+
+    /** Wrap buffers held for reuse right now (tests). */
+    static int pooledBuffers() {
+        return OutBuffers.idle();
+    }
+
+    /** The cap on buffers kept for reuse (tests). */
+    static int maxIdleBuffers() {
+        return OutBuffers.MAX_IDLE;
     }
 
     /** Runs the handshake to completion on the calling thread. */
@@ -204,21 +282,30 @@ final class TlsEndpoint implements AutoCloseable {
 
     private void wrapAndWrite(ByteBuffer src) throws IOException {
         synchronized (writeLock) {
-            netOutBuf.clear();
-            SSLEngineResult r = engine.wrap(src, netOutBuf);
-            if (r.getStatus() == SSLEngineResult.Status.BUFFER_OVERFLOW) {
-                throw new SSLException("wrap overflow");
-            }
-            netOutBuf.flip();
-            if (netOutBuf.hasRemaining()) {
-                if (!serverSide.done()) {
-                    serverSide.accept(netOutBuf.array(), netOutBuf.position(), netOutBuf.remaining());
+            ByteBuffer out = OutBuffers.acquire(packetSize);
+            try {
+                out.clear(); // a borrowed buffer still holds the last record written through it
+                SSLEngineResult r = engine.wrap(src, out);
+                if (r.getStatus() == SSLEngineResult.Status.BUFFER_OVERFLOW) {
+                    throw new SSLException("wrap overflow");
                 }
-                netOut.write(netOutBuf.array(), netOutBuf.position(), netOutBuf.remaining());
-                netOut.flush();
-            }
-            if (r.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_TASK) {
-                runTasks();
+                out.flip();
+                // Only [position, limit) is ever read, and wrap just filled it. Anything past the
+                // limit is the previous borrower's ciphertext, so reading beyond it here would
+                // hand one visitor another's bytes -- which is why the reads below are bounded by
+                // remaining() and why OutBuffersTest exists.
+                if (out.hasRemaining()) {
+                    if (!serverSide.done()) {
+                        serverSide.accept(out.array(), out.position(), out.remaining());
+                    }
+                    netOut.write(out.array(), out.position(), out.remaining());
+                    netOut.flush();
+                }
+                if (r.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+                    runTasks();
+                }
+            } finally {
+                OutBuffers.release(out);
             }
         }
     }
