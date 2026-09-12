@@ -22,8 +22,8 @@ import java.util.concurrent.TimeUnit;
  * <p><b>Why a subprocess.</b> {@code NOTIFY_SOCKET} is an AF_UNIX <i>datagram</i> socket, and the
  * JDK does not open those: {@code DatagramChannel.open(StandardProtocolFamily.UNIX)} throws
  * {@code UnsupportedOperationException: Protocol family not supported} on 25. Writing the datagram
- * ourselves would mean a foreign-function call and its native-image configuration on five release
- * targets, to save one exec that happens once per process lifetime. The cost of the subprocess is
+ * ourselves would mean a foreign-function call and its native-image configuration on every release
+ * target, to save one exec that happens once per process lifetime. The cost of the subprocess is
  * that the notification arrives from a child, so the unit needs {@code NotifyAccess=all} and the
  * host needs <b>systemd 246 or newer</b>: a message from a process that has already exited is one
  * the manager cannot attribute to a unit and therefore drops, {@code NotifyAccess=all} or not, and

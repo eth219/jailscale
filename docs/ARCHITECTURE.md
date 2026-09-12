@@ -123,7 +123,7 @@ finding nobody answered look identical six months later.
 
 **Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu, macos and
 Windows for every push and pull request, and the §14 budget on main and nightly. Windows was a
-nightly job until 2026-09-12, because the stall below failed about 2% of runs and a gate that is red
+nightly job for a while, because the stall below failed about 2% of runs and a gate that is red
 2% of the time teaches people to ignore it; it is per-push now that the stall is fixed and measured
 at 0 in 3,000, and it costs 1.5 min against the other two at 1.2. The nightly run gates nothing any
 more and stays for drift in the runner images and in what `graalvm-community` + `25.3` resolves to. `release`
@@ -992,11 +992,13 @@ wire order; and the hub's own HTTP, ACME, port 80, DNS and both IPC servers use 
 per request. Remote signing blocks on the calling thread, which is free on a virtual thread. Buffers
 are 16 KB per direction, allocated per stream, and the per-stream flow-control window is 256 KB.
 
-Memory is bounded by the connection limits, not by a heap cap, and the images deliberately set **no
-fixed heap maximum**. Concurrency scales with the number of names: the hub accepts 1,024 per name and
-a node can hold 20, so one node's ceiling is 20,480 concurrent streams and the hub's is that times
-the number of names it serves. No single byte figure covers that range correctly, and a memory-tight
-host sets its own limit, for example `jailhub serve -Xmx256m`. Two consequences: Serial GC does not
+Concurrency scales with the number of names: the hub accepts 1,024 per name and a node can hold 20,
+so one node's ceiling is 20,480 concurrent streams and the hub's is that times the number of names it
+serves. **Both binaries do carry a heap ceiling** -- 96m for `jailhub`, 64m for `jailscale` (§14) --
+because without one the Serial GC's allowance is 80% of the machine and a long-running hub drifts
+into it. Neither ceiling is derived from the concurrency ceilings above, which no single byte figure
+covers correctly; they are what 1,000 visitors held open were measured to fit in. A host that needs
+more passes `-XX:MaxHeapSize=` at run time, which the native runtime consumes before `main`. Two consequences: Serial GC does not
 return the heap to the OS, so RSS stays at its high-water mark after a load burst, which is headroom
 and not a leak; and idle RSS is unrelated to heap size, since the node daemon alone is about 16.7 MB
 and reaches about 24.3 MB the moment it connects, so roughly 7.6 MB is JSSE initialisation for one
@@ -1066,8 +1068,8 @@ loopback, joins them with the real CLI and opens a link. Both columns are measur
 platforms CI can run the gate on; the budgets differ per platform for the reason below the table.
 
 Both columns are the toolchain and options the release uses: GraalVM CE 25.3, `-O2`, no
-profile-guided optimization. That was not true of the macOS column until 2026-09-13, and the cost of
-it is below the table.
+profile-guided optimization. That was not always true of the macOS column, and the cost of it is
+below the table.
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
@@ -1090,9 +1092,9 @@ Linux next to RSS, and still gates on RSS so that the two platforms are gated on
 measurement.
 
 **The anonymous share is heap sizing, and it is capped for that reason.** An earlier version of this
-section called the difference accounting rather than heap sizing, which was wrong: on 2026-09-12 the
-live hub was found at 78.2 MB of RSS with **53.9 MB anonymous** after 20 hours with no nodes and no
-visitors at all. It is not a leak. The same binary on the same instance, driven with 40,000
+section called the difference accounting rather than heap sizing, which was wrong: the live hub was
+found at 78.2 MB of RSS with **53.9 MB anonymous** after 20 hours with no nodes and no visitors at
+all. It is not a leak. The same binary on the same instance, driven with 40,000
 scanner-shaped connections, settles at 39.0 MB of anonymous memory with `-XX:MaxHeapSize=128m` and
 at 9.7 MB with `32m`, reaching both inside the first 10,000 connections and then holding flat, so
 the plateau is set by the heap allowance and not by the work; and 6,000 of the same connections
@@ -1147,11 +1149,11 @@ that settled it: **the newer compiler line gets essentially the same doubling wi
 licence.** Two independent routes arrive at about the same place, and only one of them costs
 anything.
 
-PGO was adopted for releases on 2026-09-13 and dropped again the same day, once it could be measured
-on both platforms rather than one; the profiles stay as a local option (`profiles/README.md`). The
+PGO was adopted for releases and dropped again within the day, once it could be measured on both
+platforms rather than one; the profiles stay as a local option (`profiles/README.md`). The
 25.3 line costs one release target -- it does not build macos-amd64 -- and is not the LTS line, so
 `version:` has to be moved forward as GraalVM's feature releases land. Both were judged worth
-17,560 warm requests a second against 7,810.
+17,560 warm requests a second against 7,697.
 
 **PGO's size and memory gains are dependable. Its CPU gain lands only where the profile came
 from.** What holds up, across nine builds:
@@ -1165,7 +1167,8 @@ from.** What holds up, across nine builds:
   1,962 µs.
 - **CPU on any other platform: a loss.** The same profiles on arm64 macOS gave 862 µs of hub CPU per
   handshake against 747 plain and 28,976 warm requests a second against 34,780 -- 11% and 16% the
-  wrong way. Per-platform profiles were then collected on macOS and measured: no better, slightly
+  wrong way. Both arms there are the toolchain of the time, not what ships now; what matters is the
+  sign. Per-platform profiles were then collected on macOS and measured: no better, slightly
   worse. The FAQ's "in most cases, the PGO profiles are sufficiently cross-platform" holds for size
   and memory and not for CPU.
 - **The same recipe does not produce the same profile twice.** Four PGO builds of the same source
@@ -1204,9 +1207,10 @@ and 53.7 with all 1,000 still served. The ceilings are left at 96m and 64m, sinc
 holds either way; 32m is the lever if that ever binds.
 
 **`-O3` was measured too, and is not adopted.** It needs no Oracle GraalVM and no profile, so it was
-the one remaining free knob. Three runs of each on arm64 macOS: the binary is 0.9 MiB smaller (29.1
-and 29.3 against 29.9 and 30.2), warm request CPU is about 2% lower (101 µs against 104), handshake
-CPU and warm throughput do not move (722/741/778 µs against 747/744/741), and **`jailscale status`
+the one remaining free knob. Three runs of each on arm64 macOS, measured on the toolchain of the
+time rather than the current one: the binary is 0.9 MiB smaller (29.1 and 29.3 against 29.9 and
+30.2), warm request CPU is about 2% lower (101 µs against 104), handshake CPU and warm throughput do
+not move (722/741/778 µs against 747/744/741), and **`jailscale status`
 takes 20% longer to start** -- 7.6, 7.9 and 7.6 ms median against 6.2, 6.5 and 6.1, thirty samples
 an arm, well outside anything else here that moved. `status` is a command a person types, so that
 trade is the wrong way round. `-Dnative.optLevel=3` is the knob if a future measurement disagrees.
@@ -1219,8 +1223,8 @@ of the `ci` workflow runs it with `LOAD=1000` on linux-amd64 for every push to m
 night; the macOS column is what `./measure.sh` reports on the machine this is developed on.
 
 **The macOS column used to be a different toolchain's, and that is how two numbers here were
-wrong.** Until 2026-09-13 it came from whatever GraalVM the development machine happened to have --
-`brew`'s Community Edition -- while every release was built with Liberica NIK (§3.2). On the same
+wrong.** It used to come from whatever GraalVM the development machine happened to have --
+`brew`'s Community Edition -- while every release was built with something else (§3.2). On the same
 source that is a 4.6 MiB difference: v0.1.0 shipped `jailhub-darwin-arm64` at 29.8 MiB and
 `jailscale-darwin-arm64` at 30.1 against the 25.2 and 25.3 this table claimed, so the released
 `jailscale` was over its own 30 MiB budget from the first release, and idle RSS was 24.7 here
@@ -1234,7 +1238,7 @@ it from too.
 The macOS column is still not enforced anywhere: a `budget` job there would need the runner to
 raise its file-descriptor limit, which it refuses, so only 600 of the 1,000 visitors can be held.
 
-**Throughput, added 2026-09-13, reported and not gated.** Everything else here is memory, size or
+**Throughput is reported and not gated.** Everything else here is memory, size or
 one cold start, so a build that traded CPU for footprint had nothing to move, and neither the
 edition question nor the compiler-line question above could even be asked. Both were then answered
 by it, which is the case for keeping it. `measure.sh RATE=8`
@@ -1327,8 +1331,8 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
-- **Node idle RSS is about 29.0 MB, not the 20 MB originally aimed at**, and about 39.9 MB as
-  Linux counts it (§14: mostly the mapped binary, 5 MB of it anonymous). Roughly 7.6 MB is JSSE
+- **Node idle RSS is about 24.8 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
+  Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they
   look. There is no build-time initialisation whitelist to widen, because the build configures none
   (§3.1), so that work is introducing one — and the classes worth moving are JSSE's, which is the

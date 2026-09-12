@@ -9,7 +9,7 @@ on:
   pull_request:
   schedule:
     - cron: '17 18 * * *'   # 03:17 KST: nothing is gated on it now, but it catches drift in the
-                            # runner images and in what 'liberica' + '25' resolves to.
+                            # runner images and in what the pinned toolchain lines resolve to.
   workflow_dispatch:
 
 # A newer push supersedes an older one on the same ref; a tag build is never cancelled.
@@ -33,7 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # JDK 25.0.3 or newer, for the virtual-thread timer fixes named in ARCHITECTURE.md §3.2.
-      # 'liberica' + '25' resolves to the newest 25.0.x, which is what the release workflow builds on.
+      # The tests run on the newest 25.0.x, a different line from the release's (§3.2); what they
+      # need from a JDK is that it is not 25.0.0-25.0.2, and both lines satisfy that.
       - uses: actions/setup-java@v4
         with:
           java-version: '25'
@@ -64,9 +65,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The same toolchain and options the release uses, so the gate measures what ships. A gate on
-      # a different build than the release is worse than no gate: until 2026-09-13 this ran on a
-      # toolchain nobody released with, and §14 ended up claiming macOS binaries 4.7 MiB smaller
-      # than the ones v0.1.0 actually published.
+      # a different build than the release is worse than no gate: this once ran on a toolchain
+      # nobody released with, and §14 ended up claiming macOS binaries 4.6 MiB smaller than the
+      # ones v0.1.0 actually published.
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
@@ -80,6 +81,7 @@ jobs:
         # RATE also measures throughput, which nothing gates: it is only comparable against another
         # run on the same machine, and it is here so a build that trades CPU for footprint shows up.
         # 200 handshakes a second rather than the default 400, because a handshake costs this runner
-        # about 5.6 ms of hub and node CPU together: at 400 the four cores were three-quarters busy
-        # and the per-operation figure was measuring contention as much as code.
+        # 3.5 to 4.4 ms of hub and node CPU together: at 400 the four cores were three-quarters busy
+        # and the per-operation figure was measuring contention as much as code. It was 5.6 ms when
+        # this was chosen, on the toolchain before the current one, so there is room to revisit it.
         run: LOAD=1000 RATE=8 RATE_HANDSHAKES=200 ./measure.sh --check

@@ -55,6 +55,10 @@ Environment=JAILHUB_STATE=/var/lib/jailhub
 ExecStart=/usr/local/bin/jailhub serve --base-url https://hub.example.com --acme-email ops@example.com
 Restart=on-failure
 RestartSec=2s
+# A clean SIGTERM shutdown exits 143. Without this, every `systemctl restart` logs
+# "Failed with result 'exit-code'" for a shutdown that worked, which is the only warning in an
+# otherwise clean journal and trains an operator to ignore the ones that matter.
+SuccessExitStatus=143
 # jailhub binds 443, 80 and 53 as a non-root user:
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE

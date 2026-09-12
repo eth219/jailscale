@@ -8,12 +8,12 @@
 #
 # Why the release's toolchain and not whichever GraalVM the machine happens to have: a development
 # machine that builds with something else measures something the release does not ship. That is not
-# hypothetical -- §14's macOS binary sizes were 4.7 MiB under what v0.1.0 actually shipped for
+# hypothetical -- §14's macOS binary sizes were 4.6 MiB under what v0.1.0 actually shipped for
 # exactly that reason, and nothing noticed, because the budget gate only runs on linux.
 #
 # -Ppgo builds against the profiles committed under profiles/ and needs Oracle GraalVM, which is
-# not what the release uses: profile-guided optimization is a local option here, worth 10 MiB and a
-# fifth of the idle RSS, and worth CPU only on the platform the profile was collected on (§14,
+# not what the release uses: profile-guided optimization is a local option here, worth about 4 MiB
+# and 3 MB of idle RSS against what ships, and CPU only on the platform the profile came from (§14,
 # profiles/README.md). Installing Oracle GraalVM means agreeing to the GraalVM Free Terms and
 # Conditions: https://www.oracle.com/downloads/licenses/graal-free-license.html
 set -eu
@@ -22,7 +22,7 @@ root="$(cd "$(dirname "$0")" && pwd)"
 
 # -Ppgo needs Oracle GraalVM; everything else wants the release's GraalVM CE. Pick by what was
 # asked for, so neither choice silently builds with the other one's toolchain.
-want=nik
+want=release
 for arg in "$@"; do
   case "$arg" in -Ppgo|-Ppgo,*|*,pgo|*,pgo,*|-Ppgo-instrument*) want=oracle ;; esac
 done

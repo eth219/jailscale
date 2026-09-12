@@ -11,6 +11,10 @@
 #
 # The state volume holds the machine key and the open links. Losing it means rejoining.
 
+# The toolchain is not the release's: the release builds on GraalVM CE 25.3 (§3.2) and
+# ghcr.io/graalvm/native-image-community publishes major tags only, so :25 is the 25.0 line. The
+# binary works the same and is a few MiB larger and slower under load than the published one; §14's
+# numbers describe the published binary, not this. Pin a digest if you care which build you run.
 FROM ghcr.io/graalvm/native-image-community:25 AS build
 # The Maven wrapper needs both. Without a downloader it fetches nothing; without unzip it
 # silently switches to the .tar.gz distribution, whose checksum is not the pinned .zip one, and

@@ -32,7 +32,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-    <!-- Versions verified against Maven Central on 2026-09-10 (ARCHITECTURE.md §3.2). -->
+    <!-- Every version here was checked against Maven Central by hand (ARCHITECTURE.md §3.2). -->
     <junit.version>6.1.3</junit.version>
     <native-maven-plugin.version>1.1.12</native-maven-plugin.version>
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
@@ -73,7 +73,7 @@
     <native.pgoProfile>${maven.multiModuleProjectDirectory}/profiles/${project.artifactId}.iprof</native.pgoProfile>
     <!--
       native-image's optimization level. 2 is its default and what the release ships. 3 was measured
-      against it on 2026-09-13: a 0.9 MiB smaller binary and 2% less CPU per warm request, but
+      against it: a 0.9 MiB smaller binary and 2% less CPU per warm request, but
       `jailscale status` starts 20% slower, which is the wrong way round for a command a person
       types (§14). Override with -Dnative.optLevel=3.
     -->
@@ -202,8 +202,8 @@
       ./mvnw -Pnative,pgo package     (or ./native.sh -Ppgo, which finds the right toolchain)
 
       Profile-guided, against the profile committed for this binary. A local option and not what
-      the release ships (§14, profiles/README.md): it is worth 10 MiB and a fifth of the idle RSS
-      on every platform, but CPU only on the platform the profile was collected on, and it needs
+      the release ships (§14, profiles/README.md): against what ships it is worth about 4 MiB of
+      binary and 3 MB of idle RSS, and CPU only on the platform the profile was collected on. It needs
       Oracle GraalVM (PGO is in neither the Community Edition nor Liberica NIK), which would put
       the GraalVM Free Terms and Conditions on every released binary.
     -->
@@ -301,7 +301,8 @@
 
     <!--
       ./mvnw -Pnative package
-      Requires GraalVM for JDK 25 with native-image on PATH (brew install graalvm).
+      Requires a GraalVM for JDK 25 with native-image on PATH; ./native.sh finds the release's one
+      and says how to install it.
       Only modules that set native.skip=false (node, hub) produce a binary.
     -->
     <profile>

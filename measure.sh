@@ -24,14 +24,14 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 
 # Budget (ARCHITECTURE.md §14). Change only with a reason, in the same commit as the design table.
 # Per platform, because the same code measures differently on each and one shared number would have
-# to be the loosest: an amd64 binary is about 6.5 MiB bigger than the arm64 one, and Linux counts the
-# binary's own mapped pages in RSS where macOS largely does not -- on linux-amd64 about 34 MB of a
-# 40 MB idle RSS is the binary itself, clean and reclaimable, against about 6 MB of anonymous memory
+# to be the loosest: Linux counts the binary's own mapped pages in RSS where macOS largely does not
+# -- on linux-amd64 about 32 MB of a 35 MB idle RSS is the binary itself, clean and reclaimable,
+# against about 3 MB of anonymous memory
 # at the moment this script measures. (A hub left running grows that anonymous share -- the live one
 # is at 15 MB after a day -- which is why the budget is on RSS and the anonymous figure is only
 # printed. ARCHITECTURE.md §14 has both numbers and which is which.)
-# Re-set 2026-09-13, when both the gate and this machine started building what the release builds
-# (GraalVM CE 25.3, -O2, no profile-guided optimization). Measured then: binaries 25.3 to 26.2 MiB,
+# These describe what the release ships: GraalVM CE 25.3, -O2, no profile-guided optimization, on
+# both the gate's runner and the machine this is developed on. Measured: binaries 25.3 to 26.2 MiB,
 # idle 24.8 to 35.1 MB, peak with 1,000 held 53.5 to 70.0 MB, CLI 2.4 to 6.3 ms. A profile-guided
 # build (-Ppgo) is smaller again and passes all of these with room to spare; the budgets describe
 # what ships, not the best build available.
@@ -44,10 +44,10 @@ B_HUB_LOAD_MB=88
 B_CLI_MS=50
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
-    # These are the release toolchain's, which they were not until 2026-09-13: the binary budget was
-    # 30 while the release shipped 30.1 MiB darwin-arm64 binaries, and the idle budget was 28 while
-    # that binary idled at 29.0. Both had been set against whichever GraalVM this machine happened
-    # to have, and the gate only runs on linux, so neither could ever fail.
+    # These are the release toolchain's, which they once were not: the binary budget was 30 while
+    # the release shipped 30.1 MiB darwin-arm64 binaries, and the idle budget was 28 while that
+    # binary idled at 29.0. Both had been set against whichever GraalVM this machine happened to
+    # have, and the gate only runs on linux, so neither could ever fail.
     B_BINARY_MIB=28; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=28 ;;
   Linux-x86_64)
     B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38 ;;

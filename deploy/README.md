@@ -5,8 +5,8 @@ Reference files for operators. The reasoning behind them is in
 
 | File | Purpose |
 |---|---|
-| `jailhub.service` | systemd unit for the hub. `systemctl reload jailhub` is wired to `jailhub serve --takeover`, which replaces the process without dropping nodes |
-| `Dockerfile.hub` | Hub container: GraalVM native build on a distroless base, about 30 MB |
+| `jailhub.service` | systemd unit for the hub. Deliberately no `ExecReload`: `--takeover` needs the old process to stay alive through the hand-off, which `Type=simple` will not do. Upgrades are `systemctl restart` |
+| `Dockerfile.hub` | Hub container: GraalVM native build on a distroless base, about 35 MB. Not built with the release's toolchain -- see the file |
 | `Dockerfile.node` | Node container, same shape |
 | `nginx-stream.conf` | For a server where nginx already owns 443. SNI routing with `ssl_preread`, plus a PROXY header |
 | `haproxy.cfg` | The same with HAProxy, using `send-proxy-v2` |

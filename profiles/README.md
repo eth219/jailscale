@@ -25,7 +25,7 @@ them. That is not the toolchain the release ships, so the last column is the int
 |---|---|---|---|
 | Binary, linux-amd64 | 31.8, 32.0 MiB | **21.9, 21.9** | 26.1, 26.2 |
 | Idle RSS, linux-amd64 | 39.4, 38.6 MB | **32.4, 32.0** | 35.1, 34.4 |
-| Warm requests a second, linux-amd64 | 8,419 | **19,169** | 17,560 |
+| Warm requests a second, linux-amd64 | 8,419 | **19,169** | 13,700 to 17,600 |
 | Warm requests a second, arm64 macOS | 34,563 | 28,976 | **37,800** |
 
 Size and memory improve on every platform. CPU improves **only on the platform the profile was

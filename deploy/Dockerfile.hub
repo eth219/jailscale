@@ -1,5 +1,5 @@
-# jailhub container (ARCHITECTURE.md §14). Builds the native binary with GraalVM, ships it on a
-# distroless base: no JVM, no shell, ~30 MB image.
+# jailhub container. Builds the native binary with GraalVM, ships it on a distroless base: no JVM,
+# no shell, about 35 MB image.
 #
 #   docker build -f deploy/Dockerfile -t jailhub .
 #   docker run -d --name jailhub -p 443:443 -p 80:80 -p 53:53/udp -p 53:53/tcp -p 10000-10999:10000-10999 \
@@ -7,6 +7,10 @@
 #
 # The state volume holds hub.key, tls/ and the event log: back it up, it is the whole hub.
 
+# The toolchain is not the release's: the release builds on GraalVM CE 25.3 (§3.2) and
+# ghcr.io/graalvm/native-image-community publishes major tags only, so :25 is the 25.0 line. The
+# binary works the same and is a few MiB larger and slower under load than the published one; §14's
+# numbers describe the published binary, not this. Pin a digest if you care which build you run.
 FROM ghcr.io/graalvm/native-image-community:25 AS build
 # The Maven wrapper needs both. Without a downloader it fetches nothing; without unzip it
 # silently switches to the .tar.gz distribution, whose checksum is not the pinned .zip one, and

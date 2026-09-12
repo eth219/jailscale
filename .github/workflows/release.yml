@@ -28,10 +28,10 @@ jobs:
       # keepalive sleeps, and HandoffTest then stalled on one or two runners per run. 25.3.4.1
       # carries JDK 25.0.4.1, so it is clear. Note that `version:` and `java-version:` are
       # different knobs: java-version 25 on this distribution still resolves 25.0.2, which is why
-      # the community line looked unusable until 2026-09-13.
+      # the community line looked unusable for a while.
       #
       # Measured against Liberica NIK 25.0.4, the previous choice, on linux-amd64: 17,560 warm
-      # requests a second against 7,810, 5.6 MiB off each binary, 5 MB off idle RSS, CLI start
+      # requests a second against 7,697, 5.6 MiB off each binary, 5 MB off idle RSS, CLI start
       # halved (§14). What it costs is macos-amd64, which the 25.3 line does not build; Intel Macs
       # get the JAR.
       - uses: graalvm/setup-graalvm@v1

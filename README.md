@@ -224,7 +224,7 @@ a leak — the plateau follows the ceiling rather than the workload — and
 [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has the measurements both ways.
 
 Speed, from the same script: on connections already open the pair moves about
-38,000 requests a second here and 17,500 on a four-core Linux runner. A fresh TLS
+38,000 requests a second here and 14,000 to 17,500 on a four-core Linux runner. A fresh TLS
 handshake costs much more than a request, since it opens a stream and takes a
 signature, and the hub signs at most 1,000 a second for any one node — the
 ceiling that matters when visitors arrive rather than when they stay.
@@ -259,7 +259,8 @@ What a compromised hub can and cannot do is written out in
 
 ## Not done yet
 
-- No production track record. The hub above has been up since 2026-09-11.
+- No production track record. The hub above is the only instance with any
+  uptime behind it, and it serves one person's names.
 - The hub is a single process on a single host. Losing the host means downtime.
   Replacing the binary without dropping nodes works with `serve --takeover`, but
   not under a systemd unit, where an upgrade is a restart.

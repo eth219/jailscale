@@ -137,7 +137,8 @@ final class HttpFront {
         // leaves out both where the binary comes from and what joining was for.
         b.append("<h2>Publish a port</h2>");
         b.append("<p><a href=\"").append(REPO).append("/releases/latest\">Download <code>jailscale</code></a>")
-            .append(" for Linux, macOS or Windows: one file, no runtime to install underneath it, no root.</p>");
+            .append(" for Linux, Apple-silicon macOS or Windows: one file, no runtime to install")
+            .append(" underneath it, no root. Intel Macs run <code>jailscale.jar</code> on a JVM.</p>");
         // Say what this hub actually accepts rather than assuming a default.
         boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
         if (open) {
