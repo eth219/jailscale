@@ -105,6 +105,15 @@ class SignatureCapTest {
         // by a latch usually misses it and proves nothing. Platform threads on purpose: a virtual
         // thread that spins does not release its carrier, so spinning ones starve each other and
         // the round never starts.
+        //
+        // They spin in two stages, and the second one is not decoration. Spinning as soon as a
+        // racer is up starves the racers still starting, because the ones already spinning own
+        // every core: on a 4-core windows-2025 runner that put 28.6 s of this test into waiting for
+        // the sixteenth thread to start, against 0.55 s on a 4-core Linux one, and the class landed
+        // within seconds of its own 90 s timeout. So each racer arrives, then waits on `armed`
+        // costing nothing, and only spins once every one of them is up -- with the last one in
+        // starting the race rather than this thread, which would otherwise have to win a core back
+        // from fifteen spinners to do it.
         int rounds = 120;
         int racers = 16;
         for (int round = 0; round < rounds; round++) {
@@ -113,13 +122,25 @@ class SignatureCapTest {
             long id = group.visitorIds().stream().max(Long::compare).orElseThrow();
             java.util.concurrent.atomic.AtomicBoolean go = new java.util.concurrent.atomic.AtomicBoolean();
             CountDownLatch ready = new CountDownLatch(racers);
+            CountDownLatch armed = new CountDownLatch(1);
+            AtomicInteger spinning = new AtomicInteger();
             CountDownLatch done = new CountDownLatch(racers);
             AtomicInteger granted = new AtomicInteger();
             for (int i = 0; i < racers; i++) {
                 Thread.ofPlatform().daemon().start(() -> {
                     ready.countDown();
-                    while (!go.get()) {
-                        Thread.onSpinWait();
+                    try {
+                        armed.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    if (spinning.incrementAndGet() == racers) {
+                        go.set(true);
+                    } else {
+                        while (!go.get()) {
+                            Thread.onSpinWait();
+                        }
                     }
                     if (group.reserveSignature(id)) {
                         granted.incrementAndGet();
@@ -128,7 +149,7 @@ class SignatureCapTest {
                 });
             }
             assertTrue(ready.await(30, TimeUnit.SECONDS));
-            go.set(true);
+            armed.countDown();
             assertTrue(done.await(30, TimeUnit.SECONDS));
             assertEquals(NodeGroup.MAX_SIGNATURES_PER_STREAM, granted.get(),
                 "round " + round + ": the cap was handed out " + granted.get() + " times to " + racers
