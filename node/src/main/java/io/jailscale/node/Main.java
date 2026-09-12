@@ -272,24 +272,17 @@ public final class Main {
         System.out.println(r);
     }
 
-    /** Starts {@code <this binary> daemon} detached, logging to the config directory. */
+    /**
+     * Starts {@code <this binary> daemon} detached, logging to the config directory. The command
+     * comes from {@link Service#daemonCommand}, which is also what {@code service install} writes
+     * into a unit: they used to be built separately here and had drifted apart.
+     */
     private static void spawnDaemon(NodeConfig cfg) throws IOException, InterruptedException {
         Files.createDirectories(cfg.configDir());
-        List<String> cmd = new ArrayList<>();
-        String self = ProcessHandle.current().info().command().orElse(null);
-        if (self == null) {
+        if (ProcessHandle.current().info().command().isEmpty()) {
             throw new IOException("cannot determine own executable to start the daemon");
         }
-        cmd.add(self);
-        if (self.endsWith("java") || self.endsWith("java.exe")) {
-            // Running from the fallback JAR under a JVM.
-            cmd.add("-cp");
-            cmd.add(System.getProperty("java.class.path"));
-            cmd.add(Main.class.getName());
-        }
-        cmd.add("daemon");
-        cmd.add("--home");
-        cmd.add(cfg.configDir().toString());
+        List<String> cmd = Service.daemonCommand(cfg);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(cfg.daemonLog().toFile()));
@@ -302,7 +295,22 @@ public final class Main {
             }
             Thread.sleep(100);
         }
-        throw new IOException("daemon did not start; see " + cfg.daemonLog());
+        // Say what the daemon said. A bad JAILSCALE_DAEMON_OPTS is refused by the runtime before
+        // anything of ours runs, and "daemon did not start" on its own sends the reader to a log to
+        // find a one-line answer.
+        String why = "";
+        try {
+            List<String> log = Files.readAllLines(cfg.daemonLog());
+            for (int i = log.size() - 1; i >= 0 && i >= log.size() - 5; i--) {
+                if (!log.get(i).isBlank()) {
+                    why = ": " + log.get(i).strip();
+                    break;
+                }
+            }
+        } catch (IOException ignored) {
+            // no log to quote
+        }
+        throw new IOException("daemon did not start" + why + " (see " + cfg.daemonLog() + ")");
     }
 
     /** Opens a URL in the user's browser without AWT (ARCHITECTURE.md §3.1). */

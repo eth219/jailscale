@@ -60,9 +60,9 @@
 
       Both binaries accept -XX:MaxHeapSize= at run time (the native runtime takes it before main
       sees it, so it does not collide with the CLI's own parsing), but only the hub is raised that
-      way in practice, on the unit's ExecStart. `jailscale up` spawns the daemon with a fixed
-      command (Main.daemonCommand), so raising the node's ceiling means editing the unit that
-      `service install` wrote, or starting the daemon subcommand by hand.
+      way in practice, on the unit's ExecStart. The node's daemon takes them from
+      JAILSCALE_DAEMON_OPTS, which Service.daemonCommand puts straight after the executable whether
+      the CLI spawns the daemon or `service install` writes a unit for it.
     -->
     <native.maxHeap>64m</native.maxHeap>
     <test.excludedGroups>load</test.excludedGroups>

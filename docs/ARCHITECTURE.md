@@ -1096,9 +1096,11 @@ and 64m for `jailscale` (`native.maxHeap` in the poms). At 1,000 visitors held o
 peak RSS for the hub against 91.7 MB uncapped, and 61.5 MB for the node against 94.0 MB, with all
 1,000 still served, idle RSS and CLI start unchanged, and the ramp 2.7s against 2.5s. Both binaries take
 `-XX:MaxHeapSize=` at run time, the native runtime consuming it before `main` sees it, so a hub that
-needs more gets it on the unit's `ExecStart`. The node is the awkward one: `jailscale up` spawns the
-daemon with a fixed command, so raising its ceiling means editing the unit `service install` wrote
-or starting `jailscale daemon --home` by hand.
+needs more gets it on the unit's `ExecStart`. The node takes it through
+`JAILSCALE_DAEMON_OPTS`, which `Service.daemonCommand` puts straight after the executable when the
+CLI spawns the daemon and when `service install` writes a unit -- so whatever is set at install time
+is what the unit carries. It exists for measurement and diagnosis rather than as a product surface:
+nothing measured so far asks for a different ceiling.
 
 **Serial is the collector, and G1 was measured rather than argued about.** Liberica NIK offers
 `serial` (default), `parallel` and `epsilon`; G1 needs Oracle GraalVM and Linux, so it could only
@@ -1143,6 +1145,41 @@ the only toolchain CI can fetch that has compressed references, and its measured
 source is about 1.2 MB of idle anonymous memory. The linux-amd64 column is unaffected: it is measured on the toolchain that builds it. And the
 macOS budget is not enforced anywhere yet — a `budget` job on macOS would need the runner to raise
 its file-descriptor limit, which it refuses, so only 600 of the 1,000 visitors can be held there.
+
+**Throughput, added 2026-09-13, reported and not gated.** Everything else here is memory, size or
+one cold start, so a build that traded CPU for footprint had nothing to move, and whether Oracle
+GraalVM's profile-guided optimization earns its licence could not even be asked. `measure.sh RATE=8`
+drives `tools/throughput.py`, and what it reports is **server CPU per operation** rather than a
+maximum rate. A maximum was the first design and it measured the wrong thing: offered 32 workers of
+fresh handshakes, the hub completed exactly 7,000 in 5 seconds -- `NodeGroup.SIGN_BURST` of 2,000
+plus `SIGN_PER_SECOND` of 1,000 for five of them -- and refused 7,908 more, which is §11.5's limiter
+working and says nothing about a build. Handshakes are now offered at a fixed rate under that limit;
+warm requests, which nothing limits, keep the rate as capacity.
+
+| | arm64 macOS (14 cores) | linux-amd64 (4-core runner) |
+|---|---|---|
+| Handshake, hub CPU | 700 µs | 2,356 µs |
+| Handshake, node CPU | 1,090 µs | 2,975 µs |
+| Warm request, hub CPU | 96 µs | 142 µs |
+| Warm request, node CPU | 108 µs | 156 µs |
+| Warm requests a second | about 38,000 | about 9,000 |
+
+A handshake costs seven times a warm request or more on either side, which is the shape the design
+predicts: one opens a stream, asks the hub for a signature bound to that stream (§9.2) and finishes
+a TLS handshake on the node, while the other is a relay copying bytes. The per-operation figure is
+steady against the offered rate -- 200 a second and 400 a second give the runner 2,356 and 2,322 µs
+of hub CPU -- which is what makes it usable for comparing builds; the warm figure moved about 15%
+between two runs of the same build, which is the noise any comparison has to clear. The client's own
+CPU is printed beside each phase, because a load generator in Python can become the thing measured.
+
+Two corrections came out of building it, both in the harness rather than the product. The local app
+is an event loop that honours `Connection: close`: with keep-alive and a thread per connection,
+1,000 held visitors became 1,000 Python threads, 900 of 1,000 were held instead of all, the peaks
+rose from 53 and 69 MB to 76 and 100, and a four-core runner stopped finishing the phase at all.
+Taking that server out of the path then showed how much of the warm figure had been the harness:
+38,000 requests a second against 18,000, at 96 µs of hub CPU against 132. And
+`tools/hold-visitors.py` times out every step now -- without that, a saturated node left it waiting
+for a reply that never came, which is how a measurement becomes a hang instead of a number.
 
 **Load is measured with the connections held open.** An earlier gate fired 1,000 short requests with
 `curl --parallel` and finished, which means 1,000 were never alive at once and the figure was roughly
