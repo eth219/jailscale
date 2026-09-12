@@ -177,9 +177,11 @@ jailscale service install                     # keep the daemon running across l
 
 ### Running your own hub
 
-You need a host with a public address, a domain, and ports 443, 80 and 53. The
-hub answers DNS for its own `_acme-challenge` name, so it issues its own
-wildcard certificate with no DNS provider API token.
+You need a host with a public address, a domain, and two ports: 443, and 53
+because the hub answers DNS for its own `_acme-challenge` name, which is how it
+issues its own wildcard certificate with no DNS provider API token. Port 80 is a
+third only for domains a node brings itself, which are proven by an http-01
+challenge the hub relays; without it that one feature is off.
 
 ```
 jailscale.example.com.                  A   203.0.113.10
@@ -222,7 +224,7 @@ Requirements:
 
 | | Hub | Node |
 |---|---|---|
-| Inbound ports | 443, 80, 53 | none |
+| Inbound ports | 443 and 53, plus 80 for user domains | none |
 | Public address | yes | no |
 | Root | no (`CAP_NET_BIND_SERVICE`) | no |
 | TUN device | no | no |
