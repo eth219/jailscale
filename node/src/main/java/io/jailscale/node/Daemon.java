@@ -370,15 +370,22 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
     }
 
-/**
+    /**
      * Hourly: renew domain certificates that have a third of their lifetime left
      * (ARCHITECTURE.md §8.3), and say so when one is running out anyway.
      *
      * <p>The warning is not conditional on being connected, which is the whole point: renewal needs
      * the hub, so the node that cannot renew is exactly the node nobody is going to hear from. §15
      * called this out as nothing counting down for the operator.
+     *
+     * <p>The first pass runs before the first sleep and only warns. A node that reaches its hub has
+     * its expiry dates already, because {@link #onConnected} reopens every link and that loads the
+     * certificate; a node that cannot connect has nothing, and it is the one the warning is for, so
+     * making it wait an hour to hear that its certificate ran out yesterday is the wrong hour.
+     * Renewal is left to the tick, since at startup there is nothing to renew against yet.
      */
     private void renewLoop() {
+        warnAboutStoredCertificates();
         while (!closed) {
             try {
                 Thread.sleep(RENEW_CHECK_MS);
@@ -390,9 +397,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                     continue;
                 }
                 DomainCerts.Material m = domainCerts.load(rec.domain);
-                if (m != null) {
-                    rec.certExpiresAt = m.notAfter();
-                }
+                rememberExpiry(rec, m);
                 if (link.isConnected() && (m == null || m.dueForRenewal())) {
                     try {
                         LOG.info("renewing certificate for {}", rec.domain);
@@ -403,6 +408,27 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 }
                 warnIfExpiring(rec);
             }
+        }
+    }
+
+    /**
+     * Reads what is on disk and warns about anything close to its end, without renewing and without
+     * a hub. Called once before {@link #renewLoop} starts sleeping, so that a node which comes up
+     * unable to reach its hub says so at once instead of an hour later.
+     */
+    void warnAboutStoredCertificates() {
+        for (NodeState.LinkRec rec : state.links) {
+            if (rec.domain != null) {
+                rememberExpiry(rec, domainCerts.load(rec.domain));
+                warnIfExpiring(rec);
+            }
+        }
+    }
+
+    /** Remembers when a loaded certificate runs out; a link with none keeps the 0 that means "not known". */
+    private static void rememberExpiry(NodeState.LinkRec rec, DomainCerts.Material m) {
+        if (m != null) {
+            rec.certExpiresAt = m.notAfter();
         }
     }
 

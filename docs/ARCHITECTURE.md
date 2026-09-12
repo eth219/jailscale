@@ -1041,7 +1041,7 @@ platforms CI can run the gate on; the budgets differ per platform for the reason
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
-| Binary size | 25.0 MiB (`jailhub`), 25.3 MiB (`jailscale`) | 31.6 MiB, 31.9 MiB | 30 / 36 MiB |
+| Binary size | 25.2 MiB (`jailhub`), 25.3 MiB (`jailscale`) | 31.6 MiB, 31.9 MiB | 30 / 36 MiB |
 | Node idle RSS | about 24.7 MB | about 39.7 MB | 28 / 46 MB |
 | Hub idle RSS | about 24.7 MB | about 40.0 MB | 30 / 46 MB |
 | RSS with 1,000 visitor sessions held open | node 93 MB, hub 80 MB | node 90 MB, hub 90 MB | node 192 MB, hub 160 MB |

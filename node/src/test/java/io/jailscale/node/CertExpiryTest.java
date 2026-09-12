@@ -1,6 +1,8 @@
 package io.jailscale.node;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,7 +41,7 @@ class CertExpiryTest {
 
     @Test
     void theBoundaryIsInclusiveSoTheFirstDayIsNotMissed() {
-        assertTrue(Daemon.expiryWarning("app.example.com", NOW + Daemon.CERT_WARN_MS, NOW) != null);
+        assertNotNull(Daemon.expiryWarning("app.example.com", NOW + Daemon.CERT_WARN_MS, NOW));
     }
 
     @Test
@@ -63,5 +65,21 @@ class CertExpiryTest {
     void theCliAndTheLogUseOneThreshold() {
         // `ls` used to warn at seven days while nothing logged at all; one rule now.
         assertEquals(14 * DAY, Daemon.CERT_WARN_MS);
+        assertEquals("", Main.certNote(NOW + Daemon.CERT_WARN_MS + 1, NOW));
+        assertTrue(Main.certNote(NOW + Daemon.CERT_WARN_MS - 1, NOW).contains("cert expires"));
+    }
+
+    @Test
+    void theCliSaysExpiredRatherThanExpiringInThePast() {
+        // "expires <a date last week>" reads as a formatting bug, not as a site that is down.
+        String n = Main.certNote(NOW - DAY, NOW);
+        assertTrue(n.contains("EXPIRED"), n);
+        assertFalse(n.contains("expires"), n);
+    }
+
+    @Test
+    void theCliSaysNothingAboutALinkWithNoCertificate() {
+        // Raw ports and hub-domain names: the daemon sends null and 0 means "not known" either way.
+        assertEquals("", Main.certNote(0, NOW));
     }
 }
