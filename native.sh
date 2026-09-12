@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the jailscale and jailhub native binaries with the same toolchain the release uses:
-# Liberica NIK for JDK 25 (ARCHITECTURE.md §3.2).
+# GraalVM Community Edition on the 25.3 line (ARCHITECTURE.md §3.2).
 #
 # Usage: ./native.sh [extra mvnw args]
 #   ./native.sh -DskipTests              what the release ships
@@ -20,7 +20,7 @@ set -eu
 
 root="$(cd "$(dirname "$0")" && pwd)"
 
-# -Ppgo needs Oracle GraalVM; everything else wants the release's Liberica NIK. Pick by what was
+# -Ppgo needs Oracle GraalVM; everything else wants the release's GraalVM CE. Pick by what was
 # asked for, so neither choice silently builds with the other one's toolchain.
 want=nik
 for arg in "$@"; do
@@ -43,16 +43,17 @@ if [ "$want" = oracle ]; then
     "$HOME"/Library/Java/JavaVirtualMachines/graalvm-jdk-25*/Contents/Home)
   install_hint='  brew install --cask graalvm-jdk@25'
 else
-  name="Liberica NIK for JDK 25"
+  name="GraalVM CE 25.3"
   home=$(first_with_native_image \
     ${GRAALVM_HOME:+"$GRAALVM_HOME"} \
-    /Library/Java/JavaVirtualMachines/bellsoft-liberica-vm-openjdk25*/Contents/Home \
-    "$HOME"/Library/Java/JavaVirtualMachines/bellsoft-liberica-vm-openjdk25*/Contents/Home)
-  # Liberica NIK is not on Homebrew and BellSoft's release API only serves NIK up to JDK 21; the
-  # JDK 25 line is published as GitHub release assets, which is also where setup-graalvm finds it.
+    /Library/Java/JavaVirtualMachines/graalvm-community-25.3*/Contents/Home \
+    "$HOME"/Library/Java/JavaVirtualMachines/graalvm-community-25.3*/Contents/Home)
+  # Homebrew's graalvm-jdk cask is Oracle's, not this; the CE builds are GitHub release assets,
+  # which is where setup-graalvm finds them too. Pick the asset for your own platform.
   install_hint='  mkdir -p ~/Library/Java/JavaVirtualMachines
-  gh release download -R bell-sw/LibericaNIK -p "bellsoft-liberica-vm-openjdk25*macos-aarch64.tar.gz" -O /tmp/nik.tar.gz
-  tar xzf /tmp/nik.tar.gz -C ~/Library/Java/JavaVirtualMachines'
+  gh release download -R graalvm/graalvm-ce-builds graal-25.3.4.1 \
+    -p "graalvm-community-jdk-*_macos-aarch64_bin.tar.gz" -O /tmp/ce.tar.gz
+  tar xzf /tmp/ce.tar.gz -C ~/Library/Java/JavaVirtualMachines'
 fi
 
 if [ -z "$home" ]; then

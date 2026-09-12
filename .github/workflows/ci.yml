@@ -70,7 +70,8 @@ jobs:
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'liberica'
+          distribution: 'graalvm-community'
+          version: '25.3'
       - name: measure.sh needs bc, which the runner image does not ship
         run: sudo apt-get update && sudo apt-get install -y bc
       - name: Build the binaries

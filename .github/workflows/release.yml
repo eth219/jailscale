@@ -18,26 +18,27 @@ jobs:
           - { os: ubuntu-24.04,     target: linux-amd64 }
           - { os: ubuntu-24.04-arm, target: linux-arm64 }
           - { os: macos-15,         target: darwin-arm64 }
-          - { os: macos-15-intel,   target: darwin-amd64 }
           - { os: windows-2025,     target: windows-amd64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # Liberica NIK, and JDK 25.0.3 or newer, both on purpose (ARCHITECTURE.md §3.2, §14).
+      # GraalVM CE on the 25.3 line, and a JDK newer than 25.0.2, both on purpose (§3.2, §14).
       # JDK 25.0.0-25.0.2 lose timed virtual-thread wake-ups once a delayed task is cancelled
       # (JDK-8370887, with JDK-8369227 next to it); a hand-off cancels the old connections'
-      # keepalive sleeps, and HandoffTest then stalled on one or two runners per run. Both fixes
-      # are in 25.0.3, and this action's graalvm-community line still resolves 25 to 25.0.2, so it
-      # is out either way. Liberica delivers a fixed JDK to all five targets, which is the whole
-      # requirement. Oracle GraalVM does too and adds profile-guided optimization, which was
-      # measured, briefly adopted, and dropped again on 2026-09-13: it is worth 10 MiB and a fifth
-      # of the idle RSS, and it is worth CPU only on the platform its profile was collected on
-      # (§14). Releases stay on a toolchain with no licence attached; PGO is a documented local
-      # option (profiles/README.md).
+      # keepalive sleeps, and HandoffTest then stalled on one or two runners per run. 25.3.4.1
+      # carries JDK 25.0.4.1, so it is clear. Note that `version:` and `java-version:` are
+      # different knobs: java-version 25 on this distribution still resolves 25.0.2, which is why
+      # the community line looked unusable until 2026-09-13.
+      #
+      # Measured against Liberica NIK 25.0.4, the previous choice, on linux-amd64: 17,560 warm
+      # requests a second against 7,810, 5.6 MiB off each binary, 5 MB off idle RSS, CLI start
+      # halved (§14). What it costs is macos-amd64, which the 25.3 line does not build; Intel Macs
+      # get the JAR.
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'liberica'
+          distribution: 'graalvm-community'
+          version: '25.3'
           native-image-job-reports: 'true'
       - name: Set version from the tag
         # Without this the binaries report the pom's 0.x.y-SNAPSHOT no matter which tag built them.

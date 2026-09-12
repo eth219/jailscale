@@ -31,12 +31,14 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 # is at 15 MB after a day -- which is why the budget is on RSS and the anonymous figure is only
 # printed. ARCHITECTURE.md §14 has both numbers and which is which.)
 # Re-set 2026-09-13, when both the gate and this machine started building what the release builds
-# (Liberica NIK, no profile-guided optimization). Measured then: binaries 29.9 to 32.0 MiB, idle
-# 29.0 to 40.3 MB, peak with 1,000 held 49.1 to 68.6 MB, CLI 4.4 to 6.2 ms. A profile-guided build
-# (-Ppgo) comes out about 10 MiB smaller with a fifth less idle RSS and passes all of these with
-# room to spare; the budgets describe what ships, not the best build available.
-# The load budget is the one with teeth: without the heap ceilings the peak is 91.7 (hub) and
-# 94.0 (node), so a build that lost them fails here.
+# (GraalVM CE 25.3, -O2, no profile-guided optimization). Measured then: binaries 25.3 to 26.2 MiB,
+# idle 24.8 to 35.1 MB, peak with 1,000 held 53.5 to 70.0 MB, CLI 2.4 to 6.3 ms. A profile-guided
+# build (-Ppgo) is smaller again and passes all of these with room to spare; the budgets describe
+# what ships, not the best build available.
+# The load budget is the one with teeth: without the heap ceilings the peak was 91.7 (hub) and
+# 94.0 (node), so a build that lost them fails here. The node runs closer to it on the 25.3 line,
+# which expands the heap more eagerly under the same ceiling -- at -XX:MaxHeapSize=32m the same
+# 1,000 visitors peak at 59.8 (linux) and 53.7 (macOS), which is the lever if this ever binds.
 B_NODE_LOAD_MB=88
 B_HUB_LOAD_MB=88
 B_CLI_MS=50
@@ -44,15 +46,15 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
     # These are the release toolchain's, which they were not until 2026-09-13: the binary budget was
     # 30 while the release shipped 30.1 MiB darwin-arm64 binaries, and the idle budget was 28 while
-    # the released binary idles at 29.0. Both had been set against a Community Edition build this
-    # machine happened to have, and the gate only runs on linux, so neither could fail.
-    B_BINARY_MIB=32; B_NODE_IDLE_MB=32; B_HUB_IDLE_MB=32 ;;
+    # that binary idled at 29.0. Both had been set against whichever GraalVM this machine happened
+    # to have, and the gate only runs on linux, so neither could ever fail.
+    B_BINARY_MIB=28; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=28 ;;
   Linux-x86_64)
-    B_BINARY_MIB=34; B_NODE_IDLE_MB=44; B_HUB_IDLE_MB=44 ;;
+    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38 ;;
   *)
     # An unmeasured platform gets the loosest of the measured ones rather than a guess of its own.
     echo "note: no budget measured for $(uname -s)-$(uname -m); using the widest known"
-    B_BINARY_MIB=34; B_NODE_IDLE_MB=44; B_HUB_IDLE_MB=44 ;;
+    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38 ;;
 esac
 
 mkdir -p "$W/hub" "$W/app"
