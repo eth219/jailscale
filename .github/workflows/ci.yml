@@ -72,4 +72,6 @@ jobs:
       - name: Build the binaries
         run: ./mvnw -B -ntp -Pnative package
       - name: Budget gate
-        run: LOAD=1000 ./measure.sh --check
+        # RATE also measures throughput, which nothing gates: it is only comparable against another
+        # run on the same machine, and it is here so a build that trades CPU for footprint shows up.
+        run: LOAD=1000 RATE=8 ./measure.sh --check

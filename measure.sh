@@ -7,6 +7,8 @@
 #   IDLE=10      seconds to idle before the idle measurement
 #   LOAD=1000    also run LOAD concurrent https visitors through the link (needs curl >= 7.66)
 #   --check      exit 1 when a number exceeds the budget below (the CI gate)
+#   RATE=8       also measure throughput, 8s per phase (tools/throughput.py); reported, not gated.
+#                RATE_HANDSHAKES= offered handshakes a second (400), RATE_CONNS= warm ones (32)
 set -eu
 R=$(cd "$(dirname "$0")" && pwd)
 HUB=$R/hub/target/jailhub
@@ -65,6 +67,17 @@ rss_mb() { echo "$(ps -o rss= -p "$1" | tr -d ' ') / 1024" | bc -l; }
 # On Linux most of RSS is the binary's own mapped pages, which are clean and reclaimable; the
 # anonymous share is what the process actually costs. Reported, not gated -- the budget stays on the
 # number `ps` reports, so the two platforms are compared on the same measurement.
+# CPU seconds a process has used, to tell a server-bound rate from a client-bound one.
+cpu_s() {
+  if [ -r "/proc/$1/stat" ]; then
+    awk '{print ($14 + $15) / 100}' "/proc/$1/stat"
+  else
+    # macOS ps prints cumulative CPU as [[dd-]hh:]mm:ss.ss
+    ps -o time= -p "$1" 2>/dev/null | awk -F'[:-]' '{
+      n = NF; s = $n; if (n > 1) s += $(n-1) * 60; if (n > 2) s += $(n-2) * 3600;
+      if (n > 3) s += $(n-3) * 86400; printf "%.2f", s }'
+  fi
+}
 anon_note() {
   [ -r "/proc/$1/status" ] || return 0
   printf '   (%.1f anonymous)' "$(echo "$(awk '/^RssAnon:/{print $2}' "/proc/$1/status") / 1024" | bc -l)"
@@ -84,6 +97,9 @@ INV2=$("$NODE" invite --user bob --home "$W/a" | grep -o "https://hub.test:$PORT
 cat > "$W/app/app.py" <<'EOF'
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 class H(BaseHTTPRequestHandler):
+    # HTTP/1.1 so a connection survives a response: without it every request costs a new TLS
+    # session and tools/throughput.py's warm phase cannot exist.
+    protocol_version = 'HTTP/1.1'
     def do_GET(self):
         self.send_response(200); self.send_header('Content-Length', '6'); self.end_headers(); self.wfile.write(b'hello\n')
     def log_message(self, *a): pass
@@ -130,6 +146,30 @@ if [ -n "${LOAD:-}" ]; then
     [ -f "$f" ] && grep -qi OutOfMemory "$f" && { echo "  !! OutOfMemoryError in $(basename "$f")"; fail=1; }
   done
   [ "$CHECK" = 1 ] && [ "$ok" -lt $((LOAD * 99 / 100)) ] && { echo "  !! only $ok of $LOAD visitors were held"; fail=1; }
+fi
+
+if [ -n "${RATE:-}" ]; then
+  # Reported, never gated. There is no budget for a rate yet, and the useful number is not the rate
+  # anyway: it is the server CPU each operation costs, which is what a compiler or GC change moves
+  # and what survives both the hub's signing limit and a slow client. Handshakes are offered at a
+  # fixed rate under NodeGroup.SIGN_PER_SECOND on purpose (tools/throughput.py says why).
+  echo "throughput, ${RATE}s per phase (reported, not gated)"
+  for spec in "handshake ${RATE_HANDSHAKES:-400}" "warm ${RATE_CONNS:-32}"; do
+    phase=${spec% *}; n=${spec#* }
+    h0=$(cpu_s "$HUBPID"); n0=$(cpu_s "$NODEPID")
+    rm -f "$W/throughput.txt"
+    # Reported, not gated, so a driver that trips over a runner's limits says so and the gate
+    # carries on rather than failing on a number nothing depends on.
+    python3 "$R/tools/throughput.py" "$PORT" "$CERT" "$RATE" "$W" "$phase" "$n" \
+      || echo "  $phase: driver failed, no number"
+    h1=$(cpu_s "$HUBPID"); n1=$(cpu_s "$NODEPID")
+    done_n=$(cut -d' ' -f2 "$W/throughput.txt" 2>/dev/null || echo 0)
+    if [ "$done_n" -gt 0 ]; then
+      printf '             server CPU per op: jailhub %.0f us, jailscale %.0f us\n' \
+        "$(echo "($h1 - $h0) * 1000000 / $done_n" | bc -l)" \
+        "$(echo "($n1 - $n0) * 1000000 / $done_n" | bc -l)"
+    fi
+  done
 fi
 
 echo "CLI cold start, jailscale status, 10 runs (ms)"
