@@ -1130,10 +1130,23 @@ workflow on `ubuntu-24.04`, three measured runs each, spread within an arm under
 | Warm requests a second | 7,697 | 8,419 | **19,169** |
 
 Oracle on its own is 6 to 10% less CPU per operation, which is real and consistent across four
-metrics but close to the 7% seen between jobs on different runner instances. **PGO is not close to
-anything**: half the CPU per operation, two and a half times the warm throughput, and -- against
-what one would expect of a profile-guided build -- 7 MiB *off* each binary and 8 MB off idle RSS,
-which would also put the darwin binaries back inside the 30 MiB this table used to claim.
+metrics but close to the 7% seen between jobs on different runner instances.
+
+**PGO's size and memory gains reproduce; its CPU gain does not, and that is unexplained.** The
+column above came from one run. A second run, four arms in one workflow, reproduced the `plain`
+baseline exactly (2,350 against 2,362 µs of hub CPU per handshake) and reproduced PGO's binaries and
+memory exactly (24.7 MiB and 31.7 MB idle against 24.8 and 31.9) -- and measured the CPU gain at 7
+to 12% rather than 50%, with 9,105 warm requests a second rather than 19,169. Same runner type, same
+measurement command, same binary size, twice the CPU. The one difference between the two profiling
+runs is that the first collected its profile with `LOAD=300` -- 300 visitors arriving and being held
+-- alongside the throughput phases, and the second collected it from the throughput phases alone.
+Whether profile coverage is really worth a factor of two, or whether the first number was an
+artefact, is not yet known. **Do not plan on 50%.**
+
+That second run answered the question it was built for, though: the profile's workload does not seem
+to matter much. Profiled from warm requests only, from handshakes only, or from both, the three arms
+came out within 1% of each other on both phases -- so whatever PGO is buying here, it is not
+narrowly tied to the shape that was profiled.
 
 What it costs is not performance. GFTC puts Oracle's terms on binaries this repository ships under
 Apache-2.0: free for us, since we charge nothing and Native Image output counts as unmodified
