@@ -9,6 +9,7 @@
 #   --check      exit 1 when a number exceeds the budget below (the CI gate)
 #   RATE=8       also measure throughput, 8s per phase (tools/throughput.py); reported, not gated.
 #                RATE_HANDSHAKES= offered handshakes a second (400), RATE_CONNS= warm ones (32)
+#                RATE_PHASES="warm" runs one phase instead of both
 #   HUB_OPTS=    runtime options for the hub, and JAILSCALE_DAEMON_OPTS for the node's daemon:
 #                -XX:MaxHeapSize= to lift the build's ceiling, -XX:ProfilesDumpFile= to profile
 set -eu
@@ -191,8 +192,14 @@ if [ -n "${RATE:-}" ]; then
   # and what survives both the hub's signing limit and a slow client. Handshakes are offered at a
   # fixed rate under NodeGroup.SIGN_PER_SECOND on purpose (tools/throughput.py says why).
   echo "throughput, ${RATE}s per phase (reported, not gated)"
-  for spec in "handshake ${RATE_HANDSHAKES:-400}" "warm ${RATE_CONNS:-32}"; do
-    phase=${spec% *}; n=${spec#* }
+  # RATE_PHASES picks which of them to run, which is how a PGO profile can be collected from one
+  # kind of work and the result measured on the other.
+  for phase in ${RATE_PHASES:-handshake warm}; do
+    case "$phase" in
+      handshake) n=${RATE_HANDSHAKES:-400} ;;
+      warm) n=${RATE_CONNS:-32} ;;
+      *) echo "  unknown phase $phase"; continue ;;
+    esac
     h0=$(cpu_s "$HUBPID"); n0=$(cpu_s "$NODEPID")
     rm -f "$W/throughput.txt"
     # Reported, not gated, so a driver that trips over a runner's limits says so and the gate
