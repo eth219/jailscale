@@ -1114,14 +1114,34 @@ memory footprint and small Java heap sizes", and at a 96 MB ceiling that is the 
 Swapping collectors was never the fix for the drift either: `MaximumHeapSizePercent` applies to
 serial, parallel and epsilon alike, so the ceiling is what bounds it.
 
-That same comparison priced the edition. Oracle GraalVM 25.0.4 has `compressed references` where
-Liberica NIK 25.0.4 does not, and it is the only toolchain CI can fetch that does
-(`setup-graalvm`'s community line still resolves 25 to 25.0.2, which §3.2 forbids). On this source
-it is worth about 1.2 MB of idle anonymous memory and nothing else measurable: binary size within
-0.1 MiB, load peaks and CLI start inside run-to-run noise. Against that, GFTC would put Oracle's
-terms on binaries this repository ships under Apache-2.0, and every toolchain bump becomes a licence
-review, so it stays on Liberica. PGO is the one Oracle feature that might matter and it is
-unmeasurable here for now: it pays in throughput, and nothing in §14 measures throughput.
+**The edition question, measured once there was something to measure it with.** An earlier version
+of this section said Oracle GraalVM was worth "about 1.2 MB of idle anonymous memory and nothing
+else measurable" -- which was true of everything §14 measured at the time, and wrong as a
+conclusion, because nothing measured CPU. With `RATE=` in place, all three choices ran in one
+workflow on `ubuntu-24.04`, three measured runs each, spread within an arm under 1%:
+
+| | Liberica NIK 25.0.4 | Oracle GraalVM 25.0.4 | Oracle + PGO |
+|---|---|---|---|
+| `jailhub`, `jailscale` binary | 31.7, 32.0 MiB | 31.8, 32.0 | **24.8, 24.6** |
+| Idle RSS (anonymous) | 40.6 (6.2), 40.1 (5.0) MB | 39.4 (5.0), 38.6 (4.0) | **31.9 (4.8), 31.4 (3.9)** |
+| Peak RSS, 1,000 held | 71.7, 61.0 MB | 64.7, 58.4 | **57.3, 50.2** |
+| Handshake CPU | 2,525, 3,025 µs | 2,362, 2,750 | **1,225, 1,375** |
+| Warm request CPU | 163, 181 µs | 149, 163 | **66, 70** |
+| Warm requests a second | 7,697 | 8,419 | **19,169** |
+
+Oracle on its own is 6 to 10% less CPU per operation, which is real and consistent across four
+metrics but close to the 7% seen between jobs on different runner instances. **PGO is not close to
+anything**: half the CPU per operation, two and a half times the warm throughput, and -- against
+what one would expect of a profile-guided build -- 7 MiB *off* each binary and 8 MB off idle RSS,
+which would also put the darwin binaries back inside the 30 MiB this table used to claim.
+
+What it costs is not performance. GFTC puts Oracle's terms on binaries this repository ships under
+Apache-2.0: free for us, since we charge nothing and Native Image output counts as unmodified
+Program, but a downstream that wants to sell a bundle is blocked and every toolchain bump becomes a
+licence review. And PGO is a two-phase build -- instrument, run a workload, rebuild -- per target,
+which doubles the release build and needs a workload driver on each platform: `measure.sh` is a
+POSIX script that wants `pgrep`, so **windows-amd64 has no way to be profiled today**. Neither is
+decided here; both numbers are, which is the point.
 
 `./measure.sh --check` fails when a number exceeds its budget. The budget values live at the top of
 the script and must match this table; they change only by a PR that states a reason. The `budget` job
