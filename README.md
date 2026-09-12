@@ -206,16 +206,22 @@ binary's own mapped pages in RSS where macOS largely does not.
 
 | | jailhub | jailscale |
 |---|---|---|
-| Binary | 25.2 / 31.6 MiB | 25.3 / 31.9 MiB |
+| Binary, as released | 29.8 / 31.6 MiB | 30.1 / 31.9 MiB |
 | Idle RSS | 24.7 / 40.0 MB | 24.7 / 39.7 MB |
-| Peak RSS, 1,000 visitors held open at once | 78 / 90 MB | 85 / 90 MB |
+| Peak RSS, 1,000 visitors held open at once | 52.7 / 68.6 MB | 68.6 / 60.3 MB |
 | CLI cold start | — | 7 / 4.5 ms |
 
 *arm64 macOS / linux-amd64.* On Linux most of that idle RSS is the binary mapped
 into the process — clean pages the kernel takes back when it needs them. The
-anonymous memory, the part that is really the process's, is 6 MB. The hub above
-has been up long enough to grow to 15 MB of it, on a machine with 969 MB of RAM
-that has already reclaimed 6 MB of the binary's pages.
+anonymous memory, the part that is really the process's, is 6 MB for the hub and
+5 MB for the node.
+
+Idle is a fresh start, not a steady state. The heap has a ceiling, 96 MB for the
+hub and 64 MB for the node, and a long-running process drifts up towards it:
+without one the Serial GC's allowance is 80% of the machine, and the hub above
+was found at 78 MB of RSS, 54 MB of it anonymous, after 20 idle hours. It is not
+a leak — the plateau follows the ceiling rather than the workload — and
+[ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has the measurements both ways.
 
 The hub above runs on a GCP e2-micro: 2 shared vCPU, 1 GB of memory, Debian 12.
 That is the smallest instance Google sells, and it is not the constraint.

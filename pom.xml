@@ -49,6 +49,17 @@
     <native.skip>true</native.skip>
     <native.imageName>${project.artifactId}</native.imageName>
     <native.mainClass/>
+    <!--
+      A heap ceiling, per binary (§14). Without one the Serial GC's allowance is
+      -XX:MaximumHeapSizePercent=80, so a long-running hub drifts up to 80% of the machine: the
+      live hub reached 53.9 MB of anonymous memory after 20 idle hours on a 969 MB instance, and
+      capping it is what stops that. Measured with LOAD=1000 ./measure.sh on linux-amd64, peak RSS
+      with 1,000 visitors held open: uncapped 91.7 (hub) and 94.0 (node), 128m 74.2/84.6,
+      96m 64.9/72.0, 64m 54.8/61.5, every arm holding all 1,000 and passing the gate. Idle RSS and
+      CLI start do not move; the ramp is 2.5s uncapped against 2.7s at 64m. An operator can raise
+      it at run time with -XX:MaxHeapSize=, which the binaries accept.
+    -->
+    <native.maxHeap>64m</native.maxHeap>
     <test.excludedGroups>load</test.excludedGroups>
   </properties>
 
@@ -154,6 +165,7 @@
             <buildArgs>
               <buildArg>-O2</buildArg>
               <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+              <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
             </buildArgs>
           </configuration>
         </plugin>

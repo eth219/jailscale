@@ -98,7 +98,7 @@ reachability metadata and no third-party jars.
 | Logging | Own small logger over `System.Logger`. SLF4J plus logback means ServiceLoader and reflection |
 | Cryptography | JDK JCE for X25519 and ChaCha20-Poly1305; own BLAKE2s, HMAC and HKDF. BouncyCastle is large and awkward here, and those three are forced: the JDK has no BLAKE2s, and Noise defines HMAC and HKDF over the chosen hash. Noise's HKDF also differs from RFC 5869 (an output counter byte instead of salt and info, at most three chained outputs) |
 | AWT and `java.awt.Desktop`; IPC | Forbidden, so browsers open through `ProcessBuilder`; AF_UNIX everywhere, since Windows 10 1803+ supports it and named pipes have no public JDK API |
-| Threading; build-time initialisation | Virtual threads throughout, because there is no packet hot path (§12). **Nothing is configured to initialise at build time**: the whole native configuration is `-O2` and `-H:+ReportExceptionStackTraces`, so the image takes native-image's own policy. Whatever is whitelisted later must leave JCE on the run-time side, or a `SecureRandom` seed is frozen into the image |
+| Threading; build-time initialisation | Virtual threads throughout, because there is no packet hot path (§12). **Nothing is configured to initialise at build time**: the native configuration is `-O2`, `-H:+ReportExceptionStackTraces` and a per-binary `-R:MaxHeapSize` (§14), so the image otherwise takes native-image's own policy. Whatever is whitelisted later must leave JCE on the run-time side, or a `SecureRandom` seed is frozen into the image |
 
 ### 3.2 Build and toolchain
 
@@ -1062,10 +1062,10 @@ platforms CI can run the gate on; the budgets differ per platform for the reason
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
-| Binary size | 25.2 MiB (`jailhub`), 25.3 MiB (`jailscale`) | 31.6 MiB, 31.9 MiB | 30 / 36 MiB |
+| Binary size | 25.2 MiB (`jailhub`), 25.3 MiB (`jailscale`) — but the release ships 29.8 and 30.1, see below | 31.6 MiB, 31.9 MiB | 30 / 36 MiB |
 | Node idle RSS | about 24.7 MB | about 39.7 MB | 28 / 46 MB |
 | Hub idle RSS | about 24.7 MB | about 40.0 MB | 30 / 46 MB |
-| RSS with 1,000 visitor sessions held open | node 85 MB, hub 78 MB | node 90 MB, hub 90 MB | node 192 MB, hub 160 MB |
+| RSS with 1,000 visitor sessions held open | node 68.6 MB, hub 52.7 MB | node 60.3 MB, hub 68.6 MB | node 192 MB, hub 160 MB |
 | CLI cold start | about 7 ms (`jailscale status`, median of 10, IPC round trip included) | about 4.5 ms | 50 ms |
 
 **Linux is not 15 MB heavier; it counts differently.** Of the hub's 40.1 MB there, **6.1 MB is
@@ -1077,15 +1077,50 @@ binary is 6.5 MiB larger than the arm64 one to begin with.
 The live hub shows what that means under pressure. On a GCP e2-micro with 969 MB of RAM, after a
 day of service, `smaps_rollup` reports 41.1 MB of RSS split into 15.0 MB anonymous and 26.2 MB of
 file-backed pages — and only 25.7 MB of the 31.6 MiB binary is still resident, the kernel having
-already dropped the rest with no effect anyone can see. The same RSS total came off a 16 GB CI
-runner as off the 969 MB instance, so this is accounting and not heap sizing. `measure.sh` prints
-the anonymous share on Linux next to RSS, and still gates on RSS so that the two platforms are
-gated on the same measurement.
+already dropped the rest with no effect anyone can see. `measure.sh` prints the anonymous share on
+Linux next to RSS, and still gates on RSS so that the two platforms are gated on the same
+measurement.
+
+**The anonymous share is heap sizing, and it is capped for that reason.** An earlier version of this
+section called the difference accounting rather than heap sizing, which was wrong: on 2026-09-12 the
+live hub was found at 78.2 MB of RSS with **53.9 MB anonymous** after 20 hours with no nodes and no
+visitors at all. It is not a leak. The same binary on the same instance, driven with 40,000
+scanner-shaped connections, settles at 39.0 MB of anonymous memory with `-XX:MaxHeapSize=128m` and
+at 9.7 MB with `32m`, reaching both inside the first 10,000 connections and then holding flat, so
+the plateau is set by the heap allowance and not by the work; and 6,000 of the same connections
+against the hub on a JVM leave the heap *smaller* after a forced GC, with an unchanged class
+histogram. What sets the allowance when nobody sets it is `-XX:MaximumHeapSizePercent=80`, printed
+by the binary's own `-XX:PrintFlags=`, which on a 969 MB instance is about 775 MB — five times the
+hub's own budget. So both binaries are now built with a ceiling: `-R:MaxHeapSize`, 96m for `jailhub`
+and 64m for `jailscale` (`native.maxHeap` in the poms). At 1,000 visitors held open that is 64.9 MB
+peak RSS for the hub against 91.7 MB uncapped, and 61.5 MB for the node against 94.0 MB, with all
+1,000 still served, idle RSS and CLI start unchanged, and the ramp 2.7s against 2.5s. An operator
+who needs more can pass `-XX:MaxHeapSize=` at run time.
+
+Serial is the only GC available here, which suits it: the distribution is Liberica NIK, and
+`native-image --gc=` offers `serial` (default), `parallel` and `epsilon` — G1 is Oracle GraalVM only
+and Linux-only, and it is the wrong lever anyway, since `MaximumHeapSizePercent` applies to serial,
+parallel and epsilon alike and the fix is the ceiling rather than the collector.
 
 `./measure.sh --check` fails when a number exceeds its budget. The budget values live at the top of
 the script and must match this table; they change only by a PR that states a reason. The `budget` job
 of the `ci` workflow runs it with `LOAD=1000` on linux-amd64 for every push to main and once a
 night; the macOS column is what `./measure.sh` reports on the machine this is developed on.
+
+**The macOS column is this machine's toolchain, and the release's is not the same one.** The
+numbers above come from `brew`'s GraalVM CE, `25.3.4.1-dev` today, whose banner reads
+`serial gc, compressed references`; the release workflow builds every target with Liberica NIK
+25.0.4 (§3.2), whose banner has no compressed references. That is a 4.6 MiB difference on the same
+platform and the same source: v0.1.0 ships `jailhub-darwin-arm64` at 29.8 MiB and
+`jailscale-darwin-arm64` at 30.1 MiB, against the 25.2 and 25.3 measured here, and the released
+`jailscale` is therefore already over the 30 MiB budget in this table — invisibly, because the
+`budget` job only runs on linux-amd64. Two ways out, neither taken yet: raise the macOS budget to
+match what the release toolchain produces, or build releases on a GraalVM CE that has compressed
+references, which currently costs darwin-amd64 (`graalvm-ce-builds` 25.3.4.1 ships linux-x64,
+linux-aarch64, macos-aarch64 and windows-x64, and no macOS x64 — the same gap §3.2 chose Liberica
+over). Measured on Liberica in CI, the linux-amd64 column is unaffected, and Oracle GraalVM 25.0.4
+(which does have compressed references) built the same source to within 0.1 MiB of Liberica's
+binary size while using about 1.2 MB less anonymous memory at idle.
 
 **Load is measured with the connections held open.** An earlier gate fired 1,000 short requests with
 `curl --parallel` and finished, which means 1,000 were never alive at once and the figure was roughly

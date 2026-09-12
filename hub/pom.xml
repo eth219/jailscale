@@ -16,6 +16,9 @@
     <native.skip>false</native.skip>
     <native.imageName>jailhub</native.imageName>
     <native.mainClass>io.jailscale.hub.Main</native.mainClass>
+    <!-- More than the node's 64m: one hub carries every node and name, and 96m measured 64.9 MB
+         peak against a 160 MB budget, so its ceiling of about 130 MB RSS still sits inside it. -->
+    <native.maxHeap>96m</native.maxHeap>
   </properties>
 
   <dependencies>
