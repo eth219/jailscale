@@ -1094,8 +1094,11 @@ by the binary's own `-XX:PrintFlags=`, which on a 969 MB instance is about 775 M
 hub's own budget. So both binaries are now built with a ceiling: `-R:MaxHeapSize`, 96m for `jailhub`
 and 64m for `jailscale` (`native.maxHeap` in the poms). At 1,000 visitors held open that is 64.9 MB
 peak RSS for the hub against 91.7 MB uncapped, and 61.5 MB for the node against 94.0 MB, with all
-1,000 still served, idle RSS and CLI start unchanged, and the ramp 2.7s against 2.5s. An operator
-who needs more can pass `-XX:MaxHeapSize=` at run time.
+1,000 still served, idle RSS and CLI start unchanged, and the ramp 2.7s against 2.5s. Both binaries take
+`-XX:MaxHeapSize=` at run time, the native runtime consuming it before `main` sees it, so a hub that
+needs more gets it on the unit's `ExecStart`. The node is the awkward one: `jailscale up` spawns the
+daemon with a fixed command, so raising its ceiling means editing the unit `service install` wrote
+or starting `jailscale daemon --home` by hand.
 
 Serial is the only GC available here, which suits it: the distribution is Liberica NIK, and
 `native-image --gc=` offers `serial` (default), `parallel` and `epsilon` — G1 is Oracle GraalVM only

@@ -56,8 +56,13 @@
       capping it is what stops that. Measured with LOAD=1000 ./measure.sh on linux-amd64, peak RSS
       with 1,000 visitors held open: uncapped 91.7 (hub) and 94.0 (node), 128m 74.2/84.6,
       96m 64.9/72.0, 64m 54.8/61.5, every arm holding all 1,000 and passing the gate. Idle RSS and
-      CLI start do not move; the ramp is 2.5s uncapped against 2.7s at 64m. An operator can raise
-      it at run time with -XX:MaxHeapSize=, which the binaries accept.
+      CLI start do not move; the ramp is 2.5s uncapped against 2.7s at 64m.
+
+      Both binaries accept -XX:MaxHeapSize= at run time (the native runtime takes it before main
+      sees it, so it does not collide with the CLI's own parsing), but only the hub is raised that
+      way in practice, on the unit's ExecStart. `jailscale up` spawns the daemon with a fixed
+      command (Main.daemonCommand), so raising the node's ceiling means editing the unit that
+      `service install` wrote, or starting the daemon subcommand by hand.
     -->
     <native.maxHeap>64m</native.maxHeap>
     <test.excludedGroups>load</test.excludedGroups>
