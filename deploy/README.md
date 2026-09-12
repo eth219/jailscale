@@ -10,7 +10,6 @@ Reference files for operators. The reasoning behind them is in
 | `Dockerfile.node` | Node container, same shape |
 | `nginx-stream.conf` | For a server where nginx already owns 443. SNI routing with `ssl_preread`, plus a PROXY header |
 | `haproxy.cfg` | The same with HAProxy, using `send-proxy-v2` |
-| `homebrew/jailscale.rb` | Formula template for a tap |
 
 Registering the node as a service is a command rather than a file:
 `jailscale service install` (launchd on macOS, `systemctl --user` on Linux, a
