@@ -93,18 +93,46 @@ INV2=$("$NODE" invite --user bob --home "$W/a" | grep -o "https://hub.test:$PORT
 "$NODE" up --invite "$INV2" --hub-addr 127.0.0.1 --ca-file "$CERT" --home "$W/b" > /dev/null
 "$NODE" netcheck --home "$W/b" > /dev/null
 # A local app behind alice, published as demo.hub.test (the idle budget is "one link open").
-# (python's stock http.server has a listen backlog of 5; give it one that survives a burst)
+# asyncio rather than http.server, and HTTP/1.1 with keep-alive, for two reasons that only showed
+# up when both were needed at once. Keep-alive is what makes tools/throughput.py's warm phase
+# possible at all, and it also makes the load phase honest: with a connection that closes after
+# every response, a "held" visitor is only held because Relay lingers, not because anything is
+# still connected end to end. But ThreadingHTTPServer costs a thread per connection, so 1,000 held
+# visitors became 1,000 Python threads, and the measurement got worse rather than better -- 900 of
+# 1,000 held, and peaks of 76 and 100 MB against 53 and 69. One event loop holds them all for
+# nothing. The backlog is set high because a burst larger than the accept queue is reset by the
+# kernel before the app sees it.
 cat > "$W/app/app.py" <<'EOF'
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-class H(BaseHTTPRequestHandler):
-    # HTTP/1.1 so a connection survives a response: without it every request costs a new TLS
-    # session and tools/throughput.py's warm phase cannot exist.
-    protocol_version = 'HTTP/1.1'
-    def do_GET(self):
-        self.send_response(200); self.send_header('Content-Length', '6'); self.end_headers(); self.wfile.write(b'hello\n')
-    def log_message(self, *a): pass
-ThreadingHTTPServer.request_queue_size = 1024
-ThreadingHTTPServer(('127.0.0.1', 18080), H).serve_forever()
+import asyncio
+
+KEEP = b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: keep-alive\r\n\r\nhello\n"
+CLOSE = b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nhello\n"
+
+async def serve(reader, writer):
+    # Honour Connection: close, because the two phases want opposite things. The warm throughput
+    # phase needs the connection to survive a response; the load phase wants what an ordinary page
+    # view does, one request and gone, and holding 1,000 live chains instead measures something
+    # heavier (and slower) than the budget was set against.
+    try:
+        while True:
+            head = await reader.readuntil(b"\r\n\r\n")
+            if b"connection: close" in head.lower():
+                writer.write(CLOSE)
+                await writer.drain()
+                return
+            writer.write(KEEP)
+            await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+
+async def main():
+    server = await asyncio.start_server(serve, '127.0.0.1', 18080, backlog=1024)
+    async with server:
+        await server.serve_forever()
+
+asyncio.run(main())
 EOF
 python3 "$W/app/app.py" > /dev/null 2>&1 &
 APPPID=$!

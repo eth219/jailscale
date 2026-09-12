@@ -16,6 +16,7 @@ import sys
 import time
 
 HOLD_SECONDS = 12
+STEP_TIMEOUT = 10
 BATCH = 100
 BATCH_PAUSE = 0.05
 
@@ -25,11 +26,16 @@ async def main(port, ca, count, workdir):
     held = []
 
     async def one():
-        reader, writer = await asyncio.open_connection(
-            "127.0.0.1", port, ssl=ctx, server_hostname="demo.hub.test")
-        writer.write(b"GET / HTTP/1.1\r\nHost: demo.hub.test\r\n\r\n")
-        await writer.drain()
-        line = await reader.readline()
+        # Connection: close, so this measures a visitor session held open rather than a whole live
+        # chain to the app: the budget was set against the former, and the latter is a different
+        # (heavier) measurement. And a timeout on every step, because without one a saturated node
+        # leaves this waiting for a reply that never comes -- which hung a CI run rather than
+        # reporting a number.
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(
+            "127.0.0.1", port, ssl=ctx, server_hostname="demo.hub.test"), STEP_TIMEOUT)
+        writer.write(b"GET / HTTP/1.1\r\nHost: demo.hub.test\r\nConnection: close\r\n\r\n")
+        await asyncio.wait_for(writer.drain(), STEP_TIMEOUT)
+        line = await asyncio.wait_for(reader.readline(), STEP_TIMEOUT)
         if b"200" in line:
             held.append(writer)
         else:
