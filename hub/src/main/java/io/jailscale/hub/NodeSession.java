@@ -15,6 +15,7 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.util.Locale;
+import java.util.concurrent.Semaphore;
 
 /**
  * One connection from a node after the HTTP 101 (ARCHITECTURE.md §5, §5.3, §6). The Hello carries the
@@ -27,6 +28,12 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     static final int MIN_PROTO = 1;
     static final int IDLE_TIMEOUT_MS = 60_000;
     static final int MAX_CONNECTIONS = 4;
+    /**
+     * Signing requests this connection will answer off the reader thread at once. Sized above the
+     * concurrency a real burst produces (a 1,000-visitor load peaks at a few hundred across the
+     * node) so the bound is only reached by a peer that is trying to reach it.
+     */
+    static final int MAX_CONCURRENT_SIGNS = 256;
 
     private final Hub hub;
     private final Socket socket;
@@ -39,6 +46,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private volatile boolean closed;
     private volatile boolean draining;
     private volatile byte[] handshakeHash;
+    private final Semaphore signSlots = new Semaphore(MAX_CONCURRENT_SIGNS);
 
     NodeSession(Hub hub, Socket socket, String remoteIp) {
         this.hub = hub;
@@ -196,7 +204,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 LOG.info("node {} conn {} said goodbye: {}", mkey, conn, g.reason());
                 return false;
             }
-            case Message.SignRequest sr -> send(group.sign(sr));
+            case Message.SignRequest sr -> signOffThread(sr);
             // A newer node sending something this hub has no case for (ARCHITECTURE.md §5.4). The
             // Error is the point: the node learns the message did not happen, rather than assuming
             // silence means success.
@@ -275,6 +283,45 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             }
         }
         return true;
+    }
+
+    /**
+     * Answers a signing request on a thread of its own (ARCHITECTURE.md §9.2, §12).
+     *
+     * <p>{@link MuxSession.Listener} says callbacks run on the reader thread and must be short,
+     * and this one is not: it hashes a transcript, signs with the wildcard key, then writes the
+     * reply through the channel's write lock, which can block on a full socket buffer. Done in
+     * line, every first visitor handshake stops that connection's reader, and with it the DATA
+     * frames of every other visitor stream on it -- 1,024 visitors may share one connection
+     * (§8.1), so a burst of handshakes became a burst of stalls for everyone already served.
+     *
+     * <p>The node already does this in the other direction: it hands each incoming visitor stream
+     * to its own virtual thread rather than serving it on the reader. Signing is ordered per
+     * stream by the node's own handshake, which cannot ask twice at once, and {@code sign} takes
+     * the token bucket under a lock, so nothing here depended on the reader's serialisation.
+     */
+    private void signOffThread(Message.SignRequest sr) throws IOException {
+        // Bounded, because how many of these exist is the node's choice otherwise: it decides how
+        // many SignRequests to put on the wire, and each one that got a thread of its own would
+        // hold the request, its transcript and a stack until the channel write lock came free.
+        // §12 bounds memory by the connection limits, and an unbounded spawn is outside them.
+        // Over the limit the request is answered on the reader thread instead, which is where all
+        // of them used to be answered: a flood degrades to the old serialisation rather than to a
+        // refusal, so a legitimate burst is slow at worst and never fails.
+        if (!signSlots.tryAcquire()) {
+            send(group.sign(sr));
+            return;
+        }
+        Thread.ofVirtual().name("sign-" + sr.streamId()).start(() -> {
+            try {
+                send(group.sign(sr));
+            } catch (IOException e) {
+                LOG.debug("node {}: could not answer a signing request: {}", mkey, e.getMessage());
+                close();
+            } finally {
+                signSlots.release();
+            }
+        });
     }
 
     void visitorDone(MuxStream stream) {

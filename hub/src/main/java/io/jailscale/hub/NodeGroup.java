@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * All connections of one node (multiple connections per node): connection 0 carries control,
@@ -43,6 +44,13 @@ final class NodeGroup {
     private final Map<MuxStream, Long> streamIds = new ConcurrentHashMap<>();
     private long signRefillAt = System.currentTimeMillis();
     private double signTokens = SIGN_BURST;
+    /**
+     * Signing requests being served right now, and the most that were ever in flight at once.
+     * The token bucket above says how many arrive; this says how many the hub is inside, which is
+     * what tells a queue apart from a burst when the bucket is not the thing refusing.
+     */
+    private final AtomicInteger signsInFlight = new AtomicInteger();
+    private volatile int peakSignsInFlight;
 
     NodeGroup(Hub hub, String mkey) {
         this.hub = hub;
@@ -163,8 +171,51 @@ final class NodeGroup {
         return ((long) conn << CONN_SHIFT) | (localId & LOCAL_MASK);
     }
 
+    /** The most signing requests this group has had in flight at once, since it connected. */
+    int peakConcurrentSignatures() {
+        return peakSignsInFlight;
+    }
+
+    /**
+     * Takes one of the stream's {@link #MAX_SIGNATURES_PER_STREAM} signatures, or returns false
+     * when they are gone. This is condition 5 of ARCHITECTURE.md §9.2 and the only place that
+     * enforces it.
+     *
+     * <p>Counting it has to be one operation. Requests used to be answered on the connection's mux
+     * reader, one at a time, and a read-check-write was safe for that reason alone; they are now
+     * answered off that thread (§12), and nothing stops a node from putting several requests for
+     * one {@code streamId} on the wire at once. Read, check and write separately and each of them
+     * sees the old count, so every one of them is allowed and every one writes 1 -- the cap
+     * silently stops existing for a node that asks for it to. The hub does not get to assume the
+     * node makes one request at a time; that assumption is what the §9.2 conditions are here
+     * instead of.
+     */
+    boolean reserveSignature(long id) {
+        boolean[] taken = new boolean[1];
+        visitors.computeIfPresent(id, (k, cur) -> {
+            if (cur.signatures() >= MAX_SIGNATURES_PER_STREAM) {
+                return cur;
+            }
+            taken[0] = true;
+            return new VisitorStream(cur.linkId(), cur.sni(), cur.signatures() + 1, cur.clientSide());
+        });
+        return taken[0];
+    }
+
     /** The four conditions of ARCHITECTURE.md §9.2, then the signature. */
     Message sign(Message.SignRequest sr) {
+        int inFlight = signsInFlight.incrementAndGet();
+        if (inFlight > peakSignsInFlight) {
+            peakSignsInFlight = inFlight; // a high-water mark; racing writers can only under-report
+        }
+        try {
+            return signChecked(sr);
+        } finally {
+            signsInFlight.decrementAndGet();
+        }
+    }
+
+    private Message signChecked(Message.SignRequest sr) {
         long id = sr.streamId();
         int conn = (int) (id >>> CONN_SHIFT);
         long localId = id & LOCAL_MASK;
@@ -179,7 +230,7 @@ final class NodeGroup {
             return reject(sr, "name-not-yours");
         }
         if (vs.signatures() >= MAX_SIGNATURES_PER_STREAM) {
-            return reject(sr, "too-many-signatures");
+            return reject(sr, "too-many-signatures"); // cheap pre-check; reserveSignature is the binding one
         }
         // The hash the node wants signed must be the transcript of the handshake on this very
         // stream: the ClientHello the hub delivered, the ServerHello and EncryptedExtensions the
@@ -212,7 +263,9 @@ final class NodeGroup {
             }
             signTokens -= 1;
         }
-        visitors.put(id, new VisitorStream(vs.linkId(), vs.sni(), vs.signatures() + 1, vs.clientSide()));
+        if (!reserveSignature(id)) {
+            return reject(sr, "too-many-signatures");
+        }
         try {
             byte[] sig = hub.tls().sign(sr.keyId(), sr.content());
             if (sig == null) {
