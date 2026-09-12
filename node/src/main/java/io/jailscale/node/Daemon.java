@@ -16,6 +16,8 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
@@ -38,9 +40,12 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private volatile boolean closed;
     /** The last release check, for {@code status}; null until the first one has run. */
     private volatile Updates.Result lastUpdate;
+    /** The last self-probe per name, so `status` shows it without anyone running `verify`. */
+    private final Map<String, Probe> lastProbe = new ConcurrentHashMap<>();
     static final URI LETS_ENCRYPT = URI.create("https://acme-v02.api.letsencrypt.org/directory");
     static final long RENEW_CHECK_MS = 3600_000;
     static final long UPDATE_CHECK_MS = 24 * 3600_000L;
+    static final long PROBE_INTERVAL_MS = 30 * 60_000L;
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
@@ -59,6 +64,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         Thread.ofVirtual().name("domain-renew").start(this::renewLoop);
         Thread.ofVirtual().name("update-check").start(this::updateLoop);
+        Thread.ofVirtual().name("self-probe").start(this::probeLoop);
     }
 
     // --- HubLink.Events --------------------------------------------------------------------------
@@ -275,9 +281,19 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         for (NodeState.LinkRec l : state.links) {
             rows.add(JsonObject.builder().put("name", l.name).put("kind", l.kind).put("local", l.local())
                 .put("url", l.url).put("gate", l.gateHash != null).put("open", l.linkId != null && link.isConnected())
-                .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null).build().asMap());
+                .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
+                .put("probe", probeRow(l)).build().asMap());
         }
         return rows;
+    }
+
+    /** The last self-probe of this link's public name, or null if it has not been probed yet. */
+    private JsonObject probeRow(NodeState.LinkRec l) {
+        if (l.url == null) {
+            return null;
+        }
+        Probe p = lastProbe.get(URI.create(l.url).getHost());
+        return p == null ? null : p.json().build();
     }
 
     /** Names the hub took away, so `status` keeps saying it after the log line has scrolled. */
@@ -479,36 +495,107 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         List<Object> rows = new ArrayList<>();
         boolean allOk = true;
         for (NodeState.LinkRec rec : state.links) {
-            if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
+            Probe p = probe(rec);
+            if (p == null) {
                 continue; // raw ports carry no TLS of ours to compare
             }
-            URI u = URI.create(rec.url);
-            String host = u.getHost();
-            int port = u.getPort() > 0 ? u.getPort() : 443;
-            String verdict;
-            boolean ok = false;
-            try {
-                SSLContext ctx = Tls.clientContext(state.caFile == null ? null : Path.of(state.caFile), state.tlsInsecure);
-                try (SSLSocket s = Tls.connect(ctx, host, state.hubAddr, port, !state.tlsInsecure, VERIFY_TIMEOUT_MS)) {
-                    Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
-                    Http.readResponse(s.getInputStream(), 1 << 16);
-                    String material = SelfProbe.material(s.getSession());
-                    ok = visitors.probe().terminatedHere(material);
-                    verdict = material == null ? "keying material unavailable (needs TLS 1.3)"
-                        : ok ? "terminated by this node" : "TERMINATED ELSEWHERE";
-                }
-            } catch (IOException | GeneralSecurityException | io.jailscale.proto.http.HttpException | RuntimeException e) {
-                verdict = "unreachable: " + e.getMessage();
-            }
-            if (!ok) {
-                allOk = false;
-                if (verdict.startsWith("TERMINATED")) {
-                    visitors.probe().warn(host);
-                }
-            }
-            rows.add(JsonObject.builder().put("name", host).put("ok", ok).put("verdict", verdict).build().asMap());
+            allOk &= p.ok();
+            rows.add(p.json().build().asMap());
         }
         reply.done(JsonObject.builder().put("ok", allOk).put("checked", rows.size()).put("results", rows));
+    }
+
+    /** What one probe of one name concluded, and when. */
+    private record Probe(String name, boolean ok, String verdict, long at) {
+
+        JsonObject.Builder json() {
+            return JsonObject.builder().put("name", name).put("ok", ok).put("verdict", verdict).put("at", at / 1000);
+        }
+    }
+
+    /**
+     * Probes one link, or null when it carries no TLS this node terminates. Records the result for
+     * {@code status} and shouts on the one verdict that means something is wrong, so a probe from
+     * the loop below is as loud as one the operator asked for.
+     */
+    private Probe probe(NodeState.LinkRec rec) {
+        if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
+            return null;
+        }
+        URI u = URI.create(rec.url);
+        String host = u.getHost();
+        int port = u.getPort() > 0 ? u.getPort() : 443;
+        String verdict;
+        boolean ok = false;
+        try {
+            SSLContext ctx = Tls.clientContext(state.caFile == null ? null : Path.of(state.caFile), state.tlsInsecure);
+            try (SSLSocket s = Tls.connect(ctx, host, state.hubAddr, port, !state.tlsInsecure, VERIFY_TIMEOUT_MS)) {
+                Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
+                Http.readResponse(s.getInputStream(), 1 << 16);
+                String material = SelfProbe.material(s.getSession());
+                ok = visitors.probe().terminatedHere(material);
+                verdict = material == null ? "keying material unavailable (needs TLS 1.3)"
+                    : ok ? "terminated by this node" : "TERMINATED ELSEWHERE";
+            }
+        } catch (IOException | GeneralSecurityException | io.jailscale.proto.http.HttpException | RuntimeException e) {
+            verdict = "unreachable: " + e.getMessage();
+        }
+        if (!ok && verdict.startsWith("TERMINATED")) {
+            visitors.probe().warn(host);
+        }
+        Probe p = new Probe(host, ok, verdict, System.currentTimeMillis());
+        lastProbe.put(host, p);
+        return p;
+    }
+
+    /**
+     * ARCHITECTURE.md §11.3: run the self-probe without being asked, so an interception is found
+     * rather than waited for. **One name per tick, in turn**, which is what makes the interval
+     * independent of how many names this node holds: §15 objected that a period has to scale with
+     * the number of open names, and it does not if each tick costs one probe regardless. With the
+     * default tick a node with one name is checked every half hour and a node at the 20-link
+     * ceiling every ten hours, at the same cost to the hub either way.
+     *
+     * <p>No switch to turn it off, deliberately. The traffic goes to this node's own public name
+     * through its own hub and reaches no third party, so there is nothing here for an operator to
+     * opt out of.
+     */
+    private void probeLoop() {
+        int next = 0;
+        while (!closed) {
+            try {
+                Thread.sleep(PROBE_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                return;
+            }
+            List<NodeState.LinkRec> links = new ArrayList<>(state.links);
+            if (!link.isConnected()) {
+                continue;
+            }
+            int i = nextProbeIndex(links, next);
+            if (i < 0) {
+                continue;
+            }
+            next = (i + 1) % links.size();
+            probe(links.get(i));
+        }
+    }
+
+    /**
+     * The link to probe on this tick: the first one at or after {@code from}, wrapping, that carries
+     * TLS this node terminates. -1 when none does, which is a node with only raw ports open.
+     * Separate from the probing so that the turn-taking -- the part that keeps the cost of a tick
+     * independent of how many names are open -- can be checked without opening a socket.
+     */
+    static int nextProbeIndex(List<NodeState.LinkRec> links, int from) {
+        for (int i = 0; i < links.size(); i++) {
+            int at = (from + i) % links.size();
+            NodeState.LinkRec rec = links.get(at);
+            if (Message.LinkOpen.HTTPS.equals(rec.kind) && rec.url != null) {
+                return at;
+            }
+        }
+        return -1;
     }
 
     private static String visitUrl(NodeState.LinkRec rec, String token) {

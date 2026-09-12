@@ -844,6 +844,18 @@ The four signing conditions are enforced by **the hub**, so they stop a rogue *n
 about a rogue *hub*. The self-probe runs on **the node**. They do not overlap; they face opposite
 directions.
 
+**It also runs on its own, one name every half hour.** Waiting for someone to type `jailscale verify`
+means an interception is found when somebody happens to look, which for an unattended node is never.
+The objection to a schedule was that the period has to scale with the number of open names — short
+enough to matter for one name is a lot of self-traffic for twenty. It does not have to, if a tick
+probes **one** name and the next tick takes the next: the cost of a tick is then one request whatever
+the node holds, and what stretches is how long a full pass takes, from half an hour at one name to
+ten hours at the 20-link ceiling. Raw ports are stepped over within the same tick rather than
+spending it, since they carry no TLS of ours to compare. The result of the last probe of each name
+rides in `status`, so the answer is visible without running anything, and a `TERMINATED ELSEWHERE`
+from the loop logs exactly as loudly as one the operator asked for. There is no switch to turn it
+off: the traffic goes to this node's own name through its own hub and reaches no third party.
+
 ### 11.4 Name revocation notices
 
 The self-probe only runs when someone types `jailscale verify`, so an **honest hub announces a name
@@ -1021,9 +1033,6 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 ## 15. Limits
 
-- **The self-probe is manual.** §11.3 runs only when someone types `jailscale verify`, so nothing
-  detects a hub-side interception in between. An interval for running it periodically has to scale
-  with the number of open names: short adds self-traffic, long delays detection.
 - **The self-check does not verify A records.** It proves the `_acme-challenge` delegation reaches
   this process, but not that `hub.example.com` and `*.hub.example.com` resolve to this hub, because
   the hub does not know its own public address. A deployment where only the wildcard record is proxied

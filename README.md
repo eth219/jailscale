@@ -223,8 +223,8 @@ What a compromised hub can and cannot do is written out in
   not under a systemd unit, where an upgrade is a restart.
 - `service install` is verified on macOS only. Linux and Windows are untested
   outside CI.
-- The self-probe runs when you type `jailscale verify`. It should run on a
-  schedule.
+- Upgrading is manual. `jailscale update` says when a release is out; nothing
+  installs it for you.
 - Windows nodes occasionally need to reconnect, costing that connection's
   visitors up to 60 seconds. It is a JDK bug, not ours:
   [docs/windows-virtual-thread-stall](docs/windows-virtual-thread-stall/).
