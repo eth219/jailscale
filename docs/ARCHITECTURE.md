@@ -1247,11 +1247,17 @@ warm requests, which nothing limits, keep the rate as capacity.
 
 | | arm64 macOS (14 cores) | linux-amd64 (4-core runner) |
 |---|---|---|
-| Handshake, hub CPU | 716 µs | 1,544 µs |
-| Handshake, node CPU | 1,100 µs | 1,985 µs |
-| Warm request, hub CPU | 101 µs | 71 µs |
-| Warm request, node CPU | 113 µs | 79 µs |
-| Warm requests a second | about 38,000 | about 17,500 |
+| Handshake, hub CPU | 716 µs | 1,544 to 1,969 µs |
+| Handshake, node CPU | 1,100 µs | 1,985 to 2,475 µs |
+| Warm request, hub CPU | 101 µs | 71 to 92 µs |
+| Warm request, node CPU | 113 µs | 79 to 105 µs |
+| Warm requests a second | about 38,000 | 13,700 to 17,600 |
+
+The linux column is a range because a GitHub runner instance is: the same commit and toolchain gave
+17,560 warm requests a second on one and 13,732 on another, which is 22% and larger than most of
+what this section compares. **Two arms of a comparison have to run in the same workflow**, which is
+why every table above was measured that way; a number from one run against a number from another
+run says almost nothing.
 
 A handshake costs seven to twenty times a warm request on either side, which is the shape the design
 predicts: one opens a stream, asks the hub for a signature bound to that stream (§9.2) and finishes
