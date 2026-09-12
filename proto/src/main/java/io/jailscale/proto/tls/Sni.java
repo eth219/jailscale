@@ -1,10 +1,10 @@
 package io.jailscale.proto.tls;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Reads a TLS ClientHello off a raw socket without opening TLS and extracts the server_name
@@ -15,6 +15,12 @@ public final class Sni {
 
     /** A ClientHello larger than this is not from a browser we care about. */
     public static final int MAX_CLIENT_HELLO = 16 * 1024;
+    /**
+     * What a server_name may contain. Compiled once: this runs on the 443 accept path, once per
+     * visitor connection and before anything has been authenticated, so a {@code String.matches}
+     * here would compile the same pattern for every connection anyone makes.
+     */
+    private static final Pattern HOST = Pattern.compile("[a-z0-9.-]+");
 
     private Sni() {}
 
@@ -98,7 +104,7 @@ public final class Sni {
                     }
                     if (nameType == 0) {
                         String name = new String(b, q, nameLen, StandardCharsets.US_ASCII).toLowerCase(Locale.ROOT);
-                        if (name.isEmpty() || name.length() > 253 || !name.matches("[a-z0-9.-]+")) {
+                        if (name.isEmpty() || name.length() > 253 || !HOST.matcher(name).matches()) {
                             throw new IOException("bad server_name");
                         }
                         return name;
@@ -111,16 +117,23 @@ public final class Sni {
         return null;
     }
 
+    /**
+     * Exactly {@code n} bytes, or null if the stream ended before that. Both callers already know
+     * which of the two lengths they asked for and say so in their own message, so a clean end and
+     * a truncated one are the same answer here; this used to return one of two identical nulls to
+     * suggest otherwise. {@code n} is bounded by the caller ({@link #MAX_CLIENT_HELLO}), so the
+     * buffer is the right size from the start rather than grown and then copied out.
+     */
     private static byte[] readFully(InputStream in, int n) throws IOException {
-        ByteArrayOutputStream buf = new ByteArrayOutputStream(n);
-        byte[] tmp = new byte[Math.min(n, 4096)];
-        while (buf.size() < n) {
-            int r = in.read(tmp, 0, Math.min(tmp.length, n - buf.size()));
+        byte[] buf = new byte[n];
+        int off = 0;
+        while (off < n) {
+            int r = in.read(buf, off, n - off);
             if (r < 0) {
-                return buf.size() == 0 ? null : null;
+                return null;
             }
-            buf.write(tmp, 0, r);
+            off += r;
         }
-        return buf.toByteArray();
+        return buf;
     }
 }
