@@ -16,6 +16,12 @@ import java.io.OutputStream;
  *
  * <p>Reads and writes are independently single-threaded: one reader thread, one writer thread.
  * Writes are serialised with a lock so several producers may share the writer side.
+ *
+ * <p>{@link #close} is a third participant, and the one that has to be careful: it destroys the
+ * transport keys, and a {@code CipherState} with no key does not refuse work -- it passes the bytes
+ * through unchanged, which is right during a handshake (Noise §5.1) and is a frame on the wire in
+ * the clear here. So closing takes both locks, and a read or write that arrives after it fails as
+ * a closed channel instead of reaching a cipher whose key has been wiped.
  */
 public final class NoiseChannel implements AutoCloseable {
 
@@ -25,6 +31,8 @@ public final class NoiseChannel implements AutoCloseable {
     private final DataOutputStream out;
     private final NoiseIk.Transport transport;
     private final Object writeLock = new Object();
+    private final Object readLock = new Object();
+    private volatile boolean closed;
 
     private NoiseChannel(InputStream in, OutputStream out, NoiseIk.Transport transport) {
         this.in = new DataInputStream(in);
@@ -110,20 +118,29 @@ public final class NoiseChannel implements AutoCloseable {
 
     /** Blocks until the next frame arrives. Returns null on clean EOF before a length prefix. */
     public Frame read() throws IOException, NoiseException, MuxException {
-        byte[] ct;
-        try {
-            ct = readRaw(in);
-        } catch (EOFException e) {
-            return null;
+        synchronized (readLock) {
+            if (closed) {
+                throw new IOException("channel closed");
+            }
+            byte[] ct;
+            try {
+                ct = readRaw(in);
+            } catch (EOFException e) {
+                return null;
+            }
+            byte[] pt = transport.decrypt(ct);
+            return Frame.decode(pt);
         }
-        byte[] pt = transport.decrypt(ct);
-        return Frame.decode(pt);
     }
 
     public void write(Frame frame) throws IOException, NoiseException {
         byte[] pt = frame.encode();
-        // Encrypt inside the lock: the nonce counter must advance in wire order.
+        // Encrypt inside the lock: the nonce counter must advance in wire order, and the key must
+        // still be there when it does.
         synchronized (writeLock) {
+            if (closed) {
+                throw new IOException("channel closed");
+            }
             byte[] ct = transport.encrypt(pt);
             writeRaw(out, ct);
         }
@@ -131,11 +148,24 @@ public final class NoiseChannel implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        transport.destroy();
+        closed = true;
+        // Streams first. A reader waiting for a length prefix and a writer stuck on a full socket
+        // buffer are both holding a lock this method needs, and closing the streams underneath
+        // them is what makes them let go. Taking the locks first would wait for exactly the thing
+        // that is waiting for us.
         try {
             out.close();
         } finally {
-            in.close();
+            try {
+                in.close();
+            } finally {
+                // Now nobody is mid-message, so the keys can go.
+                synchronized (writeLock) {
+                    synchronized (readLock) {
+                        transport.destroy();
+                    }
+                }
+            }
         }
     }
 
