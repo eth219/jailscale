@@ -179,11 +179,22 @@ class UserDomainTest {
         }
         assertTrue(refused);
 
-        // Restart the node: the stored certificate is reused (no new order) and the domain comes back.
+        // Restart the node: the stored certificate is reused (no new order) and the domain comes
+        // back. Waiting for the domain to go before waiting for it to return is what the first loop
+        // is for: the record from before the restart stands until the hub notices the node has
+        // left, so a wait that only looks for a record can end on that stale one, and then the
+        // request below reaches a hub with no connection to the node and fails the handshake. Seen
+        // once in about sixty runs on windows-2025, never on a faster machine. Waiting for the
+        // record to come back cannot end early the same way: it is the restarted node's own
+        // LinkOpen that puts it there, over the session the request needs.
         node.close();
+        long deadline = System.currentTimeMillis() + 15_000;
+        while (hub.links().byDomain(DOMAIN) != null && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50);
+        }
+        assertNull(hub.links().byDomain(DOMAIN), "the hub kept the domain after the node left");
         node = new Daemon(NodeConfig.in(root.resolve("node")));
         node.start();
-        long deadline = System.currentTimeMillis() + 15_000;
         while (hub.links().byDomain(DOMAIN) == null && System.currentTimeMillis() < deadline) {
             Thread.sleep(50);
         }

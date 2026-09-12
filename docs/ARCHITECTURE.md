@@ -122,9 +122,9 @@ finding nobody answered look identical six months later.
 
 **Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu and macos for
 every push and pull request, the §14 budget on main and nightly, and Windows nightly rather than
-per push. Windows used to be nightly because the stall below failed about 2% of runs; that is fixed,
-and it stays nightly only until it has the clean-run count ubuntu and macos were promoted on. `release` builds the five native
-targets on a tag. The container images build with `-DskipTests`, deliberately: they are packaging,
+per push. Windows used to be nightly because the stall below failed about 2% of runs; that one is
+fixed, and it stays nightly only until it has the clean-run count ubuntu and macos were promoted on.
+`release` builds the five native targets on a tag. The container images build with `-DskipTests`, deliberately: they are packaging,
 not verification.
 
 Two toolchain hazards are load-bearing. **JDK 25.0.0 to 25.0.2 must not be used**: moving
