@@ -23,25 +23,42 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # Liberica NIK rather than GraalVM CE, and JDK 25.0.3 or newer, on purpose (ARCHITECTURE.md §3.2).
+      # Oracle GraalVM, and JDK 25.0.3 or newer, both on purpose (ARCHITECTURE.md §3.2, §14).
       # JDK 25.0.0-25.0.2 lose timed virtual-thread wake-ups once a delayed task is cancelled
       # (JDK-8370887, with JDK-8369227 next to it); a hand-off cancels the old connections'
       # keepalive sleeps, and HandoffTest then stalled on one or two runners per run. Both fixes
-      # are in 25.0.3. This action's graalvm-community line stops at jdk-25.0.2 and has no macOS
-      # x64 build after 25.0.1, so it cannot deliver a fixed JDK to all five targets; its liberica
-      # line resolves '25' to the newest jdk-25.0.x tag (25.0.4 today) and ships every target.
+      # are in 25.0.3, and this action's graalvm-community line still resolves 25 to 25.0.2, so it
+      # is out either way. Liberica NIK was the choice until 2026-09-13 and delivers a fixed JDK to
+      # all five targets; Oracle GraalVM does too, and it is the only one of the three with PGO,
+      # which is worth about 7 MiB and a fifth of the idle RSS on every target (§14). The cost is
+      # that the released binaries carry the GraalVM Free Terms and Conditions: free for us because
+      # jailscale charges nothing, and a bar to anyone who wants to sell a bundle of them.
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'liberica'
+          distribution: 'graalvm'
           native-image-job-reports: 'true'
       - name: Set version from the tag
         # Without this the binaries report the pom's 0.x.y-SNAPSHOT no matter which tag built them.
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: ./mvnw -B -ntp versions:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false
-      - name: Build (tests + native)
-        run: ./mvnw -B -ntp -Pnative package
+      - name: Unpack the committed profiles (native-image reads the plain files)
+        run: |
+          for gz in profiles/*.iprof.gz; do gunzip -c "$gz" > "${gz%.gz}"; done
+          ls -l profiles/
+        shell: bash
+      - name: Build (tests + native, against the profiles)
+        run: ./mvnw -B -ntp -Pnative,pgo package | tee /tmp/build.log
+        shell: bash
+      - name: Refuse to ship a build that did not use the profiles
+        # The whole point of the toolchain change is that released binaries are profile-guided, and
+        # a silently plain build would be indistinguishable afterwards except by size. native-image
+        # says which it did, once per image, so require both.
+        run: |
+          n=$(grep -c "PGO: user-provided" /tmp/build.log || true)
+          echo "native-image reported user-provided PGO $n times"
+          [ "$n" -ge 2 ] || { echo "expected two profile-guided images, got $n"; exit 1; }
         shell: bash
       - name: Collect
         shell: bash
@@ -56,12 +73,23 @@ jobs:
           fi
           # macOS ships shasum and no sha256sum; the Windows runner's bash is the other way
           # round. Both print the same "<hash>  <name>" that the release job concatenates.
+          # What built these, beside what they hash to: "is this the profile-guided release
+          # binary?" is a question nothing in the binary itself can answer (see Version.java), so
+          # the answer is published next to the checksums.
+          {
+            echo "target:        ${{ matrix.target }}"
+            echo "commit:        ${{ github.sha }}"
+            echo "ref:           ${{ github.ref_name }}"
+            echo "toolchain:     $(native-image --version | tail -1)"
+            echo "profile-guided: yes (profiles/ in this commit, see ARCHITECTURE.md §14)"
+          } > "dist/BUILDINFO-${{ matrix.target }}.txt"
           cd dist
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum * > "SHA256SUMS-${{ matrix.target }}.txt"
+            sha256sum jailscale-* jailhub-* *.jar > "SHA256SUMS-${{ matrix.target }}.txt" 2>/dev/null
           else
-            shasum -a 256 * > "SHA256SUMS-${{ matrix.target }}.txt"
+            shasum -a 256 jailscale-* jailhub-* *.jar > "SHA256SUMS-${{ matrix.target }}.txt" 2>/dev/null
           fi
+          cat "SHA256SUMS-${{ matrix.target }}.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -74,8 +102,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
-      - name: Merge checksums
-        run: cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
+      - name: Merge checksums and build info
+        run: |
+          cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
+          cat dist/BUILDINFO-*.txt > dist/BUILDINFO.txt && rm dist/BUILDINFO-*.txt
+          cat dist/BUILDINFO.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

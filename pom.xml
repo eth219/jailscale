@@ -66,13 +66,11 @@
     -->
     <native.maxHeap>64m</native.maxHeap>
     <!--
-      Extra native-image arguments, empty unless a profile below sets them. Two exist: `pgo` builds
-      with the profiles committed under profiles/, and `pgo-instrument` builds the instrumented
-      binaries that produce one. Both need Oracle GraalVM, which is what the release builds on;
-      neither is on by default, so `./native.sh` with a Community Edition keg still works and
-      building from source still needs nothing but a GraalVM (§3.1).
+      The `pgo` and `pgo-instrument` profiles below each restate the whole buildArgs list. They have
+      to: the plugin passes every <buildArg> element as one argument and does not split it on
+      whitespace, so one property holding several arguments arrives as a single argument and
+      native-image reads "path -Dsomething" as a file name. Measured the hard way.
     -->
-    <native.extraArg>-H:+ReportExceptionStackTraces</native.extraArg>
     <test.excludedGroups>load</test.excludedGroups>
   </properties>
 
@@ -177,8 +175,8 @@
             </metadataRepository>
             <buildArgs>
               <buildArg>-O2</buildArg>
+              <buildArg>-H:+ReportExceptionStackTraces</buildArg>
               <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
-              <buildArg>${native.extraArg}</buildArg>
             </buildArgs>
           </configuration>
         </plugin>
@@ -198,9 +196,24 @@
     -->
     <profile>
       <id>pgo</id>
-      <properties>
-        <native.extraArg>-H:+ReportExceptionStackTraces --pgo=${maven.multiModuleProjectDirectory}/profiles/${project.artifactId}.iprof -Djailscale.pgo=true</native.extraArg>
-      </properties>
+      <build>
+        <pluginManagement>
+          <plugins>
+            <plugin>
+              <groupId>org.graalvm.buildtools</groupId>
+              <artifactId>native-maven-plugin</artifactId>
+              <configuration>
+                <buildArgs>
+                  <buildArg>-O2</buildArg>
+                  <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+                  <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
+                <buildArg>--pgo=${maven.multiModuleProjectDirectory}/profiles/${project.artifactId}.iprof</buildArg>
+              </buildArgs>
+            </configuration>
+            </plugin>
+          </plugins>
+        </pluginManagement>
+      </build>
     </profile>
 
     <!--
@@ -213,9 +226,24 @@
     -->
     <profile>
       <id>pgo-instrument</id>
-      <properties>
-        <native.extraArg>-H:+ReportExceptionStackTraces --pgo-instrument</native.extraArg>
-      </properties>
+      <build>
+        <pluginManagement>
+          <plugins>
+            <plugin>
+              <groupId>org.graalvm.buildtools</groupId>
+              <artifactId>native-maven-plugin</artifactId>
+              <configuration>
+                <buildArgs>
+                  <buildArg>-O2</buildArg>
+                  <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+                  <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
+                <buildArg>--pgo-instrument</buildArg>
+              </buildArgs>
+            </configuration>
+            </plugin>
+          </plugins>
+        </pluginManagement>
+      </build>
     </profile>
 
     <!--

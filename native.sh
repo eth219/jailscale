@@ -49,5 +49,18 @@ MSG
 fi
 
 echo "native-image: $("$GRAALVM_HOME/bin/native-image" --version | tail -1)"
+
+# The committed profiles are gzipped: they are JSON and compress about six to one, which keeps a
+# refresh at a megabyte of history instead of six. native-image reads the plain file, so unpack
+# whichever are missing or stale.
+root="$(cd "$(dirname "$0")" && pwd)"
+for gz in "$root"/profiles/*.iprof.gz; do
+  [ -f "$gz" ] || continue
+  plain="${gz%.gz}"
+  if [ ! -f "$plain" ] || [ "$gz" -nt "$plain" ]; then
+    gunzip -c "$gz" > "$plain"
+  fi
+done
+
 export JAVA_HOME="$GRAALVM_HOME" GRAALVM_HOME
 exec "$(dirname "$0")/mvnw" -B -ntp -Pnative package "$@"

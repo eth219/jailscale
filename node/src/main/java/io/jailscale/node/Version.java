@@ -1,13 +1,15 @@
 package io.jailscale.node;
 
 /**
- * Build version, taken from the jar manifest when present (maven-jar-plugin adds it), with a
- * {@code +pgo} suffix when the binary was built against a profile.
+ * Build version, taken from the jar manifest when present (maven-jar-plugin adds it).
  *
- * <p>The suffix exists so that "is this a profile-guided build?" is a question the binary answers.
- * A PGO build is about 7 MiB smaller and a fifth lighter at idle (ARCHITECTURE.md §14), the release
- * always makes one, and a redeploy of the public hub is supposed to check. Guessing from a file
- * size is not a check.
+ * <p>This deliberately does not say whether the binary was built against a PGO profile, though it
+ * was tried: a {@code -D} on the native-image command line is set for the builder and does not
+ * reach the image's run time, and every other way of baking a constant in either needs build-time
+ * class initialisation (§3.1 forbids it) or reuses a manifest field for something it does not mean.
+ * The release proves it instead, which is stronger: each native build is checked for
+ * "PGO: user-provided" in native-image's own output, and the published BUILDINFO.txt and
+ * SHA256SUMS.txt say what was built and let anyone check that a binary is that one (§14).
  */
 final class Version {
 
@@ -15,6 +17,6 @@ final class Version {
 
     static String string() {
         String v = Version.class.getPackage() == null ? null : Version.class.getPackage().getImplementationVersion();
-        return (v == null ? "dev" : v) + ("true".equals(System.getProperty("jailscale.pgo")) ? "+pgo" : "");
+        return v == null ? "dev" : v;
     }
 }

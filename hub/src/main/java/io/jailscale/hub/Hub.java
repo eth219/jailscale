@@ -384,10 +384,9 @@ public final class Hub implements AutoCloseable {
         return http == null ? -1 : http.port();
     }
 
-    /** With a {@code +pgo} suffix when this binary was built against a profile (§14). */
     static String version() {
         String v = Hub.class.getPackage() == null ? null : Hub.class.getPackage().getImplementationVersion();
-        return (v == null ? "dev" : v) + ("true".equals(System.getProperty("jailscale.pgo")) ? "+pgo" : "");
+        return v == null ? "dev" : v;
     }
 
     boolean isHandingOff() {
