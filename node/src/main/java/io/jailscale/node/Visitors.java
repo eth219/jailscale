@@ -6,6 +6,7 @@ import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.net.ProxyProtocol;
 import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.util.Log;
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -35,6 +36,14 @@ final class Visitors {
     private static final Log LOG = Log.get("visitor");
     private static final int LOCAL_CONNECT_TIMEOUT_MS = 5_000;
     static final long UDP_IDLE_MS = 60_000;
+    /**
+     * The buffer the visitor gate reads its request head through, on gated links only. Not
+     * {@link Gate#MAX_HEAD}: that is the limit on how long a head may be, enforced by a counter
+     * as the head is read, and it does not have to be resident per connection. This only has to
+     * be large enough that an ordinary head is one read instead of several hundred, and it is
+     * memory every gated visitor holds (§15), so it is the smaller number.
+     */
+    private static final int GATE_BUFFER = 4 * 1024;
 
     private final NodeState state;
     private final SelfProbe probe = new SelfProbe();
@@ -131,10 +140,17 @@ final class Visitors {
             return;
         }
         byte[] replay = null;
+        InputStream plain = tls.plainIn();
         if (target.gateHash != null) {
+            // The gate reads the request head a byte at a time looking for the blank line, and
+            // every one of those single-byte reads allocates and takes the engine's lock. Buffer
+            // it -- but the buffer has to be the same object the relay then reads from, because a
+            // BufferedInputStream reads ahead and whatever it took past the head is the start of
+            // the visitor's body. Thrown away with the wrapper, that is a truncated request.
+            plain = new BufferedInputStream(plain, GATE_BUFFER);
             try {
                 boolean expired = target.gateExpiresAt > 0 && System.currentTimeMillis() > target.gateExpiresAt;
-                Gate.Decision d = Gate.decide(tls.plainIn(), target.gateHash, expired);
+                Gate.Decision d = Gate.decide(plain, target.gateHash, expired);
                 switch (d) {
                     case Gate.Decision.Pass p -> replay = p.head();
                     case Gate.Decision.SetCookie sc -> {
@@ -163,7 +179,7 @@ final class Visitors {
             local = connectLocal(target);
         } catch (IOException e) {
             LOG.warn("{}: local target {}:{} unreachable: {}", sni, target.host(), target.port(), e.getMessage());
-            badGateway(tls, target);
+            badGateway(tls, plain, target);
             try {
                 stream.close();
             } catch (IOException ignored) {
@@ -171,7 +187,7 @@ final class Visitors {
             }
             return;
         }
-        relay(tls, local, stream, concat(proxyLine, replay));
+        relay(tls, plain, local, stream, concat(proxyLine, replay));
     }
 
     /** ARCHITECTURE.md §9.3: {@code --proxy-protocol} tells the local app who the visitor is, HAProxy style. */
@@ -318,14 +334,19 @@ final class Visitors {
         throw last;
     }
 
-    private static void relay(TlsEndpoint tls, Socket local, MuxStream stream, byte[] replay) {
+    /**
+     * {@code plain} is the visitor's plaintext, which is {@code tls.plainIn()} unless the gate
+     * (§9.3) already read the request head from a buffered view of it -- in which case it is that
+     * view, holding whatever the gate read past the head.
+     */
+    private static void relay(TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream, byte[] replay) {
         Thread toLocal = Thread.ofVirtual().name("visitor-in").start(() -> {
             try {
                 if (replay != null) {
                     local.getOutputStream().write(replay);
                     local.getOutputStream().flush();
                 }
-                copy(tls.plainIn(), local.getOutputStream());
+                copy(plain, local.getOutputStream());
                 local.shutdownOutput();
             } catch (IOException e) {
                 closeQuietly(local);
@@ -347,12 +368,11 @@ final class Visitors {
         }
     }
 
-    private static void badGateway(TlsEndpoint tls, NodeState.LinkRec target) {
+    private static void badGateway(TlsEndpoint tls, InputStream plain, NodeState.LinkRec target) {
         try {
             // Consume the request head so the browser sees a clean response, then answer.
-            InputStream in = tls.plainIn();
             byte[] buf = new byte[4096];
-            int n = in.read(buf);
+            int n = plain.read(buf);
             if (n < 0) {
                 return;
             }

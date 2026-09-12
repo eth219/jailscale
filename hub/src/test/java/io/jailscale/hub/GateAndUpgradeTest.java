@@ -81,7 +81,7 @@ class GateAndUpgradeTest {
 
     private static void serve(Socket c) {
         try (c) {
-            HttpRequest r = Http.readRequest(c.getInputStream(), 4096);
+            HttpRequest r = Http.readRequest(c.getInputStream(), 65536);
             OutputStream out = c.getOutputStream();
             if ("echo".equalsIgnoreCase(r.headers().get("Upgrade"))) {
                 HttpResponse.upgrade("echo").writeTo(out);
@@ -94,7 +94,9 @@ class GateAndUpgradeTest {
                 }
                 return;
             }
-            HttpResponse.text(200, "page " + r.path() + " cookie=" + r.headers().get("Cookie")).writeTo(out);
+            byte[] body = r.body();
+            HttpResponse.text(200, "page " + r.path() + " cookie=" + r.headers().get("Cookie")
+                + (body.length > 0 ? " body=" + body.length + ":" + new String(body, StandardCharsets.US_ASCII) : "")).writeTo(out);
         } catch (Exception ignored) {
             // visitor gone
         }
@@ -152,6 +154,87 @@ class GateAndUpgradeTest {
         assertEquals(403, get("private.hub.test", "/", new Headers().add("Cookie", "jail=" + token)).status());
         Ipc.call(sock, JsonObject.builder().put("cmd", "gate").put("name", "private").put("off", true).build());
         assertEquals(200, get("private.hub.test", "/", null).status());
+    }
+
+    /**
+     * A gated link must not eat the request body. The gate reads only the head, but it reads it
+     * through a buffer, and a buffer reads ahead: on a POST that arrives in one segment the body
+     * is already in that buffer by the time the head ends. If the relay then went back to the
+     * unbuffered stream, those bytes would be stranded and the local app would sit waiting for a
+     * Content-Length that never arrives. Sent as one write on purpose, so the read-ahead happens.
+     */
+    @Test
+    void aGatedLinkDeliversTheRequestBodyThatFollowsTheHead() throws Exception {
+        JsonObject open = Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", app.getLocalPort())
+            .put("name", "posted").put("gate", true).build());
+        assertTrue(open.optBool("ok", false), open.toString());
+        String visit = open.string("visitUrl");
+        String token = visit.substring(visit.indexOf("jail=") + 5);
+
+        // Longer than the gate's read buffer, so the relay has to keep pulling from the
+        // underlying stream once what the gate read ahead runs out.
+        String body = "b".repeat(9000);
+        String request = "POST /upload HTTP/1.1\r\nHost: posted.hub.test\r\nCookie: jail=" + token + "\r\n"
+            + "Content-Length: " + body.length() + "\r\n\r\n" + body;
+        try (SSLSocket s = connect("posted.hub.test")) {
+            s.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII)); // head and body together
+            s.getOutputStream().flush();
+            HttpResponse r = Http.readResponse(s.getInputStream(), 65536);
+            assertEquals(200, r.status());
+            assertEquals("page /upload cookie=jail=" + token + " body=" + body.length() + ":" + body, r.bodyText());
+        }
+
+        // And when the body arrives after the head, in its own write, which is the other ordering.
+        String head = "POST /later HTTP/1.1\r\nHost: posted.hub.test\r\nCookie: jail=" + token + "\r\n"
+            + "Content-Length: " + body.length() + "\r\n\r\n";
+        try (SSLSocket s = connect("posted.hub.test")) {
+            s.getOutputStream().write(head.getBytes(StandardCharsets.US_ASCII));
+            s.getOutputStream().flush();
+            Thread.sleep(150);
+            s.getOutputStream().write(body.getBytes(StandardCharsets.US_ASCII));
+            s.getOutputStream().flush();
+            HttpResponse r = Http.readResponse(s.getInputStream(), 65536);
+            assertEquals(200, r.status());
+            assertEquals("page /later cookie=jail=" + token + " body=" + body.length() + ":" + body, r.bodyText());
+        }
+    }
+
+    /**
+     * The same hazard on a connection that keeps streaming: the gate passes the head, and every
+     * byte after it -- including whatever its buffer already holds -- has to reach the local app,
+     * in order and exactly once.
+     */
+    @Test
+    void aGatedUpgradeStreamsEverythingAfterTheHead() throws Exception {
+        JsonObject open = Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", app.getLocalPort())
+            .put("name", "gsock").put("gate", true).build());
+        assertTrue(open.optBool("ok", false), open.toString());
+        String visit = open.string("visitUrl");
+        String token = visit.substring(visit.indexOf("jail=") + 5);
+        try (SSLSocket s = connect("gsock.hub.test")) {
+            // Head and the first frame in one write: the first frame lands in the gate's buffer.
+            byte[] first = "frame-0".getBytes(StandardCharsets.US_ASCII);
+            byte[] head = ("GET /socket HTTP/1.1\r\nHost: gsock.hub.test\r\nCookie: jail=" + token + "\r\n"
+                + "Connection: Upgrade\r\nUpgrade: echo\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
+            byte[] both = new byte[head.length + first.length];
+            System.arraycopy(head, 0, both, 0, head.length);
+            System.arraycopy(first, 0, both, head.length, first.length);
+            s.getOutputStream().write(both);
+            s.getOutputStream().flush();
+            HttpResponse r = Http.readResponse(s.getInputStream(), 4096);
+            assertEquals(101, r.status());
+            InputStream in = s.getInputStream();
+            assertEquals("frame-0", new String(in.readNBytes(first.length), StandardCharsets.US_ASCII),
+                "the frame sent alongside the head was swallowed");
+            OutputStream out = s.getOutputStream();
+            for (int i = 1; i < 10; i++) {
+                byte[] msg = ("frame-" + i + "-" + "y".repeat(i * 200)).getBytes(StandardCharsets.US_ASCII);
+                out.write(msg);
+                out.flush();
+                assertEquals(new String(msg, StandardCharsets.US_ASCII),
+                    new String(in.readNBytes(msg.length), StandardCharsets.US_ASCII));
+            }
+        }
     }
 
     @Test

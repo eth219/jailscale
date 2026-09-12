@@ -230,7 +230,17 @@ public final class Http {
         return body;
     }
 
-    /** Reads one CRLF (or bare LF) terminated line as ISO-8859-1. Returns null at EOF before any byte. */
+    /**
+     * Reads one CRLF (or bare LF) terminated line as ISO-8859-1. Returns null at EOF before any byte.
+     *
+     * <p>One byte at a time, deliberately. The stream does not end with the request: after a 101
+     * the same {@code InputStream} carries the Noise channel (§5.1), and the hub hands the very
+     * object it parsed the head from to {@code NodeSession}. Any buffering here would read past
+     * the blank line and take the first Noise message with it, which is the failure mode §3.1
+     * rejected {@code com.sun.net.httpserver} for. Buffering belongs to a caller that owns the
+     * stream afterwards and passes the same wrapper on -- as the visitor gate does (§9.3) -- not
+     * to this method, which cannot know whether there is an afterwards.
+     */
     static String readLine(InputStream in, int max, int overflowStatus) throws IOException, HttpException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream(128);
         int c;
