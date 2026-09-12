@@ -81,8 +81,8 @@ class SigningConcurrencyTest {
         }
     }
 
-    @Test
-    void signaturesForOneConnectionOverlap() throws Exception {
+    /** A hub, one node on a single control connection, and one open link. */
+    private void startHubNodeAndLink() throws Exception {
         Log.setLevel(Log.Level.INFO);
         root = TestDirs.newRoot("jsg");
         try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
@@ -118,6 +118,11 @@ class SigningConcurrencyTest {
         assertTrue(Ipc.call(sock, JsonObject.builder().put("cmd", "open").put("port", app.getLocalPort())
             .put("name", "signing").build()).optBool("ok", false));
 
+    }
+
+    @Test
+    void signaturesForOneConnectionOverlap() throws Exception {
+        startHubNodeAndLink();
         // Each visitor is a fresh TLS 1.3 session, so each costs the node one signature from the hub.
         // Resumption would not, which is why every one of these is a new context.
         int peak = 0;
@@ -175,5 +180,28 @@ class SigningConcurrencyTest {
             peak = Math.max(peak, g.peakConcurrentSignatures());
         }
         return peak;
+    }
+
+    /**
+     * With the limit exhausted, requests fall back to the reader thread and every one is still
+     * answered. That branch is unreachable under any legitimate load — 1,000 visitors peak at
+     * about 150 in flight, and the number does not grow with the visitor count — so the limit is
+     * lowered here to reach it. What it must not do is lose or deadlock a request: the fallback
+     * is the code that shipped before signing moved off the reader, running where it used to run,
+     * while other signatures hold the channel write lock around it.
+     */
+    @Test
+    void anExhaustedLimitFallsBackToTheReaderAndStillAnswers() throws Exception {
+        NodeSession.concurrentSignLimit = 2;
+        try {
+            startHubNodeAndLink();
+            assertEquals(VISITORS, burst(), "every visitor should be answered through the fallback");
+            int inline = hub.registry().get(node.machineKey()).all().stream()
+                .mapToInt(NodeSession::signedInline).sum();
+            assertTrue(inline > 0, "the fallback was never taken, so it was not tested");
+            assertEquals(VISITORS, hits.get(), "every visitor should have reached the local app");
+        } finally {
+            NodeSession.concurrentSignLimit = NodeSession.MAX_CONCURRENT_SIGNS;
+        }
     }
 }

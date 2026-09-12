@@ -16,6 +16,7 @@ import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.util.Locale;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * One connection from a node after the HTTP 101 (ARCHITECTURE.md §5, §5.3, §6). The Hello carries the
@@ -34,6 +35,14 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
      * node) so the bound is only reached by a peer that is trying to reach it.
      */
     static final int MAX_CONCURRENT_SIGNS = 256;
+    /**
+     * What a new connection actually starts with. A legitimate burst does not come near the
+     * default -- 1,000 visitors against one node peak at about 150 in flight, because that number
+     * is the arrival rate times the time a signature takes and neither grows with the visitor
+     * count -- so the fallback below is only reached by a peer that sets out to reach it. Tests
+     * lower this to get there.
+     */
+    static int concurrentSignLimit = MAX_CONCURRENT_SIGNS;
 
     private final Hub hub;
     private final Socket socket;
@@ -46,7 +55,9 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private volatile boolean closed;
     private volatile boolean draining;
     private volatile byte[] handshakeHash;
-    private final Semaphore signSlots = new Semaphore(MAX_CONCURRENT_SIGNS);
+    private final Semaphore signSlots = new Semaphore(concurrentSignLimit);
+    /** Signing requests answered on the reader thread because the limit above was reached. */
+    private final AtomicInteger signedInline = new AtomicInteger();
 
     NodeSession(Hub hub, Socket socket, String remoteIp) {
         this.hub = hub;
@@ -309,6 +320,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         // of them used to be answered: a flood degrades to the old serialisation rather than to a
         // refusal, so a legitimate burst is slow at worst and never fails.
         if (!signSlots.tryAcquire()) {
+            signedInline.incrementAndGet();
             send(group.sign(sr));
             return;
         }
@@ -322,6 +334,11 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 signSlots.release();
             }
         });
+    }
+
+    /** How many signing requests this connection had to answer on its reader thread. */
+    int signedInline() {
+        return signedInline.get();
     }
 
     void visitorDone(MuxStream stream) {
