@@ -1131,9 +1131,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   is attached to could differ.
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
   loses events when one socket is parked for read and for write together (JDK-8334574), so one side
-  of each of those sockets is kept off the poller there. Linux and macOS are untouched, but a
-  Windows node's memory grows with connection count faster than theirs does, and new code that
-  gives a socket two threads has to remember to do the same.
+  of each of those sockets is kept off the poller there. Measured at about 60 KB per concurrent
+  connection more than the virtual thread it replaces (66.6 KB against 6.7 KB, and a smaller
+  `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
+  ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
+  do the same.
 - **Node idle RSS is about 24.7 MB, not the 20 MB originally aimed at**, and about 39.7 MB as
   Linux counts it (§14: mostly the mapped binary, 5 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they

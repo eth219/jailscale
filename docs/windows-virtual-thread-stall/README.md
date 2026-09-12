@@ -102,6 +102,28 @@ in two poll handles:
 The cost is one platform thread per concurrently-used socket, on Windows only. Linux and macOS get
 `Thread.ofVirtual()` exactly as before, and nothing about the protocol or the wire changes.
 
+`ThreadCost.java` prices that thread with nothing else in the process: 1,000 loopback socket pairs,
+then one thread per pair blocked in `read()`, with the working set sampled before and after.
+
+| 1,000 sockets, one blocked thread each | windows-2025 | ubuntu-24.04 |
+|---|---|---|
+| virtual | 6.7 KB each | 5.7 KB each |
+| platform, default stack | **66.6 KB each** | 108.6 KB each |
+| platform, `stackSize` 256 KB | 66.8 KB each | 108.1 KB each |
+| platform, `stackSize` 128 KB | 66.9 KB each | 108.5 KB each |
+
+So a Windows node pays about 60 KB per concurrent visitor connection that it would not have paid
+before: 60 MB at a thousand of them, 600 KB at ten. Asking for a smaller stack does not help and was
+measured rather than assumed -- an eighth of the reserve changes nothing, because what is paid for
+is committed pages and the JVM's per-thread structures, not the reservation.
+
+The same shape through the whole stack, `LoadTest` with 1,000 visitors held open at once on
+windows-2025: 2,024 OS threads (1,000 `relay-in` for the hub side, 1,000 `visitor-in` for the node
+side, 4 `mux-reader`, the rest the JVM's own), 6.1 ms per handshake, 2,000 of 2,000 burst requests
+served. On ubuntu the same run is 18 OS threads before and after, which is the point: the cost
+exists on Windows and nowhere else. A hub on Linux contributes none of it, so a real deployment pays
+only the node's side.
+
 `MuxLoop.java` measures it through jailscale's own code rather than a socket reproducer: the body of
 `MuxSessionTest.largeTransferRespectsFlowControl` in a loop, two `MuxSession`s over a loopback pair.
 
