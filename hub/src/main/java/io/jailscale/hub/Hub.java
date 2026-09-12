@@ -341,6 +341,10 @@ public final class Hub implements AutoCloseable {
         return front;
     }
 
+    SniRouter router() {
+        return router;
+    }
+
     AdminWeb adminWeb() {
         return adminWeb;
     }

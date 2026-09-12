@@ -35,6 +35,43 @@ final class SniRouter {
         this.hub = hub;
     }
 
+    /**
+     * Takes one slot for {@code key} and returns how many are now held. The counter is created
+     * and incremented inside the map's own lock, and {@link #release} removes it inside that same
+     * lock once the last holder lets go, so an entry never outlives the connections it counts.
+     *
+     * <p>Counting in a map keyed by the visitor address means an address nobody has connected
+     * from since is an entry nobody will ever look at again, and this is the one path here that
+     * runs before any authentication: reaching it costs an attacker a TCP connection, so leaving
+     * the entries behind is a map that grows for as long as the process lives. {@code RateLimiter}
+     * makes the same point about buckets and answers it by pruning; a counter that is back at zero
+     * needs no pruning heuristic, because zero and absent are the same state.
+     */
+    private static int acquire(Map<String, AtomicInteger> counts, String key) {
+        int[] held = new int[1];
+        counts.compute(key, (k, c) -> {
+            AtomicInteger v = c == null ? new AtomicInteger() : c;
+            held[0] = v.incrementAndGet();
+            return v;
+        });
+        return held[0];
+    }
+
+    /** Gives a slot back, dropping the entry when it was the last one. */
+    private static void release(Map<String, AtomicInteger> counts, String key) {
+        counts.computeIfPresent(key, (k, c) -> c.decrementAndGet() == 0 ? null : c);
+    }
+
+    /** Visitor addresses with at least one connection open. Zero when nothing is in flight. */
+    int trackedAddresses() {
+        return perIp.size();
+    }
+
+    /** Names with at least one connection open. Zero when nothing is in flight. */
+    int trackedNames() {
+        return perName.size();
+    }
+
     /** Serves one accepted raw connection to completion. */
     void serve(Socket socket) {
         String ip = socket.getInetAddress().getHostAddress();
@@ -51,10 +88,9 @@ final class SniRouter {
             Relay.closeQuietly(socket);
             return;
         }
-        AtomicInteger ipCount = perIp.computeIfAbsent(ip, k -> new AtomicInteger());
         // Loopback is exempt: a local proxy without PROXY protocol would otherwise fold every visitor into one address.
-        if (ipCount.incrementAndGet() > MAX_PER_IP && !socket.getInetAddress().isLoopbackAddress()) {
-            ipCount.decrementAndGet();
+        if (acquire(perIp, ip) > MAX_PER_IP && !socket.getInetAddress().isLoopbackAddress()) {
+            release(perIp, ip);
             Relay.closeQuietly(socket);
             return;
         }
@@ -97,22 +133,21 @@ final class SniRouter {
                     return;
                 }
             }
-            AtomicInteger nameCount = perName.computeIfAbsent(name, k -> new AtomicInteger());
-            if (nameCount.incrementAndGet() > MAX_PER_NAME) {
-                nameCount.decrementAndGet();
+            if (acquire(perName, name) > MAX_PER_NAME) {
+                release(perName, name);
                 Relay.closeQuietly(socket);
                 return;
             }
             try {
                 relay(socket, peek, link, ip, visitorPort);
             } finally {
-                nameCount.decrementAndGet();
+                release(perName, name);
             }
         } catch (IOException e) {
             LOG.debug("{}: {}", ip, e.getMessage());
             Relay.closeQuietly(socket);
         } finally {
-            ipCount.decrementAndGet();
+            release(perIp, ip);
         }
     }
 
