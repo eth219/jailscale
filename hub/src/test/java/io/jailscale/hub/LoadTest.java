@@ -35,7 +35,7 @@ import org.junit.jupiter.api.Timeout;
  * connection open at the same time, then a short throughput burst. Correctness (every visitor
  * gets its answer) and timing are asserted loosely; the memory budget is measured on the native
  * binaries by {@code measure.sh LOAD=1000}, not here. Excluded from the default build:
- * {@code ./mvnw -pl hub test -Dgroups=load -DexcludedGroups=}.
+ * {@code ./mvnw -pl hub test -Dgroups=load -Dtest.excludedGroups=}.
  */
 @Tag("load")
 @Timeout(300)

@@ -22,6 +22,31 @@ TUN device, no root, no inbound ports on the node.
 
 Full design and architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## What it does, and what it does not
+
+A port on a machine you run, served at `https://<name>.<your-hub>` to visitors
+who install nothing. That is the whole of it.
+
+ngrok, Cloudflare Tunnel and frp do the same job — the first two hosted, frp on
+a server you run. Tailscale is larger: a mesh between your own machines, of
+which Funnel is this one job.
+
+**Everything else is out of scope**, in particular:
+
+- **A VPN.** No mesh, no peer-to-peer, no exit nodes, no subnet routes, no
+  MagicDNS.
+- **Reading the visitor's HTTP.** Neither end parses it: no routing on paths or
+  headers, no rewriting, no request inspector, no replay, no per-request log.
+- **HTTP/2 and HTTP/3 to the visitor.** The node offers `http/1.1` only.
+- **More than one node behind a name.** No load balancing, no health checking,
+  no failover.
+- **An identity provider.** Joining is an invite, a code or an auth-key; an
+  admin is a machine key ([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)).
+- **Mobile clients.** Desktop and server platforms only.
+- **A hosted service.** You run the hub; there is nothing to sign up for.
+
+Things *missing* rather than excluded are under [Not done yet](#not-done-yet).
+
 ## What Java bought, and what it cost
 
 The interesting question was whether a JVM language can carry this kind of
@@ -232,7 +257,7 @@ What a compromised hub can and cannot do is written out in
   [docs/windows-virtual-thread-stall](docs/windows-virtual-thread-stall/).
 - Idle memory is 24.7 MB against a 20 MB goal (39.7 MB as Linux counts it, 5 MB
   of it anonymous). Most of the gap is JSSE standing up a TLS client.
-- No standby hub, no state replication, no OIDC.
+- No standby hub, no state replication.
 - v0.1.0 is the first tagged release, so there is no upgrade path to have got
   wrong yet. What the protocol promises across versions is
   [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md).

@@ -30,7 +30,7 @@ what ngrok, Cloudflare Tunnel and Tailscale Funnel do, with no third party in th
    node. A pure-JVM fallback JAR ships beside the native binaries.
 
 Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or frp, HTTP/2 and HTTP/3
-on the visitor side, mobile clients.
+on the visitor side, mobile clients, an external identity provider (§10).
 
 ---
 
@@ -931,13 +931,18 @@ operator's job. Unauthenticated work is metered with per-source token buckets:
 |---|---|---|---|
 | `/v1/noise` handshake | 30 | 1/s | HTTP 429, Upgrade refused |
 | Credential presentation (invite token, code, auth-key) | 20 | 0.2/s | `rejected{reason: rate-limited}` |
+| Registration under `--registration open` | 5 | 1 per 12 min | `rejected{reason: rate-limited}` |
 | Knock queue | 5 entries per address | n/a | `rejected{reason: too-many-pending}` |
 
 A node the hub already knows returns before the credential check, so reconnections never touch the
 bucket. The bursts are generous because a node opens up to four connections and a NAT can hide many
-nodes behind one address; the sustained rate is what limits abuse. To stop an attacker inflating the
-map by rotating addresses, once more than 10,000 keys are tracked the full buckets are dropped: a
-full bucket is indistinguishable from one that never existed, so nothing is lost.
+nodes behind one address; the sustained rate is what limits abuse. Open registration needs a bucket
+of its own because nothing is presented in that case, so the credential one never sees it, and
+without a limit one address could register nodes without bound and claim public names under the hub
+domain. To stop an attacker inflating the map by rotating addresses, once more than 10,000 keys are
+tracked the full buckets are dropped: a full bucket is indistinguishable from one that never
+existed, so nothing is lost. The same rotation is why the per-address connection counters of §8.1
+are dropped once the last connection using one is gone, rather than left behind at zero.
 
 **`/admin` sessions.** The login link is one-shot and lives 60 seconds, the session cookie lasts 12
 hours, and every POST carries a CSRF token. On top of that, **admin status is rechecked on every

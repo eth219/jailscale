@@ -20,8 +20,11 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 # Budget (ARCHITECTURE.md §14). Change only with a reason, in the same commit as the design table.
 # Per platform, because the same code measures differently on each and one shared number would have
 # to be the loosest: an amd64 binary is about 6.5 MiB bigger than the arm64 one, and Linux counts the
-# binary's own mapped pages in RSS where macOS largely does not -- on linux-amd64 about 25 MB of a
-# 40 MB idle RSS is the binary itself, clean and reclaimable, against 15 MB of anonymous memory.
+# binary's own mapped pages in RSS where macOS largely does not -- on linux-amd64 about 34 MB of a
+# 40 MB idle RSS is the binary itself, clean and reclaimable, against about 6 MB of anonymous memory
+# at the moment this script measures. (A hub left running grows that anonymous share -- the live one
+# is at 15 MB after a day -- which is why the budget is on RSS and the anonymous figure is only
+# printed. ARCHITECTURE.md §14 has both numbers and which is which.)
 B_NODE_LOAD_MB=192
 B_HUB_LOAD_MB=160
 B_CLI_MS=50

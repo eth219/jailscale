@@ -111,7 +111,8 @@
           <artifactId>maven-surefire-plugin</artifactId>
           <version>${maven-surefire-plugin.version}</version>
           <configuration>
-            <!-- Load tests (ARCHITECTURE.md §14) run on demand: -Dgroups=load -DexcludedGroups= -->
+            <!-- Load tests (ARCHITECTURE.md §14) run on demand: -Dgroups=load -Dtest.excludedGroups=
+                 (the property below, not surefire's own -DexcludedGroups, which this overrides) -->
             <excludedGroups>${test.excludedGroups}</excludedGroups>
           </configuration>
         </plugin>
