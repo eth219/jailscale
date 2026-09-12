@@ -65,6 +65,14 @@
       the CLI spawns the daemon or `service install` writes a unit for it.
     -->
     <native.maxHeap>64m</native.maxHeap>
+    <!--
+      Extra native-image arguments, empty unless a profile below sets them. Two exist: `pgo` builds
+      with the profiles committed under profiles/, and `pgo-instrument` builds the instrumented
+      binaries that produce one. Both need Oracle GraalVM, which is what the release builds on;
+      neither is on by default, so `./native.sh` with a Community Edition keg still works and
+      building from source still needs nothing but a GraalVM (§3.1).
+    -->
+    <native.extraArg>-H:+ReportExceptionStackTraces</native.extraArg>
     <test.excludedGroups>load</test.excludedGroups>
   </properties>
 
@@ -169,8 +177,8 @@
             </metadataRepository>
             <buildArgs>
               <buildArg>-O2</buildArg>
-              <buildArg>-H:+ReportExceptionStackTraces</buildArg>
               <buildArg>-R:MaxHeapSize=${native.maxHeap}</buildArg>
+              <buildArg>${native.extraArg}</buildArg>
             </buildArgs>
           </configuration>
         </plugin>
@@ -179,6 +187,37 @@
   </build>
 
   <profiles>
+    <!--
+      ./mvnw -Pnative,pgo package
+
+      Builds with the profile committed for this binary (§14). Measured: every PGO build comes out
+      about 7 MiB smaller with a fifth less idle RSS, on either platform, and the CPU gain is
+      between nothing and half depending on the profile, which is why the profile in the repository
+      is merged from three runs rather than taken from one. Needs Oracle GraalVM: PGO is not in the
+      Community Edition.
+    -->
+    <profile>
+      <id>pgo</id>
+      <properties>
+        <native.extraArg>-H:+ReportExceptionStackTraces --pgo=${maven.multiModuleProjectDirectory}/profiles/${project.artifactId}.iprof -Djailscale.pgo=true</native.extraArg>
+      </properties>
+    </profile>
+
+    <!--
+      ./mvnw -Pnative,pgo-instrument package
+
+      The other half: binaries that record what they do. Run one under a workload that covers the
+      kinds of work you care about (a profile collected without visitors arriving gave no
+      handshake gain at all), and point it somewhere with
+      HUB_OPTS=-XX:ProfilesDumpFile=... or JAILSCALE_DAEMON_OPTS=-XX:ProfilesDumpFile=...
+    -->
+    <profile>
+      <id>pgo-instrument</id>
+      <properties>
+        <native.extraArg>-H:+ReportExceptionStackTraces --pgo-instrument</native.extraArg>
+      </properties>
+    </profile>
+
     <!--
       ./mvnw -Panalyze verify
 
