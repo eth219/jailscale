@@ -385,7 +385,8 @@ Otherwise the hub starts the port 53 responder (TXT, NS and SOA for `_acme-chall
 for everything else, UDP and TCP), runs the self-check, then issues. The **self-check** must pass
 first and retries every 60 seconds on failure: it sets a random TXT value and asks 1.1.1.1 and
 8.8.8.8 for it, which separates a missing NS delegation from a blocked port 53 from a cached answer.
-`--no-selfcheck` skips it, and the address check below with it, where hairpinning does not work.
+`--no-selfcheck` skips it where hairpinning does not work; it does not touch the address check
+below, which holds nothing up and so needs no escape hatch of the same kind.
 
 Issuance creates an EC P-256 account key if absent, orders both names, publishes each dns-01 token as
 `base64url(SHA-256(keyAuthorization))` in a TXT record, polls the authorizations, generates a new EC
@@ -406,7 +407,7 @@ root or `CAP_NET_BIND_SERVICE`, which the reference systemd unit grants to a ded
 
 **The address check.** The self-check above proves the `_acme-challenge` delegation reaches this
 process and says nothing about the address records every visitor actually follows, so a hub started
-with ACME, unless `--no-selfcheck` turned both off, also asks once in the background: do public
+with ACME, unless `--no-address-check` says otherwise, also asks once in the background: do public
 resolvers have an address (A or AAAA) for `hub.example.com` and for a name under
 `*.hub.example.com`, do those two share one, and does that address answer `/v1/key` on the base
 URL's port with **this process's** hub key? The last question needs no PKI — the hub key is what a

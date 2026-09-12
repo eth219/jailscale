@@ -15,7 +15,9 @@ public final class Main {
                       [--listen 0.0.0.0:443] [--state DIR] [--registration invite|open]
                       [--invite-policy members|admins] [--knock on|off] [--dns-suffix HOST] [--debug]
                       certificate: built-in ACME (dns-01 via the hub's own DNS on --dns-listen 0.0.0.0:53)
-                        [--acme-email you@example.com] [--acme-staging | --acme-directory URL] [--no-selfcheck]
+                        [--acme-email you@example.com] [--acme-staging | --acme-directory URL]
+                        [--no-selfcheck]  do not hold issuance on the dns-01 check
+                        [--no-address-check]  do not report whether the name points here (§7.2)
                       or your own files: --tls-cert FILE --tls-key FILE
                       [--port-range 10000-10999 | none]  ports for raw tcp/udp links (ARCHITECTURE.md §8.4)
                       [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (ARCHITECTURE.md §8.3)
@@ -39,7 +41,7 @@ public final class Main {
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "admin", "help", "acme-staging", "no-selfcheck", "takeover");
+            a = Args.parse(argv, "debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover");
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);

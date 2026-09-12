@@ -43,6 +43,28 @@ class ReachabilityTest {
     }
 
     @Test
+    void noSelfcheckDoesNotSilenceTheAddressCheck() {
+        // The two checks fail in opposite ways, so one flag cannot serve both: --no-selfcheck
+        // exists because the dns-01 check holds issuance until it passes, and an operator who
+        // needs the hub to start should not lose a report that can only write a log line. The
+        // half that matters most to that operator -- do the records exist and agree -- asks
+        // public resolvers and never needs to reach this host at all.
+        io.jailscale.proto.util.Args noSelfCheck = io.jailscale.proto.util.Args.parse(
+            new String[] {"serve", "--base-url", "https://hub.example.com", "--no-selfcheck"},
+            "debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover");
+        HubConfig a = HubConfig.fromArgs(noSelfCheck);
+        assertTrue(!a.selfCheck(), "--no-selfcheck still turns the dns-01 check off");
+        assertTrue(a.addressCheck(), "--no-selfcheck must not turn the address check off");
+
+        io.jailscale.proto.util.Args noAddressCheck = io.jailscale.proto.util.Args.parse(
+            new String[] {"serve", "--base-url", "https://hub.example.com", "--no-address-check"},
+            "debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover");
+        HubConfig b = HubConfig.fromArgs(noAddressCheck);
+        assertTrue(!b.addressCheck(), "--no-address-check turns the address check off");
+        assertTrue(b.selfCheck(), "--no-address-check must not turn the dns-01 check off");
+    }
+
+    @Test
     void theAddressAnsweringWithOurOwnKeyIsProof() {
         Reachability.Result r = check(Map.of(HOST, set("203.0.113.10"), "*." + HOST, set("203.0.113.10")),
             (address, host, port) -> OURS);

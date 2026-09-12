@@ -25,7 +25,8 @@ public record HubConfig(
     String acmeEmail,
     String dnsListenHost,
     int dnsListenPort,
-    boolean selfCheck,
+    boolean selfCheck,     // dns-01 self-check: holds issuance until it passes (§7.2)
+    boolean addressCheck,  // address check: holds nothing, only reports (§7.2)
     int portRangeLo,
     int portRangeHi,
     String httpListenHost,
@@ -37,7 +38,7 @@ public record HubConfig(
     /** ARCHITECTURE.md §8.5: behind nginx stream / HAProxy sending PROXY headers. */
     public HubConfig withProxyProtocol(boolean on, List<String> trusted) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, httpListenHost,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
             httpListenPort, userDomainCa, on, trusted);
     }
 
@@ -48,14 +49,14 @@ public record HubConfig(
 
     public HubConfig withHttp(String host, int port) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, host, port, userDomainCa,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, host, port, userDomainCa,
             proxyProtocol, trustedProxies);
     }
 
     /** Tests and private CAs: trust this PEM instead of the platform roots when verifying user-domain certificates. */
     public HubConfig withUserDomainCa(Path caPem) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, portRangeLo, portRangeHi, httpListenHost,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
             httpListenPort, caPem, proxyProtocol, trustedProxies);
     }
 
@@ -69,7 +70,7 @@ public record HubConfig(
 
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa,
             proxyProtocol, trustedProxies);
     }
 
@@ -87,7 +88,7 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, 0, 0, null, -1, null, false, List.of());
+            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, false, List.of());
     }
 
     public String hostname() {
@@ -183,6 +184,7 @@ public record HubConfig(
             dnsListen.substring(0, dc),
             Integer.parseInt(dnsListen.substring(dc + 1)),
             !a.flag("no-selfcheck"),
+            !a.flag("no-address-check"),
             lo,
             hi,
             httpHost,

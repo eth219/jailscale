@@ -155,10 +155,12 @@ public final class Hub implements AutoCloseable {
         listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 1024); // capped by somaxconn
         running = true;
         Thread.ofPlatform().name("accept").daemon(false).start(this::acceptLoop);
-        if (config.acme() && config.selfCheck()) {
+        if (config.acme() && config.addressCheck()) {
             // After the listener is up, or the one connection that proves the records reach this
             // process would arrive with nothing to answer it. Off the startup path: the answer is a
-            // diagnosis for the operator, never a reason to refuse to serve.
+            // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied
+            // to --no-selfcheck: that flag exists because the dns-01 check holds issuance until it
+            // passes, and nothing here can hold anything.
             Thread.ofVirtual().name("address-check").start(() -> Reachability.report(config, keys));
         }
         if (config.hasHttp()) {
