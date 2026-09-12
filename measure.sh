@@ -52,7 +52,11 @@ esac
 
 mkdir -p "$W/hub" "$W/app"
 cleanup() {
-  pkill -f "jailscale daemon --home $W" 2>/dev/null || true
+  # Matched on the subcommand and the work directory, not on the binary name next to them:
+  # JAILSCALE_DAEMON_OPTS puts runtime options between the two, and a pattern that expected them
+  # adjacent stopped matching, so the daemons were never signalled -- which is how an instrumented
+  # binary came to write no profile at all.
+  pkill -f "daemon --home $W" 2>/dev/null || true
   [ -n "${HUBPID:-}" ] && kill "$HUBPID" 2>/dev/null || true
   [ -n "${APPPID:-}" ] && kill "$APPPID" 2>/dev/null || true
   sleep 0.3
@@ -143,7 +147,7 @@ python3 "$W/app/app.py" > /dev/null 2>&1 &
 APPPID=$!
 "$NODE" open 18080 --name demo --home "$W/a" > /dev/null
 sleep "${IDLE:-10}"
-NODEPID=$(pgrep -f "jailscale daemon --home $W/a")
+NODEPID=$(pgrep -f "daemon --home $W/a")
 
 echo "binary size (MiB)"
 for b in "$HUB" "$NODE"; do
