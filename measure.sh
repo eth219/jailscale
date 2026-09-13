@@ -90,6 +90,31 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 mkdir -p "$W/hub" "$W/app"
+# The node daemons log to their own state directories, not to a file this script redirects: `node
+# open` daemonises itself. Both OOM checks used to grep "$W/node.log", which nothing ever writes, so
+# a node that died of memory exhaustion passed silently -- on the one axis built to provoke exactly
+# that. Globbed, because there are two homes ($W/a, $W/b) and a third would be missed by name.
+oom_check() {
+  for f in "$W/hub.log" "$W"/*/daemon.log; do
+    [ -f "$f" ] || continue
+    if grep -qi OutOfMemory "$f"; then
+      echo "  !! OutOfMemoryError in ${f#$W/}"; fail=1
+    fi
+  done
+}
+
+# The work directory goes at exit, so anything worth reading after a failure has to be copied while
+# it still exists. Findings on this axis are intermittent: losing the one run that reproduced costs
+# an hour of re-running, which is how the first OOM log was lost.
+keep_logs() {
+  d=$(mktemp -d "${TMPDIR:-/tmp}/jsm-failed-XXXX")
+  cp "$W/hub.log" "$d/" 2>/dev/null || true
+  for f in "$W"/*/daemon.log; do
+    [ -f "$f" ] && cp "$f" "$d/$(basename "$(dirname "$f")")-daemon.log"
+  done
+  echo "  logs kept in $d"
+}
+
 cleanup() {
   # Matched on the subcommand and the work directory, not on the binary name next to them:
   # JAILSCALE_DAEMON_OPTS puts runtime options between the two, and a pattern that expected them
@@ -231,10 +256,9 @@ if [ -n "${LOAD:-}" ]; then
   printf '  %s/%s held in %ss\n' "$ok" "$LOAD" "$(cut -d' ' -f2 "$W/held.txt" 2>/dev/null || echo '?')"
   printf '  %-10s %6.1f  (peak)\n' jailhub "$peak_h";  gate "hub RSS under load" "$peak_h" "$B_HUB_LOAD_MB"
   printf '  %-10s %6.1f  (peak)\n' jailscale "$peak_n"; gate "node RSS under load" "$peak_n" "$B_NODE_LOAD_MB"
-  for f in "$W/hub.log" "$W/node.log"; do
-    [ -f "$f" ] && grep -qi OutOfMemory "$f" && { echo "  !! OutOfMemoryError in $(basename "$f")"; fail=1; }
-  done
+  oom_check
   [ "$CHECK" = 1 ] && [ "$ok" -lt $((LOAD * 99 / 100)) ] && { echo "  !! only $ok of $LOAD visitors were held"; fail=1; }
+  [ "${fail:-0}" = 1 ] && keep_logs
 fi
 
 if [ -n "${SLOW:-}" ]; then
@@ -274,9 +298,7 @@ if [ -n "${SLOW:-}" ]; then
   printf '  %-10s %6.1f  (peak)\n' jailscale "$peak_n"; gate "node RSS with stalled readers" "$peak_n" "$B_NODE_SLOW_MB"
   printf '  ordinary visitor while held (ms):%s\n' "$probes"
   # Surviving is the point, so a process that died is caught here and not inferred from RSS.
-  for f in "$W/hub.log" "$W/node.log"; do
-    [ -f "$f" ] && grep -qi OutOfMemory "$f" && { echo "  !! OutOfMemoryError in $(basename "$f")"; fail=1; }
-  done
+  oom_check
   kill -0 $HUBPID 2>/dev/null || { echo "  !! jailhub died under stalled readers"; fail=1; }
   kill -0 $NODEPID 2>/dev/null || { echo "  !! jailscale died under stalled readers"; fail=1; }
   # The gate with teeth on this axis, and the only deterministic number here: peak RSS on a Serial
@@ -309,6 +331,7 @@ if [ -n "${SLOW:-}" ]; then
   if [ "$CHECK" = 1 ] && [ "$qbud" -gt 0 ] && [ "$qpeak" -ge "$qbud" ] && [ "$rec" -eq 0 ]; then
     echo "  !! queue reached the budget with nothing reclaimed; the bound is not what held it"; fail=1
   fi
+  [ "${fail:-0}" = 1 ] && keep_logs
 fi
 
 if [ -n "${RATE:-}" ]; then
