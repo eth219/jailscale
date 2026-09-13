@@ -31,6 +31,8 @@ public record HubConfig(
     int portRangeHi,
     String httpListenHost,
     int httpListenPort,
+    String metricsListenHost,  // /metrics on a listener of its own, loopback by default (§6.3)
+    int metricsListenPort,
     Path userDomainCa,
     boolean proxyProtocol,
     List<String> trustedProxies) {
@@ -39,7 +41,7 @@ public record HubConfig(
     public HubConfig withProxyProtocol(boolean on, List<String> trusted) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, userDomainCa, on, trusted);
+            httpListenPort, metricsListenHost, metricsListenPort, userDomainCa, on, trusted);
     }
 
     /** True when port 80 is served, the precondition for user domains (ARCHITECTURE.md §8.3). */
@@ -49,15 +51,26 @@ public record HubConfig(
 
     public HubConfig withHttp(String host, int port) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, host, port, userDomainCa,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, host, port, metricsListenHost, metricsListenPort, userDomainCa,
             proxyProtocol, trustedProxies);
+    }
+
+    /** True when {@code /metrics} is served at all (ARCHITECTURE.md §6.3). */
+    public boolean hasMetrics() {
+        return metricsListenHost != null && metricsListenPort >= 0;
+    }
+
+    public HubConfig withMetrics(String host, int port) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi,
+            httpListenHost, httpListenPort, host, port, userDomainCa, proxyProtocol, trustedProxies);
     }
 
     /** Tests and private CAs: trust this PEM instead of the platform roots when verifying user-domain certificates. */
     public HubConfig withUserDomainCa(Path caPem) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, caPem, proxyProtocol, trustedProxies);
+            httpListenPort, metricsListenHost, metricsListenPort, caPem, proxyProtocol, trustedProxies);
     }
 
     public static final int DEFAULT_PORT_LO = 10000;
@@ -70,7 +83,7 @@ public record HubConfig(
 
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, lo, hi, httpListenHost, httpListenPort, metricsListenHost, metricsListenPort, userDomainCa,
             proxyProtocol, trustedProxies);
     }
 
@@ -88,7 +101,7 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, false, List.of());
+            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, -1, null, false, List.of());
     }
 
     public String hostname() {
@@ -153,6 +166,19 @@ public record HubConfig(
             httpHost = httpListen.substring(0, hc);
             httpPort = Integer.parseInt(httpListen.substring(hc + 1));
         }
+        // Loopback by default and not on 443 at all: the hub's own name is the public internet,
+        // so where this listens is the whole of the access control (§6.3). `none` turns it off.
+        String metricsListen = a.get("metrics-listen", "127.0.0.1:9090");
+        String metricsHost = null;
+        int metricsPort = -1;
+        if (!metricsListen.equals("none")) {
+            int mc = metricsListen.lastIndexOf(':');
+            if (mc < 0) {
+                throw new IllegalArgumentException("--metrics-listen must be host:port or none");
+            }
+            metricsHost = metricsListen.substring(0, mc);
+            metricsPort = Integer.parseInt(metricsListen.substring(mc + 1));
+        }
         boolean proxyProtocol = a.flag("proxy-protocol");
         List<String> trusted = new ArrayList<>();
         if (a.has("trusted-proxy")) {
@@ -201,6 +227,8 @@ public record HubConfig(
             hi,
             httpHost,
             httpPort,
+            metricsHost,
+            metricsPort,
             null,
             proxyProtocol,
             List.copyOf(trusted));

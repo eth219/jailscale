@@ -72,13 +72,12 @@ own. Neither has a runtime dependency and neither needs root to run.
 ### A binary
 
 v0.1.1 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
-`darwin-arm64` and `windows-amd64.exe`, each 25.3 to 26.3 MiB. Intel Macs run
-the JAR, because GraalVM CE 25.3 does not build `darwin-amd64`
-([ARCHITECTURE.md §3.2](docs/ARCHITECTURE.md)).
-
-v0.1.0 is still there and is a different build: the previous toolchain, five
-targets, binaries 29.8 to 31.9 MiB. Nothing in this file describes it, and
-[Resource usage](#resource-usage) is v0.1.1.
+`darwin-arm64` and `windows-amd64.exe`. There is no `darwin-amd64`, because
+GraalVM CE 25.3 does not build one ([ARCHITECTURE.md
+§3.2](docs/ARCHITECTURE.md)); Intel Macs get [the JAR](#anything-else-with-a-jvm-25).
+The two targets the budget measures are 25.3 to 26.2 MiB
+([Resource usage](#resource-usage)), which is what the rest of this file
+describes; the other two carry no measured figure.
 
 ```sh
 base=https://github.com/eth219/jailscale/releases/download/v0.1.1
@@ -101,11 +100,15 @@ jailscale` — and Windows SmartScreen warns for the same reason.
 
 ### A container image
 
-For linux/amd64 and linux/arm64, carrying the same binary the release does, so
-[Resource usage](#resource-usage) describes them too. `:v0.1.1` pins this
-release, `:latest` follows releases, `:edge` follows main. The images tagged
-`:v0.1.0` are not worth pulling: they were built before the runtime base
-carried a libc, and they fail at `exec` rather than starting.
+For linux/amd64 and linux/arm64, built by the same workflow, toolchain and
+options as the binaries above, so [Resource usage](#resource-usage) describes
+them too. `:v0.1.1` pins that tag, `:latest` follows releases, `:edge` follows
+main.
+
+The images tagged `:v0.1.0` are not worth pulling: they were built before the
+runtime base carried a libc, so they answer `exec /jailscale: no such file or
+directory` instead of starting, and `:latest` pointed at one of them until this
+release.
 
 ```
 docker pull ghcr.io/eth219/jailhub:v0.1.1
@@ -211,17 +214,18 @@ configurations for putting the hub behind nginx or HAProxy.
 
 ## Resource usage
 
-Measured with the native binaries by `./measure.sh`, which CI runs as a budget
-on every push to main. Two platforms, because an amd64 binary is bigger
+Measured on main with the native binaries by `./measure.sh`, which CI runs as a
+budget on every push there. Two platforms, because an amd64 binary is bigger
 than an arm64 one and Linux counts the binary's own mapped pages in RSS where
 macOS largely does not.
 
-**This is v0.1.1, and it is not v0.1.0.** That first release was built with the
-previous toolchain, Liberica NIK 25.0.4, which the release workflow dropped for
-GraalVM CE 25.3 the day after the tag: what you download from v0.1.0 is 29.8 to
-31.9 MiB rather than 25 to 26, idles 5 to 6 MB higher on linux-amd64, and starts
-`jailscale status` in 4.7 ms rather than 2.4. [ARCHITECTURE.md
-§14](docs/ARCHITECTURE.md) measures both toolchains side by side.
+This describes v0.1.1, the release [Install](#a-binary) downloads: the budget
+builds with the toolchain and options the release workflow uses, so the gate
+measures what ships. v0.1.0 did not — it was tagged a day before that pin landed
+and was built with Liberica NIK 25.0.4, which cost it about 5 MiB per binary,
+5 to 6 MB of idle RSS on linux-amd64 and 2.3 ms of CLI start.
+[ARCHITECTURE.md §14](docs/ARCHITECTURE.md) measures both toolchains side by
+side.
 
 | | jailhub | jailscale |
 |---|---|---|
@@ -292,11 +296,12 @@ What a compromised hub can and cannot do is written out in
 - Idle memory is 25 MB against the 20 MB originally aimed at (34.4 MB as Linux
   counts it, 2 MB of it anonymous). Most of the gap is JSSE standing up a single
   TLS client.
-- v0.1.1 is the second tagged release and the first upgrade. Node and hub can be
-  upgraded in either order: the only wire change since v0.1.0 is one added
-  `Hello` field, which §5.4 permits and `WireFormatTest` pins both ways, and
-  `proto` is 1 on both sides. What the protocol promises across versions is
-  [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md).
+- v0.1.1 is the second tagged release and the first upgrade, and nobody has
+  performed one yet. The wire between the two tags is compatible — the only
+  control-message change is one added optional field, which is the additive case
+  [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md) permits, and `WireFormatTest`
+  pins v0.1.0's own `Hello` line as still decoding — so a hub and its nodes can
+  be replaced separately rather than together.
 
 [ARCHITECTURE.md §15](docs/ARCHITECTURE.md) has the rest, in more detail.
 

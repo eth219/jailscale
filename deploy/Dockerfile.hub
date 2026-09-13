@@ -43,6 +43,9 @@ COPY --from=libs --chown=65532:65532 /state /var/lib/jailhub
 COPY ${BIN} /jailhub
 ENV JAILHUB_STATE=/var/lib/jailhub
 VOLUME /var/lib/jailhub
+# Not 9090: /metrics defaults to the container's own loopback (ARCHITECTURE.md 6.3), which is what a
+# sidecar in the same network namespace scrapes. Reaching it from another container needs
+# --metrics-listen 0.0.0.0:9090 and a network policy in front of it, which is a deliberate act.
 EXPOSE 443 80 53/udp 53/tcp 10000-10999
 USER nonroot
 ENTRYPOINT ["/jailhub"]

@@ -4,6 +4,8 @@ import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -87,7 +89,7 @@ final class AdminWeb {
         }
         if (req.method().equals("POST")) {
             Map<String, String> f = req.form();
-            if (!s.csrf().equals(f.get("csrf"))) {
+            if (!secretEquals(s.csrf(), f.get("csrf"))) {
                 return HttpResponse.text(403, "bad csrf token");
             }
             if (path.equals("/admin/logout")) {
@@ -189,6 +191,20 @@ final class AdminWeb {
     /** {@code __Host-} forbids a Domain attribute and requires Path=/ and Secure. */
     private static String cookie(String sid, long maxAgeSeconds) {
         return COOKIE + "=" + sid + "; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=" + maxAgeSeconds;
+    }
+
+    /**
+     * Compares a presented secret against a stored one without returning at the first differing
+     * byte (§11.6). Length still separates them, which is fine: these are fixed-width tokens.
+     * Nothing here is reachable by walking a prefix of 128 random bits, so this is habit rather
+     * than a fix -- but the habit is what keeps the next comparison honest.
+     */
+    private static boolean secretEquals(String stored, String presented) {
+        if (presented == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(
+            stored.getBytes(StandardCharsets.UTF_8), presented.getBytes(StandardCharsets.UTF_8));
     }
 
     private Session session(HttpRequest req) {

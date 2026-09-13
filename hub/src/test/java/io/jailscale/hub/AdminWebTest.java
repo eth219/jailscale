@@ -122,8 +122,10 @@ class AdminWebTest {
         assertTrue(mk.find());
         String bobKey = mk.group(1);
 
-        // CSRF is enforced.
+        // CSRF is enforced, whether the token is wrong or absent -- the absent case is a null
+        // from the form map, which the comparison has to refuse rather than throw on.
         assertEquals(403, http("POST", "/admin/approve", cookie, "csrf=wrong&mkey=" + enc(bobKey) + "&user=bob").status());
+        assertEquals(403, http("POST", "/admin/approve", cookie, "mkey=" + enc(bobKey) + "&user=bob").status());
 
         // Approve bob from the page; his daemon gets pushed the result.
         HttpResponse approve = http("POST", "/admin/approve", cookie, "csrf=" + csrf + "&mkey=" + enc(bobKey) + "&user=bobby");
