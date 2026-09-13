@@ -6,9 +6,16 @@ import io.jailscale.proto.util.Args;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Admin commands over the state-directory socket (ARCHITECTURE.md §6.3). Socket permissions are the auth. */
 final class AdminIpc implements Ipc.Handler {
+
+    /** What {@code jailhub setting} may write, and to what. */
+    static final Map<String, List<String>> SETTING_VALUES = Map.of(
+        Store.SETTING_INVITE_POLICY, List.of(HubConfig.POLICY_MEMBERS, HubConfig.POLICY_ADMINS),
+        Store.SETTING_REGISTRATION, List.of("invite", "open"),
+        Store.SETTING_KNOCK, List.of("on", "off"));
 
     private final Hub hub;
 
@@ -209,7 +216,22 @@ final class AdminIpc implements Ipc.Handler {
             case "admin-login-link" -> reply.done(JsonObject.builder().put("ok", true).put("url", hub.adminWeb().loginLink("shell", true))
                 .put("expiresAt", System.currentTimeMillis() + AdminWeb.LOGIN_LINK_TTL_MS));
             case "setting" -> {
-                store.setSetting(req.string("key"), req.string("value"));
+                String key = req.string("key");
+                String value = req.string("value");
+                List<String> allowed = SETTING_VALUES.get(key);
+                if (allowed == null) {
+                    reply.error("no such setting " + key + " (" + String.join(", ", new java.util.TreeSet<>(SETTING_VALUES.keySet())) + ")");
+                    return;
+                }
+                // Unchecked, a typo did not fail here: it was stored, and every reader asks
+                // `"open".equals(...)` or `"off".equals(...)`, so `setting knock of` answered ok
+                // and left knocking on. The /admin form never had the hole because it maps its
+                // radio buttons onto the two values instead of passing a string through.
+                if (!allowed.contains(value)) {
+                    reply.error(key + " is " + String.join(" or ", allowed) + ", not " + value);
+                    return;
+                }
+                store.setSetting(key, value);
                 reply.ok();
             }
             case "key-rotate" -> {
