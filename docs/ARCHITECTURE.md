@@ -1498,7 +1498,17 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
   **Pooling the other two would not work, and the 256 KB stream window is not the lever either.**
   Buffers a connection holds between calls are needed by every open connection at once, so a pool
-  of them is the same memory with a free list in front. The window caps what may sit queued
-  (§5.3), not what is allocated, so a visitor whose reader keeps up holds none of it and the load
-  measurement in §14 never fills it; shrinking it would not move that figure, and it would lower
-  single-stream throughput, which is bounded by the window divided by the round-trip time.
+  of them is the same memory with a free list in front. That applies to `Relay`'s copy buffers in
+  particular: they are the destination of a blocking `read`, held across the block, so every open
+  direction needs its own at once and a pool cannot lower the live set. The levers there are the
+  buffer's size, or not copying at all in the node-to-visitor direction -- the bytes are already a
+  private array in the stream's queue, put there by `Frame.decode`, so they can go to the socket
+  without an intermediate. The visitor-to-node direction has no such shortcut: a socket read needs
+  somewhere to land.
+
+  The window caps what may sit queued (§5.3), not what is allocated, so a visitor whose reader keeps
+  up holds none of it; shrinking it would lower single-stream throughput, which is bounded by the
+  window divided by the round-trip time. **A visitor whose reader stalls is the case this paragraph
+  used to miss.** It said the load measurement never fills the window, which was true of `LOAD=` and
+  is why the gap survived: `SLOW=` fills it completely (§14), and what answers that is the receive
+  budget of §5.3 rather than a smaller window, for the reasons given there.
