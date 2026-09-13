@@ -71,7 +71,9 @@ public final class Main {
         String cmd = a.positional(0);
         if (cmd == null || a.flag("help")) {
             System.out.print(USAGE);
-            System.exit(cmd == null ? 2 : 0);
+            // As in the node's Main, and it was wrong here in the same way: asking for help
+            // succeeds, and only a bare invocation with nothing to do is an error.
+            System.exit(a.flag("help") ? 0 : 2);
             return;
         }
         try {
