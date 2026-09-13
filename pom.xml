@@ -43,7 +43,7 @@
     <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
     <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
 
-    <spotbugs-maven-plugin.version>4.9.8.5</spotbugs-maven-plugin.version>
+    <spotbugs-maven-plugin.version>4.10.4.1</spotbugs-maven-plugin.version>
 
     <!-- Modules that produce a native binary override these (see node, hub). -->
     <native.skip>true</native.skip>
