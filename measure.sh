@@ -139,10 +139,20 @@ B_NODE_SLOW_AT=400
 # change nobody has made, and a permanently red gate is one people learn to ignore (3.2 makes the
 # same argument about the Windows job).
 #
-# 400 is the largest count that measures the node rather than the defect, and it still has teeth:
-# the same run holds 400 of 400 in 5.4 s, serves the ordinary visitor in 13 to 31 ms, and pins the
-# hub's receive queue at 24.0 MB of 24.0 with 116 streams shed -- the assertion this phase exists
-# for, working. Node peak there: 82.3 MB on this run, 82.0 to 86.8 across the runs in 14.
+# 400 is the largest count that measures the node rather than the defect. On darwin-arm64 it holds
+# 400 of 400 in 5.4 s, serves the ordinary visitor in 13 to 31 ms, and pins the hub's receive queue
+# at 24.0 MB of 24.0 with 116 streams shed; node peak 82.1 and 82.3 across two runs, inside the
+# 82.0 to 86.8 of 14.
+#
+# WHAT THE GATE ACTUALLY HAS TEETH ON, WHICH IS NOT THE SAME ON BOTH PLATFORMS. On the ubuntu-24.04
+# runner this count does not reach the receive budget at all: two measured runs put the queue's peak
+# at 2.0 and 4.7 MB of 24.0 with nothing reclaimed, where the same count on a developer's machine
+# pins it. The runner is about five times slower per warm request, so the harness cannot fill the
+# queue faster than the hub drains it. The check below is an upper bound, so at 2 MB of 24 it cannot
+# fail -- meaning that where this gate runs, it is the node's RSS that is asserted and not the hub's
+# bound. Do not read a green budget job as the receive budget having been exercised; that assertion
+# lives on whoever runs this by hand at this count, until the count that reaches it on a runner is
+# survivable, which is the same per-visitor term as above.
 #
 # The number itself is per platform, below, for the same RSS-accounting reason as the idle budgets:
 # it was derived on darwin-arm64, and a Linux peak carries the binary's own mapped pages on top of
@@ -157,16 +167,16 @@ case "$(uname -s)-$(uname -m)" in
     # 95 is ~10% over the highest seen at SLOW=400 (86.8), the same margin the other budgets carry.
     B_BINARY_MIB=28; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=28; B_NODE_SLOW_MB=95 ;;
   Linux-x86_64)
-    # B_NODE_SLOW_MB here is PROVISIONAL and has never been measured. It is the darwin-arm64 number
-    # plus the 10 MB that separates the two platforms' node idle RSS (24.8 against 34.4, §14), which
-    # is the binary's own mapped pages and not anything this phase grows. That derivation is an
-    # assumption, not a measurement: replace it with the peak the gate prints on its first runs and
-    # say so in §14. If it is red on a build nobody changed, this constant is the first suspect.
-    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=105 ;;
+    # B_NODE_SLOW_MB measured on the ubuntu-24.04 runner, two workflow_dispatch runs of this exact
+    # command: 89.7 and 88.5 MB. 100 is ~11% over the higher, the margin the macOS one carries. It
+    # was 105 for a day, derived from the two platforms' idle difference rather than measured, and
+    # the measurement came in 15 MB under that guess -- which is the argument for not shipping a
+    # derived budget, not for deriving them more carefully.
+    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=100 ;;
   *)
     # An unmeasured platform gets the loosest of the measured ones rather than a guess of its own.
     echo "note: no budget measured for $(uname -s)-$(uname -m); using the widest known"
-    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=105 ;;
+    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=100 ;;
 esac
 
 mkdir -p "$W/hub" "$W/app"

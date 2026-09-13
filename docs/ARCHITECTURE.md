@@ -1368,22 +1368,28 @@ it is the ceiling it died against, with 183 visitors never admitted. This is the
 `TlsEndpoint` term of the paragraph above, arriving as a fault rather than as a number, and it is
 the same shape `docs/mux-saturation` predicted on the JVM.
 
-**So the gate runs at 400, which measures the node, and the budget is pinned to that count.** The
-same run holds 400 of 400 in 5.4 s, serves the ordinary visitor in 13 to 31 ms, and pins the hub's
-receive queue at 24.0 MB of 24.0 with 116 streams shed — the assertion this phase exists for,
-working. The node peaks at 82.3 MB there, within the 82.0 to 86.8 above, and the budget is 95.
-`measure.sh` now carries `B_NODE_SLOW_AT` and **skips the node gate at any other count**: the cost
-being bounded is per visitor, so the budget is only a budget at the count it was measured at, and
-this gate was very nearly wired to `SLOW=1000` against a number measured at a thousand on a machine
-where a thousand no longer behaves. Gating on an open defect would have been red on every build
-until somebody bounds the per-visitor term, which is the same argument §3.2 makes for not gating on
-a job that fails 2% of the time.
+**So the gate runs at 400, which measures the node, and the budget is pinned to that count.** On
+darwin-arm64 that run holds 400 of 400 in 5.4 s, serves the ordinary visitor in 13 to 31 ms, and
+pins the hub's receive queue at 24.0 MB of 24.0 with 116 streams shed — the assertion this phase
+exists for, working. The node peaks at 82.1 and 82.3 MB there, within the 82.0 to 86.8 above, and
+the budget is 95. `measure.sh` now carries `B_NODE_SLOW_AT` and **skips the node gate at any other
+count**: the cost being bounded is per visitor, so the budget is only a budget at the count it was
+measured at, and this gate was very nearly wired to `SLOW=1000` against a number measured at a
+thousand on a machine where a thousand no longer behaves. Gating on an open defect would have been
+red on every build until somebody bounds the per-visitor term, which is the same argument §3.2
+makes for not gating on a job that fails 2% of the time.
 
-**The linux-amd64 budget is the part still owed a measurement.** 105 MB there is derived, not
-measured: the macOS number plus the 10 MB that separates the two platforms' node idle RSS, which is
-mapped binary and not anything this phase grows. Replace it with what the gate prints, here and in
-`measure.sh`; until then a red budget job on a build nobody changed is that guess before it is a
-regression.
+**On linux-amd64 the budget is 100, measured, and the gate there has teeth on the node only.** Two
+`workflow_dispatch` runs of the CI command on `ubuntu-24.04` put the node at **89.7 and 88.5 MB**;
+100 is about 11% over the higher, the margin the macOS budget carries. It was 105 for a day, derived
+from the two platforms' idle difference rather than measured, and the measurement came in 15 MB
+under the guess. **The same two runs put the hub's receive queue at 2.0 and 4.7 MB of its 24.0 MB
+budget with nothing reclaimed** — where the same count on a developer's machine pins it. The runner
+is about five times slower per warm request (8,360 a second against 44,721 here), so the harness
+cannot fill the queue faster than the hub drains it, and `measure.sh`'s queue check is an upper
+bound, which at 2 MB of 24 cannot fail. So a green budget job asserts the node's RSS and says
+nothing about the receive bound; that assertion lives with whoever runs this by hand, until the
+count that would reach it on a runner is one the node survives — the same per-visitor term again.
 
 **The long tail on this axis was the machine, and it took four attributions to reach that.** This
 paragraph has said that an ordinary visitor's 7 to 19 s wait while slow readers arrive was the
