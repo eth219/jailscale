@@ -21,7 +21,7 @@ jobs:
           - { os: windows-2025,     target: windows-amd64 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # GraalVM CE on the 25.3 line, and a JDK newer than 25.0.2, both on purpose (§3.2, §14).
       # JDK 25.0.0-25.0.2 lose timed virtual-thread wake-ups once a delayed task is cancelled
       # (JDK-8370887, with JDK-8369227 next to it); a hand-off cancels the old connections'
