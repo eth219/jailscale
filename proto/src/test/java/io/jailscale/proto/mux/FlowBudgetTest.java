@@ -42,6 +42,8 @@ class FlowBudgetTest {
     private static final long LIMIT = 1024 * 1024;
     private static final int PER_STREAM = 512 * 1024;
     private static final int STALLED_STREAMS = 24;
+    /** A stopped stream's depth in the inverted-depth test: small, so the slow reader is the fullest. */
+    private static final int SMALL_STALLED = 64 * 1024;
 
     @Test
     void stalledStreamsStopAtTheBudget() throws Exception {
@@ -241,6 +243,55 @@ class FlowBudgetTest {
     }
 
     /**
+     * The case the stalled-time half of victim selection exists for, and the one nothing covered.
+     *
+     * <p>{@link #aDrainingStreamOutlivesTheStalledOnes()} looks like this test and is not: the
+     * stream it protects survives because it is <em>empty</em>, so the "fullest queue" half decides
+     * it and the timestamp never comes into play. Dropping the stall condition leaves that test
+     * passing, and the first version of this one too -- a stream being drained is by definition
+     * less full than one that is not, so it kept winning for the wrong reason.
+     *
+     * <p>So the depths are inverted here: <b>the slow reader is the fullest stream in the process</b>
+     * and the stopped ones are each a quarter of its size. Now "fullest queue" alone would pick the
+     * slow reader every time, and only the stalled-time condition saves it. Disable that condition
+     * and this test fails, which is the whole reason it exists -- a visitor on a bad train must not
+     * be cut off ahead of a genuinely stuck one.
+     */
+    @Test
+    void aSlowReaderOutlivesAStalledOneAtTheSameQueueDepth() throws Exception {
+        try (Rig r = rig(FlowBudget.of(LIMIT))) {
+            // Trickle first and let it fill: 1 KB per 20 ms against a sender with a full window is
+            // a queue that sits at the cap while its timestamp stays fresh.
+            MuxStream slow = r.sender.open(JsonObject.builder().put("trickle", true).build(), false);
+            Thread trickleWriter = Thread.ofVirtual().start(() -> {
+                byte[] chunk = new byte[Frame.MAX_DATA];
+                try {
+                    for (int i = 0; i < 256; i++) {
+                        slow.out().write(chunk);
+                    }
+                } catch (IOException e) {
+                    // reset or out of credit for good; the assertion below reads which
+                }
+            });
+            Thread.sleep(FlowBudget.STALL_MS + 500);
+            assertTrue(r.trickledBytes.get() > 0, "the slow reader never started");
+            long slowDepth = slow.id() > 0 ? r.queuedOnReceiver() : 0;
+            assertTrue(slowDepth > SMALL_STALLED * 2,
+                "the slow reader has to be the fullest stream for this to test anything; it held " + slowDepth);
+
+            // Crowd it with streams that stopped entirely, each a quarter of its depth, so the
+            // "fullest" rule on its own would take the slow reader and only the stall rule spares it.
+            r.pushStalled(16, SMALL_STALLED);
+            assertTrue(r.budget.reclaimedStreams() > 0, "nothing was reclaimed, so nothing chose");
+
+            assertFalse(r.trickled.isCompletedExceptionally(),
+                "the slow reader was reset while streams that had stopped were still queued");
+            assertTrue(r.trickledBytes.get() > 0);
+            trickleWriter.interrupt();
+        }
+    }
+
+    /**
      * A peer that sends past its window loses that stream and keeps the session. The session is
      * every other visitor on that node (§5.3), which is why this is not fatal.
      */
@@ -284,6 +335,9 @@ class FlowBudgetTest {
         private final FlowBudget budget;
         private final CompletableFuture<Throwable> receiverClosed = new CompletableFuture<>();
         private final AtomicLong drainedBytes = new AtomicLong();
+        private final AtomicLong trickledBytes = new AtomicLong();
+        /** Completes exceptionally if the trickling stream was reset, which is the failure asserted. */
+        private final CompletableFuture<Long> trickled = new CompletableFuture<>();
         /** Completes with the total at EOF, or exceptionally if the stream was reset under us. */
         private final CompletableFuture<Long> drained = new CompletableFuture<>();
         private final List<MuxStream> held = new ArrayList<>();
@@ -307,7 +361,9 @@ class FlowBudgetTest {
                 @Override public void onControl(MuxSession s, byte[] json) {}
 
                 @Override public void onOpen(MuxSession s, MuxStream stream) {
-                    if (stream.meta().optBool("drain", false)) {
+                    if (stream.meta().optBool("trickle", false)) {
+                        ex.submit(() -> trickle(stream));
+                    } else if (stream.meta().optBool("drain", false)) {
                         ex.submit(() -> drain(stream));
                     } else {
                         held.add(stream); // never read: the stalled local app
@@ -338,6 +394,28 @@ class FlowBudgetTest {
             }
         }
 
+        /**
+         * Reads far slower than the sender fills, so the queue stays near full while the stream
+         * keeps making progress: a visitor on a bad connection, as opposed to one that has stopped.
+         * Nothing else here produces that state, and it is the only state in which the stalled-time
+         * half of victim selection decides anything.
+         */
+        private void trickle(MuxStream stream) {
+            byte[] buf = new byte[1024];
+            try {
+                int n;
+                while ((n = stream.in().read(buf)) >= 0) {
+                    trickledBytes.addAndGet(n);
+                    Thread.sleep(20);
+                }
+                trickled.complete(trickledBytes.get());
+            } catch (IOException e) {
+                trickled.completeExceptionally(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
         /** Opens {@code n} streams the receiver will never read and offers each {@code bytes}. */
         void pushStalled(int n, int bytes) throws Exception {
             AtomicLong written = new AtomicLong();
@@ -356,6 +434,15 @@ class FlowBudgetTest {
                 });
             }
             settle(written);
+        }
+
+        /** What the receiver is holding for the trickling stream right now. */
+        long queuedOnReceiver() {
+            long most = 0;
+            for (MuxStream m : receiver.streams()) {
+                most = Math.max(most, m.queuedBytes());
+            }
+            return most;
         }
 
         /** Waits until no writer has made progress for a second: everyone is blocked or finished. */

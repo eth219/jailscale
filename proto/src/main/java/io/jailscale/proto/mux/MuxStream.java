@@ -40,8 +40,20 @@ public final class MuxStream {
      * release those bytes a second time, talking the budget down below what is really held.
      */
     private boolean accounted = true;
-    /** When a reader last took bytes out: what tells a slow stream from a stalled one. */
-    private volatile long lastConsumedAt = System.currentTimeMillis();
+    /**
+     * When a reader last took bytes out: what tells a slow stream from a stalled one. <b>Zero until
+     * one has</b>, not the creation time, which is a difference the budget turns on.
+     *
+     * <p>Seeded with the clock, a stream that has never read a byte looks freshly active for its
+     * first {@code STALL_MS}. A burst of stalled streams arriving at once is then invisible to
+     * reclaim's first choice, it falls through to "fullest queue", and the fullest queue belongs to
+     * the established slow reader that has had time to accumulate one -- so the burst survives and
+     * the legitimate visitor is reset, which is backwards and is reachable on purpose by anyone who
+     * opens streams in a burst. A stream that has consumed nothing has, factually, not consumed
+     * since forever; zero says that. It costs nothing in the other direction, because a stream
+     * holding nothing is skipped on queue depth before its timestamp is ever read.
+     */
+    private volatile long lastConsumedAt;
     /**
      * {@link #inboundBytes} while it is still accounted, published for reading without {@link #lock}.
      * The budget's victim scan looks at every stream on a reader thread to choose one, and taking a
