@@ -53,6 +53,20 @@
 #   RSS cannot see the live set. A heap ceiling means the collector fills the space it has, so RSS
 #   plateaus whatever the live set does. That is why the receive budget is gated on
 #   jailhub_receive_queued_peak_bytes, which is exact, and RSS is only reported here.
+#
+#   The kernel is shared state too, and it was the one nobody sampled. SLOW= visitors asked for
+#   8 MB on loopback and the kernel autotuned every socket in the chain to megabytes, so 400 of
+#   them put 660 to 680 MB in socket buffers with the machine's cluster pools at their caps, and
+#   every socket on the machine froze: the node's write to the hub blocked for 3.2 s, an ordinary
+#   visitor took 5 to 17 s, this script's own ramp took 18 s instead of 5, and both processes' own
+#   timers said they were idle, because they were. It read as the multiplexer's control frames
+#   starving behind data, three designs were priced against it, and none of them touched the
+#   cause. Two runs told them apart: the same 400 visitors with a 768 KB body kept the kernel at
+#   229 MB and served the ordinary visitor in 5 to 26 ms through the same multiplexer. And it was
+#   intermittent at the old occupancy -- two of four runs froze, on the same binaries -- which is
+#   how it looked like a code change between builds. The SLOW phase now prints the kernel's peak
+#   and how many allocations it refused, and every socket in the chain has a bounded buffer: the
+#   node's app socket (Visitors.connectLocal), the app's own send side here, and the visitor's.
 set -eu
 R=$(cd "$(dirname "$0")" && pwd)
 HUB=$R/hub/target/jailhub
@@ -187,6 +201,23 @@ anon_note() {
   [ -r "/proc/$1/status" ] || return 0
   printf '   (%.1f anonymous)' "$(echo "$(awk '/^RssAnon:/{print $2}' "/proc/$1/status") / 1024" | bc -l)"
 }
+# What the kernel is holding for sockets, machine-wide, in KB: the shared state the SLOW phase used
+# to fill without anyone looking (the header says what that cost). macOS: mbuf clusters in use,
+# summed by size -- not the pool's allocated size, which stays where the last peak left it. Linux
+# counts TCP pages in /proc/net/sockstat. Anything else reads 0.
+net_mem_kb() {
+  if [ -r /proc/net/sockstat ]; then
+    awk '/^TCP:/{for(i=1;i<=NF;i++) if($i=="mem"){print $(i+1)*4; exit}}' /proc/net/sockstat
+  else
+    netstat -m 2>/dev/null | awk '/mbuf [0-9]+KB clusters in use/{split($1,a,"/"); sub("KB","",$3); kb+=a[1]*$3} END{print kb+0}'
+  fi
+}
+# Allocations the kernel refused, cumulative; a delta over a phase says the pool ran dry. macOS
+# counts these; Linux has no equivalent counter, so it is not claimed there.
+net_denied() {
+  [ -r /proc/net/sockstat ] && { echo n/a; return; }
+  netstat -m 2>/dev/null | awk '/requests for memory denied/{print $1; exit}'
+}
 
 # HUB_OPTS is the hub's half of JAILSCALE_DAEMON_OPTS (which the CLI gives the node's daemon):
 # runtime options the native image reads before main, deliberately unquoted so several split.
@@ -212,6 +243,7 @@ INV2=$("$NODE" invite --user bob --home "$W/a" | grep -o "https://hub.test:$PORT
 # kernel before the app sees it.
 cat > "$W/app/app.py" <<'EOF'
 import asyncio
+import socket
 import sys
 
 KEEP = b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: keep-alive\r\n\r\nhello\n"
@@ -222,6 +254,10 @@ BIG = 8 * 1024 * 1024
 CHUNK = b"x" * 65536
 
 async def serve(reader, writer):
+    # A small send buffer, so a stalled visitor leaves 64 KB of this app's bytes in the kernel and
+    # not the megabytes it would autotune to. The SLOW phase is measured against the machine's
+    # network memory pool, and the app's share of it is the harness's to bound (the header).
+    writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
     # Honour Connection: close, because the two phases want opposite things. The warm throughput
     # phase needs the connection to survive a response; the load phase wants what an ordinary page
     # view does, one request and gone, and holding 1,000 live chains instead measures something
@@ -301,6 +337,8 @@ if [ -n "${SLOW:-}" ]; then
   # per-stream credits and the hub is left holding them. Gated on the same ceiling as LOAD, because
   # the claim being checked is exactly that: a stalled reader must not move the hub's peak past it.
   # Without the receive budget of ARCHITECTURE.md 5.3 this is what killed the process outright.
+  # The visitor's socket is given a small receive buffer (tools/slow-readers.py) so that the bytes
+  # come to rest in the hub's queue and not in the kernel, which is what the budget bounds.
   echo "saturation: $SLOW visitors asking for 8 MB and not reading it, peak RSS while they are up"
   python3 "$R/tools/slow-readers.py" "$PORT" "$CERT" "$SLOW" "$W" > "$W/slow.log" 2>&1 &
   SGPID=$!
@@ -309,10 +347,14 @@ if [ -n "${SLOW:-}" ]; then
   # is the thing worth knowing -- a hub that serves at 300 ms with one 5 s outlier is a different
   # product from one that serves at 300 ms flat.
   peak_h=0; peak_n=0; probes=""
+  # The kernel's share, sampled alongside: this is where 400 stalled chains once put 680 MB while
+  # both processes reported themselves idle (the header, and ARCHITECTURE.md 14).
+  net0=$(net_mem_kb); peak_k=${net0:-0}; denied0=$(net_denied)
   while kill -0 $SGPID 2>/dev/null; do
-    h=$(rss_mb "$HUBPID"); n=$(rss_mb "$NODEPID")
+    h=$(rss_mb "$HUBPID"); n=$(rss_mb "$NODEPID"); k=$(net_mem_kb)
     [ "$(echo "$h > $peak_h" | bc -l)" = 1 ] && peak_h=$h
     [ "$(echo "$n > $peak_n" | bc -l)" = 1 ] && peak_n=$n
+    [ -n "$k" ] && [ "$k" -gt "$peak_k" ] && peak_k=$k
     # Only while the visitors are actually held: tools/slow-readers.py drops closing.txt before it
     # tears them down, and a probe inside that herd measures the teardown. RSS sampling continues,
     # because the peak there is real.
@@ -339,6 +381,13 @@ if [ -n "${SLOW:-}" ]; then
   # reason that is not the receive budget. The constant's comment has the numbers and the why.
   printf '  %-10s %6.1f  (peak)\n' jailscale "$peak_n"; gate "node RSS with stalled readers" "$peak_n" "$B_NODE_SLOW_MB"
   printf '  ordinary visitor while held (ms): %s\n' "$(tr '\n' ' ' < "$W/probes.txt" 2>/dev/null)"
+  # The node's side of the multiplexer, which the hub's line below cannot see: the bulk travels
+  # node to hub, so the writer that blocks under saturation is this one ("count mean/max" ms).
+  "$NODE" status --home "$W/a" 2>/dev/null | sed -n 's/.*"muxQueueWaitMs":"\([^"]*\)".*"muxSocketWriteMs":"\([^"]*\)".*/  node mux, count mean\/worst ms: queue_wait=\1 socket_write=\2/p'
+  denied1=$(net_denied)
+  if [ "$denied0" = n/a ]; then refused=n/a; else refused=$((${denied1:-0} - ${denied0:-0})); fi
+  printf '  kernel socket memory %.0f MB before, %.0f MB peak; allocations refused during the phase: %s\n' \
+    "$(echo "${net0:-0} / 1024" | bc -l)" "$(echo "$peak_k / 1024" | bc -l)" "$refused"
   # Surviving is the point, so a process that died is caught here and not inferred from RSS.
   oom_check
   kill -0 $HUBPID 2>/dev/null || { echo "  !! jailhub died under stalled readers"; fail=1; }

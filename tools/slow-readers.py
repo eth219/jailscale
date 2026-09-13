@@ -12,16 +12,26 @@ ARCHITECTURE.md 5.3's receive budget, and the only shape that reaches it.
 A hub with the budget sheds the slowest streams and stays under its heap
 ceiling; a hub without one holds 256 KB per visitor until the process dies.
 
+Each visitor's socket is given a small receive buffer before it connects, so
+that a stalled reader stalls at its own socket and the bytes come to rest in
+the hub's queue, which is what the budget bounds. Left to autotune, the kernel
+absorbs megabytes per connection and the queue never fills at all -- it only
+reached the budget before because 400 such chains had exhausted the machine's
+network memory, which froze every socket on it and put an ordinary visitor at
+5 to 17 seconds for reasons that were in neither process (ARCHITECTURE.md 14).
+macOS raises the 32 KB asked for to about 320 KB at connect and holds it there;
+what matters is that it holds.
+
 Usage: slow-readers.py <port> <ca-pem> <count> <workdir> [path]
 Writes "<held> <seconds>" to <workdir>/slow.txt, holds for HOLD_SECONDS so the
 caller can sample RSS, then closes.
 """
 import asyncio
+import os
+import socket
 import ssl
 import sys
 import time
-
-import os
 
 HOLD_SECONDS = int(os.environ.get("SR_HOLD", "15"))
 # Seconds of quiet before teardown, so no latency probe can still be running when it starts. Both are
@@ -31,15 +41,25 @@ PROBE_MARGIN = int(os.environ.get("SR_MARGIN", "4"))
 STEP_TIMEOUT = 15
 BATCH = 50
 BATCH_PAUSE = 0.05
+# What a stalled visitor asks to hold in the kernel on its side. Set before connect, which is when
+# the window scale is chosen and autotuning is switched off; the kernel rounds it up (to about
+# 320 KB on macOS) and then leaves it alone, which is the property this needs.
+RCVBUF = 32 * 1024
 
 
 async def main(port, ca, count, workdir, path):
     ctx = ssl.create_default_context(cafile=ca)
     held = []
 
+    loop = asyncio.get_running_loop()
+
     async def one():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RCVBUF)
+        sock.setblocking(False)
+        await asyncio.wait_for(loop.sock_connect(sock, ("127.0.0.1", port)), STEP_TIMEOUT)
         reader, writer = await asyncio.wait_for(asyncio.open_connection(
-            "127.0.0.1", port, ssl=ctx, server_hostname="demo.hub.test"), STEP_TIMEOUT)
+            sock=sock, ssl=ctx, server_hostname="demo.hub.test"), STEP_TIMEOUT)
         # Keep-alive, so the chain to the app stays live and the body keeps coming: with
         # Connection: close the node finishes and Relay's linger, not a stalled reader, is what
         # holds the session.

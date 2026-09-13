@@ -286,6 +286,25 @@ stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA fr
     credits already applied; it is a handoff, not a second window. The control queue is bounded by
     count and a session that fills it is treated as gone, because blocking a control producer would
     reintroduce the problem — one of them is the reader thread.
+  - **What the priority left behind measures in tens of milliseconds.** After it landed an
+    ordinary visitor still waited 12 to 17 s while 400 stalled readers were served, and the node's
+    one socket write was blocking for 3.2 s. That read as the connection itself being full -- a
+    queue with nothing in front of it is still a queue -- and three designs were priced against it:
+    a connection-level window, smaller data frames under congestion, keeping control off
+    connections carrying bulk. None of them touched the cause. The write blocked because the
+    *machine* had no network memory left: the harness's 8 MB bodies had autotuned every socket in
+    the chain to megabytes, 400 chains put 660 to 680 MB in kernel socket buffers with the pool's
+    cluster classes at their caps, and the machine's sockets then froze -- the hub's writes to
+    visitors, the node's write to the hub, the harness's own ramp -- while both processes' timers
+    reported idle, because they were. At that occupancy it froze in two of four runs and not the
+    other two, on the same binaries, which is what made it look like a code change. The same 400
+    streams through the same multiplexer with the kernel at 454 MB show the node's writer, the one
+    carrying the bulk, at a worst queue wait of 22 ms and a worst socket write of 16 ms over 81,000
+    frames, and the ordinary visitor served in 13 to 45 ms (§14). That pair is the multiplexer's
+    whole head-of-line cost with 400 stalled streams behind one socket. The connection-level window
+    stays not done, for the reason above and now for this one too: what it would have bounded was
+    never the thing that was full. What was bounded instead is the kernel's share, on the node
+    (§9.3).
 - **A window overrun costs the stream, not the session.** A peer that sends past its granted window
   gets that stream RST; the session survives, because it is every other visitor on that node. Eight
   of them and the peer is not honouring flow control at all, and the session goes.
@@ -1242,36 +1261,51 @@ visitors (two people, one macOS arm64 machine; unconfirmed on linux). The cause 
 budget, which this direction barely touches: a visitor sends one GET line, so the node's receive
 queues hold tens of bytes.
 
-**The long tail on this axis is the node answering, and §6.3's stage metrics say so in one scrape.**
-This paragraph has said three things about it. First that it was the node's per-visitor TLS state --
-an inference. Then, when a node timing its own signing requests caught the hub taking 12.8 s to
-answer one, that it was the hub's control frames queued behind data, which was true and is fixed
-(§5.3). What is left, measured rather than reasoned:
+**The long tail on this axis was the machine, and it took four attributions to reach that.** This
+paragraph has said that an ordinary visitor's 7 to 19 s wait while slow readers arrive was the
+node's per-visitor TLS state (an inference), then the hub's control frames queued behind data (true,
+fixed in §5.3, and not enough: the wait survived it), then that what remained was in no stage at all
+-- retired by the stage metrics, which put all of it in one:
 
-    admissions 424, mean/worst ms: peek=6/9 resolve=0/0 open=0/0 reply=223/13198
-                                   first_byte=229/13198 unaccounted=-0
+    admissions 416, mean/worst ms: peek=7/14 resolve=0/0 open=0/0 reply=224/13491
+                                   first_byte=231/13491 unaccounted=-0
 
-All of it is `reply`: the wait for the node's first byte. `unaccounted` being zero also retires the
-theory that replaced the first one -- that the time was in no stage at all, scheduling or a pause --
-which eight native rebuilds of hand-placed timers had suggested because each timer only ever covered
-the stage it was placed in. So the first attribution was incomplete rather than wrong, and the way
-to have known that on day one was to measure every stage at once instead of one at a time. It is `TlsEndpoint`'s per-visitor state -- `netInBuf`, `appInBuf` and the
-`SSLEngine`'s own, 50 to 60 KB each -- times however many visitors are live at once, which is an
-unbounded per-connection term of exactly the kind §5.3's budget bounds for receive queues, and is a
-separate change. Two numbers for whoever takes it: the node's RSS on this axis repeats to 0.1 MB
-across runs, unlike the hub's, because per-visitor state scales with the visitor count where queue
-occupancy moves with the collector; and an ordinary visitor sees 7 to 19 second responses while
-1,000 slow readers are arriving, dropping to 240-580 ms once the ramp finishes. It is not the
-budget's: with the budget completely full and reclaim running, but the node barely loaded (120
-visitors arriving in half a second), ordinary visitors were served in 4 to 153 ms. **It is also not
-the node's, which this section first said it was.** That was an inference from the node being the
-hotter process, and it is wrong: the outlier survives opening the node's ceiling to 768m, and a node
-timing its own signing requests caught the *hub* taking 12.8 s to answer one, with two answers
-released in the same millisecond. `NoiseChannel.write` holds one lock across the encryption and the
-socket write — the nonce has to advance in wire order — so one blocked write stalls every frame on
-that session, control frames included, and a visitor handshake waits on a `SignResponse` behind a
-queue of someone else's data. That is its own fix (§5.3), not this one. `measure.sh` gates the node
-on this axis at `B_NODE_SLOW_MB`, which is set above today's figure on purpose and says so.
+All of it is `reply`, the wait for the node's first byte, and the node's own timers put that in one
+socket write blocking for 3.2 s. What it was, found by sampling `netstat -m` through the phase: the
+harness's 8 MB bodies on loopback, autotuned into megabytes of kernel socket buffer per chain, 400 of
+which put 660 to 680 MB in use during the 5 s ramp, the pool's cluster classes at their caps and its
+allocation at 798 MB. Every socket on the machine then froze -- the hub's writes to visitors, the
+node's write to the hub for 3.2 s, the ordinary visitor's own handshake for 4.5 to 17 s, the
+harness's own ramp -- while both processes' timers reported idle, which they were. The same 400
+visitors with a 768 KB body kept the kernel at 229 MB and were served in 5 to 26 ms through the same
+multiplexer. Three multiplexer designs had been priced against this before the kernel was sampled,
+and the cheapest instrument in the story was one `netstat` line; `measure.sh` prints it now, with the
+count of allocations the kernel refused during the phase -- which rises in every run at this scale,
+frozen or not, so it says the pool is at its cap and not whether that cost anything.
+
+Three things changed. The node gives its app socket the stream window (§9.3), so a stalled visitor
+parks half a megabyte in the node's kernel and not up to 8; the harness gives each slow visitor a
+small receive buffer, so its unread bytes come to rest in the hub's queue -- which is what the budget
+bounds -- instead of in the kernel, where they had been reaching the budget only by exhausting the
+machine first; and the harness app bounds its own send buffer to 64 KB. With all three the same 400
+visitors put 454 MB in the kernel instead of 660 to 680 -- the node's app sockets 240 MB, the
+visitors' 148, the hub's 31, the app's 25 -- the ordinary visitor is served in 13 to 45 ms, the
+hub's queue reaches its 24 MB budget and sheds 130 streams, and the node's own writer, the one
+carrying the bulk, shows a worst queue wait of 22 ms and a worst socket write of 16 ms across
+81,000 frames. That pair is the multiplexer's whole head-of-line cost with 400 stalled streams
+behind one socket, and it is what the three designs would have been paid for. Two cautions for
+whoever runs this again: the freeze was intermittent at the old occupancy, two of four runs, so one
+clean run at 660 MB proves nothing; and macOS keeps the pool allocated at its last peak, so the
+figure `measure.sh` prints is clusters in use and not the pool's size, which reads high for minutes
+after any run.
+
+**What the node's RSS on this axis is, separately from the tail.** It is `TlsEndpoint`'s per-visitor
+state -- `netInBuf`, `appInBuf` and the `SSLEngine`'s own, 50 to 60 KB each -- times however many
+visitors are live at once, an unbounded per-connection term of exactly the kind §5.3's budget bounds
+for receive queues, and a separate change. The node's RSS on this axis repeats to 0.1 MB across runs,
+unlike the hub's, because per-visitor state scales with the visitor count where queue occupancy
+moves with the collector. `measure.sh` gates the node on this axis at `B_NODE_SLOW_MB`, which is set
+above today's figure on purpose and says so.
 
 **Linux is not 10 MB heavier; it counts differently.** Of the hub's 35.1 MB there, **3.3 MB is
 anonymous** — the heap, the stacks, everything the process actually owns — and the rest is the
