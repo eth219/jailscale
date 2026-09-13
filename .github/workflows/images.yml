@@ -3,8 +3,16 @@ name: images
 # Container images for the hub and the node, published to GHCR.
 #
 # Each architecture builds on its own runner rather than under emulation: native-image cannot
-# cross-compile, and building arm64 under qemu takes long enough to be useless. The per-arch
-# images are pushed by digest, then a manifest list joins them under one tag.
+# cross-compile, and building arm64 under qemu takes long enough to be useless. One job per
+# architecture builds both binaries and packages both images; the per-arch images are pushed by
+# digest, then a manifest list joins them under one tag.
+#
+# It was a job per image per architecture until the log showed each arch building `jailscale` twice.
+# `hub` depends on `node` in test scope, so `-pl hub -am` pulls node into the reactor and the
+# `native` profile -- which lives in the parent pom and cannot be turned off for one module -- built
+# it again for nothing. Excluding it does not work either: Maven resolves test-scope dependencies
+# before it runs a goal, so `-pl 'hub,!node'` fails on a clean runner whatever the skip flag says.
+# Building both binaries once per arch is what actually removes the duplicate.
 #
 # The native binary is built here, by this workflow, and the Dockerfiles only package it. They used
 # to build it themselves FROM ghcr.io/graalvm/native-image-community:25 -- which is GraalVM for JDK
@@ -28,21 +36,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - component: hub
-            image: jailhub
-            runner: ubuntu-24.04
+          - runner: ubuntu-24.04
             arch: amd64
-          - component: hub
-            image: jailhub
-            runner: ubuntu-24.04-arm
-            arch: arm64
-          - component: node
-            image: jailscale
-            runner: ubuntu-24.04
-            arch: amd64
-          - component: node
-            image: jailscale
-            runner: ubuntu-24.04-arm
+          - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -69,26 +65,28 @@ jobs:
         run: ./mvnw -B -ntp versions:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false
 
       # -DskipTests on purpose: `ci` is the gate and these images are packaging, not verification
-      # (ARCHITECTURE.md §3.2). One module, not the whole build: each job packages one component.
-      - name: Build the native binary
-        run: ./mvnw -B -ntp -DskipTests -Pnative -pl ${{ matrix.component }} -am package
+      # (ARCHITECTURE.md §3.2). The whole reactor, so each binary is built once for this arch.
+      - name: Build both native binaries
+        run: ./mvnw -B -ntp -DskipTests -Pnative package
 
-      # The runtime base carries glibc, and the Dockerfile adds zlib because the binary needs it and
+      # The runtime base carries glibc, and the Dockerfiles add zlib because the binaries need it and
       # distroless/base does not have it. That list is hard-coded now, where the old Dockerfile read
       # it off `ldd` and would have failed loudly on a third library, so the check moves here: a new
       # dependency is a red job rather than an image that builds and dies at exec.
-      - name: Check what the binary links against
+      - name: Check what the binaries link against
         run: |
           set -eu
-          bin=${{ matrix.component }}/target/${{ matrix.image }}
-          ldd "$bin"
-          unexpected=$(ldd "$bin" | awk '{print $1}' | grep -vE \
-            '^(linux-vdso\.so\.1|libc\.so\.6|libz\.so\.1|/lib64/ld-linux-x86-64\.so\.2|/lib/ld-linux-aarch64\.so\.1)$' || true)
-          if [ -n "$unexpected" ]; then
-            echo "the image carries libc and zlib only, and this also needs: $unexpected"
-            echo "either add it to deploy/Dockerfile.${{ matrix.component }} or to the list above"
-            exit 1
-          fi
+          for bin in hub/target/jailhub node/target/jailscale; do
+            echo "== $bin"
+            ldd "$bin"
+            unexpected=$(ldd "$bin" | awk '{print $1}' | grep -vE \
+              '^(linux-vdso\.so\.1|libc\.so\.6|libz\.so\.1|/lib64/ld-linux-x86-64\.so\.2|/lib/ld-linux-aarch64\.so\.1)$' || true)
+            if [ -n "$unexpected" ]; then
+              echo "the images carry libc and zlib only, and $bin also needs: $unexpected"
+              echo "either add it to deploy/Dockerfile.* or to the list above"
+              exit 1
+            fi
+          done
 
       - uses: docker/setup-buildx-action@v4
 
@@ -98,66 +96,79 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push by digest
-        id: build
+      - name: Build and push jailhub by digest
+        id: hub
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/Dockerfile.${{ matrix.component }}
+          file: deploy/Dockerfile.hub
           platforms: linux/${{ matrix.arch }}
           # The binary the step above produced. It is the Dockerfile's default as well, so a local
-          # `docker build -f deploy/Dockerfile.node .` needs no argument.
+          # `docker build -f deploy/Dockerfile.hub .` needs no argument.
           build-args: |
-            BIN=${{ matrix.component }}/target/${{ matrix.image }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+            BIN=hub/target/jailhub
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/jailhub,push-by-digest=true,name-canonical=true,push=true
           # No layer cache: what was expensive to build is no longer built here, and the image is
           # now two small COPYs whose cache would save nothing worth the chance of serving a stale
           # layer for a binary that changed.
+
+      - name: Build and push jailscale by digest
+        id: node
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.node
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            BIN=node/target/jailscale
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/jailscale,push-by-digest=true,name-canonical=true,push=true
 
       # Start what was just pushed. Three faults shipped at once because this workflow built and
       # pushed images and never ran one: a runtime base with no libc, so every image ever published
       # died at exec; a state volume owned by root against a USER of nonroot, so the daemon could
       # not write its own state; and a CMD that made the node container exit as soon as it started.
-      # This runs before the digest is exported, so a broken image never reaches the manifest job
+      # This runs before the digests are exported, so a broken image never reaches the manifest job
       # and never becomes :edge, :latest or a version tag.
-      - name: Smoke-test the pushed image
+      - name: Smoke-test the pushed images
         run: |
           set -eu
-          img="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+          owner="${{ env.REGISTRY }}/${{ github.repository_owner }}"
 
-          # Does it run at all? Asserted on the output as well as the exit status, so a runtime that
-          # swallows the exec failure still fails here.
-          docker run --rm "$img" version | tee /tmp/version.txt
-          # The binary is named after the image: jailhub prints "jailhub <v>", jailscale likewise.
-          grep -q "^${{ matrix.image }} " /tmp/version.txt
+          # Does each one run at all? Asserted on the output as well as the exit status, so a
+          # runtime that swallows the exec failure still fails here. The binary is named after the
+          # image: jailhub prints "jailhub <v>", jailscale likewise.
+          for pair in "jailhub@${{ steps.hub.outputs.digest }}" "jailscale@${{ steps.node.outputs.digest }}"; do
+            docker run --rm "$owner/$pair" version | tee /tmp/version.txt
+            grep -q "^${pair%@*} " /tmp/version.txt
+          done
 
           # And can it write its own state? A fresh named volume arrives owned by root unless the
           # image carries that directory with an owner. Only the node answers this in one command:
           # the hub writes its state from `serve`, which wants ports, a certificate and ACME. Both
           # images build the directory the same way, so the node covers the construction.
-          if [ "${{ matrix.component }}" = node ]; then
-            docker volume create smoke-state >/dev/null
-            docker run -d --name smoke -v smoke-state:/var/lib/jailscale "$img" >/dev/null
-            for _ in $(seq 30); do
-              if docker logs smoke 2>&1 | grep -q "machine key"; then break; fi
-              sleep 1
-            done
-            docker logs smoke
-            docker logs smoke 2>&1 | grep -q "machine key" \
-              || { echo "the daemon did not start on a fresh state volume"; exit 1; }
-            docker rm -f smoke >/dev/null
-          fi
+          docker volume create smoke-state >/dev/null
+          docker run -d --name smoke -v smoke-state:/var/lib/jailscale \
+            "$owner/jailscale@${{ steps.node.outputs.digest }}" >/dev/null
+          for _ in $(seq 30); do
+            if docker logs smoke 2>&1 | grep -q "machine key"; then break; fi
+            sleep 1
+          done
+          docker logs smoke
+          docker logs smoke 2>&1 | grep -q "machine key" \
+            || { echo "the daemon did not start on a fresh state volume"; exit 1; }
+          docker rm -f smoke >/dev/null
 
-      - name: Export the digest
+      - name: Export the digests
         run: |
-          mkdir -p /tmp/digests
-          touch "/tmp/digests/${{ matrix.arch }}"
-          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+          set -eu
+          mkdir -p /tmp/digests/hub /tmp/digests/node
+          echo "${{ steps.hub.outputs.digest }}"  > "/tmp/digests/hub/${{ matrix.arch }}"
+          echo "${{ steps.node.outputs.digest }}" > "/tmp/digests/node/${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: digest-${{ matrix.component }}-${{ matrix.arch }}
-          path: /tmp/digests/*
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/**
           retention-days: 1
 
   manifest:
@@ -175,7 +186,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: digest-${{ matrix.component }}-*
+          pattern: digests-*
           path: /tmp/digests
           merge-multiple: true
 
@@ -190,9 +201,13 @@ jobs:
           set -eu
           repo="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}"
           refs=""
-          for f in /tmp/digests/*; do
+          for f in /tmp/digests/${{ matrix.component }}/*; do
             refs="$refs ${repo}@$(cat "$f")"
           done
+          # Both architectures or nothing: a manifest list quietly built from one of them is how a
+          # pull on the other arch starts failing.
+          count=$(echo $refs | wc -w)
+          [ "$count" -eq 2 ] || { echo "expected 2 digests, found $count in /tmp/digests/${{ matrix.component }}"; exit 1; }
           # A tag push gets both the version and latest; a main push only gets edge.
           if [ "${{ github.ref_type }}" = "tag" ]; then
             tags="${{ github.ref_name }} latest"
