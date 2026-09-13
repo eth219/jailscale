@@ -341,12 +341,31 @@ final class Visitors {
      * Connects to the local target. A burst of visitors can overflow a small listen backlog
      * (macOS defaults to 128), which shows up as an immediate refusal or reset; a few short
      * retries (up to ~1.5 s) turn that into a served request instead of a 502.
+     *
+     * <p><b>Both socket buffers are given the stream window before connecting.</b> Left to the
+     * kernel they autotune to megabytes each (measured at up to 8 MB on macOS; Linux allows 6), and
+     * they hold what the visitor has not read once this thread stops taking it: a visitor that
+     * stalls its download stops this stream at {@link MuxStream#WINDOW} of credit, and from then
+     * on every byte the app can still push lands in the kernel, on this machine, outside any figure
+     * the node reports. Measured with 400 stalled visitors on loopback, these sockets held 300 to
+     * 400 MB -- a megabyte each -- while the machine's network memory sat at its cap and every
+     * socket on it froze, including the ones a visitor's handshake needed (ARCHITECTURE.md §14).
+     * A byte this stream cannot send yet is a byte it should not have asked the app for, so the
+     * kernel is told the window. macOS doubles what it is told at connect and then holds it there,
+     * Linux keeps it as given; either way it stops growing, which is the property this needs. The
+     * app is on this machine or its network, where 256 KB is far past the bandwidth-delay
+     * product, so this costs no throughput; the visitor-facing sockets are the hub's and are not
+     * touched, because a visitor a continent away needs the kernel's pipelining.
      */
-    private static Socket connectLocal(NodeState.LinkRec target) throws IOException {
+    static Socket connectLocal(NodeState.LinkRec target) throws IOException {
         IOException last = null;
         for (int attempt = 0; attempt < 5; attempt++) {
             Socket s = new Socket();
             try {
+                // Before connect: the receive window is scaled from the buffer at SYN time, and an
+                // explicit size is what switches the kernel's autotuning off for this socket.
+                s.setReceiveBufferSize(MuxStream.WINDOW);
+                s.setSendBufferSize(MuxStream.WINDOW);
                 s.connect(new InetSocketAddress(target.host(), target.port()), LOCAL_CONNECT_TIMEOUT_MS);
                 s.setTcpNoDelay(true);
                 return s;

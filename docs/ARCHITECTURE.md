@@ -799,6 +799,24 @@ visitors really does overflow a small listen backlog (macOS defaults to 128) and
 immediate refusal. That page and the gate are the only two places where the node *writes* HTTP, and
 only on https links.
 
+**The socket to the local app is given the stream window, 256 KB each way, before it connects.**
+Left to the kernel both buffers autotune to megabytes -- measured at up to 8 MB on macOS, whose
+default ceiling is 4 MB a side; Linux allows 6 -- and what they hold is bytes the visitor has not
+read: a stalled download stops its stream at the window of credit (§5.3), the relay stops taking
+from the app, and everything the app can still push lands in the kernel on the node's machine,
+outside any number the node reports. With 400 stalled visitors on loopback those sockets held 300 to
+400 MB, a megabyte each, while the machine's network memory sat at its cap and every socket on it
+froze (§14). A byte the stream cannot send yet is a byte it should not have taken from the app, so
+the kernel is told the window. macOS doubles what it is told at connect and then holds it there, so
+the node's share is about half a megabyte a visitor on macOS and the window itself on Linux -- 240 MB
+for the same 400, and a figure that stops growing. What the app puts in its own send buffer is the
+app's; `measure.sh`'s app bounds its own. The app is local or on the node's network, where 256 KB is
+far past the bandwidth-delay product, and the warm throughput of §14 does not move: 42,500 requests
+a second with the buffers given, against about 38,000 recorded, at 83 and 94 µs of hub and node CPU
+an operation against 101 and 113. The hub's
+visitor-facing sockets are left autotuning on purpose: a visitor a continent away is what the
+kernel's pipelining is for (§15).
+
 A link that should not be public is locked behind a visit link, the same capability model as invites.
 `jailscale open 3000 --gate` prints `https://q7x2k.hub.example.com/?jail=<token>` alongside the
 public URL, and `jailscale gate <name> --new-link --ttl 7d` or `--off` manages it afterwards.
@@ -1521,6 +1539,14 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   several paths abandon a visitor without closing the endpoint, and a count that leaked on those
   would invent visitors that are not there.
 
+- **What the kernel holds per stalled visitor is bounded on the node and not on the hub.** The node
+  gives its app socket the stream window (§9.3). The hub's visitor sockets autotune, so a visitor
+  that stops reading can leave the kernel's full send buffer behind on the hub's machine, and a
+  thousand of them is gigabytes asked of a host with 969 MB -- which Linux answers machine-wide with
+  `tcp_mem`, about 87 MB there, by making every socket wait. That is the failure the node just had,
+  on the hub, and it is not fixed the same way because the same fix costs what the node's does not:
+  pinning the send buffer caps a far visitor's download at the window over its round trip, 20 Mbit/s
+  at 100 ms. The right bound scales with the visitor's measured round trip, and nothing measures it.
 - **Node idle RSS is about 24.8 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
   Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they
