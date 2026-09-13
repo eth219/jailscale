@@ -49,7 +49,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The release's toolchain, and the reasoning for the pin is in release.yml: GraalVM CE on the
       # 25.3 line, a JDK newer than 25.0.2, and `version:` rather than `java-version:` because the
