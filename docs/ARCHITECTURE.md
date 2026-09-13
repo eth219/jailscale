@@ -1530,6 +1530,23 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   second would write a chunk the first has not removed yet. Both relays give a stream one thread per
   direction, and a second caller is refused rather than left to duplicate output.
 
+  **A saturated node session delays the handshakes of new visitors, and the node now says so.**
+  Under `SLOW=400` an ordinary visitor's first byte arrives after ten to thirteen seconds, once per
+  run, while the other probes in the same run are at 250-370 ms. It is not the receive budget (it
+  happens with zero reclaims), not the node's heap (it happens with the node's ceiling lifted to
+  768 MB, at a 137 MB peak), and not the signing rate limit (no refusals). The node's log says what
+  it is: *the hub took 12,852 ms to sign for stream 818*, and the stream next to it was released in
+  the same millisecond.
+
+  The path is one Noise channel. `NoiseChannel.write` encrypts and writes inside one lock, because
+  the nonce has to advance in wire order, so a frame whose socket write blocks holds every other
+  frame behind it -- including the `SignResponse` a visitor's handshake is waiting on. A node with
+  hundreds of stalled streams congests that channel, and a new visitor pays for it in the one place
+  the hub's own counters cannot see: the signature went out, so `jailhub_signatures_total` counted
+  it and nothing was refused. Signing above `RemoteSigning.SLOW_SIGN_MS` is logged on the node for
+  that reason, and what would actually fix it is a writer that can put a control frame in front of a
+  queued data frame rather than behind it.
+
   **Measured, the size is not a lever either.** At 4 KiB against 16 KiB the hub's peak under `SLOW=300`
   came out 92.0 MB, then 58.9 MB, against 63.9 MB for the buffer it ships -- the spread at one fixed
   size is several times the 7 MB the arithmetic says the change is worth, so RSS cannot see it. It is

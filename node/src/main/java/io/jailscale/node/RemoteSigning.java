@@ -39,6 +39,8 @@ final class RemoteSigning {
     static final String PROVIDER_NAME = "JailscaleRemote";
     static final String ALGORITHM = "SHA256withECDSA";
     static final long SIGN_TIMEOUT_MS = 10_000;
+    /** A signature slower than this is worth a line: the visitor is waiting on it (ARCHITECTURE.md §9.2). */
+    static final long SLOW_SIGN_MS = 1_000;
 
     /**
      * Who signs for the current thread: the stream's full id, the connection it arrived on, and
@@ -229,11 +231,21 @@ final class RemoteSigning {
                 throw new SignatureException(e.getMessage(), e);
             }
             Message reply;
+            long asked = System.currentTimeMillis();
             try {
                 reply = ctx.link().requestOn(ctx.session(), new Message.SignRequest(ctx.streamId(), key.keyId(), ALGORITHM, bytes,
                     t.serverHello(), t.encryptedExtensions(), t.helloRetryRequest()), "SignResponse:" + ctx.streamId(), SIGN_TIMEOUT_MS);
             } catch (IOException | TimeoutException e) {
                 throw new SignatureException("hub did not sign: " + e.getMessage(), e);
+            }
+            // One signature is one visitor's handshake, so a slow one is a visitor waiting with
+            // nothing on screen and no other trace that it happened: `verify` and the hub's counters
+            // both say it succeeded. The threshold is well above a healthy round trip (single-digit
+            // milliseconds on loopback, tens over the internet) so a quiet hub says nothing.
+            long took = System.currentTimeMillis() - asked;
+            if (took >= SLOW_SIGN_MS) {
+                LOG.warn("the hub took {} ms to sign for stream {}; the visitor waited that long for "
+                    + "the handshake", took, ctx.streamId());
             }
             if (reply instanceof Message.SignResponse r && r.sig() != null) {
                 return r.sig();
