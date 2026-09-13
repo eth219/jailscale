@@ -1,0 +1,28 @@
+# Nothing else watches what the build pulls in. The only third-party dependency is JUnit; everything
+# else here is a build plugin, and a plugin is exactly what goes stale unnoticed -- the toolchain
+# versions are pinned on purpose (ARCHITECTURE.md 3.2) and a pin nobody revisits is a pin that rots.
+version: 2
+updates:
+  # The workflows reference moving tags (actions/checkout@v4 and eight more), so an action can change
+  # under the same ref without a commit here. Weekly pull requests are the record of when it did.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    open-pull-requests-limit: 5
+
+  # The root pom carries the plugin versions and the dependencyManagement for all four modules, so
+  # one entry covers the reactor.
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # 3.2 argues the native-image toolchain is chosen by measurement, not by recency: the GraalVM
+      # version the release builds with is set in the workflow and in profiles/, and bumping this
+      # plugin alone would make the two disagree. Majors stay a deliberate, measured change.
+      - dependency-name: org.graalvm.buildtools:native-maven-plugin
+        update-types: [version-update:semver-major]
