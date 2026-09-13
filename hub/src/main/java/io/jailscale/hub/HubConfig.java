@@ -109,6 +109,18 @@ public record HubConfig(
         if (!policy.equals(POLICY_MEMBERS) && !policy.equals(POLICY_ADMINS)) {
             throw new IllegalArgumentException("--invite-policy must be members or admins");
         }
+        // Checked the same way --invite-policy is, and for the same reason: the readers ask
+        // `"open".equals(...)` and `"off".equals(...)`, so a typo here does not fail, it quietly
+        // selects the other setting -- `--registration opne` would leave registration closed and
+        // `--knock of` would leave knocking on, both while the operator believes otherwise.
+        String registration = a.get("registration", "invite");
+        if (!registration.equals("invite") && !registration.equals("open")) {
+            throw new IllegalArgumentException("--registration must be invite or open");
+        }
+        String knock = a.get("knock", "on");
+        if (!knock.equals("on") && !knock.equals("off")) {
+            throw new IllegalArgumentException("--knock must be on or off");
+        }
         String cert = a.get("tls-cert");
         String key = a.get("tls-key");
         if ((cert == null) != (key == null)) {
@@ -175,9 +187,9 @@ public record HubConfig(
             Integer.parseInt(listen.substring(colon + 1)),
             cert == null ? null : Path.of(cert),
             key == null ? null : Path.of(key),
-            "open".equals(a.get("registration", "invite")),
+            registration.equals("open"),
             policy,
-            !"off".equals(a.get("knock", "on")),
+            !knock.equals("off"),
             a.get("dns-suffix", base.getHost()),
             acme,
             a.get("acme-email"),

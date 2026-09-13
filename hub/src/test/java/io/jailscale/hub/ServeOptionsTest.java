@@ -1,0 +1,225 @@
+package io.jailscale.hub;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.jailscale.proto.util.Args;
+import java.net.URI;
+import java.nio.file.Path;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+/**
+ * {@code jailhub serve} and its twenty-odd options ({@link HubConfig#fromArgs}). Sixteen tests
+ * built a {@link HubConfig} through {@code withCert} instead, which skips this method entirely, so
+ * every default and every refusal here was running unexamined on the live hub.
+ *
+ * <p>The refusals matter more than they look: these options are typed once into a systemd unit and
+ * then not read again for months, and the ones that are a pair or an enum fail silently when they
+ * are wrong -- a listener on the wrong interface, or a check the operator believes is on.
+ */
+class ServeOptionsTest {
+
+    private static final String STATE = "/tmp/jailhub-serve-options-test";
+
+    private static HubConfig serve(String... extra) {
+        String[] argv = new String[extra.length + 5];
+        argv[0] = "serve";
+        argv[1] = "--base-url";
+        argv[2] = "https://hub.example.com";
+        argv[3] = "--state";
+        argv[4] = STATE;
+        System.arraycopy(extra, 0, argv, 5, extra.length);
+        return HubConfig.fromArgs(Args.parse(argv, Main.FLAGS));
+    }
+
+    private static String refused(String... extra) {
+        return assertThrows(IllegalArgumentException.class, () -> serve(extra),
+            () -> "accepted: jailhub serve " + String.join(" ", extra)).getMessage();
+    }
+
+    // --- what an operator gets by typing as little as possible -----------------------------------
+
+    @Test
+    void theDefaultsAreTheOnesDocumentedInTheUsage() {
+        HubConfig c = serve();
+        assertEquals("0.0.0.0", c.listenHost());
+        assertEquals(443, c.listenPort());
+        assertEquals("hub.example.com", c.hostname());
+        assertEquals("hub.example.com", c.dnsSuffix(), "the dns suffix follows the base url unless told otherwise");
+        assertEquals(Path.of(STATE), c.stateDir());
+        assertEquals(Path.of(STATE, "jailhub.sock"), c.socketPath());
+
+        assertFalse(c.registrationOpen(), "registration is invite-only until asked otherwise");
+        assertEquals(HubConfig.POLICY_MEMBERS, c.invitePolicy());
+        assertTrue(c.knock());
+
+        assertTrue(c.acme(), "no --tls-cert means the hub gets its own certificate");
+        assertEquals(HubConfig.LETS_ENCRYPT, c.acmeDirectory());
+        assertNull(c.acmeEmail());
+        assertNull(c.tlsCert());
+        assertNull(c.tlsKey());
+        assertEquals("0.0.0.0", c.dnsListenHost());
+        assertEquals(53, c.dnsListenPort());
+        assertTrue(c.selfCheck());
+        assertTrue(c.addressCheck());
+
+        assertTrue(c.hasPortRange());
+        assertEquals(HubConfig.DEFAULT_PORT_LO, c.portRangeLo());
+        assertEquals(HubConfig.DEFAULT_PORT_HI, c.portRangeHi());
+        assertTrue(c.hasHttp(), "port 80 is the precondition for user domains");
+        assertEquals("0.0.0.0", c.httpListenHost());
+        assertEquals(80, c.httpListenPort());
+
+        assertFalse(c.proxyProtocol());
+        assertEquals(List.of(), c.trustedProxies());
+    }
+
+    @Test
+    void eachOptionMovesTheOneThingItNames() {
+        assertEquals(8443, serve("--listen", "127.0.0.1:8443").listenPort());
+        assertEquals("127.0.0.1", serve("--listen", "127.0.0.1:8443").listenHost());
+        assertTrue(serve("--registration", "open").registrationOpen());
+        assertFalse(serve("--registration", "invite").registrationOpen());
+        assertEquals(HubConfig.POLICY_ADMINS, serve("--invite-policy", "admins").invitePolicy());
+        assertFalse(serve("--knock", "off").knock());
+        assertTrue(serve("--knock", "on").knock());
+        assertEquals("nodes.example.com", serve("--dns-suffix", "nodes.example.com").dnsSuffix());
+        assertEquals("you@example.com", serve("--acme-email", "you@example.com").acmeEmail());
+        assertEquals("127.0.0.1", serve("--dns-listen", "127.0.0.1:5353").dnsListenHost());
+        assertEquals(5353, serve("--dns-listen", "127.0.0.1:5353").dnsListenPort());
+    }
+
+    @Test
+    void anIpv6ListenerKeepsItsBrackets() {
+        // The host is split on the LAST colon, or "[::]:443" would become host "[" port ":]:443".
+        HubConfig c = serve("--listen", "[::]:443");
+        assertEquals("[::]", c.listenHost());
+        assertEquals(443, c.listenPort());
+    }
+
+    // --- certificate: built-in ACME, or your own files --------------------------------------------
+
+    @Test
+    void ownFilesTurnAcmeOffAndComeAsAPair() {
+        HubConfig c = serve("--tls-cert", "/etc/ssl/hub.crt", "--tls-key", "/etc/ssl/hub.key");
+        assertFalse(c.acme());
+        assertEquals(Path.of("/etc/ssl/hub.crt"), c.tlsCert());
+        assertEquals(Path.of("/etc/ssl/hub.key"), c.tlsKey());
+
+        // Half a pair is the dangerous shape: it would start with ACME on for a name the operator
+        // has already got a certificate for, and rate-limit the account for nothing.
+        assertEquals("--tls-cert and --tls-key go together", refused("--tls-cert", "/etc/ssl/hub.crt"));
+        assertEquals("--tls-cert and --tls-key go together", refused("--tls-key", "/etc/ssl/hub.key"));
+    }
+
+    @Test
+    void anExplicitAcmeDirectoryBeatsTheStagingFlag() {
+        assertEquals(HubConfig.LETS_ENCRYPT_STAGING, serve("--acme-staging").acmeDirectory());
+        URI pebble = URI.create("https://127.0.0.1:14000/dir");
+        assertEquals(pebble, serve("--acme-directory", pebble.toString()).acmeDirectory());
+        assertEquals(pebble, serve("--acme-staging", "--acme-directory", pebble.toString()).acmeDirectory(),
+            "the named directory wins, or --acme-staging would silently redirect it");
+    }
+
+    @Test
+    void theTwoChecksAreSeparateSwitches() {
+        // Kept honest by ReachabilityTest as well; here to record that neither is on a default path.
+        assertFalse(serve("--no-selfcheck").selfCheck());
+        assertTrue(serve("--no-selfcheck").addressCheck());
+        assertFalse(serve("--no-address-check").addressCheck());
+        assertTrue(serve("--no-address-check").selfCheck());
+    }
+
+    // --- the two listeners that can be switched off ----------------------------------------------
+
+    @Test
+    void rawPortsAndPortEightyCanBeTurnedOffButNotTheDnsListener() {
+        HubConfig noRaw = serve("--port-range", "none");
+        assertFalse(noRaw.hasPortRange());
+        HubConfig noHttp = serve("--http-listen", "none");
+        assertFalse(noHttp.hasHttp());
+
+        HubConfig range = serve("--port-range", "20000-20100");
+        assertTrue(range.hasPortRange());
+        assertEquals(20000, range.portRangeLo());
+        assertEquals(20100, range.portRangeHi());
+        assertEquals(8080, serve("--http-listen", "127.0.0.1:8080").httpListenPort());
+
+        // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here.
+        assertEquals("--dns-listen must be host:port", refused("--dns-listen", "none"));
+    }
+
+    @Test
+    void aPortRangeOutsideWhatAnUnprivilegedProcessCanBindIsRefused() {
+        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "80-1000"));
+        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "10000-70000"));
+        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "20000-10000"));
+        assertEquals("--port-range must be lo-hi or none", refused("--port-range", "20000"));
+    }
+
+    // --- behind a proxy ---------------------------------------------------------------------------
+
+    /**
+     * ARCHITECTURE.md §8.5. A PROXY header is believed, so accepting one from anywhere lets any
+     * visitor claim any source address -- which is what the bans, the rate limiter and every
+     * logged address rest on. Loopback is the exception because nothing off-box can reach it.
+     */
+    @Test
+    void proxyProtocolNeedsEitherLoopbackOrANamedProxy() {
+        assertTrue(refused("--proxy-protocol").contains("anyone could forge visitor addresses"));
+        assertTrue(refused("--proxy-protocol", "--listen", "0.0.0.0:443").contains("--trusted-proxy"));
+
+        HubConfig loopback = serve("--proxy-protocol", "--listen", "127.0.0.1:8443");
+        assertTrue(loopback.proxyProtocol());
+        assertEquals(List.of(), loopback.trustedProxies());
+
+        HubConfig named = serve("--proxy-protocol", "--trusted-proxy", "10.0.0.0/8, 192.168.0.0/16");
+        assertTrue(named.proxyProtocol());
+        assertEquals(List.of("10.0.0.0/8", "192.168.0.0/16"), named.trustedProxies(), "trimmed, and empty entries dropped");
+    }
+
+    @Test
+    void aTrustedProxyThatIsNotACidrIsRefusedHereRatherThanIgnoredLater() {
+        assertTrue(refused("--proxy-protocol", "--trusted-proxy", "10.0.0.0/99").startsWith("bad prefix length"));
+    }
+
+    // --- the base url and the enums ---------------------------------------------------------------
+
+    @Test
+    void theBaseUrlIsRequiredAndHasToBeHttpsWithAHost() {
+        assertEquals("--base-url is required",
+            assertThrows(IllegalArgumentException.class,
+                () -> HubConfig.fromArgs(Args.parse(new String[] {"serve"}, Main.FLAGS))).getMessage());
+        for (String bad : new String[] {"http://hub.example.com", "hub.example.com", "https:///join"}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> HubConfig.fromArgs(Args.parse(new String[] {"serve", "--base-url", bad, "--state", STATE}, Main.FLAGS)),
+                "accepted --base-url " + bad);
+            assertEquals("--base-url must be https://<host>", e.getMessage());
+        }
+    }
+
+    @Test
+    void aListenerWithoutAPortIsRefused() {
+        assertEquals("--listen must be host:port", refused("--listen", "0.0.0.0"));
+        assertEquals("--http-listen must be host:port or none", refused("--http-listen", "8080"));
+    }
+
+    /**
+     * The three options whose readers compare against one spelling. {@code --invite-policy} was
+     * always checked; {@code --registration} and {@code --knock} were not, and a typo in either
+     * selected the other setting without a word -- a hub the operator had opened staying closed,
+     * or knocking they had turned off still being answered.
+     */
+    @Test
+    void anEnumOptionIsRefusedRatherThanSilentlyMeaningTheOtherValue() {
+        assertEquals("--invite-policy must be members or admins", refused("--invite-policy", "admin"));
+        assertEquals("--registration must be invite or open", refused("--registration", "opne"));
+        assertEquals("--registration must be invite or open", refused("--registration", "Open"));
+        assertEquals("--knock must be on or off", refused("--knock", "of"));
+        assertEquals("--knock must be on or off", refused("--knock", "false"));
+    }
+}
