@@ -18,76 +18,45 @@ digest and never holds a session key, so the party you are trusting least is
 also the one that can read least.
 
 Two binaries, no runtime dependencies, nothing to install underneath them. No
-TUN device, no root, no inbound ports on the node.
+TUN device, no root, no inbound ports on the node. Full design:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Full design and architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+## Scope
 
-## What it does, and what it does not
+One server you own runs `jailhub`. Every machine that publishes something runs
+`jailscale`. It does what ngrok, Cloudflare Tunnel and frp do — the first two
+hosted, frp on a server you run — with no third party in the path. Tailscale is
+larger: a mesh between your own machines, of which Funnel is this one job.
 
-A port on a machine you run, served at `https://<name>.<your-hub>` to visitors
-who install nothing. That is the whole of it.
+1. **Lightweight.** 25 MiB per binary, 25 MB idle, milliseconds for a CLI round
+   trip ([Resource usage](#resource-usage)). That needs GraalVM Native Image,
+   and Native Image needs discipline: no reflection, no dependency injection, no
+   dynamic class loading, no third-party runtime dependency at all. JSON,
+   HTTP/1.1, ACME, DNS, the multiplexer and the Noise handshake are written here
+   rather than taken off a shelf.
+2. **Usability.** `jailscale open 3000` and the link is live. The operator
+   creates three DNS records and opens two ports; the wildcard certificate
+   arrives on its own, because the hub is the authoritative DNS server for its
+   own `_acme-challenge` name and answers its own ACME challenge. No DNS
+   provider API token anywhere.
+3. **Portability.** No root, no TUN device, no kernel module, no inbound port
+   and no UDP on the node. Four native platforms plus a pure-JVM fallback JAR.
+   Virtual threads throughout, so a thread per direction per stream is an
+   ordinary thing to write rather than something to optimise away.
+4. **Least privilege at the edge.** The hub reads the TLS SNI and nothing else,
+   so it never parses visitor HTTP and never holds plaintext. Its wildcard key
+   signs one handshake digest per visitor, and only when the request is bound to
+   a stream the hub itself delivered to that node; domains you bring yourself
+   never involve that key at all. The node checks the hub's honesty from its own
+   side ([Trust](#trust)), and the control channel is Noise IK inside TLS, so a
+   compromised certificate authority still does not get you the control plane.
 
-ngrok, Cloudflare Tunnel and frp do the same job — the first two hosted, frp on
-a server you run. Tailscale is larger: a mesh between your own machines, of
-which Funnel is this one job.
-
-**Everything else is out of scope**, in particular:
-
-- **A VPN.** No mesh, no peer-to-peer, no exit nodes, no subnet routes, no
-  MagicDNS.
-- **Reading the visitor's HTTP.** Neither end parses it: no routing on paths or
-  headers, no rewriting, no request inspector, no replay, no per-request log.
-- **HTTP/2 and HTTP/3 to the visitor.** The node offers `http/1.1` only.
-- **More than one node behind a name.** No load balancing, no health checking,
-  no failover.
-- **An identity provider.** Joining is an invite, a code or an auth-key; an
-  admin is a machine key ([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)).
-- **Mobile clients.** Desktop and server platforms only.
-- **A hosted service.** You run the hub; there is nothing to sign up for.
-
-Things *missing* rather than excluded are under [Not done yet](#not-done-yet).
-
-## What Java bought, and what it cost
-
-The interesting question was whether a JVM language can carry this kind of
-product without apologising for itself. Four things were the target.
-
-**Light.** 25 MiB per binary and 25 MB idle on arm64 macOS, 26 MiB and 35 MB on
-linux-amd64 — of which 3 MB is memory the process actually owns and the rest is
-the binary's own pages, which the kernel can take back. 6 ms for a CLI round
-trip, 2.4 ms on Linux. That needs
-GraalVM Native Image, and Native Image needs discipline: no reflection, no
-dependency injection, no dynamic class loading, no third-party runtime
-dependency at all. JSON, HTTP/1.1, ACME, DNS, the multiplexer and the Noise
-handshake are all written here. The cost is real. Those are all things you would
-normally take off a shelf.
-
-**Easy.** `jailscale open 3000` and the link is live. On the hub side the
-operator creates three DNS records and opens two ports; the wildcard
-certificate arrives on its own, because the hub is the authoritative DNS server
-for its own `_acme-challenge` name and answers its own ACME challenge. No DNS
-provider API token anywhere.
-
-**Portable.** No root, no TUN device, no kernel module, no inbound port, no UDP
-on the node. Four native platforms plus a pure-JVM fallback JAR for anything
-else. Virtual threads throughout, so a thread per direction per stream is an
-ordinary thing to write rather than something to optimise away.
-
-**Secure, and specifically how.** The hub reads the TLS SNI and nothing else, so
-it never parses visitor HTTP and never holds plaintext. The wildcard private key
-stays on the hub and signs one handshake digest per visitor, and the hub refuses
-to sign unless the request is bound to a stream it itself delivered to that node.
-Domains you bring yourself never involve the hub's key at all. The node then
-checks the hub's honesty from its own side: the daemon opens a session to one of
-its own public names every half hour, and `jailscale verify` does all of them at
-once. Either way it compares RFC 5705 exported keying material against what it
-recorded, which catches a hub that terminated the TLS itself, and `status` keeps
-each name's last verdict. The control channel is Noise IK inside TLS, so a
-compromised certificate authority still does not get you the control plane.
-
-What it did not buy: idle memory is 25 MB against a 20 MB goal, and roughly
-7.6 MB of that is JSSE standing up a single TLS client. On Linux the number to
-compare is the 3 MB of anonymous memory, not the 35 MB `ps` prints.
+Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or
+frp, reading the visitor's HTTP — neither end parses it, so no routing on paths
+or headers, no rewriting, no per-request log — HTTP/2 and HTTP/3 on the visitor
+side, more than one node behind a name, mobile clients, and an external identity
+provider ([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)). There is no hosted
+service either: you run the hub, and there is nothing to sign up for.
 
 ## Install
 
@@ -200,9 +169,9 @@ configurations for putting the hub behind nginx or HAProxy.
 ## Resource usage
 
 Measured with the native binaries by `./measure.sh`, which CI runs as a budget
-on every push to main. Two platforms, because the same code measures differently
-on each: an amd64 binary is bigger than an arm64 one, and Linux counts the
-binary's own mapped pages in RSS where macOS largely does not.
+on every push to main. Two platforms, because an amd64 binary is bigger than an
+arm64 one and Linux counts the binary's own mapped pages in RSS where macOS
+largely does not.
 
 | | jailhub | jailscale |
 |---|---|---|
@@ -212,27 +181,28 @@ binary's own mapped pages in RSS where macOS largely does not.
 | CLI cold start | — | 6.3 / 2.4 ms |
 
 *arm64 macOS / linux-amd64.* On Linux most of that idle RSS is the binary mapped
-into the process — clean pages the kernel takes back when it needs them. The
+into the process, clean pages the kernel takes back when it needs them. The
 anonymous memory, the part that is really the process's, is 3 MB for the hub and
 2 MB for the node.
 
 Idle is a fresh start, not a steady state. The heap has a ceiling, 96 MB for the
-hub and 64 MB for the node, and a long-running process drifts up towards it:
-without one the Serial GC's allowance is 80% of the machine, and the hub above
-was found at 78 MB of RSS, 54 MB of it anonymous, after 20 idle hours. It is not
-a leak — the plateau follows the ceiling rather than the workload — and
-[ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has the measurements both ways.
+hub and 64 MB for the node, and a long-running process drifts up towards it: the
+hub above was found at 78 MB of RSS, 54 MB of it anonymous, after 20 idle hours.
+It is not a leak — the plateau follows the ceiling rather than the workload —
+and [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has the measurements both ways.
 
 Speed, from the same script: on connections already open the pair moves about
-38,000 requests a second here and 14,000 to 17,500 on a four-core Linux runner. A fresh TLS
-handshake costs much more than a request, since it opens a stream and takes a
-signature, and the hub signs at most 1,000 a second for any one node — the
-ceiling that matters when visitors arrive rather than when they stay.
+38,000 requests a second here and 14,000 to 17,500 on a four-core Linux runner.
+A fresh TLS handshake costs much more than a request, since it opens a stream
+and takes a signature, and the hub signs at most 1,000 a second for any one
+node, 2,000 in a burst — the ceiling that matters when visitors arrive rather
+than when they stay. A hub also accepts 1,024 concurrent visitors per name and
+20 names per node.
 
 The hub above runs on a GCP e2-micro: 2 shared vCPU, 1 GB of memory, Debian 12.
 That is the smallest instance Google sells, and it is not the constraint.
 
-Requirements:
+What each side needs:
 
 | | Hub | Node |
 |---|---|---|
@@ -242,38 +212,41 @@ Requirements:
 | TUN device | no | no |
 | Runtime to install | none | none |
 
-A hub accepts 1,024 concurrent visitors per name and 20 names per node, and signs at most 1,000
-TLS handshakes a second for any one node, with a burst of 2,000.
-
 ## Trust
 
 The hub holds the wildcard private key. A compromised hub cannot read traffic to
 a healthy node, but it can move a name to a node of its own and sign for it. The
-node's self-probe detects that afterwards, on its own schedule or when you type
-`jailscale verify`, and an honest hub reports the move on its own. Names you
-bring yourself are not exposed this way: the key stays on the node and the hub
-only routes.
+node catches that afterwards from its own side: the daemon opens a session to
+one of its own public names every half hour, `jailscale verify` does all of them
+at once, and either way it compares RFC 5705 exported keying material against
+what it recorded, which a hub that terminated the TLS itself cannot match.
+`status` keeps each name's last verdict, and an honest hub reports the move on
+its own. Names you bring yourself are not exposed this way: the key stays on the
+node and the hub only routes.
 
 What a compromised hub can and cannot do is written out in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[ARCHITECTURE.md §11](docs/ARCHITECTURE.md).
 
-## Not done yet
+## Limits
 
 - No production track record. The hub above is the only instance with any
   uptime behind it, and it serves one person's names.
-- The hub is a single process on a single host. Losing the host means downtime.
-  Replacing the binary without dropping nodes works with `serve --takeover`, but
-  not under a systemd unit, where an upgrade is a restart.
-- `service install` is verified on macOS only. Linux and Windows are untested
-  outside CI.
+- The hub is a single process on a single host, with no standby and no state
+  replication. Losing the host means downtime. Replacing the binary without
+  dropping nodes works with `serve --takeover`, but not under a systemd unit,
+  where an upgrade is a restart.
 - Upgrading is manual. `jailscale update` says when a release is out; nothing
   installs it for you.
-- Idle memory is 25 MB against a 20 MB goal (34.4 MB as Linux counts it, 2 MB
-  of it anonymous). Most of the gap is JSSE standing up a TLS client.
-- No standby hub, no state replication.
+- `service install` is verified on macOS only. Linux and Windows are untested
+  outside CI.
+- Idle memory is 25 MB against the 20 MB originally aimed at (34.4 MB as Linux
+  counts it, 2 MB of it anonymous). Most of the gap is JSSE standing up a single
+  TLS client.
 - v0.1.0 is the first tagged release, so there is no upgrade path to have got
   wrong yet. What the protocol promises across versions is
   [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md).
+
+[ARCHITECTURE.md §15](docs/ARCHITECTURE.md) has the rest, in more detail.
 
 ## Credit
 
