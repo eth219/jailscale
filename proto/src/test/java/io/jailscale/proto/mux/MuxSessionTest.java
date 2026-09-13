@@ -4,6 +4,7 @@ import com.sun.management.HotSpotDiagnosticMXBean;
 import io.jailscale.crypto.NoiseIk;
 import io.jailscale.crypto.X25519;
 import io.jailscale.proto.json.JsonObject;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -83,6 +84,10 @@ class MuxSessionTest {
     }
 
     private static Pair pair() throws Exception {
+        return pair(FlowBudget.unlimited());
+    }
+
+    private static Pair pair(FlowBudget budget) throws Exception {
         X25519.Keypair hk = X25519.generate();
         X25519.Keypair nk = X25519.generate();
         ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
@@ -100,7 +105,7 @@ class MuxSessionTest {
         CompletableFuture<Throwable> hcl = new CompletableFuture<>();
         CompletableFuture<Throwable> ncl = new CompletableFuture<>();
         MuxSession hub = new MuxSession(hubCh.get(), true, listener(ho, hc, hcl), FlowBudget.unlimited());
-        MuxSession node = new MuxSession(nodeCh, false, listener(no, nc, ncl), FlowBudget.unlimited());
+        MuxSession node = new MuxSession(nodeCh, false, listener(no, nc, ncl), budget);
         hub.start();
         node.start();
         ex.shutdown();
@@ -196,6 +201,43 @@ class MuxSessionTest {
         }
         w.join();
         assertArrayEquals(data, got);
+        p.hub().close();
+        p.node().close();
+    }
+
+    /**
+     * {@code writeTo} moves the same bytes as {@code read} without a buffer of the caller's, and --
+     * the part worth testing -- keeps the same accounting: the window has to refill or the writer
+     * stalls forever, and against a real budget the release has to happen or the budget fills and
+     * the stream is reclaimed. Both are checked by sending several windows through a budget small
+     * enough to notice.
+     */
+    @Test
+    void writeToMovesTheBytesAndKeepsTheAccounting() throws Exception {
+        Pair p = pair(FlowBudget.of(2 * MuxStream.WINDOW));
+        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
+        byte[] data = new byte[3 * MuxStream.WINDOW + 4321];
+        new Random(7).nextBytes(data);
+        Thread w = Thread.ofVirtual().start(() -> {
+            try {
+                hs.out().write(data);
+                hs.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+        int chunks = 0;
+        for (int n; (n = ns.writeTo(sink)) >= 0; ) {
+            chunks++;
+        }
+        w.join();
+
+        assertArrayEquals(data, sink.toByteArray());
+        // More than one chunk, or the loop never exercised a refill and the budget never released.
+        assertTrue(chunks > 3, "expected several chunks, got " + chunks);
         p.hub().close();
         p.node().close();
     }

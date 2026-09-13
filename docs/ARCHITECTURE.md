@@ -1515,6 +1515,21 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   without an intermediate. The visitor-to-node direction has no such shortcut: a socket read needs
   somewhere to land.
 
+  **The second lever is taken, and not for the reason it looked like.** `MuxStream.writeTo` writes a
+  queued chunk straight to a socket and `Relay` uses it node-to-visitor. Throughput is unmoved --
+  37,444 requests a second against 37,805 for the buffered copy, which is the run-to-run spread --
+  because the warm measurement moves small responses, where a 16 KB `memcpy` is not what costs.
+  What it buys is that **the bound stops lying**. `read` releases a chunk from the budget at the
+  moment it copies it into the caller's buffer, so bytes waiting on a visitor that has stopped
+  reading are still held, still costing the process, and no longer counted: one buffer per stalled
+  visitor, megabytes at the concurrency §5.3 exists to survive. `writeTo` leaves the chunk queued
+  and charged until the socket has taken it -- look under the lock, write outside it, then remove
+  and account under the lock again -- so a write that throws leaves the chunk where it was.
+
+  The price is a narrower contract than `in()` has: **one thread may drain a stream**, because a
+  second would write a chunk the first has not removed yet. Both relays give a stream one thread per
+  direction, and a second caller is refused rather than left to duplicate output.
+
   **Measured, the size is not a lever either.** At 4 KiB against 16 KiB the hub's peak under `SLOW=300`
   came out 92.0 MB, then 58.9 MB, against 63.9 MB for the buffer it ships -- the spread at one fixed
   size is several times the 7 MB the arithmetic says the change is worth, so RSS cannot see it. It is

@@ -44,7 +44,7 @@ final class Relay {
         CountDownLatch visitorDone = new CountDownLatch(1);
         Thread toVisitor = DuplexThread.start("relay-in", () -> {
             try {
-                copy(stream.in(), visitor.getOutputStream());
+                drain(stream, visitor.getOutputStream());
                 visitor.shutdownOutput();
             } catch (IOException e) {
                 closeQuietly(visitor);
@@ -78,6 +78,20 @@ final class Relay {
             Thread.currentThread().interrupt();
         }
         closeQuietly(visitor);
+    }
+
+    /**
+     * Node to visitor, without the buffer. The bytes are already a private array in the stream's
+     * queue, so they go to the socket from there (ARCHITECTURE.md §15). The other direction has no
+     * such shortcut -- a socket read has to land somewhere -- which is why only this one changed.
+     */
+    static void drain(MuxStream stream, OutputStream out) throws IOException {
+        for (int n; (n = stream.writeTo(out)) >= 0; ) {
+            if (n > 0) {
+                out.flush();
+                Metrics.RELAY_BYTES.add(n);
+            }
+        }
     }
 
     static void copy(InputStream in, OutputStream out) throws IOException {

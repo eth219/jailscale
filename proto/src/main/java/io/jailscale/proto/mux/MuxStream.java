@@ -112,6 +112,93 @@ public final class MuxStream {
         }
     };
 
+    /**
+     * The thread that drains this stream with {@link #writeTo}, once one has. That path narrows the
+     * contract {@link #in()} does not have -- one consumer at a time -- because it leaves the chunk
+     * in the queue while it writes, so a second caller would send the same bytes again.
+     */
+    private volatile Thread drainer;
+
+    /**
+     * Writes the next queued chunk straight to {@code sink}, without copying it into a buffer of
+     * the caller's first, and returns how many bytes went or -1 at end of stream. What is queued is
+     * already a private array -- {@link Frame#decode} allocated it for this stream and nobody else
+     * holds it -- so a relay that is only moving bytes to a socket needs no intermediate at all
+     * (ARCHITECTURE.md §15).
+     *
+     * <p><b>The chunk stays queued and accounted until it has been written.</b> Taking it out first
+     * and releasing the budget before the write is the obvious shape and it loosens the bound: a
+     * visitor that has stopped reading blocks that write for as long as it likes, so at a thousand
+     * of them a chunk each would be megabytes the budget cannot see. So: look under the lock, write
+     * outside it, then take it out and account for it under the lock again. A write that throws
+     * leaves the chunk where it was, which is the true state -- the stream is about to be reset.
+     *
+     * <p>The cost is that <b>one thread may drain a stream</b>, which {@link #in()} never required;
+     * a second caller would write a chunk the first has not removed yet. Both relays give a stream
+     * one thread per direction, and a second one is refused here rather than left to corrupt the
+     * output.
+     */
+    public int writeTo(OutputStream sink) throws IOException {
+        Thread me = Thread.currentThread();
+        Thread other = drainer;
+        if (other == null) {
+            drainer = me;
+        } else if (other != me) {
+            throw new IllegalStateException("a stream may be drained by one thread; " + other + " already is");
+        }
+        byte[] chunk;
+        int pos;
+        int n;
+        synchronized (lock) {
+            while (current == null && inbound.isEmpty() && !remoteClosed && error == null) {
+                try {
+                    lock.wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("interrupted");
+                }
+            }
+            if (current == null) {
+                if (!inbound.isEmpty()) {
+                    current = inbound.poll();
+                    currentPos = 0;
+                } else if (error != null) {
+                    throw error;
+                } else {
+                    return -1;
+                }
+            }
+            chunk = current;
+            pos = currentPos;
+            n = chunk.length - pos;
+        }
+
+        sink.write(chunk, pos, n);
+
+        int refill = 0;
+        synchronized (lock) {
+            // An abort during the write clears the queue and releases its bytes in one go, so there
+            // is nothing here to account for; anything else and this is still the chunk we wrote.
+            if (current == chunk && currentPos == pos) {
+                current = null;
+                currentPos = 0;
+                inboundBytes -= n;
+                queued = accounted ? inboundBytes : 0;
+                if (accounted) {
+                    budget.release(n);
+                }
+                lastConsumedAt = System.currentTimeMillis();
+                consumedSinceWindow += n;
+                if (consumedSinceWindow >= WINDOW / 2) {
+                    refill = consumedSinceWindow;
+                    consumedSinceWindow = 0;
+                }
+            }
+        }
+        sendRefill(refill);
+        return n;
+    }
+
     private final OutputStream out = new OutputStream() {
         @Override
         public void write(int b) throws IOException {

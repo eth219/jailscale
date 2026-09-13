@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
@@ -105,6 +106,141 @@ class FlowBudgetTest {
     }
 
     /**
+     * The same thing again, drained by {@code MuxStream.writeTo} instead of {@code in().read}: the
+     * relay's zero-copy path (ARCHITECTURE.md §15) has to hold up under the same pressure, with the
+     * budget full and every arriving frame forcing a reclaim.
+     *
+     * <p>It does <b>not</b> stand in for {@code lastConsumedAt}, which is what it was first written
+     * to cover: removing that line from the new path leaves this test green, because the victim is
+     * the fullest stalled stream and a stream being drained this fast is never the fullest whatever
+     * its timestamp says. {@link #writeToKeepsTheStreamOffTheStalledList} asserts it where it can
+     * actually fail.
+     */
+    @Test
+    void aStreamDrainedWithWriteToOutlivesTheStalledOnes() throws Exception {
+        try (Rig r = rig(FlowBudget.of(LIMIT), true)) {
+            r.pushStalled(8, PER_STREAM);
+            long reclaimedWhileStalling = r.budget.reclaimedStreams();
+            Thread.sleep(FlowBudget.STALL_MS + 500);
+
+            MuxStream drained = r.sender.open(JsonObject.builder().put("drain", true).build(), false);
+            byte[] chunk = new byte[Frame.MAX_DATA];
+            for (int i = 0; i < 2 * 1024 * 1024 / chunk.length; i++) {
+                drained.out().write(chunk);
+            }
+            drained.close();
+
+            assertTrue(r.budget.reclaimedStreams() > reclaimedWhileStalling,
+                "the draining stream never put the budget under pressure, so nothing was chosen");
+            assertEquals(2L * 1024 * 1024, r.drained.get(30, TimeUnit.SECONDS),
+                "the draining stream was cut short");
+            assertFalse(r.receiver.isClosed(), "the session died");
+        }
+    }
+
+    /**
+     * {@code writeTo} has to mark the stream as having consumed something, or the victim scan reads
+     * it as stalled. The scan wants both -- stalled <em>and</em> fullest -- so a drained stream is
+     * usually saved by being empty rather than by its timestamp, and only a direct assertion fails
+     * when the timestamp is the thing that is missing.
+     */
+    @Test
+    void writeToKeepsTheStreamOffTheStalledList() throws Exception {
+        try (Rig r = rig(FlowBudget.of(LIMIT), true)) {
+            // No `drain` in the metadata, so the rig holds this one and reads nothing: this test is
+            // the only consumer, which is what the one-drainer rule requires.
+            MuxStream sent = r.sender.open(JsonObject.builder().put("sni", "timestamp").build(), false);
+            MuxStream received = null;
+            for (int i = 0; i < 100 && received == null; i++) {
+                received = r.held.isEmpty() ? null : r.held.get(0);
+                if (received == null) {
+                    Thread.sleep(50);
+                }
+            }
+            assertNotNull(received, "the receiver never saw the stream");
+
+            Thread.sleep(FlowBudget.STALL_MS + 300);
+            assertTrue(System.currentTimeMillis() - received.lastConsumedAt() >= FlowBudget.STALL_MS,
+                "it should look stalled before anything is drained");
+
+            sent.out().write(new byte[Frame.MAX_DATA]);
+            assertEquals(Frame.MAX_DATA, received.writeTo(java.io.OutputStream.nullOutputStream()));
+
+            assertTrue(System.currentTimeMillis() - received.lastConsumedAt() < FlowBudget.STALL_MS,
+                "writeTo moved bytes without recording that it had, so the scan still reads this "
+                    + "stream as stalled: " + received.flowState());
+            sent.close();
+        }
+    }
+
+    /**
+     * The reason the relay drains this way, and it is not speed: **bytes waiting on a slow visitor
+     * stay charged to the budget.** {@code in().read} hands them to the caller and releases them at
+     * that moment, so they sit in the caller's buffer, still held, still costing the process memory,
+     * and invisible to the bound -- one buffer per stalled visitor, which is megabytes at the
+     * concurrency this budget exists to survive. {@code writeTo} keeps the chunk queued and charged
+     * until the socket has taken it.
+     */
+    @Test
+    void bytesWaitingOnASlowSinkStayChargedToTheBudget() throws Exception {
+        try (Rig r = rig(FlowBudget.of(LIMIT), true)) {
+            MuxStream sent = r.sender.open(JsonObject.builder().put("sni", "slowsink").build(), false);
+            MuxStream received = null;
+            for (int i = 0; i < 100 && received == null; i++) {
+                received = r.held.isEmpty() ? null : r.held.get(0);
+                if (received == null) {
+                    Thread.sleep(50);
+                }
+            }
+            assertNotNull(received);
+            sent.out().write(new byte[Frame.MAX_DATA]);
+            for (int i = 0; i < 100 && r.budget.usedBytes() < Frame.MAX_DATA; i++) {
+                Thread.sleep(50);
+            }
+            long charged = r.budget.usedBytes();
+            assertEquals(Frame.MAX_DATA, charged, "the chunk should be on the budget before anyone drains it");
+
+            // A sink that has stopped taking bytes: exactly the visitor this budget is about.
+            CountDownLatch writing = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            MuxStream target = received;
+            Thread drainer = Thread.ofVirtual().start(() -> {
+                try {
+                    target.writeTo(new java.io.OutputStream() {
+                        @Override
+                        public void write(byte[] b, int off, int len) throws IOException {
+                            writing.countDown();
+                            try {
+                                release.await(30, TimeUnit.SECONDS);
+                            } catch (InterruptedException e) {
+                                throw new IOException(e);
+                            }
+                        }
+
+                        @Override
+                        public void write(int b) {
+                        }
+                    });
+                } catch (IOException e) {
+                    // the stream went while we were parked; the assertion below is what matters
+                }
+            });
+            assertTrue(writing.await(10, TimeUnit.SECONDS), "the drain never reached the sink");
+            assertEquals(charged, r.budget.usedBytes(),
+                "the bytes were released while the sink still had not taken them, so the budget is "
+                    + "short by what every stalled visitor is holding");
+
+            release.countDown();
+            drainer.join(TimeUnit.SECONDS.toMillis(30));
+            for (int i = 0; i < 100 && r.budget.usedBytes() > 0; i++) {
+                Thread.sleep(50);
+            }
+            assertEquals(0, r.budget.usedBytes(), "and released once the sink had them");
+            sent.close();
+        }
+    }
+
+    /**
      * A peer that sends past its window loses that stream and keeps the session. The session is
      * every other visitor on that node (§5.3), which is why this is not fatal.
      */
@@ -154,6 +290,9 @@ class FlowBudgetTest {
         private final ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor();
         private final List<Socket> sockets;
 
+        /** Whether the draining stream is read with {@code writeTo} rather than {@code in().read}. */
+        private boolean zeroCopy;
+
         Rig(FlowBudget budget, List<Socket> sockets, NoiseChannel senderCh, NoiseChannel receiverCh) {
             this.budget = budget;
             this.sockets = sockets;
@@ -185,9 +324,10 @@ class FlowBudgetTest {
 
         private void drain(MuxStream stream) {
             byte[] buf = new byte[Frame.MAX_DATA];
+            java.io.OutputStream sink = java.io.OutputStream.nullOutputStream();
             try {
                 int n;
-                while ((n = stream.in().read(buf)) >= 0) {
+                while ((n = zeroCopy ? stream.writeTo(sink) : stream.in().read(buf)) >= 0) {
                     drainedBytes.addAndGet(n);
                 }
                 drained.complete(drainedBytes.get());
@@ -240,6 +380,12 @@ class FlowBudgetTest {
                 s.close();
             }
         }
+    }
+
+    private Rig rig(FlowBudget budget, boolean zeroCopy) throws Exception {
+        Rig r = rig(budget);
+        r.zeroCopy = zeroCopy;
+        return r;
     }
 
     private Rig rig(FlowBudget budget) throws Exception {
