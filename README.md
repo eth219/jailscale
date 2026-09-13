@@ -39,8 +39,10 @@ larger: a mesh between your own machines, of which Funnel is this one job.
    arrives on its own, because the hub is the authoritative DNS server for its
    own `_acme-challenge` name and answers its own ACME challenge. No DNS
    provider API token anywhere.
-3. **Portability.** No root, no TUN device, no kernel module, no inbound port
-   and no UDP on the node. Four native platforms plus a pure-JVM fallback JAR.
+3. **Portability.** No root, no TUN device, no kernel module, no inbound port,
+   and one outbound TCP connection is all the node needs on the wire — a
+   published UDP port rides that same connection. Four native platforms plus a
+   pure-JVM fallback JAR.
    Virtual threads throughout, so a thread per direction per stream is an
    ordinary thing to write rather than something to optimise away.
 4. **Least privilege at the edge.** The hub reads the TLS SNI and nothing else,
@@ -137,6 +139,7 @@ Other things a node can do:
 ```sh
 jailscale open 3000 --gate                    # visitors need a one-time link
 jailscale open 22 --tcp                       # a raw TCP port, no TLS
+jailscale open 51820 --udp                    # a raw UDP port, carried over TCP
 jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
 jailscale verify                              # check that this node, not the hub, terminated the TLS
 jailscale update                              # say whether a newer release is out; never installs it

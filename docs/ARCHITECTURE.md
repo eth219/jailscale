@@ -26,8 +26,9 @@ what ngrok, Cloudflare Tunnel and Tailscale Funnel do, with no third party in th
    footprint, millisecond CLI round trips. Measured and gated in CI (§14).
 2. **Usability.** Publishing is one line, inviting is one line, and the operator sets three DNS
    records and opens two ports. Lengthening that setup list counts as a regression.
-3. **Portability.** No root, no TUN device, no kernel module, no inbound port and no UDP on the
-   node. A pure-JVM fallback JAR ships beside the native binaries.
+3. **Portability.** No root, no TUN device, no kernel module, no inbound port, and one outbound TCP
+   connection is all the node needs on the wire; a published UDP port (§8.4) rides that same
+   connection. A pure-JVM fallback JAR ships beside the native binaries.
 
 Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or frp, HTTP/2 and HTTP/3
 on the visitor side, mobile clients, an external identity provider (§10).
@@ -1321,6 +1322,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   the hash itself, but it can take the service down. `TranscriptTest` exists to catch that at
   build time. Visitors are also confined to TLS 1.3 with X25519 for the same reason.
 - **Raw TCP and UDP links are not end to end unless the app encrypts itself** (§8.4).
+- **Raw UDP is UDP over TCP** (§8.4). Both ends really are datagrams, but the carrier is the node's
+  one TCP connection, so a lost packet holds up every stream sharing it until the retransmit lands,
+  and a sender out of window credits waits instead of dropping. Request-reply protocols over UDP are
+  fine; latency-sensitive ones -- game netcode, WireGuard roaming -- get delivery they can rely on
+  and a delay distribution they cannot.
 - **User domains require port 80 on the hub.** The http-01 relay is the only verification path
   implemented; tls-alpn-01 would remove that requirement.
 - **Upgrading is manual.** `jailscale update`, and the daemon's daily check behind `status`, say that
