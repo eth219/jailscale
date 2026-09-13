@@ -351,8 +351,11 @@ final class Visitors {
      * 400 MB -- a megabyte each -- while the machine's network memory sat at its cap and every
      * socket on it froze, including the ones a visitor's handshake needed (ARCHITECTURE.md §14).
      * A byte this stream cannot send yet is a byte it should not have asked the app for, so the
-     * kernel is told the window. macOS doubles what it is told at connect and then holds it there,
-     * Linux keeps it as given; either way it stops growing, which is the property this needs. The
+     * kernel is told the window. What comes back differs per kernel -- macOS doubles it at connect
+     * and holds it there; Linux gives the receive side the window and clamps the send side to
+     * {@code net.core.wmem_max} where that is lower, 212,992 on the CI runner -- but never upwards,
+     * and never growing afterwards, which is the property this needs: the lock that ends autotuning
+     * is taken whether or not the value is clamped. The
      * app is on this machine or its network, where 256 KB is far past the bandwidth-delay
      * product, so this costs no throughput; the visitor-facing sockets are the hub's and are not
      * touched, because a visitor a continent away needs the kernel's pipelining.
