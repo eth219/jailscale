@@ -24,7 +24,9 @@ final class Service {
      * fallback JAR. The one place that decides this -- {@code Main.spawnDaemon} used to build its
      * own version, which had drifted into using {@code -cp} where this used {@code -jar} and a
      * relative home where this used an absolute one, so a daemon started by the CLI and one started
-     * by the installed unit were launched two different ways.
+     * by the installed unit were launched two different ways. Both paths are passed and both are
+     * absolute: whoever launches the daemon decides where it listens, so the CLI and the daemon
+     * cannot disagree about it.
      */
     static List<String> daemonCommand(NodeConfig cfg) {
         return daemonCommand(cfg, System.getenv("JAILSCALE_DAEMON_OPTS"));
@@ -68,6 +70,12 @@ final class Service {
         cmd.add("daemon");
         cmd.add("--home");
         cmd.add(cfg.configDir().toAbsolutePath().toString());
+        // And the socket, which is not always inside that directory: where XDG_RUNTIME_DIR is set,
+        // which is every systemd login session, the CLI looks for it in /run/user/<uid>. Passing
+        // only the home let the daemon bind the other one, and the CLI then waited five seconds for
+        // a socket nobody was listening on and left the daemon it had just started behind.
+        cmd.add("--socket");
+        cmd.add(cfg.socketPath().toAbsolutePath().toString());
         return cmd;
     }
 

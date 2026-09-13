@@ -737,7 +737,14 @@ by an older build cannot serve a phantom one.
 `jailscale` is one binary with two roles. `jailscale daemon`, or a registered service, stays
 resident; every other subcommand except `version`, `update` and `service` talks to it over **local
 IPC**, an AF_UNIX socket at `$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600),
-Windows included, carrying line-delimited JSON with streaming replies for progress output. Commands
+Windows included, carrying line-delimited JSON with streaming replies for progress output. **Whoever
+starts the daemon passes both paths**, `--home` and `--socket`, because those two rules do not give
+the same answer to everyone: the CLI resolves the socket from the environment, and a daemon told
+only its home would bind the one next to the config file while the CLI waited on the one in
+`$XDG_RUNTIME_DIR` -- so on any systemd login session `up` reported that the daemon did not start,
+five seconds after starting it, and left it running. One more orphan for every command typed.
+`Service.daemonCommand` is the single place that builds that command, so the CLI and an installed
+unit cannot drift apart on it. Commands
 are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify`
 (§11.3), `leave`, `update` and `service install|uninstall|status`; service registration uses only
 what the OS already has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with

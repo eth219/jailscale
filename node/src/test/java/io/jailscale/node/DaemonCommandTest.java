@@ -3,6 +3,7 @@ package io.jailscale.node;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.jailscale.proto.util.Args;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -22,10 +23,12 @@ class DaemonCommandTest {
     @Test
     void withoutOptionsItIsTheExecutableAndTheSubcommand() {
         List<String> cmd = Service.daemonCommand(cfgIn(Path.of("nodehome")), null);
-        assertEquals("daemon", cmd.get(cmd.size() - 3));
-        assertEquals("--home", cmd.get(cmd.size() - 2));
-        assertTrue(Path.of(cmd.get(cmd.size() - 1)).isAbsolute(),
-            "a unit's ExecStart runs from systemd's working directory, so the home must be absolute: " + cmd);
+        assertEquals("daemon", cmd.get(cmd.size() - 5));
+        assertEquals("--home", cmd.get(cmd.size() - 4));
+        assertEquals("--socket", cmd.get(cmd.size() - 2));
+        // A unit's ExecStart runs from systemd's working directory, so neither path may be relative.
+        assertTrue(Path.of(cmd.get(cmd.size() - 3)).isAbsolute(), "relative home: " + cmd);
+        assertTrue(Path.of(cmd.get(cmd.size() - 1)).isAbsolute(), "relative socket: " + cmd);
         assertTrue(cmd.stream().noneMatch(a -> a.startsWith("-XX:")), cmd.toString());
     }
 
@@ -43,6 +46,31 @@ class DaemonCommandTest {
         assertTrue(cmd.indexOf("daemon") > 2, cmd.toString());
         // Whatever the runtime is, nothing may sit between the executable and its own options.
         assertEquals(cmd.get(0), ProcessHandle.current().info().command().orElse("jailscale"));
+    }
+
+    /**
+     * The socket is not always inside the config directory: where {@code XDG_RUNTIME_DIR} is set,
+     * which is every systemd login session, the CLI looks for it in {@code /run/user/<uid>}. The
+     * daemon has to be told which one, or it binds the other, and the CLI then waits five seconds
+     * for a socket nobody is listening on, reports that the daemon did not start, and leaves it
+     * running -- one more orphan for every command typed.
+     */
+    @Test
+    void theDaemonIsToldTheSocketTheCliWillWaitOn() {
+        NodeConfig cfg = new NodeConfig(Path.of("nodehome"), Path.of("/run/user/501/jailscale.sock"));
+        List<String> cmd = Service.daemonCommand(cfg, null);
+        String[] tail = cmd.subList(cmd.indexOf("daemon"), cmd.size()).toArray(new String[0]);
+
+        NodeConfig asTheDaemonReadsIt = Main.configOf(Args.parse(tail));
+        assertEquals(cfg.socketPath(), asTheDaemonReadsIt.socketPath(), cmd.toString());
+        assertEquals(cfg.configDir().toAbsolutePath(), asTheDaemonReadsIt.configDir(), cmd.toString());
+    }
+
+    /** Without one, the socket is where it has always been, so an existing unit keeps working. */
+    @Test
+    void aHomeOnItsOwnStillMeansTheSocketInsideIt() {
+        NodeConfig cfg = Main.configOf(Args.parse(new String[] {"daemon", "--home", "/tmp/nodehome"}));
+        assertEquals(Path.of("/tmp/nodehome/jailscale.sock"), cfg.socketPath());
     }
 
     @Test

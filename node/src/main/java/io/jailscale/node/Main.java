@@ -51,7 +51,7 @@ public final class Main {
             System.exit(cmd == null ? 2 : 0);
             return;
         }
-        NodeConfig cfg = a.has("home") ? NodeConfig.in(Path.of(a.get("home"))) : NodeConfig.defaults();
+        NodeConfig cfg = configOf(a);
         try {
             switch (cmd) {
                 case "version" -> System.out.println("jailscale " + Version.string());
@@ -244,6 +244,21 @@ public final class Main {
             System.out.println("  code:  " + r.string("code") + "                             <- for reading out over the phone (10 min)");
         }
         System.out.println("the other side runs: jailscale up --invite " + url);
+    }
+
+    /**
+     * Where this process keeps its files and which socket it speaks on. {@code --home} alone puts
+     * the socket inside that directory, which is what a test wants; {@code --socket} names it
+     * separately, which is what the CLI passes to the daemon it spawns, because the two do not
+     * agree on their own -- {@link NodeConfig#defaultSocketPath} prefers {@code XDG_RUNTIME_DIR}
+     * and a bare {@code --home} cannot know that.
+     */
+    static NodeConfig configOf(Args a) {
+        if (!a.has("home")) {
+            return NodeConfig.defaults();
+        }
+        Path home = Path.of(a.get("home"));
+        return a.has("socket") ? new NodeConfig(home, Path.of(a.get("socket"))) : NodeConfig.in(home);
     }
 
     /** Sends a request to the daemon, starting it if needed. Progress lines are printed as they arrive. */
