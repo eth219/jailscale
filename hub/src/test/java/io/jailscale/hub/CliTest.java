@@ -51,14 +51,26 @@ import org.junit.jupiter.api.Timeout;
  * <p>The child's {@code PATH} is emptied on purpose. {@code pbcopy}, {@code xclip} and
  * {@code clip.exe} are how the CLI copies a link to the clipboard, and a test suite that reaches
  * into the clipboard of whoever is running it is a poor neighbour; with nothing on the path the
- * copy fails the way it already does on a headless runner, which is the branch CI would exercise
- * anyway. It is asserted rather than assumed, so this does not quietly become a test of nothing.
+ * copy fails the way it already does on a headless runner. It is asserted rather than assumed, so
+ * this does not quietly become a test of nothing.
+ *
+ * <p><b>It does not work on Windows, and that is not fixable from here.</b> {@code CreateProcess}
+ * searches the system directory before {@code PATH}, and {@code clip.exe} lives in System32, so an
+ * emptied {@code PATH} hides it from nobody -- the first CI run on windows-2025 failed on exactly
+ * that, against a comment claiming the copy could not happen "by construction". So the clipboard
+ * line is asserted present there and absent everywhere else, which is the truth about the two
+ * platforms rather than a tolerance that would pass either way. The consequence worth knowing:
+ * running this suite on a Windows machine replaces that machine's clipboard. Making the CLI decline
+ * to copy when its stdout is not a terminal would fix both that and {@code jailscale open | tee},
+ * and is a product change nobody has asked for yet.
  */
 @Timeout(180)
 class CliTest {
 
     private static final Path CERT = Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath();
     private static final Path KEY = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
+    private static final boolean WINDOWS =
+        System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows");
 
     private Path root;
     private Path home;
@@ -154,23 +166,33 @@ class CliTest {
      */
     private static String classpath() throws Exception {
         Set<String> entries = new LinkedHashSet<>();
-        for (Class<?> c : List.of(io.jailscale.node.Main.class, io.jailscale.proto.json.JsonObject.class,
-                io.jailscale.crypto.KeyText.class)) {
+        for (Class<?> c : List.of(io.jailscale.node.Main.class, io.jailscale.hub.Main.class,
+                io.jailscale.proto.json.JsonObject.class, io.jailscale.crypto.KeyText.class)) {
             entries.add(Path.of(c.getProtectionDomain().getCodeSource().getLocation().toURI()).toAbsolutePath().toString());
         }
         return String.join(File.pathSeparator, entries);
     }
 
     private Run cli(String... args) throws Exception {
+        List<String> full = new ArrayList<>(List.of(args));
+        full.add("--home");
+        full.add(home.toAbsolutePath().toString());
+        return run(io.jailscale.node.Main.class, full);
+    }
+
+    /** The other binary, for the paths the two entry points share. It is given no state directory. */
+    private Run jailhub(String... args) throws Exception {
+        return run(io.jailscale.hub.Main.class, List.of(args));
+    }
+
+    private Run run(Class<?> main, List<String> args) throws Exception {
         List<String> cmd = new ArrayList<>();
         cmd.add(ProcessHandle.current().info().command()
             .orElse(Path.of(System.getProperty("java.home"), "bin", "java").toString()));
         cmd.add("-cp");
         cmd.add(classpath());
-        cmd.add(io.jailscale.node.Main.class.getName());
-        cmd.addAll(List.of(args));
-        cmd.add("--home");
-        cmd.add(home.toAbsolutePath().toString());
+        cmd.add(main.getName());
+        cmd.addAll(args);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         // See the class comment: no pbcopy, no xclip, no clip.exe.
         pb.environment().put("PATH", emptyPath.toString());
@@ -222,13 +244,28 @@ class CliTest {
         // 2, not 0: `jailscale` on its own in a script is a mistake, and asking for help is not.
         assertEquals(2, r.exit(), r.all());
         assertTrue(r.out().contains("jailscale up --invite"), r.all());
-        // Asking a command for help succeeds, and the usage goes to stdout so it can be paged.
+        // Asking for help succeeds, and the usage goes to stdout so it can be paged. Both forms:
+        // a bare `--help` used to print this same text and exit 2, because the branch that answers
+        // it is the one for "no command given" and the exit was chosen from the command rather than
+        // from the flag, so `jailscale --help | less` reported a failure.
         Run help = ok(cli("up", "--help"));
         assertTrue(help.out().contains("jailscale up --invite"), help.all());
-        // A bare `--help` prints the same text but exits 2, because the branch that answers it is
-        // the one for "no command given" and that exit is chosen before the flag is looked at.
-        // Recorded rather than endorsed: `jailscale --help | less` reports a failure today.
-        Run bare = cli("--help");
+        Run bare = ok(cli("--help"));
+        assertEquals(help.out(), bare.out(), bare.all());
+    }
+
+    /**
+     * The same two entry points, the same rule. `jailhub` carried an identical copy of the exit
+     * that made `--help` a failure, and fixing one of two identical bugs is how the second one
+     * survives -- so both are asserted here, where the assertion costs one process each.
+     */
+    @Test
+    void theHubBinaryAnswersHelpTheSameWay() throws Exception {
+        Run help = jailhub("--help");
+        assertEquals(0, help.exit(), help.all());
+        assertTrue(help.out().contains("jailhub"), help.all());
+
+        Run bare = jailhub();
         assertEquals(2, bare.exit(), bare.all());
         assertEquals(help.out(), bare.out(), bare.all());
     }
@@ -266,13 +303,18 @@ class CliTest {
     void joinOpenListAndCloseAreWhatTheUserReads() throws Exception {
         join();
 
-        // The whole of what `open` prints, not a substring of it: this is the line the user reads,
-        // and one line is all of it. It is also where the clipboard line would be if anything on
-        // the child's PATH could copy -- nothing can, by construction (class comment), so its
-        // absence here is what says the emptied PATH took effect.
+        // The whole of what `open` prints, line by line, not a substring of it: this is what the
+        // user reads. The second line is the clipboard, and whether it is there is a platform fact
+        // rather than a choice (class comment), so both shapes are pinned instead of one tolerated.
         Run open = ok(cli("open", String.valueOf(app.getLocalPort()), "--name", "demo"));
+        List<String> lines = open.out().strip().lines().toList();
         assertEquals("https://demo.hub.test:" + port + "  ->  127.0.0.1:" + app.getLocalPort(),
-            open.out().strip(), open.all());
+            lines.get(0), open.all());
+        if (WINDOWS) {
+            assertEquals(List.of(lines.get(0), "(link copied to clipboard)"), lines, open.all());
+        } else {
+            assertEquals(1, lines.size(), "nothing on the emptied PATH should have copied: " + open.out());
+        }
 
         Run ls = ok(cli("ls"));
         assertTrue(ls.out().contains("demo"), ls.all());

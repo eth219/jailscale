@@ -63,7 +63,11 @@ public final class Main {
         String cmd = a.positional(0);
         if (cmd == null || a.flag("help")) {
             System.out.print(USAGE);
-            System.exit(cmd == null ? 2 : 0);
+            // Asking for help succeeded, whether or not a command was named with it. This used to
+            // key off the command instead, so `jailscale --help` printed the usage and exited 2 --
+            // `jailscale --help | less` reported a failure, and a script that checked the status of
+            // its own --help saw one. Only a bare invocation with nothing to do is an error.
+            System.exit(a.flag("help") ? 0 : 2);
             return;
         }
         NodeConfig cfg = configOf(a);
