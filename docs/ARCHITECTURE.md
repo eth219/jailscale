@@ -1222,7 +1222,22 @@ the hub is fine -- the receive queue pins at its budget, streams are shed, and i
 the load budget -- but **the node reaches 96.7 to 98.9 MB against an 88 MB budget** at about 1,000
 visitors (two people, one macOS arm64 machine; unconfirmed on linux). The cause is not the receive
 budget, which this direction barely touches: a visitor sends one GET line, so the node's receive
-queues hold tens of bytes. It is `TlsEndpoint`'s per-visitor state -- `netInBuf`, `appInBuf` and the
+queues hold tens of bytes.
+
+**The long tail on this axis is the node answering, and §6.3's stage metrics say so in one scrape.**
+This paragraph has said three things about it. First that it was the node's per-visitor TLS state --
+an inference. Then, when a node timing its own signing requests caught the hub taking 12.8 s to
+answer one, that it was the hub's control frames queued behind data, which was true and is fixed
+(§5.3). What is left, measured rather than reasoned:
+
+    admissions 424, mean/worst ms: peek=6/9 resolve=0/0 open=0/0 reply=223/13198
+                                   first_byte=229/13198 unaccounted=-0
+
+All of it is `reply`: the wait for the node's first byte. `unaccounted` being zero also retires the
+theory that replaced the first one -- that the time was in no stage at all, scheduling or a pause --
+which eight native rebuilds of hand-placed timers had suggested because each timer only ever covered
+the stage it was placed in. So the first attribution was incomplete rather than wrong, and the way
+to have known that on day one was to measure every stage at once instead of one at a time. It is `TlsEndpoint`'s per-visitor state -- `netInBuf`, `appInBuf` and the
 `SSLEngine`'s own, 50 to 60 KB each -- times however many visitors are live at once, which is an
 unbounded per-connection term of exactly the kind §5.3's budget bounds for receive queues, and is a
 separate change. Two numbers for whoever takes it: the node's RSS on this axis repeats to 0.1 MB

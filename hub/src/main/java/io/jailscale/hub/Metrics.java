@@ -55,6 +55,17 @@ final class Metrics {
         gauge(b, "jailhub_visitors_in_flight", "Visitors being relayed to a node right now.",
             hub.router().visitorsInFlight());
         gauge(b, "jailhub_uptime_seconds", "Seconds since this process started.", Resources.uptimeMillis() / 1000);
+        // Where the time goes admitting a visitor (§6.3). The point of having all five is the
+        // comparison: first_byte running ahead of peek+resolve+open+reply is time spent in no stage
+        // at all -- scheduling, queueing or a pause -- which no single stage's timer can show.
+        counter(b, "jailhub_visitor_admissions_total",
+            "Visitors that reached their first relayed byte, the denominator for the sums below.",
+            RelayStages.OBSERVED.sum());
+        stage(b, "peek", "reading the ClientHello off the visitor's socket", RelayStages.PEEK);
+        stage(b, "resolve", "finding which link and node serve the name", RelayStages.RESOLVE);
+        stage(b, "open", "opening a mux stream on the node's session", RelayStages.OPEN);
+        stage(b, "reply", "waiting for the node's first byte", RelayStages.REPLY);
+        stage(b, "first_byte", "accept to the visitor's first byte, end to end", RelayStages.FIRST_BYTE);
         // The receive budget (§5.3). Queued against limit is the one to alert on: it reaching the
         // limit is the hub shedding visitor streams to stay alive, and reclaimed says how many.
         FlowBudget budget = hub.flowBudget();
@@ -77,6 +88,20 @@ final class Metrics {
         gauge(b, "jailhub_heap_used_bytes", "Heap in use, a fraction of resident size under a native image.",
             Resources.heapUsedBytes());
         return b.toString();
+    }
+
+    /** A stage's total and high-water mark. Two label-free series, because no metric here has labels. */
+    private static void stage(StringBuilder b, String name, String what, RelayStages.Stage s) {
+        seconds(b, "jailhub_visitor_" + name + "_seconds_total", "counter",
+            "Total seconds spent " + what + ", over jailhub_visitor_admissions_total.", s.totalSeconds());
+        seconds(b, "jailhub_visitor_" + name + "_seconds_max", "gauge",
+            "The longest single wait spent " + what + " since this process started.", s.maxSeconds());
+    }
+
+    private static void seconds(StringBuilder b, String name, String type, String help, double value) {
+        b.append("# HELP ").append(name).append(' ').append(help).append("\n# TYPE ").append(name)
+            .append(' ').append(type).append('\n').append(name).append(' ')
+            .append(String.format(java.util.Locale.ROOT, "%.6f", value)).append('\n');
     }
 
     private static void counter(StringBuilder b, String name, String help, long value) {

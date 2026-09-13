@@ -330,6 +330,18 @@ if [ -n "${SLOW:-}" ]; then
   # budget -- noise even at a hundred nodes, which is why this is a gate concern and not a
   # correctness one.
   qslack=$((nodes * 4 * 16 * 1024))
+  # The stage breakdown (ARCHITECTURE.md 6.3). first_byte running ahead of the sum of the others is
+  # time in no stage at all, which is the finding that took eight rebuilds to reach by hand.
+  curl -sk --resolve "hub.test:$PORT:127.0.0.1" "https://hub.test:$PORT/metrics" 2>/dev/null \
+    | awk '/^jailhub_visitor_admissions_total /{n=$2}
+           /^jailhub_visitor_[a-z_]+_seconds_total /{split($1,a,"_"); k=$1; sub("jailhub_visitor_","",k); sub("_seconds_total","",k); sum[k]=$2}
+           /^jailhub_visitor_[a-z_]+_seconds_max /{k=$1; sub("jailhub_visitor_","",k); sub("_seconds_max","",k); mx[k]=$2}
+           END{if (n>0) {
+                 parts=sum["peek"]+sum["resolve"]+sum["open"]+sum["reply"];
+                 printf "  admissions %d, mean/worst ms:", n;
+                 split("peek resolve open reply first_byte", o, " ");
+                 for (i=1;i<=5;i++) printf " %s=%.0f/%.0f", o[i], sum[o[i]]/n*1000, mx[o[i]]*1000;
+                 printf " unaccounted=%.0f\n", (sum["first_byte"]-parts)/n*1000 }}'
   printf '  receive queue peak %.1f MB of %.1f MB (+%d KB slack, %s nodes), %s streams reclaimed\n' \
     "$(echo "$qpeak / 1048576" | bc -l)" "$(echo "$qbud / 1048576" | bc -l)" "$((qslack / 1024))" "$nodes" "$rec"
   if [ "$qbud" -gt 0 ] && [ "$qpeak" -gt $((qbud + qslack)) ]; then

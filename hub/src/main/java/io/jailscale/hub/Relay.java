@@ -41,9 +41,36 @@ final class Relay {
      * handshake is over: the ClientHello the hub delivered is what a signature is bound to (§9.2).
      */
     static void pump(Socket visitor, MuxStream stream, byte[] consumed, Tls13.Tap clientSide) {
+        pump(visitor, stream, consumed, clientSide, 0, 0);
+    }
+
+    /**
+     * As above, timing the node's reply. {@code acceptedAt} and {@code openedAt} are nanos from
+     * {@link SniRouter}; zero turns the accounting off for callers that have no timeline (raw ports).
+     *
+     * <p>Recorded here rather than by the caller because the caller returns when the whole relay is
+     * over -- a download or a WebSocket, which can be minutes -- while the number worth having is the
+     * wait before the first byte.
+     */
+    static void pump(Socket visitor, MuxStream stream, byte[] consumed, Tls13.Tap clientSide,
+        long acceptedAt, long openedAt) {
         CountDownLatch visitorDone = new CountDownLatch(1);
+        byte[] firstByte = new byte[1];
         Thread toVisitor = DuplexThread.start("relay-in", () -> {
             try {
+                if (openedAt != 0) {
+                    // One byte first, so the reply can be timed; the rest goes the zero-copy way.
+                    int n = stream.in().read(firstByte);
+                    long now = System.nanoTime();
+                    RelayStages.REPLY.record(now - openedAt);
+                    RelayStages.FIRST_BYTE.record(now - acceptedAt);
+                    RelayStages.OBSERVED.increment();
+                    if (n > 0) {
+                        visitor.getOutputStream().write(firstByte, 0, n);
+                        visitor.getOutputStream().flush();
+                        Metrics.RELAY_BYTES.add(n);
+                    }
+                }
                 drain(stream, visitor.getOutputStream());
                 visitor.shutdownOutput();
             } catch (IOException e) {

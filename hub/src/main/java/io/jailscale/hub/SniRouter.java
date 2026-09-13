@@ -88,6 +88,7 @@ final class SniRouter {
 
     /** Serves one accepted raw connection to completion. */
     void serve(Socket socket) {
+        long acceptedAt = System.nanoTime();
         String ip = socket.getInetAddress().getHostAddress();
         int visitorPort = socket.getPort();
         try {
@@ -114,6 +115,8 @@ final class SniRouter {
             socket.setTcpNoDelay(true);
             socket.setSoTimeout(HELLO_TIMEOUT_MS);
             Sni.Peek peek = Sni.peek(socket.getInputStream());
+            long peekedAt = System.nanoTime();
+            RelayStages.PEEK.record(peekedAt - acceptedAt);
             String sni = peek.serverName();
             if (sni == null) {
                 LOG.debug("{}: no SNI, closing", ip);
@@ -151,6 +154,7 @@ final class SniRouter {
                     return;
                 }
             }
+            RelayStages.RESOLVE.record(System.nanoTime() - peekedAt);
             if (acquire(perName, name) > MAX_PER_NAME) {
                 release(perName, name);
                 Metrics.VISITORS_REFUSED.increment();
@@ -160,7 +164,7 @@ final class SniRouter {
             try {
                 Metrics.VISITORS.increment();
                 current.incrementAndGet();
-                relay(socket, peek, link, ip, visitorPort);
+                relay(socket, peek, link, ip, visitorPort, acceptedAt);
             } finally {
                 current.decrementAndGet();
                 release(perName, name);
@@ -173,13 +177,17 @@ final class SniRouter {
         }
     }
 
-    private void relay(Socket socket, Sni.Peek peek, Links.Link link, String visitorIp, int visitorPort) throws IOException {
+    private void relay(Socket socket, Sni.Peek peek, Links.Link link, String visitorIp, int visitorPort,
+        long acceptedAt) throws IOException {
         NodeGroup group = link.group();
         socket.setSoTimeout(0);
+        long beforeOpen = System.nanoTime();
         MuxStream stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
             link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
+        long openedAt = System.nanoTime();
+        RelayStages.OPEN.record(openedAt - beforeOpen);
         try {
-            Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream));
+            Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream), acceptedAt, openedAt);
         } finally {
             group.visitorDone(stream);
         }
