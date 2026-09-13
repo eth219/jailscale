@@ -22,6 +22,8 @@ import sys
 import time
 
 HOLD_SECONDS = 15
+# Seconds of quiet before teardown, so no latency probe can still be running when it starts.
+PROBE_MARGIN = 4
 STEP_TIMEOUT = 15
 BATCH = 50
 BATCH_PAUSE = 0.05
@@ -54,7 +56,12 @@ async def main(port, ca, count, workdir, path):
 
     with open(workdir + "/slow.txt", "w") as f:
         f.write("%d %.1f" % (len(held), time.time() - started))
-    await asyncio.sleep(HOLD_SECONDS)
+    # Margin, not a marker: a probe issued just before the herd is still in flight during it, so
+    # stopping the prober at the moment of teardown does not keep it out of the teardown. This says
+    # "stop now" with enough slack that anything already running has finished.
+    await asyncio.sleep(max(0, HOLD_SECONDS - PROBE_MARGIN))
+    open(workdir + "/quiet.txt", "w").close()
+    await asyncio.sleep(PROBE_MARGIN)
     # Tell the caller the hold is over before tearing it down. Closing N sessions at once is a
     # thundering herd of its own, and a latency probe that lands in it measures the teardown rather
     # than the state being held -- which is exactly what it looked like when the probe's last sample

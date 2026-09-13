@@ -281,7 +281,7 @@ if [ -n "${SLOW:-}" ]; then
     # Only while the visitors are actually held: tools/slow-readers.py drops closing.txt before it
     # tears them down, and a probe inside that herd measures the teardown. RSS sampling continues,
     # because the peak there is real.
-    if [ ! -f "$W/closing.txt" ]; then
+    if [ ! -f "$W/quiet.txt" ]; then
       ms=$(curl -sk -o /dev/null -w '%{time_total}' --max-time 20 \
            --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null \
            | awk '{printf "%.0f", $1 * 1000}')

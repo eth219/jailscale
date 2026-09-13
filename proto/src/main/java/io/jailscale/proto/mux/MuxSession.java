@@ -36,9 +36,17 @@ public final class MuxSession implements AutoCloseable {
     static final int MAX_WINDOW_OVERRUNS = 8;
 
     /**
-     * Control frames this session will hold for the writer before it treats the peer as gone. They
-     * are small and rare, and a peer that has not taken 256 of them is not taking anything; blocking
-     * the producer instead would be worse, because one of the producers is the reader thread.
+     * Protocol messages -- CTRL, RST, KEEPALIVE -- this session will hold for the writer before it
+     * treats the peer as gone. A peer that has not taken 256 of them is not taking anything, and
+     * blocking the producer instead would be worse, because one of the producers is the reader
+     * thread.
+     *
+     * <p><b>Refills are not counted against this and must not be.</b> Their depth is set by how many
+     * streams are draining, which is up to 20,480 on one connection (§12), so any fixed count would
+     * be a cap on healthy traffic that ends the session when it is exceeded -- and this one nearly
+     * was: 400 streams reached 32 deep before they were coalesced, on the way to 256. A coalesced
+     * refill is one small entry per stream and costs kilobytes at the ceiling, so it is bounded by
+     * something real without being counted here.
      */
     static final int CONTROL_QUEUE_FRAMES = 256;
     /**
@@ -83,6 +91,10 @@ public final class MuxSession implements AutoCloseable {
     private final ArrayDeque<Frame> dataQueue = new ArrayDeque<>();
     private final Object sendLock = new Object();
     private int dataQueueBytes;
+    /** Stream id to refill not yet sent, so repeated refills are one frame. Guarded by sendLock. */
+    private final Map<Long, Integer> pendingWindow = new java.util.HashMap<>();
+    /** Queued CTRL/RST/KEEPALIVE, which is what {@link #CONTROL_QUEUE_FRAMES} bounds. */
+    private int protocolQueued;
     private Thread writer;
     /** Frames of a type this build has no case for; only the first one is logged. */
     private int unknownFrames;
@@ -252,11 +264,27 @@ public final class MuxSession implements AutoCloseable {
         }
         synchronized (sendLock) {
             if (isControl(f)) {
-                if (controlQueue.size() >= CONTROL_QUEUE_FRAMES) {
+                if (f.type() != Frame.WINDOW && ++protocolQueued > CONTROL_QUEUE_FRAMES) {
+                    protocolQueued--;
                     throw new IOException("control queue full after " + CONTROL_QUEUE_FRAMES
-                        + " frames; the peer is not reading");
+                        + " protocol frames; the peer is not reading");
                 }
-                controlQueue.add(f);
+                if (f.type() == Frame.WINDOW) {
+                    // Coalesced, not queued one per refill. A reader draining fast emits a refill
+                    // every half window per stream, and while the writer is inside one socket write
+                    // those pile up -- measured at 32 deep with 400 streams, on the way to a bound
+                    // that used to end the session. Deltas are additive, so N refills for a stream
+                    // are one frame carrying their sum, and the queue can hold at most one entry
+                    // per stream however hard the reader works.
+                    long id = f.streamId();
+                    int delta = f.windowDelta();
+                    Integer prior = pendingWindow.put(id, pendingWindow.getOrDefault(id, 0) + delta);
+                    if (prior == null) {
+                        controlQueue.add(f); // a placeholder; the sum is read when it is sent
+                    }
+                } else {
+                    controlQueue.add(f);
+                }
             } else {
                 while (!dataQueue.isEmpty() && dataQueueBytes + f.payload().length > DATA_QUEUE_BYTES && !closed) {
                     try {
@@ -308,6 +336,15 @@ public final class MuxSession implements AutoCloseable {
                         sendLock.wait();
                     }
                     f = controlQueue.poll();
+                    if (f != null && f.type() == Frame.WINDOW) {
+                        Integer sum = pendingWindow.remove(f.streamId());
+                        if (sum == null) {
+                            continue; // already sent with an earlier frame's sum
+                        }
+                        f = Frame.window(f.streamId(), sum);
+                    } else if (f != null) {
+                        protocolQueued--;
+                    }
                     if (f == null) {
                         f = dataQueue.poll();
                         dataQueueBytes -= f.payload().length;
