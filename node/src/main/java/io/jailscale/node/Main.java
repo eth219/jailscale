@@ -392,7 +392,23 @@ public final class Main {
         }
     }
 
+    /**
+     * Puts {@code text} on the clipboard, and says whether it got there so the caller can say so.
+     *
+     * <p>Only when someone is looking at the output. A clipboard is for a person about to paste,
+     * and this used to copy whenever the platform had a tool for it: {@code jailscale open 8080 |
+     * tee log} replaced the clipboard of whoever ran it, and so did the test suite, on any machine
+     * where the tool was findable -- which on Windows is every machine, because
+     * {@code CreateProcess} looks in System32 before PATH and that is where {@code clip.exe} is.
+     * {@code isTerminal} is the question that separates the two, and it has to be asked rather than
+     * inferred from {@code System.console() != null}, which since JDK 22 is non-null for a
+     * redirected stream as well.
+     */
     private static boolean copyToClipboard(String text) {
+        java.io.Console console = System.console();
+        if (console == null || !console.isTerminal()) {
+            return false;
+        }
         String os = HubLink.osName();
         List<String> cmd = switch (os) {
             case "macos" -> List.of("pbcopy");

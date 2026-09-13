@@ -48,29 +48,20 @@ import org.junit.jupiter.api.Timeout;
  * by moving assertions in-process, which would give up the argument parsing, the process exit code
  * and the daemon spawn that are the point.
  *
- * <p>The child's {@code PATH} is emptied on purpose. {@code pbcopy}, {@code xclip} and
- * {@code clip.exe} are how the CLI copies a link to the clipboard, and a test suite that reaches
- * into the clipboard of whoever is running it is a poor neighbour; with nothing on the path the
- * copy fails the way it already does on a headless runner. It is asserted rather than assumed, so
- * this does not quietly become a test of nothing.
- *
- * <p><b>It does not work on Windows, and that is not fixable from here.</b> {@code CreateProcess}
- * searches the system directory before {@code PATH}, and {@code clip.exe} lives in System32, so an
- * emptied {@code PATH} hides it from nobody -- the first CI run on windows-2025 failed on exactly
- * that, against a comment claiming the copy could not happen "by construction". So the clipboard
- * line is asserted present there and absent everywhere else, which is the truth about the two
- * platforms rather than a tolerance that would pass either way. The consequence worth knowing:
- * running this suite on a Windows machine replaces that machine's clipboard. Making the CLI decline
- * to copy when its stdout is not a terminal would fix both that and {@code jailscale open | tee},
- * and is a product change nobody has asked for yet.
+ * <p>The child's stdout is a pipe, so the CLI does not touch the clipboard and these tests cannot
+ * replace the clipboard of whoever runs them. That is the CLI's rule and not an arrangement here:
+ * it copies only when someone is looking at the output. This was first attempted by emptying the
+ * child's {@code PATH} so {@code pbcopy}/{@code xclip}/{@code clip.exe} could not be found, which
+ * worked everywhere except the one platform nobody could test locally -- {@code CreateProcess}
+ * searches System32 before {@code PATH}, and that is where {@code clip.exe} is, so the windows-2025
+ * job failed against a comment claiming the copy could not happen "by construction". The PATH is
+ * still emptied, now as a second lock on the same door rather than the only one.
  */
 @Timeout(180)
 class CliTest {
 
     private static final Path CERT = Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath();
     private static final Path KEY = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
-    private static final boolean WINDOWS =
-        System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows");
 
     private Path root;
     private Path home;
@@ -303,18 +294,12 @@ class CliTest {
     void joinOpenListAndCloseAreWhatTheUserReads() throws Exception {
         join();
 
-        // The whole of what `open` prints, line by line, not a substring of it: this is what the
-        // user reads. The second line is the clipboard, and whether it is there is a platform fact
-        // rather than a choice (class comment), so both shapes are pinned instead of one tolerated.
+        // The whole of what `open` prints, not a substring of it: this is the line the user reads,
+        // and one line is all of it into a pipe. A second line here means the clipboard was taken
+        // from a process nobody is watching, on whatever machine ran this.
         Run open = ok(cli("open", String.valueOf(app.getLocalPort()), "--name", "demo"));
-        List<String> lines = open.out().strip().lines().toList();
         assertEquals("https://demo.hub.test:" + port + "  ->  127.0.0.1:" + app.getLocalPort(),
-            lines.get(0), open.all());
-        if (WINDOWS) {
-            assertEquals(List.of(lines.get(0), "(link copied to clipboard)"), lines, open.all());
-        } else {
-            assertEquals(1, lines.size(), "nothing on the emptied PATH should have copied: " + open.out());
-        }
+            open.out().strip(), open.all());
 
         Run ls = ok(cli("ls"));
         assertTrue(ls.out().contains("demo"), ls.all());
