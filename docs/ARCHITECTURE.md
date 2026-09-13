@@ -1163,6 +1163,50 @@ would make it erase a registration the hub still holds. A ban is not a firewall 
 visitors. The point is to stop someone running nodes here, not to stop them reading a page.
 
 
+### 11.6 Side channels and the local attacker
+
+Two things sit outside everything above, and this says which, so that nothing is quietly assumed
+into them.
+
+**A process on the same machine is not defended against.** On the node that means the MachineKey and
+any user-domain keys; on the hub it means the wildcard private key, which is what the rest of §11 is
+written around. Key material is an ordinary heap object read from an ordinary file: nothing is
+pinned in memory, nothing is zeroed after use, and a core dump or a debugger attached to either
+process yields it. The boundary is the operating system's -- `node.json` and the hub's keys are
+written 0600 (§4; on Windows `setPosixFilePermissions` is unsupported and the directory ACL is what
+holds), the daemon needs no root and opens no port, and the container image adds a filesystem
+namespace around the node as well. Those are real and they are not cryptographic: an attacker
+already running as that user has the key. The self-probe does not help here either, because a node
+with a stolen MachineKey is, to the hub and to the probe, that node.
+
+**Timing is not a property anything here claims.** X25519 and ChaCha20-Poly1305 come from the JDK's
+own providers -- `XDH` and SunJCE -- and have whatever properties those have; this project adapts
+them to the Noise encodings and implements neither. What is written here is BLAKE2s and the HMAC and
+HKDF over it, which branch on nothing secret but are not audited for timing and claim nothing. They
+hash handshake material; they are never the thing that compares a presented secret against a stored
+one. The comparisons that do decide something:
+
+| What is compared | How | Where that leaves it |
+|---|---|---|
+| Self-probe keying material (§11.3) | `MessageDigest.isEqual` | Constant time, deliberately: the verdict is the whole feature |
+| Invite token, short code, auth-key (§10) | SHA-256, then a lookup by the hash | Timing follows the hash of what was presented, which does not walk back to the secret |
+| `/admin` CSRF token (§11.5) | `MessageDigest.isEqual` over the bytes | Constant time. It was `String.equals`, and nothing reachable turned on that; a comparison of a presented secret is the wrong place to keep the cheaper habit |
+| `/admin` session cookie and login link (§11.5) | 128-bit random, a `ConcurrentHashMap` key | **Not constant time, and not made so:** a hash lookup has no byte compare to replace. Reaching a useful prefix of 128 random bits over HTTP is not a path anyone has, and a correct guess needs no timing |
+
+**Traffic analysis is not addressed at all.** The hub sees the SNI, the visitor's address, byte
+counts and timing (§8.1), and nothing on either side pads, batches or delays anything. Sizes and
+arrival times say what they usually say, and a hub that wants to know which page went over a link it
+cannot decrypt has the ordinary means. What §11.2 claims is that the hub cannot read the bytes, not
+that it cannot count them.
+
+**None of this is a gap waiting on a fix.** A tunnel whose node runs unprivileged on a machine its
+owner already controls has no meaningful place to put a key the machine's owner cannot reach, and
+padding a proxy that forwards ciphertext buys latency and bandwidth against an adversary this design
+already grants the metadata to. They are written down because a security model that lists four axes
+and stops invites the reader to assume a fifth.
+
+---
+
 ## 12. Threading and memory
 
 There is no packet hot path, so there is no reason to insist on platform threads. The hub's 443
