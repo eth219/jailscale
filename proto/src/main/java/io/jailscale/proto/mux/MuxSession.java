@@ -8,6 +8,7 @@ import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -34,6 +35,19 @@ public final class MuxSession implements AutoCloseable {
      */
     static final int MAX_WINDOW_OVERRUNS = 8;
 
+    /**
+     * Control frames this session will hold for the writer before it treats the peer as gone. They
+     * are small and rare, and a peer that has not taken 256 of them is not taking anything; blocking
+     * the producer instead would be worse, because one of the producers is the reader thread.
+     */
+    static final int CONTROL_QUEUE_FRAMES = 256;
+    /**
+     * Bytes of data frames held for the writer. A handoff, not a second window: a producer that
+     * fills it blocks, which is the same backpressure it already had from stream credits, and eight
+     * frames is enough that a writer with a draining socket is never idle waiting for one.
+     */
+    static final int DATA_QUEUE_BYTES = 8 * Frame.MAX_DATA;
+
     /** Events for the owner of the session. Callbacks run on the reader thread; keep them short. */
     public interface Listener {
         void onControl(MuxSession session, byte[] json) throws IOException;
@@ -51,6 +65,25 @@ public final class MuxSession implements AutoCloseable {
     private final Map<Long, MuxStream> streams = new ConcurrentHashMap<>();
     private final AtomicLong nextId;
     private volatile boolean closed;
+    /**
+     * Frames waiting for the socket, in two FIFOs the writer drains control-first (§5.3).
+     *
+     * <p>{@link NoiseChannel#write} holds one lock across the encryption and the socket write,
+     * because the nonce has to advance in wire order. With every producer calling it directly, one
+     * blocked write stalled every frame on the session -- so a visitor's handshake waited on its
+     * {@code SignResponse} behind other visitors' data, measured at 12.8 s, and the keepalive waited
+     * behind it too. One writer thread and a priority makes the wait depend on what a frame is
+     * rather than on who else is sending.
+     *
+     * <p><b>Two queues and not a priority queue.</b> Order within a class has to hold: control
+     * messages refer to each other, and {@code PriorityBlockingQueue} does not order equal
+     * priorities. Two FIFOs give that for free and there are only two classes.
+     */
+    private final ArrayDeque<Frame> controlQueue = new ArrayDeque<>();
+    private final ArrayDeque<Frame> dataQueue = new ArrayDeque<>();
+    private final Object sendLock = new Object();
+    private int dataQueueBytes;
+    private Thread writer;
     /** Frames of a type this build has no case for; only the first one is logged. */
     private int unknownFrames;
     private final AtomicInteger windowOverruns = new AtomicInteger();
@@ -90,8 +123,18 @@ public final class MuxSession implements AutoCloseable {
     }
 
     public void start() {
+        startWriter();
         reader = DuplexThread.start("mux-reader", this::readLoop);
         keepalive = Thread.ofVirtual().name("mux-keepalive").start(this::keepaliveLoop);
+    }
+
+    /**
+     * The writer sits on the send side of this socket while the reader sits on the receive side,
+     * which is exactly what {@link DuplexThread} is for: on Windows both are platform threads, so
+     * the socket enters no poller at all and the pair JDK-8334574 needs cannot form.
+     */
+    private void startWriter() {
+        writer = DuplexThread.start("mux-writer", this::writeLoop);
     }
 
     /**
@@ -102,6 +145,7 @@ public final class MuxSession implements AutoCloseable {
      * thing from the caller's side: it returns when the session is over either way.
      */
     public void run() {
+        startWriter();
         keepalive = Thread.ofVirtual().name("mux-keepalive").start(this::keepaliveLoop);
         if (!DuplexThread.needed()) {
             readLoop();
@@ -193,14 +237,97 @@ public final class MuxSession implements AutoCloseable {
         streams.remove(s.id(), s);
     }
 
+    /**
+     * Hands a frame to the writer. Every send on this session goes through here, which is what makes
+     * one priority decision enough.
+     *
+     * <p>A socket failure now surfaces on the writer thread rather than to this caller, so it
+     * arrives as the session shutting down: the next call throws, and a stream's reader or writer
+     * sees the error {@link MuxStream#onSessionClosed} set. One step later than before, and the same
+     * outcome -- nothing retries a frame either way.
+     */
     private void write(Frame f) throws IOException {
         if (closed) {
             throw new IOException("session closed");
         }
+        synchronized (sendLock) {
+            if (isControl(f)) {
+                if (controlQueue.size() >= CONTROL_QUEUE_FRAMES) {
+                    throw new IOException("control queue full after " + CONTROL_QUEUE_FRAMES
+                        + " frames; the peer is not reading");
+                }
+                controlQueue.add(f);
+            } else {
+                while (!dataQueue.isEmpty() && dataQueueBytes + f.payload().length > DATA_QUEUE_BYTES && !closed) {
+                    try {
+                        sendLock.wait();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("interrupted");
+                    }
+                }
+                if (closed) {
+                    throw new IOException("session closed");
+                }
+                dataQueue.add(f);
+                dataQueueBytes += f.payload().length;
+            }
+            sendLock.notifyAll();
+        }
+    }
+
+    /**
+     * Whether a frame may go ahead of queued data. CTRL, WINDOW, RST and KEEPALIVE may; everything
+     * else, including a type a newer build adds, keeps its place in line.
+     *
+     * <p><b>CLOSE is deliberately not here</b>, and it is the one that looks like it belongs.
+     * {@link MuxStream#onData} drops payloads once the peer has closed, so a CLOSE that overtook
+     * data already sent would silently truncate the stream -- a short HTTP response that only
+     * appears under load. WINDOW is safe because credit deltas are additive, and RST is safe
+     * because discarding what is queued is what RST means. OPEN stays with data so that it cannot
+     * arrive after the frames that belong to the stream it opens.
+     */
+    private static boolean isControl(Frame f) {
+        return switch (f.type()) {
+            case Frame.CTRL, Frame.WINDOW, Frame.RST, Frame.KEEPALIVE -> true;
+            default -> false;
+        };
+    }
+
+    /** Drains control before data, one frame at a time, until the session ends. */
+    private void writeLoop() {
+        Throwable cause = null;
         try {
-            ch.write(f);
-        } catch (NoiseException e) {
-            throw new IOException("encrypt failed", e);
+            while (true) {
+                Frame f;
+                synchronized (sendLock) {
+                    while (controlQueue.isEmpty() && dataQueue.isEmpty()) {
+                        if (closed) {
+                            return;
+                        }
+                        sendLock.wait();
+                    }
+                    f = controlQueue.poll();
+                    if (f == null) {
+                        f = dataQueue.poll();
+                        dataQueueBytes -= f.payload().length;
+                        sendLock.notifyAll(); // a producer may be waiting for the room this freed
+                    }
+                }
+                try {
+                    ch.write(f);
+                } catch (NoiseException e) {
+                    throw new IOException("encrypt failed", e);
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            cause = e;
+        } finally {
+            if (cause != null) {
+                shutdown(cause);
+            }
         }
     }
 
@@ -318,6 +445,11 @@ public final class MuxSession implements AutoCloseable {
         if (!first) {
             return;
         }
+        // The writer may be parked on an empty queue and a producer on a full one; both check
+        // `closed` once woken. Queued frames are dropped, as they were when a send raced a shutdown.
+        synchronized (sendLock) {
+            sendLock.notifyAll();
+        }
         IOException err = cause instanceof IOException io ? io : new IOException("session closed", cause);
         for (MuxStream s : streams.values()) {
             s.onSessionClosed(err);
@@ -340,6 +472,9 @@ public final class MuxSession implements AutoCloseable {
         shutdown(null);
         if (reader != null) {
             reader.interrupt();
+        }
+        if (writer != null) {
+            writer.interrupt();
         }
     }
 }

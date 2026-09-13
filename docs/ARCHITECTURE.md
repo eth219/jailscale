@@ -267,6 +267,25 @@ stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA fr
   and would not free what is already held. And **nothing is advertised on the wire** -- RST is
   already the receiver's to send at any time -- so no flag day and no node needs upgrading for a hub
   to protect itself.
+- **One writer a session, and control does not queue behind data.** `NoiseChannel.write` holds one
+  lock across the encryption and the socket write, because the nonce must advance in wire order. With
+  every producer calling it directly, one blocked write stalled every frame on that session: a
+  visitor's handshake waited on its `SignResponse` behind other visitors' data — measured at 12.8
+  seconds, with two answers released in the same millisecond — and the keepalive waited behind it
+  too, so a congested session could be timed out as a dead one. Producers now hand frames to a
+  writer thread through **two FIFO queues**, and it drains control first. `CTRL`, `WINDOW`, `RST` and
+  `KEEPALIVE` may go ahead; `DATA`, `OPEN`, `CLOSE` and any type a later build adds keep their place.
+  Two FIFOs rather than a priority queue, because order within a class has to hold — control messages
+  refer to each other — and a priority queue does not order equal priorities.
+  - **`CLOSE` is deliberately not prioritised**, and it is the one that looks like it should be. A
+    receiver drops payloads for a stream once the peer has closed it, so a `CLOSE` that overtook data
+    already sent would silently truncate the stream: a short response that only appears under load.
+    `WINDOW` is safe because credit deltas are additive, `RST` because discarding what is queued is
+    what `RST` means, and `OPEN` stays with data so it cannot arrive after its own stream's frames.
+  - The data queue is **bounded in bytes and blocks its producer**, which is the backpressure stream
+    credits already applied; it is a handoff, not a second window. The control queue is bounded by
+    count and a session that fills it is treated as gone, because blocking a control producer would
+    reintroduce the problem — one of them is the reader thread.
 - **A window overrun costs the stream, not the session.** A peer that sends past its granted window
   gets that stream RST; the session survives, because it is every other visitor on that node. Eight
   of them and the peer is not honouring flow control at all, and the session goes.

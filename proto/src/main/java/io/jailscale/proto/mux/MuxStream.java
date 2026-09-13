@@ -292,11 +292,15 @@ public final class MuxStream {
     }
 
     /**
-     * Sends a flow-control refill, never while holding {@link #lock}. {@code sendWindow} ends in a
-     * blocking socket write under the session's write lock, so a reader that refilled inside the
-     * lock stalled its own stream whenever the send buffer was full -- and when both directions
-     * congested at once, each side's reader sat on the lock its peer's writer needed. Deltas are
-     * additive, so emitting them after the lock cannot lose or reorder credit.
+     * Sends a flow-control refill, never while holding {@link #lock}. The reason has changed and the
+     * rule has not. It used to matter absolutely: {@code sendWindow} ended in a blocking socket write
+     * under the session's write lock, so a reader that refilled inside the lock stalled its own
+     * stream whenever the send buffer was full, and when both directions congested at once each
+     * side's reader sat on the lock its peer's writer needed. Sending is now an enqueue behind a
+     * writer thread (§5.3), so that deadlock is gone -- but a producer can still block waiting for
+     * room in the data queue, and holding this lock while it did would stall this stream's readers
+     * for no reason. Deltas are additive, so emitting them after the lock cannot lose or reorder
+     * credit.
      */
     private void sendRefill(int refill) throws IOException {
         if (refill > 0) {
@@ -395,20 +399,19 @@ public final class MuxStream {
     }
 
     /**
-     * Gives this stream's queued bytes back to the budget now and lets the RST follow on a thread
-     * of its own. Returns what was freed.
+     * Gives this stream's queued bytes back to the budget and sends the RST. Returns what was freed.
      *
-     * <p>The frame is thirty-odd bytes on a socket that may be congested, and the caller is a
-     * session reader thread that is not necessarily this stream's. Blocking it there would let one
-     * congested peer stall an unrelated peer's reader, which is the shape of the problem this
-     * budget exists to fix, so only the local abort is synchronous. Freeing the bytes does not
-     * depend on the frame arriving.
+     * <p>This used to hand the RST to a virtual thread of its own: the caller is a session reader
+     * thread that is not necessarily this stream's, and {@code sendReset} ended in a blocking socket
+     * write, so doing it here let one congested peer stall an unrelated peer's reader -- the shape of
+     * the problem this budget exists to fix. Sending is now an enqueue behind a writer thread
+     * (§5.3), so the reason is gone and so is the thread.
      */
     long reclaim() {
         long freed = abort(new IOException("stream reset: the hub's receive budget was full"), true);
         budget.release(freed);
         session.remove(this);
-        Thread.ofVirtual().name("mux-rst-" + id).start(() -> session.sendReset(id, Frame.RST_NO_BUDGET));
+        session.sendReset(id, Frame.RST_NO_BUDGET);
         return freed;
     }
 
