@@ -851,6 +851,13 @@ auth-key whose owner is them, or an operator typing the name at approval. For th
 member may pin an invite to a *new* user or to themselves, but naming an existing user in an invite
 is an admin's call.
 
+**A rejection answers the attempt that caused it, and no later one.** `up` reports what the hub said
+by reading the last `RegisterResponse` off the link, and the link outlives the command: a refused
+`--user alice`, followed by the `invite --self` the refusal itself recommends, used to report
+`user-taken` a second time for an invite the hub had just accepted. The node was joined and the
+person at the keyboard had been told it had failed. `HubLink.start` clears that answer when it is
+given a new credential, since a new credential is a new question.
+
 **Credentials.** Invites are not admin-only: by default any member issues one from their own node,
 the issuer is recorded, and an admin can narrow it with `--invite-policy admins`. `jailscale invite`
 prints a link carrying a 128-bit token (one use, 24 hours by default) and a short code that is an
