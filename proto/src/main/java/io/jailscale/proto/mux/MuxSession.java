@@ -371,6 +371,13 @@ public final class MuxSession implements AutoCloseable {
     public static final Timing SOCKET_WRITE = new Timing();
     /** A peer-opened stream's wait between the frame arriving and the listener being done with it. */
     public static final Timing OPEN_DISPATCH = new Timing();
+    /**
+     * One frame's handling on the reader thread. The symmetric gap: a peer's write blocking for
+     * seconds means this end is not draining the socket, and nothing measured whether it was.
+     */
+    public static final Timing READ_DISPATCH = new Timing();
+    /** Waiting for the next frame to arrive, which is idle time and not a fault. */
+    public static final Timing READ_WAIT = new Timing();
 
     /** Drains control before data, one frame at a time, until the session ends. */
     private void writeLoop() {
@@ -433,6 +440,7 @@ public final class MuxSession implements AutoCloseable {
         try {
             while (!closed) {
                 Frame f;
+                long beforeRead = System.nanoTime();
                 try {
                     f = ch.read();
                 } catch (SocketTimeoutException e) {
@@ -443,7 +451,10 @@ public final class MuxSession implements AutoCloseable {
                 if (f == null) {
                     throw new IOException("peer closed the connection");
                 }
+                long afterRead = System.nanoTime();
+                READ_WAIT.record(afterRead - beforeRead);
                 dispatch(f);
+                READ_DISPATCH.record(System.nanoTime() - afterRead);
             }
         } catch (IOException | MuxException e) {
             cause = e;

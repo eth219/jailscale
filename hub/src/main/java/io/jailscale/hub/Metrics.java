@@ -74,6 +74,9 @@ final class Metrics {
         mux(b, "socket_write", "encrypting and writing one frame, where a congested peer shows",
             MuxSession.SOCKET_WRITE);
         mux(b, "open_dispatch", "handing a peer-opened stream to its listener", MuxSession.OPEN_DISPATCH);
+        mux(b, "read_dispatch", "handling one frame on the reader thread", MuxSession.READ_DISPATCH);
+        mux(b, "read_wait", "waiting for the peer's next frame, which is idle and not a fault",
+            MuxSession.READ_WAIT);
         // The receive budget (§5.3). Queued against limit is the one to alert on: it reaching the
         // limit is the hub shedding visitor streams to stay alive, and reclaimed says how many.
         FlowBudget budget = hub.flowBudget();

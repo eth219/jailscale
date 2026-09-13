@@ -382,8 +382,8 @@ if [ -n "${SLOW:-}" ]; then
            /^jailhub_mux_[a-z_]+_seconds_total /{k=$1; sub("jailhub_mux_","",k); sub("_seconds_total","",k); s[k]=$2}
            /^jailhub_mux_[a-z_]+_seconds_max /{k=$1; sub("jailhub_mux_","",k); sub("_seconds_max","",k); m[k]=$2}
            END{printf "  mux mean/worst ms:";
-               split("queue_wait socket_write open_dispatch", o, " ");
-               for (i=1;i<=3;i++) if (n[o[i]]>0) printf " %s=%.1f/%.0f", o[i], s[o[i]]/n[o[i]]*1000, m[o[i]]*1000;
+               split("queue_wait socket_write open_dispatch read_dispatch", o, " ");
+               for (i=1;i<=4;i++) if (n[o[i]]>0) printf " %s=%.1f/%.0f", o[i], s[o[i]]/n[o[i]]*1000, m[o[i]]*1000;
                printf "\n"}'
   printf '  receive queue peak %.1f MB of %.1f MB (+%d KB slack, %s nodes), %s streams reclaimed\n' \
     "$(echo "$qpeak / 1048576" | bc -l)" "$(echo "$qbud / 1048576" | bc -l)" "$((qslack / 1024))" "$nodes" "$rec"
