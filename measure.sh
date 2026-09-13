@@ -18,6 +18,41 @@
 #                RATE_PHASES="warm" runs one phase instead of both
 #   HUB_OPTS=    runtime options for the hub, and JAILSCALE_DAEMON_OPTS for the node's daemon:
 #                -XX:MaxHeapSize= to lift the build's ceiling, -XX:ProfilesDumpFile= to profile
+# HOW THIS HARNESS HAS MISLED PEOPLE. Every item below produced a confident, wrong conclusion that
+# somebody acted on, and in every one the numbers looked plausible -- which is the only reason the
+# list is worth keeping. Read it before trusting a surprising result from here.
+#
+#   Shared state. The local app was hardcoded on 18080 while PORT moved only the hub, so two runs at
+#   once shared one app and quietly corrupted each other. Fixed (APP_PORT follows PORT), but the
+#   shape recurs: another session's load also moves these numbers, and hub peak RSS varies 2x on an
+#   idle machine. Ramp times drifted monotonically slower across one afternoon as the machine filled,
+#   which read as a code change and was the machine.
+#
+#   The harness shaping what it measures. The latency prober was serial, so while one probe was slow
+#   no connection arrived and the hub's accept loop showed a gap exactly as long as the probe -- an
+#   effect read as a cause. Serial sampling also turned a contiguous burst of slow admissions into
+#   one rare-looking outlier. And it probed into the herd of N sessions closing at once. All three
+#   fixed; all three were believed first.
+#
+#   Instruments that answer a narrower question than they look like they do. Adding one timer per
+#   rebuild, each to a stage guessed at in advance, had every stage come back fast -- which produced
+#   "the time is between stages, so it is scheduling". It was not: the first scrape of the stage
+#   metrics (§6.3) showed unaccounted at zero and all of it in one stage. Eight rebuilds, and the
+#   answer needed every stage measured at once instead of one at a time. Twice over, a value already
+#   being collected was not read: jailhub_visitor_open_seconds_max said 0 for three more builds, and
+#   a timer was requested for a span that already had one.
+#
+#   Reading a mechanism one layer too shallow. "Control frames queue behind data, so put them in
+#   front" -- correct as far as it goes, and the measured problem was that there is no room in front,
+#   because the connection itself is full. Ordering and capacity are different faults.
+#
+#   Experiments invalidated by a later fix. With two causes, an experiment run before one is fixed
+#   says nothing about the other. One finding here was retracted and then un-retracted for exactly
+#   that reason.
+#
+#   RSS cannot see the live set. A heap ceiling means the collector fills the space it has, so RSS
+#   plateaus whatever the live set does. That is why the receive budget is gated on
+#   jailhub_receive_queued_peak_bytes, which is exact, and RSS is only reported here.
 set -eu
 R=$(cd "$(dirname "$0")" && pwd)
 HUB=$R/hub/target/jailhub
