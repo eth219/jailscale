@@ -71,19 +71,17 @@ own. Neither has a runtime dependency and neither needs root to run.
 
 ### A binary
 
-v0.1.0 carries five targets for both programs: `linux-amd64`, `linux-arm64`,
-`darwin-arm64`, `darwin-amd64` and `windows-amd64.exe`, each 29.8 to 31.9 MiB.
+v0.1.1 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
+`darwin-arm64` and `windows-amd64.exe`, each 25.3 to 26.3 MiB. Intel Macs run
+the JAR, because GraalVM CE 25.3 does not build `darwin-amd64`
+([ARCHITECTURE.md §3.2](docs/ARCHITECTURE.md)).
 
-It is the only release so far, and it was tagged a day before the release
-toolchain changed, so it is not the build the numbers in this file describe.
-A release built from main carries four targets and not five, because GraalVM CE
-25.3 does not build `darwin-amd64` and Intel Macs get the JAR instead
-([ARCHITECTURE.md §3.2](docs/ARCHITECTURE.md)), and its binaries are about
-5 MiB smaller. Everything under [Resource usage](#resource-usage) is measured
-on main, not on the release this section downloads.
+v0.1.0 is still there and is a different build: the previous toolchain, five
+targets, binaries 29.8 to 31.9 MiB. Nothing in this file describes it, and
+[Resource usage](#resource-usage) is v0.1.1.
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.1.0
+base=https://github.com/eth219/jailscale/releases/download/v0.1.1
 target=darwin-arm64   # pick yours
 
 curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
@@ -103,15 +101,15 @@ jailscale` — and Windows SmartScreen warns for the same reason.
 
 ### A container image
 
-For linux/amd64 and linux/arm64, built with the same toolchain and options as a
-release from main, so [Resource usage](#resource-usage) describes them and the
-paragraph above does not. `:v0.1.0` pins that tag, `:latest` follows releases,
-`:edge` follows main — though the images on the registry for v0.1.0 and
-`:latest` were built before any of that was true, and match it once rebuilt.
+For linux/amd64 and linux/arm64, carrying the same binary the release does, so
+[Resource usage](#resource-usage) describes them too. `:v0.1.1` pins this
+release, `:latest` follows releases, `:edge` follows main. The images tagged
+`:v0.1.0` are not worth pulling: they were built before the runtime base
+carried a libc, and they fail at `exec` rather than starting.
 
 ```
-docker pull ghcr.io/eth219/jailhub:v0.1.0
-docker pull ghcr.io/eth219/jailscale:v0.1.0
+docker pull ghcr.io/eth219/jailhub:v0.1.1
+docker pull ghcr.io/eth219/jailscale:v0.1.1
 ```
 
 Both images are distroless and run as a non-root user: the binary, glibc and
@@ -126,7 +124,7 @@ The container runs the daemon, and the CLI is `exec`ed into it:
 ```sh
 docker network create demo   # the app joins this too, see below
 docker run -d --name jailscale --network demo \
-    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.0
+    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.1
 docker exec jailscale /jailscale up --hub jailscale.sinabro.io
 docker exec jailscale /jailscale open 3000 --host myapp --name myapp
 ```
@@ -213,18 +211,17 @@ configurations for putting the hub behind nginx or HAProxy.
 
 ## Resource usage
 
-Measured on main with the native binaries by `./measure.sh`, which CI runs as a
-budget on every push there. Two platforms, because an amd64 binary is bigger
+Measured with the native binaries by `./measure.sh`, which CI runs as a budget
+on every push to main. Two platforms, because an amd64 binary is bigger
 than an arm64 one and Linux counts the binary's own mapped pages in RSS where
 macOS largely does not.
 
-**None of this is v0.1.0.** That release was built with the previous toolchain,
-Liberica NIK 25.0.4, which the release workflow dropped for GraalVM CE 25.3 the
-day after the tag. What you download from it is 29.8 to 31.9 MiB rather than 25
-to 26, idles 5 to 6 MB higher on linux-amd64, and starts `jailscale status` in
-4.7 ms rather than 2.4. [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) measures
-both toolchains side by side. The table below describes the next release, not
-the one [Install](#a-binary) downloads.
+**This is v0.1.1, and it is not v0.1.0.** That first release was built with the
+previous toolchain, Liberica NIK 25.0.4, which the release workflow dropped for
+GraalVM CE 25.3 the day after the tag: what you download from v0.1.0 is 29.8 to
+31.9 MiB rather than 25 to 26, idles 5 to 6 MB higher on linux-amd64, and starts
+`jailscale status` in 4.7 ms rather than 2.4. [ARCHITECTURE.md
+§14](docs/ARCHITECTURE.md) measures both toolchains side by side.
 
 | | jailhub | jailscale |
 |---|---|---|
@@ -295,8 +292,10 @@ What a compromised hub can and cannot do is written out in
 - Idle memory is 25 MB against the 20 MB originally aimed at (34.4 MB as Linux
   counts it, 2 MB of it anonymous). Most of the gap is JSSE standing up a single
   TLS client.
-- v0.1.0 is the first tagged release, so there is no upgrade path to have got
-  wrong yet. What the protocol promises across versions is
+- v0.1.1 is the second tagged release and the first upgrade. Node and hub can be
+  upgraded in either order: the only wire change since v0.1.0 is one added
+  `Hello` field, which §5.4 permits and `WireFormatTest` pins both ways, and
+  `proto` is 1 on both sides. What the protocol promises across versions is
   [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md).
 
 [ARCHITECTURE.md §15](docs/ARCHITECTURE.md) has the rest, in more detail.
