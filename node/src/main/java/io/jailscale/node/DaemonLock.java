@@ -52,8 +52,16 @@ final class DaemonLock implements Closeable {
      */
     static DaemonLock acquire(NodeConfig cfg) throws IOException {
         Files.createDirectories(cfg.configDir());
-        FileChannel ch = FileChannel.open(file(cfg), StandardOpenOption.CREATE,
-            StandardOpenOption.READ, StandardOpenOption.WRITE);
+        FileChannel ch;
+        try {
+            ch = FileChannel.open(file(cfg), StandardOpenOption.CREATE,
+                StandardOpenOption.READ, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            // The bare path is what this used to say, and a container with a root-owned state
+            // volume is where it says it: the reader needs to be told it is about permissions.
+            throw new IOException("cannot open the daemon lock at " + file(cfg) + " (" + e.getMessage()
+                + "). The state directory has to be writable by the user running the daemon.", e);
+        }
         FileLock l;
         try {
             l = ch.tryLock(SENTINEL, 1, false);

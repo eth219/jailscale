@@ -19,8 +19,20 @@ RUN microdnf install -y curl unzip || dnf install -y curl unzip || yum install -
 WORKDIR /src
 COPY . .
 RUN ./mvnw -B -ntp -DskipTests -Pnative -pl hub -am package
+# Whatever zlib it actually linked, and a state directory owned by the user that will run: Docker
+# copies an image directory's ownership into a fresh named volume, and without this the volume
+# arrives root-owned and the process cannot write its own state.
+RUN cp "$(ldd hub/target/jailhub | awk '/libz/{print $3}')" /tmp/libz.so.1 \
+ && mkdir -p /tmp/state && chown 65532:65532 /tmp/state
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# distroless/base, not distroless/static: a native image is dynamically linked against glibc, and
+# `static` has no libc at all -- the images published before this ran as far as
+# "exec /jailscale: no such file or directory" and no further. `base` carries glibc but not zlib,
+# which the binary also needs, so the build stage puts the one it linked against where the runtime
+# stage can take it. If native-image ever links something else, this is where it will say so.
+FROM gcr.io/distroless/base-debian12:nonroot
+COPY --from=build /tmp/libz.so.1 /usr/lib/libz.so.1
+COPY --from=build --chown=65532:65532 /tmp/state /var/lib/jailhub
 COPY --from=build /src/hub/target/jailhub /jailhub
 ENV JAILHUB_STATE=/var/lib/jailhub
 VOLUME /var/lib/jailhub

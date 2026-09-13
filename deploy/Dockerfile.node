@@ -2,14 +2,23 @@
 # native binary, distroless ships it. No JVM, no shell.
 #
 #   docker build -f deploy/Dockerfile.node -t jailscale .
-#   docker run -d --name jailscale -v jailscale-state:/var/lib/jailscale \
-#       jailscale up --invite https://hub.example.com/join/XXXX
+#   docker network create demo
+#   docker run -d --name jailscale --restart unless-stopped --network demo \
+#       -v jailscale-state:/var/lib/jailscale jailscale
+#   docker exec jailscale /jailscale up --invite https://hub.example.com/join/XXXX
+#   docker exec jailscale /jailscale open 3000 --host myapp --name myapp
+#
+# The container runs the daemon, and the other commands are `exec`ed into it. `run ... up ...` was
+# what this used to say and it does not work: `up` starts the daemon and returns, so pid 1 exits and
+# the container stops with it.
 #
 # The node reaches the hub with one outbound TLS connection, so no ports are published here.
-# Publishing a local service means the node has to reach it: use --network host, or point
-# `jailscale open` at a host the container can see rather than 127.0.0.1.
+# Publishing a local service means the node has to reach it, and 127.0.0.1 inside a container is the
+# container's own loopback: put the app on the same network and name it with --host, which needs no
+# published port on the app either, or use --network host and keep 127.0.0.1.
 #
-# The state volume holds the machine key and the open links. Losing it means rejoining.
+# The state volume holds the machine key and the open links. Losing it means rejoining -- as a new
+# node, since the machine key is the identity.
 
 # The toolchain is not the release's: the release builds on GraalVM CE 25.3 (§3.2) and
 # ghcr.io/graalvm/native-image-community publishes major tags only, so :25 is the 25.0 line. The
@@ -23,11 +32,23 @@ RUN microdnf install -y curl unzip || dnf install -y curl unzip || yum install -
 WORKDIR /src
 COPY . .
 RUN ./mvnw -B -ntp -DskipTests -Pnative -pl node -am package
+# Whatever zlib it actually linked, and a state directory owned by the user that will run: Docker
+# copies an image directory's ownership into a fresh named volume, and without this the volume
+# arrives root-owned and the process cannot write its own state.
+RUN cp "$(ldd node/target/jailscale | awk '/libz/{print $3}')" /tmp/libz.so.1 \
+ && mkdir -p /tmp/state && chown 65532:65532 /tmp/state
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# distroless/base, not distroless/static: a native image is dynamically linked against glibc, and
+# `static` has no libc at all -- the images published before this ran as far as
+# "exec /jailscale: no such file or directory" and no further. `base` carries glibc but not zlib,
+# which the binary also needs, so the build stage puts the one it linked against where the runtime
+# stage can take it. If native-image ever links something else, this is where it will say so.
+FROM gcr.io/distroless/base-debian12:nonroot
+COPY --from=build /tmp/libz.so.1 /usr/lib/libz.so.1
+COPY --from=build --chown=65532:65532 /tmp/state /var/lib/jailscale
 COPY --from=build /src/node/target/jailscale /jailscale
 ENV JAILSCALE_HOME=/var/lib/jailscale
 VOLUME /var/lib/jailscale
 USER nonroot
 ENTRYPOINT ["/jailscale"]
-CMD ["--help"]
+CMD ["daemon"]
