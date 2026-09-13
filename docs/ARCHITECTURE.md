@@ -374,6 +374,22 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
+Two endpoints say the same things to something that is not a person. **`GET /v1/status`** is the
+page's public facts as JSON -- build, hub key, uptime, nodes registered and online, links open, when
+the certificate expires, resident size, and the counters below -- for an uptime check or a script;
+fields may be added, so a monitor that reads the ones it knows keeps working (§5.4). **`GET /metrics`**
+is the Prometheus text format, which needs no library to produce: counters for visitors routed and
+refused, signatures issued and refused, control sessions and relayed bytes, and gauges for the state
+the page shows. Both are public, because they are the page's numbers and the page is public.
+
+**No metric names anything.** Not a link, not a node, not an address -- a scrape says how much the
+hub is doing and never who is doing it, and the test asserts that no line carries a label except
+`jailhub_build_info`, which is about the binary. That is the line that would be easy to cross: one
+label per name and the metrics become the directory the admin page deliberately is not. Counting
+lives in `Metrics`, six `LongAdder`s written from every visitor thread and read once a scrape, and
+the signature counter sits at the one point that decides, so a refusal added later cannot forget to
+be counted.
+
 It lists the open links as well -- the address a visitor would type and whether it is https, tcp or
 udp -- because a hub that serves nothing and a hub that is busy look identical without it. Those
 addresses are public by construction: a visitor reaches one by typing it, and a DNS lookup finds it

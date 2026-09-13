@@ -209,7 +209,13 @@ final class NodeGroup {
             peakSignsInFlight = inFlight; // a high-water mark; racing writers can only under-report
         }
         try {
-            return signChecked(sr);
+            Message m = signChecked(sr);
+            // One place, so a refusal added later cannot forget to be counted: what went back to
+            // the node is what says whether it was signed.
+            if (m instanceof Message.SignResponse r) {
+                (r.sig() == null ? Metrics.SIGNATURES_REFUSED : Metrics.SIGNATURES).increment();
+            }
+            return m;
         } finally {
             signsInFlight.decrementAndGet();
         }

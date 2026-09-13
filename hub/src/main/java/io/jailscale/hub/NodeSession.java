@@ -146,6 +146,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             if (rejected[0]) {
                 return;
             }
+            Metrics.NODE_SESSIONS.increment();
             handshakeHash = ch.handshakeHash();
             if (hub.isHandingOff()) {
                 LOG.info("node {} arrived during hand-off; asking it to retry", mkey);

@@ -91,6 +91,7 @@ final class SniRouter {
         // Loopback is exempt: a local proxy without PROXY protocol would otherwise fold every visitor into one address.
         if (acquire(perIp, ip) > MAX_PER_IP && !socket.getInetAddress().isLoopbackAddress()) {
             release(perIp, ip);
+            Metrics.VISITORS_REFUSED.increment();
             Relay.closeQuietly(socket);
             return;
         }
@@ -102,6 +103,7 @@ final class SniRouter {
             String sni = peek.serverName();
             if (sni == null) {
                 LOG.debug("{}: no SNI, closing", ip);
+                Metrics.VISITORS_REFUSED.increment();
                 Relay.closeQuietly(socket);
                 return;
             }
@@ -117,6 +119,7 @@ final class SniRouter {
                     link = hub.links().awaitOnline(name, false, HOLD_MS); // node reconnecting (hand-off, restart)
                 }
                 if (link == null) {
+                    Metrics.VISITORS_REFUSED.increment();
                     fallback(socket, peek.consumed(), name);
                     return;
                 }
@@ -129,16 +132,19 @@ final class SniRouter {
                 }
                 if (link == null) {
                     LOG.debug("{}: unknown SNI {}, closing", ip, sni);
+                    Metrics.VISITORS_REFUSED.increment();
                     Relay.closeQuietly(socket);
                     return;
                 }
             }
             if (acquire(perName, name) > MAX_PER_NAME) {
                 release(perName, name);
+                Metrics.VISITORS_REFUSED.increment();
                 Relay.closeQuietly(socket);
                 return;
             }
             try {
+                Metrics.VISITORS.increment();
                 relay(socket, peek, link, ip, visitorPort);
             } finally {
                 release(perName, name);

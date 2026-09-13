@@ -107,6 +107,12 @@ final class HttpFront {
             }
             return HttpResponse.json(200, b.toJson()).header("Cache-Control", "no-store");
         }
+        if (path.equals("/v1/status")) {
+            return HttpResponse.json(200, status().toString()).header("Cache-Control", "no-store");
+        }
+        if (path.equals("/metrics")) {
+            return HttpResponse.text(200, Metrics.prometheus(hub)).header("Cache-Control", "no-store");
+        }
         if (path.startsWith("/join/")) {
             String token = path.substring("/join/".length());
             if (token.isEmpty() || token.contains("/")) {
@@ -124,6 +130,39 @@ final class HttpFront {
             return HttpResponse.html(200, page("jailscale hub", home(req))).header("Cache-Control", "no-store");
         }
         return HttpResponse.text(404, "not found");
+    }
+
+    /**
+     * The page's public facts, for something that is not a person: whether this hub is up, which
+     * build it is, how much it is carrying, and when its certificate runs out -- the last being the
+     * one that takes every name down at once and the one worth alerting on. Nothing per node, per
+     * link or per visitor, which is what {@code /admin} is for. Fields may be added; a monitor that
+     * reads the ones it knows keeps working (ARCHITECTURE.md §5.4).
+     */
+    private JsonObject status() {
+        String sha = Build.executableSha256();
+        JsonObject.Builder b = JsonObject.builder()
+            .put("ok", true)
+            .put("hostname", hub.config().hostname())
+            .put("version", Hub.version())
+            .put("binary", sha == null ? null : "sha256:" + sha)
+            .put("hubKey", hub.keys().publicText())
+            .put("uptimeSeconds", Resources.uptimeMillis() / 1000)
+            .put("nodesRegistered", hub.store().nodes().size())
+            .put("nodesOnline", hub.registry().size())
+            .put("linksOpen", hub.links().all().size())
+            .put("certificateNotAfter", hub.tls().isLoaded() ? hub.tls().leaf().getNotAfter().getTime() / 1000 : null)
+            .put("visitors", Metrics.VISITORS.sum())
+            .put("visitorsRefused", Metrics.VISITORS_REFUSED.sum())
+            .put("signatures", Metrics.SIGNATURES.sum())
+            .put("signaturesRefused", Metrics.SIGNATURES_REFUSED.sum())
+            .put("nodeSessions", Metrics.NODE_SESSIONS.sum())
+            .put("relayBytes", Metrics.RELAY_BYTES.sum());
+        long rss = Resources.rssBytes();
+        if (rss >= 0) {
+            b.put("residentBytes", rss);
+        }
+        return b.build();
     }
 
     /**

@@ -94,6 +94,7 @@ final class Relay {
                 }
                 out.write(buf, 0, n);
                 out.flush();
+                Metrics.RELAY_BYTES.add(n);
             }
         }
     }
