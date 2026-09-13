@@ -30,6 +30,12 @@ final class SniRouter {
     private final Hub hub;
     private final Map<String, AtomicInteger> perIp = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> perName = new ConcurrentHashMap<>();
+    /**
+     * Visitors being relayed right now. Its own counter rather than a sum over {@link #perName}:
+     * that map exists to enforce a per-name cap and summing it would walk every name a scrape, for
+     * a number the relay can keep exactly as it enters and leaves.
+     */
+    private final AtomicInteger current = new AtomicInteger();
 
     SniRouter(Hub hub) {
         this.hub = hub;
@@ -70,6 +76,14 @@ final class SniRouter {
     /** Names with at least one connection open. Zero when nothing is in flight. */
     int trackedNames() {
         return perName.size();
+    }
+
+    /**
+     * Visitors being relayed to a node right now. The page prints {@link #MAX_PER_NAME} as the cap
+     * and had nothing measured to read it against, which made a limit look like a load figure.
+     */
+    int visitorsInFlight() {
+        return current.get();
     }
 
     /** Serves one accepted raw connection to completion. */
@@ -145,8 +159,10 @@ final class SniRouter {
             }
             try {
                 Metrics.VISITORS.increment();
+                current.incrementAndGet();
                 relay(socket, peek, link, ip, visitorPort);
             } finally {
+                current.decrementAndGet();
                 release(perName, name);
             }
         } catch (IOException e) {

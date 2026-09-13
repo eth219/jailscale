@@ -23,6 +23,16 @@ public record Frame(long streamId, int type, int flags, byte[] payload) {
     /** Flag: DATA frames on this stream are datagrams (one frame = one UDP packet). */
     public static final int FLAG_DGRAM = 0x01;
 
+    // RST reasons the multiplexer sends for itself, above the range an application picks from. The
+    // byte is diagnostic only -- a peer fails the stream whatever it says -- and the low numbers are
+    // each end's own local vocabulary: the hub's 1 and the node's 1 already mean different things,
+    // so naming those here would claim a shared namespace that does not exist. These two do belong
+    // to the protocol, because no caller chooses them.
+    /** Reclaimed: this stream held receive bytes the process could not afford (§5.3). */
+    public static final int RST_NO_BUDGET = 100;
+    /** The peer sent past the window it had been granted on this stream. */
+    public static final int RST_WINDOW_OVERRUN = 101;
+
     public static final long CONTROL_STREAM = 0;
 
     public Frame {

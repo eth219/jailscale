@@ -106,6 +106,23 @@ class EndToEndTest {
     }
 
     @Test
+    void everyNodeSessionSharesTheHubsOneReceiveBudget() throws Exception {
+        // The wiring the arithmetic depends on (§5.3): the hub's heap is one pool, so a per-session
+        // budget would multiply by the number of nodes connected and bound nothing. Two nodes, two
+        // sessions, one budget -- and the limit derived from the heap ceiling rather than picked.
+        assertEquals(0, hub.flowBudget().sessionCount());
+        Invites.Created boot = hub.invites().create(null, 2, 3600, "test", true);
+        node("alice");
+        up("alice", JsonObject.builder().put("invite", boot.url()).put("user", "alice"));
+        node("bob");
+        up("bob", JsonObject.builder().put("invite", boot.url()).put("user", "bob"));
+        waitFor(() -> hub.flowBudget().sessionCount() == 2);
+        assertEquals(Math.max(4L * 1024 * 1024, Runtime.getRuntime().maxMemory() / 4),
+            hub.flowBudget().limitBytes(), "the budget stopped tracking the heap ceiling");
+        assertEquals(0, hub.flowBudget().reclaimedStreams(), "an idle hub reclaimed a stream");
+    }
+
+    @Test
     void onlyPublicAddressesCountAsOutside() {
         assertTrue(Hub.isPublicAddress("203.0.113.5"));
         assertTrue(Hub.isPublicAddress("2001:db8::1"));

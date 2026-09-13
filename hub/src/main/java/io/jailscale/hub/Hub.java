@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.ipc.Ipc;
+import io.jailscale.proto.mux.FlowBudget;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -33,6 +34,12 @@ public final class Hub implements AutoCloseable {
     /** When a node from a public address last arrived by this hub's own name; 0 until one has. */
     private volatile long reachedFromOutsideAt;
     private final Registry registry = new Registry(this);
+    /**
+     * One receive budget for every node session at once (§5.3). Shared and not per session: the
+     * heap it protects is one pool, so a per-session limit would multiply by however many nodes
+     * happen to be connected, which is the arithmetic that made a global bound necessary.
+     */
+    private final FlowBudget flowBudget = FlowBudget.ofHeap();
     static final long DRAIN_TIMEOUT_MS = 60_000;
     private volatile boolean handingOff;
     private final Registrar registrar;
@@ -311,6 +318,10 @@ public final class Hub implements AutoCloseable {
 
     HubKeys keys() {
         return keys;
+    }
+
+    FlowBudget flowBudget() {
+        return flowBudget;
     }
 
     Registry registry() {

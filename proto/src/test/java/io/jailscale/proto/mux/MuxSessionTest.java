@@ -99,8 +99,8 @@ class MuxSessionTest {
         LinkedBlockingQueue<byte[]> nc = new LinkedBlockingQueue<>();
         CompletableFuture<Throwable> hcl = new CompletableFuture<>();
         CompletableFuture<Throwable> ncl = new CompletableFuture<>();
-        MuxSession hub = new MuxSession(hubCh.get(), true, listener(ho, hc, hcl));
-        MuxSession node = new MuxSession(nodeCh, false, listener(no, nc, ncl));
+        MuxSession hub = new MuxSession(hubCh.get(), true, listener(ho, hc, hcl), FlowBudget.unlimited());
+        MuxSession node = new MuxSession(nodeCh, false, listener(no, nc, ncl), FlowBudget.unlimited());
         hub.start();
         node.start();
         ex.shutdown();

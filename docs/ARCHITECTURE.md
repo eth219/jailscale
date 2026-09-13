@@ -238,7 +238,36 @@ stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA fr
 
 - **Flow control** is per stream: a 256 KB receive window refilled once half has been consumed. A
   sender out of credit stops, which keeps one slow visitor from stalling the others. There is no
-  retransmission, because the carrier is TCP.
+  retransmission, because the carrier is TCP. A connection-level window would be the other way to
+  do it, and is what HTTP/2 does; it is not done here because a window shared across streams is a
+  window one stalled stream can eat, which is the starvation the per-stream window exists to avoid.
+- **A receive budget** bounds what the per-stream windows do not: their sum. 256 KB plus a frame is
+  272 KB, the hub admits 1,024 visitors per name with no global cap, and the product is 272 MB
+  against a 96 MB heap ceiling -- so a visitor who simply reads its download slowly, needing no
+  registration and no authentication, could make the hub hold bytes until its heap was gone.
+  Measured on the native binaries: under a high enough arrival rate it *can*, and when it did the
+  `OutOfMemoryError` surfaced on the thread carrying a node's control connection, whose death runs
+  `NodeGroup.detach` -- so **the whole node session went, with every link and visitor on it**, and the
+  node reconnected a second later. An unauthenticated outage of every name on that node, not a dead
+  process. Two hedges, both measured: it fired once in two identical attempts, and the attempt that
+  survived had the slower ramp (176s against 144s for the same 1,200 visitors), which is the same
+  arrival-rate effect that fills the budget at 120 visitors in half a second but not at 300 spread
+  over 25s. It also needs the node's own ceiling raised, because at the shipped 64m the node's
+  per-visitor TLS state saturates first and the hub never reaches its heap -- which is why this axis
+  read as harmless every time it was measured without that. Whether it fires and what it takes with
+  it are both chance, which is the argument for bounding it rather than for waiting on a repro. `FlowBudget` is one byte total across every session, a quarter of
+  the heap ceiling and derived from it rather than chosen. Over it, the receiver **reclaims**: it
+  RSTs the stream holding the most bytes among those that have consumed nothing for two seconds,
+  which is a stalled reader and not a slow one. Three things follow. It is a byte bound and not a
+  connection count, because deriving a count would have to assume the worst case per connection and
+  would cap a hub that really serves a thousand light visitors at a few hundred. It reclaims rather
+  than refuses, because refusing would hand an attacker a cheaper denial than the one being fixed
+  and would not free what is already held. And **nothing is advertised on the wire** -- RST is
+  already the receiver's to send at any time -- so no flag day and no node needs upgrading for a hub
+  to protect itself.
+- **A window overrun costs the stream, not the session.** A peer that sends past its granted window
+  gets that stream RST; the session survives, because it is every other visitor on that node. Eight
+  of them and the peer is not honouring flow control at all, and the session goes.
 - **Stream ids.** The hub opens even ids, the node odd ones, 0 is control. The node opens none today;
   the parity rule is enforced on receipt so a peer cannot claim ids that are not its to allocate.
 - **Multiple connections per node.** One connection for every stream means head-of-line blocking on
@@ -1076,8 +1105,14 @@ Concurrency scales with the number of names: the hub accepts 1,024 per name and 
 so one node's ceiling is 20,480 concurrent streams and the hub's is that times the number of names it
 serves. **Both binaries do carry a heap ceiling** -- 96m for `jailhub`, 64m for `jailscale` (§14) --
 because without one the Serial GC's allowance is 80% of the machine and a long-running hub drifts
-into it. Neither ceiling is derived from the concurrency ceilings above, which no single byte figure
-covers correctly; they are what 1,000 visitors held open were measured to fit in. A host that needs
+into it. The connection ceilings above are not derived from those, and cannot be: what a connection
+costs depends on whether anyone is reading it, so no count covers the bytes correctly. The two used
+to have nothing to say to each other at all, and the product of them was 272 MB against a 96 MB
+ceiling -- reachable by an unauthenticated visitor reading slowly. What connects them now is the
+receive budget of §5.3, which is in bytes, is a quarter of the heap ceiling and derived from it, and
+resets the stalled stream rather than letting the process die. The ceilings themselves are still
+what 1,000 visitors held open were measured to fit in; the budget is what makes that measurement
+hold when those visitors are not reading. A host that needs
 more passes `-XX:MaxHeapSize=` at run time, which the native runtime consumes before `main`. Two consequences: Serial GC does not
 return the heap to the OS, so RSS stays at its high-water mark after a load burst, which is headroom
 and not a leak; and idle RSS is unrelated to heap size, since the node daemon alone is about 16.7 MB
@@ -1158,6 +1193,25 @@ below the table.
 | Hub idle RSS | about 25.3 MB | about 35.1 MB (3.3 anonymous) | 28 / 38 MB |
 | RSS with 1,000 visitor sessions held open | node 69 MB, hub 53 MB | node 67 MB, hub 65 MB | node 88 MB, hub 88 MB |
 | CLI cold start | about 6.3 ms (`jailscale status`, median of 10, IPC round trip included) | about 2.4 ms | 50 ms |
+
+**`measure.sh SLOW=` measures a third axis, and the node does not meet its budget on it.** `LOAD=`
+holds visitor sessions open with no bytes in flight; `SLOW=` has each visitor ask for 8 MB and read
+only the status line, which is the only shape that reaches the receive budget of §5.3. On that axis
+the hub is fine -- the receive queue pins at its budget, streams are shed, and its RSS stays under
+the load budget -- but **the node reaches 96.7 to 98.9 MB against an 88 MB budget** at about 1,000
+visitors (two people, one macOS arm64 machine; unconfirmed on linux). The cause is not the receive
+budget, which this direction barely touches: a visitor sends one GET line, so the node's receive
+queues hold tens of bytes. It is `TlsEndpoint`'s per-visitor state -- `netInBuf`, `appInBuf` and the
+`SSLEngine`'s own, 50 to 60 KB each -- times however many visitors are live at once, which is an
+unbounded per-connection term of exactly the kind §5.3's budget bounds for receive queues, and is a
+separate change. Two numbers for whoever takes it: the node's RSS on this axis repeats to 0.1 MB
+across runs, unlike the hub's, because per-visitor state scales with the visitor count where queue
+occupancy moves with the collector; and an ordinary visitor sees 7 to 19 second responses while
+1,000 slow readers are arriving, dropping to 240-580 ms once the ramp finishes. That long tail is
+arrival-driven and not the budget's: with the budget completely full and reclaim running, but the
+node barely loaded (120 visitors arriving in half a second), ordinary visitors were served in 4 to
+153 ms. `measure.sh` gates the node on this axis at `B_NODE_SLOW_MB`, which is set above today's
+figure on purpose and says so.
 
 **Linux is not 10 MB heavier; it counts differently.** Of the hub's 35.1 MB there, **3.3 MB is
 anonymous** — the heap, the stacks, everything the process actually owns — and the rest is the

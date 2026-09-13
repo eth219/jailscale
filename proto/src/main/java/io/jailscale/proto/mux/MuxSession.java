@@ -9,9 +9,11 @@ import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -25,6 +27,12 @@ public final class MuxSession implements AutoCloseable {
 
     private static final Log LOG = Log.get("mux");
     public static final int KEEPALIVE_SECONDS = 25;
+    /**
+     * Window overruns this session tolerates before it treats the peer as broken rather than
+     * unlucky. One overrun costs one stream (§5.3); a peer that keeps producing them is not
+     * honouring flow control at all, and there is nothing to be gained by staying connected.
+     */
+    static final int MAX_WINDOW_OVERRUNS = 8;
 
     /** Events for the owner of the session. Callbacks run on the reader thread; keep them short. */
     public interface Listener {
@@ -39,19 +47,46 @@ public final class MuxSession implements AutoCloseable {
     private final NoiseChannel ch;
     private final boolean opensEven;
     private final Listener listener;
+    private final FlowBudget budget;
     private final Map<Long, MuxStream> streams = new ConcurrentHashMap<>();
     private final AtomicLong nextId;
     private volatile boolean closed;
     /** Frames of a type this build has no case for; only the first one is logged. */
     private int unknownFrames;
+    private final AtomicInteger windowOverruns = new AtomicInteger();
     private Thread reader;
     private Thread keepalive;
 
-    public MuxSession(NoiseChannel ch, boolean opensEven, Listener listener) {
+    /**
+     * {@code budget} bounds the bytes this session's receive queues may hold, together with every
+     * other session sharing it (§5.3). There is no overload that leaves it out: the hub and the
+     * node each have exactly one call site, and a default would be an unbounded process waiting for
+     * someone to notice.
+     */
+    public MuxSession(NoiseChannel ch, boolean opensEven, Listener listener, FlowBudget budget) {
         this.ch = ch;
         this.opensEven = opensEven;
         this.listener = listener;
+        this.budget = budget;
         this.nextId = new AtomicLong(opensEven ? 2 : 1);
+        budget.register(this);
+    }
+
+    FlowBudget budget() {
+        return budget;
+    }
+
+    /**
+     * One stream overran the window it was granted. The stream goes; the session stays, unless this
+     * peer has done it {@link #MAX_WINDOW_OVERRUNS} times.
+     */
+    void onWindowOverrun(MuxStream s) throws MuxException {
+        LOG.warn("stream {} exceeded its receive window; resetting it", s.id());
+        s.reset(Frame.RST_WINDOW_OVERRUN);
+        int n = windowOverruns.incrementAndGet();
+        if (n > MAX_WINDOW_OVERRUNS) {
+            throw new MuxException("peer exceeded the receive window on " + n + " streams");
+        }
     }
 
     public void start() {
@@ -101,6 +136,17 @@ public final class MuxSession implements AutoCloseable {
         return new ArrayList<>(streams.values());
     }
 
+    /**
+     * The live stream collection, not a copy. Only for {@link FlowBudget}'s victim scan, which runs
+     * on a reader thread while the heap is at its limit: copying a thousand streams per arriving
+     * frame allocates hardest exactly when there is least room, and the scan does not need a
+     * stable snapshot to pick the fullest queue. Weakly consistent iteration is the right
+     * guarantee here -- a stream that appears or vanishes mid-scan is one the next frame will see.
+     */
+    Collection<MuxStream> streamsView() {
+        return streams.values();
+    }
+
     public void control(byte[] json) throws IOException {
         write(Frame.ctrl(json));
     }
@@ -111,7 +157,7 @@ public final class MuxSession implements AutoCloseable {
         if (id > 0xFFFFFFFFL) {
             throw new IOException("stream ids exhausted");
         }
-        MuxStream s = new MuxStream(this, id, meta, dgram);
+        MuxStream s = new MuxStream(this, budget, id, meta, dgram);
         streams.put(id, s);
         write(new Frame(id, Frame.OPEN, dgram ? Frame.FLAG_DGRAM : 0, Json.writeUtf8(meta.asMap())));
         return s;
@@ -208,7 +254,7 @@ public final class MuxSession implements AutoCloseable {
                 } catch (JsonException e) {
                     throw new MuxException("bad OPEN metadata: " + e.getMessage());
                 }
-                MuxStream s = new MuxStream(this, id, meta, (f.flags() & Frame.FLAG_DGRAM) != 0);
+                MuxStream s = new MuxStream(this, budget, id, meta, (f.flags() & Frame.FLAG_DGRAM) != 0);
                 streams.put(id, s);
                 listener.onOpen(this, s);
             }
@@ -277,6 +323,7 @@ public final class MuxSession implements AutoCloseable {
             s.onSessionClosed(err);
         }
         streams.clear();
+        budget.unregister(this);
         if (keepalive != null) {
             keepalive.interrupt();
         }

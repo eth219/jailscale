@@ -84,8 +84,8 @@ public final class MuxLoop {
             NoiseChannel nodeCh = NoiseChannel.initiate(a.getInputStream(), a.getOutputStream(),
                 NoiseIk.initiator(PROLOGUE, nk, hk.publicKey()), null);
             LinkedBlockingQueue<MuxStream> opened = new LinkedBlockingQueue<>();
-            hub = new MuxSession(hubCh.get(), true, listener(new LinkedBlockingQueue<>()));
-            node = new MuxSession(nodeCh, false, listener(opened));
+            hub = new MuxSession(hubCh.get(), true, listener(new LinkedBlockingQueue<>()), FlowBudget.unlimited());
+            node = new MuxSession(nodeCh, false, listener(opened), FlowBudget.unlimited());
             hub.start();
             node.start();
             ex.shutdown();

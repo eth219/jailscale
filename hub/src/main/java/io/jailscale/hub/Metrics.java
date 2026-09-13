@@ -1,5 +1,6 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.mux.FlowBudget;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -51,7 +52,20 @@ final class Metrics {
         gauge(b, "jailhub_nodes_registered", "Nodes with a registration on this hub.", hub.store().nodes().size());
         gauge(b, "jailhub_nodes_online", "Nodes with a control connection right now.", hub.registry().size());
         gauge(b, "jailhub_links_open", "Links open right now.", hub.links().all().size());
+        gauge(b, "jailhub_visitors_in_flight", "Visitors being relayed to a node right now.",
+            hub.router().visitorsInFlight());
         gauge(b, "jailhub_uptime_seconds", "Seconds since this process started.", Resources.uptimeMillis() / 1000);
+        // The receive budget (§5.3). Queued against limit is the one to alert on: it reaching the
+        // limit is the hub shedding visitor streams to stay alive, and reclaimed says how many.
+        FlowBudget budget = hub.flowBudget();
+        counter(b, "jailhub_streams_reclaimed_total",
+            "Visitor streams reset because the receive budget was full.", budget.reclaimedStreams());
+        gauge(b, "jailhub_receive_budget_bytes",
+            "Bytes this hub allows to sit in multiplexer receive queues at once.", budget.limitBytes());
+        gauge(b, "jailhub_receive_queued_bytes", "Bytes in multiplexer receive queues right now.",
+            budget.usedBytes());
+        gauge(b, "jailhub_receive_queued_peak_bytes",
+            "The most that has sat in multiplexer receive queues since this process started.", budget.peakBytes());
         if (hub.tls().isLoaded()) {
             gauge(b, "jailhub_certificate_not_after_seconds", "When the wildcard certificate expires, unix time.",
                 hub.tls().leaf().getNotAfter().getTime() / 1000);

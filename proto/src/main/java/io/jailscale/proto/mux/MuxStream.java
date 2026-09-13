@@ -10,13 +10,16 @@ import java.util.ArrayDeque;
  * One byte stream (or datagram stream) inside a {@link MuxSession} (ARCHITECTURE.md §5.3). The session's
  * reader thread feeds {@link #onData} etc.; application threads use {@link #in()}/{@link #out()}.
  * Flow control: the receiver advertises {@link #WINDOW} bytes and refills it with WINDOW frames
- * once half is consumed; the sender blocks when out of credits.
+ * once half is consumed; the sender blocks when out of credits. That bounds one stream; what bounds
+ * their sum is the {@link FlowBudget} the session shares, which resets a stalled stream rather than
+ * let the process run out of memory.
  */
 public final class MuxStream {
 
     public static final int WINDOW = 256 * 1024;
 
     private final MuxSession session;
+    private final FlowBudget budget;
     private final long id;
     private final JsonObject meta;
     private final boolean dgram;
@@ -31,6 +34,22 @@ public final class MuxStream {
     private boolean localClosed;
     private IOException error;
     private int credits = WINDOW;
+    /**
+     * Whether {@link #inboundBytes} is still counted against the budget. An abort releases the
+     * whole queue at once, and without this a reader draining what an abort left behind would
+     * release those bytes a second time, talking the budget down below what is really held.
+     */
+    private boolean accounted = true;
+    /** When a reader last took bytes out: what tells a slow stream from a stalled one. */
+    private volatile long lastConsumedAt = System.currentTimeMillis();
+    /**
+     * {@link #inboundBytes} while it is still accounted, published for reading without {@link #lock}.
+     * The budget's victim scan looks at every stream on a reader thread to choose one, and taking a
+     * thousand monitors to do it blocks every other stream on that connection for as long as it
+     * takes -- the head-of-line stall the per-stream window exists to prevent, reintroduced by the
+     * thing meant to protect it. Written only under {@code lock}, so it is never a torn value.
+     */
+    private volatile int queued;
 
     private final InputStream in = new InputStream() {
         @Override
@@ -77,6 +96,11 @@ public final class MuxStream {
                     current = null;
                 }
                 inboundBytes -= n;
+                queued = accounted ? inboundBytes : 0;
+                if (accounted) {
+                    budget.release(n);
+                }
+                lastConsumedAt = System.currentTimeMillis();
                 consumedSinceWindow += n;
                 if (consumedSinceWindow >= WINDOW / 2) {
                     refill = consumedSinceWindow;
@@ -130,8 +154,9 @@ public final class MuxStream {
         }
     };
 
-    MuxStream(MuxSession session, long id, JsonObject meta, boolean dgram) {
+    MuxStream(MuxSession session, FlowBudget budget, long id, JsonObject meta, boolean dgram) {
         this.session = session;
+        this.budget = budget;
         this.id = id;
         this.meta = meta;
         this.dgram = dgram;
@@ -146,7 +171,8 @@ public final class MuxStream {
         synchronized (lock) {
             return "credits=" + credits + " inboundBytes=" + inboundBytes
                 + " consumedSinceWindow=" + consumedSinceWindow + " queued=" + inbound.size()
-                + " localClosed=" + localClosed + " remoteClosed=" + remoteClosed + " error=" + error;
+                + " localClosed=" + localClosed + " remoteClosed=" + remoteClosed
+                + " accounted=" + accounted + " error=" + error;
         }
     }
 
@@ -204,6 +230,11 @@ public final class MuxStream {
             }
             d = inbound.poll();
             inboundBytes -= d.length;
+            queued = accounted ? inboundBytes : 0;
+            if (accounted) {
+                budget.release(d.length);
+            }
+            lastConsumedAt = System.currentTimeMillis();
             consumedSinceWindow += d.length;
             if (consumedSinceWindow >= WINDOW / 2) {
                 refill = consumedSinceWindow;
@@ -259,16 +290,63 @@ public final class MuxStream {
 
     /** Abort both directions. */
     public void reset(int reason) {
+        budget.release(abort(new IOException("stream reset (" + reason + ")"), true));
+        session.sendReset(id, reason);
+        session.remove(this);
+    }
+
+    /**
+     * Gives this stream's queued bytes back to the budget now and lets the RST follow on a thread
+     * of its own. Returns what was freed.
+     *
+     * <p>The frame is thirty-odd bytes on a socket that may be congested, and the caller is a
+     * session reader thread that is not necessarily this stream's. Blocking it there would let one
+     * congested peer stall an unrelated peer's reader, which is the shape of the problem this
+     * budget exists to fix, so only the local abort is synchronous. Freeing the bytes does not
+     * depend on the frame arriving.
+     */
+    long reclaim() {
+        long freed = abort(new IOException("stream reset: the hub's receive budget was full"), true);
+        budget.release(freed);
+        session.remove(this);
+        Thread.ofVirtual().name("mux-rst-" + id).start(() -> session.sendReset(id, Frame.RST_NO_BUDGET));
+        return freed;
+    }
+
+    /**
+     * The local half of an abort: fail both directions, wake everyone waiting, and optionally drop
+     * what is queued. Returns the bytes that were still counted against the budget, for the caller
+     * to release -- once, which is what {@link #accounted} is for.
+     */
+    private long abort(IOException cause, boolean discard) {
         synchronized (lock) {
             if (error == null) {
-                error = new IOException("stream reset (" + reason + ")");
+                error = cause;
             }
             localClosed = true;
             remoteClosed = true;
+            long held = accounted ? inboundBytes : 0;
+            accounted = false;
+            if (discard) {
+                inbound.clear();
+                current = null;
+                currentPos = 0;
+                inboundBytes = 0;
+            }
+            queued = 0;
             lock.notifyAll();
+            return held;
         }
-        session.sendReset(id, reason);
-        session.remove(this);
+    }
+
+    /** Bytes in this stream's receive queue that the budget is counting. Lock-free by design. */
+    long queuedBytes() {
+        return queued;
+    }
+
+    /** When a reader last took bytes out of the queue. */
+    long lastConsumedAt() {
+        return lastConsumedAt;
     }
 
     boolean isFullyClosed() {
@@ -279,17 +357,37 @@ public final class MuxStream {
 
     // --- called by the session reader --------------------------------------------------------
 
+    /**
+     * Queues one DATA payload. The budget is charged before the queue takes it and outside the
+     * lock, because charging it can reclaim, reclaiming takes another stream's lock, and the stream
+     * it picks may be this one.
+     */
     void onData(byte[] payload) throws MuxException {
+        budget.acquire(payload.length);
+        boolean overrun = false;
+        boolean accepted = false;
         synchronized (lock) {
-            if (remoteClosed) {
-                return;
+            if (!remoteClosed) {
+                if (inboundBytes + payload.length > WINDOW + Frame.MAX_DATA) {
+                    overrun = true;
+                } else {
+                    inbound.add(payload);
+                    inboundBytes += payload.length;
+                    queued = inboundBytes;
+                    accepted = true;
+                    lock.notifyAll();
+                }
             }
-            if (inboundBytes + payload.length > WINDOW + Frame.MAX_DATA) {
-                throw new MuxException("peer exceeded the receive window on stream " + id);
-            }
-            inbound.add(payload);
-            inboundBytes += payload.length;
-            lock.notifyAll();
+        }
+        if (!accepted) {
+            budget.release(payload.length);
+        }
+        if (overrun) {
+            // Not fatal to the session. The peer broke flow control on one stream, and cutting the
+            // connection would take every other visitor on that node down with it -- the same
+            // blast radius the budget is here to avoid. The session counts repeats and gives up on
+            // a peer that keeps doing it.
+            session.onWindowOverrun(this);
         }
     }
 
@@ -309,25 +407,14 @@ public final class MuxStream {
     }
 
     void onReset(int reason) {
-        synchronized (lock) {
-            if (error == null) {
-                error = new IOException("stream reset by peer (" + reason + ")");
-            }
-            remoteClosed = true;
-            localClosed = true;
-            lock.notifyAll();
-        }
+        budget.release(abort(new IOException("stream reset by peer (" + reason + ")"), true));
         session.remove(this);
     }
 
     void onSessionClosed(IOException cause) {
-        synchronized (lock) {
-            if (error == null) {
-                error = cause;
-            }
-            remoteClosed = true;
-            localClosed = true;
-            lock.notifyAll();
-        }
+        // The queue is left where it is: a reader draining the last bytes before it sees the error
+        // is what this has always done, and half a response beats none. The budget stops counting
+        // them, because the session is gone and no reader is obliged to come back and release them.
+        budget.release(abort(cause, false));
     }
 }

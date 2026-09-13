@@ -5,8 +5,14 @@
 #
 # Usage: ./native.sh -DskipTests && ./measure.sh [--check]
 #   IDLE=10      seconds to idle before the idle measurement
+#   PORT=18443   the hub's port; the local app follows it (APP_PORT, default PORT+138) so that two
+#                runs on one machine cannot land on each other
 #   LOAD=1000    also run LOAD concurrent https visitors through the link (needs curl >= 7.66)
 #   --check      exit 1 when a number exceeds the budget below (the CI gate)
+#   SLOW=300     also run SLOW visitors that ask for a large body and then stop reading it, which
+#                is the axis LOAD does not touch: LOAD holds sessions with no bytes in flight, so
+#                the hub's receive queues are empty and its peak says nothing about what a stalled
+#                reader costs. This is what reaches the receive budget (ARCHITECTURE.md 5.3).
 #   RATE=8       also measure throughput, 8s per phase (tools/throughput.py); reported, not gated.
 #                RATE_HANDSHAKES= offered handshakes a second (400), RATE_CONNS= warm ones (32)
 #                RATE_PHASES="warm" runs one phase instead of both
@@ -20,6 +26,11 @@ CERT=$R/hub/src/test/resources/tls/hub-test.crt
 KEY=$R/hub/src/test/resources/tls/hub-test.key
 W=/tmp/jsm$$
 PORT=${PORT:-18443}
+# The local app's port moves with PORT, or two runs at once quietly ruin each other's numbers: PORT
+# used to move the hub and leave the app on 18080, so the second run's node published the first
+# run's app and both sampled RSS off a topology neither of them set up. Found by two sessions
+# measuring at the same time.
+APP_PORT=${APP_PORT:-$((PORT + 138))}
 CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 
 # Budget (ARCHITECTURE.md §14). Change only with a reason, in the same commit as the design table.
@@ -41,6 +52,27 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 # 1,000 visitors peak at 59.8 (linux) and 53.7 (macOS), which is the lever if this ever binds.
 B_NODE_LOAD_MB=88
 B_HUB_LOAD_MB=88
+# The SLOW phase needs its own node budget, looser than B_NODE_LOAD_MB and for a reason that is not
+# the receive budget: a visitor sending one GET line puts tens of bytes in the node's receive queue.
+# What grows is TlsEndpoint's per-visitor state (netInBuf + appInBuf + the SSLEngine's own, 50-60 KB
+# each) times the visitors live at once -- its own unbounded per-connection term, and its own change
+# to make. Measured 96.7 to 98.9 at about 1,000 visitors, by two people on one machine; 108 is ~10%
+# over the highest number anyone has seen. Tight enough to mean something: the failure this phase
+# exists to catch drove the node past 200, so a real regression blows through 108 rather than
+# creeping to 101.
+#
+# RSS is the right metric here and the wrong one for the hub, which is worth knowing rather than
+# looking inconsistent. The hub's growth is receive queues that the collector expands and reclaims on
+# its own schedule, so its peak swung 61 to 125 MB on one configuration; the node's is per-visitor TLS
+# state that scales with the visitor count, and it repeated to 0.1 MB across runs. So the hub is gated
+# on jailhub_receive_queued_peak_bytes, which is exact, and the node on RSS, which for the node is
+# reproducible. Replace this with a direct count of concurrent visitor TLS endpoints when the node
+# exposes one; RSS is standing in for that number.
+#
+# Derived on darwin-arm64. NOT confirmed on linux-amd64, where RSS accounting differs enough to
+# matter (see the note below the platform block: most of a Linux idle RSS is binary pages). Someone
+# should measure it there before the gate runs on it.
+B_NODE_SLOW_MB=108
 B_CLI_MS=50
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
@@ -120,9 +152,14 @@ INV2=$("$NODE" invite --user bob --home "$W/a" | grep -o "https://hub.test:$PORT
 # kernel before the app sees it.
 cat > "$W/app/app.py" <<'EOF'
 import asyncio
+import sys
 
 KEEP = b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: keep-alive\r\n\r\nhello\n"
 CLOSE = b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nhello\n"
+# /big is for tools/slow-readers.py: far more than one stream's 256 KB window, so a visitor that
+# stops reading leaves bytes with nowhere to go but the hub's receive queue.
+BIG = 8 * 1024 * 1024
+CHUNK = b"x" * 65536
 
 async def serve(reader, writer):
     # Honour Connection: close, because the two phases want opposite things. The warm throughput
@@ -132,6 +169,14 @@ async def serve(reader, writer):
     try:
         while True:
             head = await reader.readuntil(b"\r\n\r\n")
+            if b" /big " in head:
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n" % BIG)
+                for _ in range(BIG // len(CHUNK)):
+                    writer.write(CHUNK)
+                    # Parks once the node stops taking them, which is the whole point: the producer
+                    # is faster than the visitor and something in between holds the difference.
+                    await writer.drain()
+                continue
             if b"connection: close" in head.lower():
                 writer.write(CLOSE)
                 await writer.drain()
@@ -144,15 +189,15 @@ async def serve(reader, writer):
         writer.close()
 
 async def main():
-    server = await asyncio.start_server(serve, '127.0.0.1', 18080, backlog=1024)
+    server = await asyncio.start_server(serve, '127.0.0.1', int(sys.argv[1]), backlog=1024)
     async with server:
         await server.serve_forever()
 
 asyncio.run(main())
 EOF
-python3 "$W/app/app.py" > /dev/null 2>&1 &
+python3 "$W/app/app.py" "$APP_PORT" > /dev/null 2>&1 &
 APPPID=$!
-"$NODE" open 18080 --name demo --home "$W/a" > /dev/null
+"$NODE" open "$APP_PORT" --name demo --home "$W/a" > /dev/null
 sleep "${IDLE:-10}"
 NODEPID=$(pgrep -f "daemon --home $W/a")
 
@@ -190,6 +235,80 @@ if [ -n "${LOAD:-}" ]; then
     [ -f "$f" ] && grep -qi OutOfMemory "$f" && { echo "  !! OutOfMemoryError in $(basename "$f")"; fail=1; }
   done
   [ "$CHECK" = 1 ] && [ "$ok" -lt $((LOAD * 99 / 100)) ] && { echo "  !! only $ok of $LOAD visitors were held"; fail=1; }
+fi
+
+if [ -n "${SLOW:-}" ]; then
+  # The saturation axis. Each visitor asks for 8 MB and reads one line, so the node fills its
+  # per-stream credits and the hub is left holding them. Gated on the same ceiling as LOAD, because
+  # the claim being checked is exactly that: a stalled reader must not move the hub's peak past it.
+  # Without the receive budget of ARCHITECTURE.md 5.3 this is what killed the process outright.
+  echo "saturation: $SLOW visitors asking for 8 MB and not reading it, peak RSS while they are up"
+  python3 "$R/tools/slow-readers.py" "$PORT" "$CERT" "$SLOW" "$W" > "$W/slow.log" 2>&1 &
+  SGPID=$!
+  # An ordinary visitor is probed repeatedly while the stalled ones are held, not once: a single
+  # sample cannot tell a reclaim stall from a GC pause from the ramp still running, and the spread
+  # is the thing worth knowing -- a hub that serves at 300 ms with one 5 s outlier is a different
+  # product from one that serves at 300 ms flat.
+  peak_h=0; peak_n=0; probes=""
+  while kill -0 $SGPID 2>/dev/null; do
+    h=$(rss_mb "$HUBPID"); n=$(rss_mb "$NODEPID")
+    [ "$(echo "$h > $peak_h" | bc -l)" = 1 ] && peak_h=$h
+    [ "$(echo "$n > $peak_n" | bc -l)" = 1 ] && peak_n=$n
+    ms=$(curl -sk -o /dev/null -w '%{time_total}' --max-time 20 \
+         --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null \
+         | awk '{printf "%.0f", $1 * 1000}')
+    probes="$probes ${ms:-timeout}"
+    sleep 1
+  done
+  wait $SGPID 2>/dev/null || true
+  ok=$(cut -d' ' -f1 "$W/slow.txt" 2>/dev/null || echo 0)
+  printf '  %s/%s held in %ss\n' "$ok" "$SLOW" "$(cut -d' ' -f2 "$W/slow.txt" 2>/dev/null || echo '?')"
+  # The hub is reported and not gated on RSS here, the mirror of the node and for the opposite
+  # reason: its growth is receive queues that the collector expands and reclaims on its own
+  # schedule, and its peak swung 61 to 125 MB on one configuration. Gating that produces red runs
+  # with no code change behind them. The hub's assertion on this axis is the receive queue's
+  # high-water mark below, which is exact and reproduces at the budget every time.
+  printf '  %-10s %6.1f  (peak, reported; the queue below is the hub'"'"'s gate)\n' jailhub "$peak_h"
+  # Gated on B_NODE_SLOW_MB, not B_NODE_LOAD_MB: the node legitimately carries more here, for a
+  # reason that is not the receive budget. The constant's comment has the numbers and the why.
+  printf '  %-10s %6.1f  (peak)\n' jailscale "$peak_n"; gate "node RSS with stalled readers" "$peak_n" "$B_NODE_SLOW_MB"
+  printf '  ordinary visitor while held (ms):%s\n' "$probes"
+  # Surviving is the point, so a process that died is caught here and not inferred from RSS.
+  for f in "$W/hub.log" "$W/node.log"; do
+    [ -f "$f" ] && grep -qi OutOfMemory "$f" && { echo "  !! OutOfMemoryError in $(basename "$f")"; fail=1; }
+  done
+  kill -0 $HUBPID 2>/dev/null || { echo "  !! jailhub died under stalled readers"; fail=1; }
+  kill -0 $NODEPID 2>/dev/null || { echo "  !! jailscale died under stalled readers"; fail=1; }
+  # The gate with teeth on this axis, and the only deterministic number here: peak RSS on a Serial
+  # GC that never returns the heap is a GC-timing artefact that varies 2x run to run, but the receive
+  # queue's high-water mark is exact and reproduced at exactly the budget across every run of this
+  # phase. Over the budget means the bound leaked; zero reclaims with the peak AT the budget means
+  # something other than the bound flattened it, which is the falsification FlowBudget asks for.
+  set -- $(curl -sk --resolve "hub.test:$PORT:127.0.0.1" "https://hub.test:$PORT/metrics" 2>/dev/null \
+      | awk '/^jailhub_streams_reclaimed_total /{r=$2} /^jailhub_receive_queued_peak_bytes /{p=$2} \
+             /^jailhub_receive_budget_bytes /{b=$2} /^jailhub_nodes_online /{n=$2} \
+             END{print r+0, p+0, b+0, n+0}')
+  rec=${1:-0}; qpeak=${2:-0}; qbud=${3:-0}; nodes=${4:-1}
+  # The budget is charged before the queue takes the payload, so each session reader can be holding
+  # one 16 KB frame that is counted and not yet queued: the invariant is the budget plus a frame per
+  # reader, not the budget exactly. Asserting it exactly failed by 16,367 bytes -- one frame less
+  # seventeen -- which is the slack doing exactly what it is documented to do.
+  #
+  # Derived from the node count rather than hardcoded, because a fixed number would silently be a
+  # fact about this harness: it starts two node daemons today, and the first person to add a third
+  # gets the same false failure and re-debugs it. A node may hold up to four connections (5.3) and
+  # each one has a reader, so the bound is nodes x 4 frames. That is 128 KB here against a 24 MB
+  # budget -- noise even at a hundred nodes, which is why this is a gate concern and not a
+  # correctness one.
+  qslack=$((nodes * 4 * 16 * 1024))
+  printf '  receive queue peak %.1f MB of %.1f MB (+%d KB slack, %s nodes), %s streams reclaimed\n' \
+    "$(echo "$qpeak / 1048576" | bc -l)" "$(echo "$qbud / 1048576" | bc -l)" "$((qslack / 1024))" "$nodes" "$rec"
+  if [ "$qbud" -gt 0 ] && [ "$qpeak" -gt $((qbud + qslack)) ]; then
+    echo "  !! the receive queue passed its budget: $qpeak > $qbud + $qslack bytes"; fail=1
+  fi
+  if [ "$CHECK" = 1 ] && [ "$qbud" -gt 0 ] && [ "$qpeak" -ge "$qbud" ] && [ "$rec" -eq 0 ]; then
+    echo "  !! queue reached the budget with nothing reclaimed; the bound is not what held it"; fail=1
+  fi
 fi
 
 if [ -n "${RATE:-}" ]; then

@@ -153,7 +153,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 return;
             }
             node = hub.store().node(mkey);
-            mux = new MuxSession(ch, true, this);
+            mux = new MuxSession(ch, true, this, hub.flowBudget());
             group = hub.registry().attach(this);
             if (conn == 0 && node != null && hub.tls().isLoaded()) {
                 send(hub.tls().certUpdate());

@@ -4,6 +4,7 @@ import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpException;
 import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.http.HttpResponse;
+import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Log;
 import java.io.EOFException;
@@ -151,13 +152,18 @@ final class HttpFront {
             .put("nodesRegistered", hub.store().nodes().size())
             .put("nodesOnline", hub.registry().size())
             .put("linksOpen", hub.links().all().size())
+            .put("visitorsInFlight", hub.router().visitorsInFlight())
             .put("certificateNotAfter", hub.tls().isLoaded() ? hub.tls().leaf().getNotAfter().getTime() / 1000 : null)
             .put("visitors", Metrics.VISITORS.sum())
             .put("visitorsRefused", Metrics.VISITORS_REFUSED.sum())
             .put("signatures", Metrics.SIGNATURES.sum())
             .put("signaturesRefused", Metrics.SIGNATURES_REFUSED.sum())
             .put("nodeSessions", Metrics.NODE_SESSIONS.sum())
-            .put("relayBytes", Metrics.RELAY_BYTES.sum());
+            .put("relayBytes", Metrics.RELAY_BYTES.sum())
+            .put("receiveBudgetBytes", hub.flowBudget().limitBytes())
+            .put("receiveQueuedBytes", hub.flowBudget().usedBytes())
+            .put("receiveQueuedPeakBytes", hub.flowBudget().peakBytes())
+            .put("streamsReclaimed", hub.flowBudget().reclaimedStreams());
         long rss = Resources.rssBytes();
         if (rss >= 0) {
             b.put("residentBytes", rss);
@@ -264,7 +270,13 @@ final class HttpFront {
         }
 
         b.append("<h2>Limits</h2><table>");
-        row(b, "Visitors per name", SniRouter.MAX_PER_NAME + " at once");
+        row(b, "Visitors per name", SniRouter.MAX_PER_NAME + " at once, "
+            + hub.router().visitorsInFlight() + " right now");
+        // Both numbers, because either one alone misleads. The count is what admission checks; the
+        // budget is what the hub can actually hold, and it is the one that binds first.
+        row(b, "Buffered per visitor", MuxStream.WINDOW / 1024 + " KiB at most");
+        row(b, "Buffered in total", hub.flowBudget().limitBytes() / (1024 * 1024) + " MiB, then the"
+            + " slowest stream is dropped");
         row(b, "Links per node", String.valueOf(Links.MAX_LINKS_PER_NODE));
         row(b, "New control connections", HANDSHAKE_BURST + " per address, then "
             + (long) HANDSHAKE_PER_SECOND + " a second");
