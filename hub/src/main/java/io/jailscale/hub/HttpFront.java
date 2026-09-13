@@ -177,9 +177,6 @@ final class HttpFront {
             .append(" machine over HTTPS without opening an inbound port: the hub relays the bytes and your")
             .append(" machine terminates the TLS. <a href=\"").append(REPO).append("\">What this is</a>.</p>");
 
-        // Reading matter on one side, numbers on the other. Both are one column under 56rem.
-        b.append("<div class=cols><div>");
-
         // In the order someone has to do it. The page used to say how to join and stop there, which
         // leaves out both where the binary comes from and what joining was for.
         b.append("<h2>Publish a port</h2>");
@@ -212,8 +209,6 @@ final class HttpFront {
             .append(" That is what <code>jailscale verify</code> checks from your side, and what the daemon")
             .append(" re-checks on its own every half hour. A domain you bring yourself never involves this")
             .append(" hub's key at all.</p>");
-
-        b.append("</div><div>");
 
         int online = hub.registry().size();
         long rss = Resources.rssBytes();
@@ -277,9 +272,7 @@ final class HttpFront {
         b.append("<p>The operator can remove a node or bar an address, so treat an open hub you do not run")
             .append(" as a place to try this rather than one to depend on.</p>");
 
-        b.append("</div></div>");
-
-        // The admin tables are wide and there are forms in them: full width, under the two columns.
+        // The admin tables and their forms come last, under everything a visitor came for.
         AdminWeb.Session s = hub.adminWeb().adminSession(req);
         if (s != null) {
             b.append("<p>Signed in as <b>").append(escape(s.user())).append("</b>. ")
@@ -325,34 +318,34 @@ final class HttpFront {
      * The frame every page shares. One stylesheet, inline, because a second request for a file that
      * never changes is a second thing to serve and to cache-bust; it is under a kilobyte.
      *
-     * <p>The width is 64rem rather than the 40rem a page of prose wants, because this one is mostly
-     * tables: at 40rem the binary hash ran to the edge of its cell while two thirds of a desktop
-     * window sat empty. {@code .cols} puts the reading matter beside the numbers on a wide screen
-     * and stacks them under 56rem, which is the only breakpoint. Dark is the system's choice, not a
-     * toggle, since there is nothing here to remember a preference with.
+     * <p>One column, 48rem: wide enough that a 64-character hash and a two-part status line sit on
+     * one line each, which is what was actually wrong at 40rem, and narrow enough to read. Section
+     * headings are small and muted because on this page they are labels between blocks rather than
+     * titles anyone reads. Dark is the system's choice, not a toggle, since there is nothing here
+     * to remember a preference with.
      */
     private static String page(String title, String body) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             + "<title>" + escape(title) + "</title><style>"
-            + ":root{color-scheme:light dark;--ink:#111;--dim:#666;--rule:#e8e8e8;--wash:#f4f4f4;--link:#0b57d0}"
-            + "body{font-family:system-ui,-apple-system,sans-serif;max-width:64rem;margin:3rem auto;padding:0 1.5rem;"
-            + "line-height:1.6;color:var(--ink);background:Canvas;overflow-wrap:break-word}"
-            + "h1{font-size:1.6rem;margin:0 0 .75rem}"
-            + "h2{font-size:1.05rem;margin:2rem 0 .25rem}"
-            + ".cols{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:0 3rem;align-items:start}"
-            + ".cols>div>h2:first-child{margin-top:1.5rem}"
-            + "@media(max-width:56rem){.cols{display:block}}"
-            + "a{color:var(--link)}"
-            + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.4rem}"
-            + "table{border-collapse:collapse;width:100%;margin:.5rem 0}"
-            + "td{padding:.35rem .75rem .35rem 0;text-align:left;border-bottom:1px solid var(--rule);vertical-align:top}"
-            + "td:first-child{white-space:nowrap;width:1%;color:var(--dim)}"
-            + "td code{word-break:break-all}small{color:var(--dim)}"
-            // A label column that will not wrap is right until the screen is narrower than the
-            // longest label, which on a phone it is.
-            + "@media(max-width:30rem){td:first-child{white-space:normal}}"
-            + "@media(prefers-color-scheme:dark){:root{--ink:#e8eaed;--dim:#9aa0a6;--rule:#2a2f37;--wash:#20242b;--link:#8ab4f8}}"
+            + ":root{color-scheme:light dark;--bg:#fff;--ink:#15171a;--dim:#70757c;--rule:#e7e8ea;--wash:#f5f6f7;--link:#0b57d0}"
+            + "body{font-family:system-ui,-apple-system,sans-serif;max-width:48rem;margin:4rem auto 6rem;"
+            + "padding:0 1.5rem;line-height:1.65;color:var(--ink);background:var(--bg);overflow-wrap:break-word}"
+            + "h1{font-size:1.5rem;letter-spacing:-.01em;margin:0 0 1rem}"
+            + "h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);"
+            + "font-weight:600;margin:2.75rem 0 .5rem}"
+            + "p{margin:.75rem 0}a{color:var(--link)}"
+            + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"
+            + "table{border-collapse:collapse;width:100%;margin:.25rem 0}"
+            + "td{padding:.5rem 0;text-align:left;border-top:1px solid var(--rule);vertical-align:baseline}"
+            + "tr:first-child td{border-top:0}"
+            + "td:first-child{width:11rem;color:var(--dim);padding-right:1rem}"
+            + "td code{word-break:break-all}"
+            + "small{color:var(--dim);font-size:.85rem;line-height:1.55;display:block;margin:.75rem 0}"
+            + "@media(max-width:30rem){td,td:first-child{display:block;width:auto;padding:0}"
+            + "td:first-child{border-top:1px solid var(--rule);padding-top:.5rem}td+td{padding-bottom:.5rem}}"
+            + "@media(prefers-color-scheme:dark){:root{--bg:#131517;--ink:#e6e8eb;--dim:#8b9096;--rule:#282b30;"
+            + "--wash:#1c1f23;--link:#8ab4f8}}"
             + "</style></head><body><h1>" + escape(title) + "</h1>" + body + "</body></html>";
     }
 

@@ -374,12 +374,16 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
-The page is two columns on a wide screen -- what to read on one side, what the hub is doing on the
-other -- and one column under 56rem, which is the only breakpoint. It was 40rem of centred prose,
-which is the right measure for a page of prose and the wrong one for a page that is now mostly
-tables: the binary hash ran to the edge of its cell with two thirds of the window empty beside it.
-The stylesheet is inline and under a kilobyte, there is no script and no image, and dark is whatever
-the system asked for, since a toggle would need somewhere to remember the answer.
+The page is one column, 48rem. It was 40rem, and what was wrong there was not the margins but the
+measure: a 64-character binary hash ran to the edge of its cell and a two-word label wrapped onto two
+lines. Both fit on one line now, and the rows are full-width with a hairline between them rather than
+a table boxed inside a narrower one. Section headings are small, muted and uppercase, because on this
+page they separate blocks rather than being read. The stylesheet is inline and under a kilobyte,
+there is no script and no image, and dark is whatever the system asked for, since a toggle would need
+somewhere to remember the answer. **Both colours come from the same place**: taking the background
+from the `Canvas` keyword while the text colour came from a media query let them disagree, and a
+browser that darkens the page on its own -- Chrome's auto dark theme -- then painted dark text on a
+dark background.
 
 Two endpoints say the same things to something that is not a person. **`GET /v1/status`** is the
 page's public facts as JSON -- build, hub key, uptime, nodes registered and online, links open, when
