@@ -38,10 +38,18 @@ import java.util.concurrent.atomic.LongAdder;
  * suspicion about a scan that runs on a reader thread is that it stalls one. With this budget
  * completely full and reclaim actively running, an ordinary visitor was served in 4 to 153 ms; at
  * ten times the load, with the budget in the same state and the same reclaim activity, ordinary
- * visitors saw 8 to 19 <em>seconds</em> during the ramp and 238 to 576 ms once it finished. The
- * difference between those two is the node saturating on its own per-visitor TLS state, not
- * anything here -- an unbounded hub showed worse outliers still, 14.0 s and 10.6 s. The long tail
- * on this axis belongs to {@code TlsEndpoint}, and is not this budget's to answer.
+ * visitors saw 8 to 19 <em>seconds</em> during the ramp and 238 to 576 ms once it finished. An
+ * unbounded hub showed worse outliers still, 14.0 s and 10.6 s, so whatever produces them is older
+ * than this budget.
+ *
+ * <p>This first said the difference was the node saturating on its own per-visitor TLS state. That
+ * was an inference and the measurements since contradict it: the outlier survives opening the node's
+ * ceiling to 768m, and a node that timed its own signing requests found the <em>hub</em> taking
+ * 12.8 s to answer one, with two answers released in the same millisecond. That is a queue draining
+ * at once, and {@link NoiseChannel#write} is where it forms -- it holds one lock across both the
+ * encryption and the socket write, because the nonce must advance in wire order, so a single blocked
+ * write stalls every frame on that session including the control frames a visitor handshake is
+ * waiting for. The long tail is a control-frame stall on the hub, not the node, and not this.
  *
  * <p>Two things about that measurement belong next to it, because without them it does not
  * reproduce. It needed {@code -XX:MaxHeapSize=768m} on the *node*: at the shipped 64m the node's own

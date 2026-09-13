@@ -1209,11 +1209,17 @@ unbounded per-connection term of exactly the kind §5.3's budget bounds for rece
 separate change. Two numbers for whoever takes it: the node's RSS on this axis repeats to 0.1 MB
 across runs, unlike the hub's, because per-visitor state scales with the visitor count where queue
 occupancy moves with the collector; and an ordinary visitor sees 7 to 19 second responses while
-1,000 slow readers are arriving, dropping to 240-580 ms once the ramp finishes. That long tail is
-arrival-driven and not the budget's: with the budget completely full and reclaim running, but the
-node barely loaded (120 visitors arriving in half a second), ordinary visitors were served in 4 to
-153 ms. `measure.sh` gates the node on this axis at `B_NODE_SLOW_MB`, which is set above today's
-figure on purpose and says so.
+1,000 slow readers are arriving, dropping to 240-580 ms once the ramp finishes. It is not the
+budget's: with the budget completely full and reclaim running, but the node barely loaded (120
+visitors arriving in half a second), ordinary visitors were served in 4 to 153 ms. **It is also not
+the node's, which this section first said it was.** That was an inference from the node being the
+hotter process, and it is wrong: the outlier survives opening the node's ceiling to 768m, and a node
+timing its own signing requests caught the *hub* taking 12.8 s to answer one, with two answers
+released in the same millisecond. `NoiseChannel.write` holds one lock across the encryption and the
+socket write — the nonce has to advance in wire order — so one blocked write stalls every frame on
+that session, control frames included, and a visitor handshake waits on a `SignResponse` behind a
+queue of someone else's data. That is its own fix (§5.3), not this one. `measure.sh` gates the node
+on this axis at `B_NODE_SLOW_MB`, which is set above today's figure on purpose and says so.
 
 **Linux is not 10 MB heavier; it counts differently.** Of the hub's 35.1 MB there, **3.3 MB is
 anonymous** — the heap, the stacks, everything the process actually owns — and the rest is the
