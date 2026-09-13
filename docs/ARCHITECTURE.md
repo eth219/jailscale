@@ -249,10 +249,12 @@ stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA fr
   `OutOfMemoryError` surfaced on the thread carrying a node's control connection, whose death runs
   `NodeGroup.detach` -- so **the whole node session went, with every link and visitor on it**, and the
   node reconnected a second later. An unauthenticated outage of every name on that node, not a dead
-  process. Two hedges, both measured: it fired once in two identical attempts, and the attempt that
-  survived had the slower ramp (176s against 144s for the same 1,200 visitors), which is the same
-  arrival-rate effect that fills the budget at 120 visitors in half a second but not at 300 spread
-  over 25s. It also needs the node's own ceiling raised, because at the shipped 64m the node's
+  process. Two hedges, both measured: it fired once in three identical attempts, in the one with the
+  fastest ramp, and ramp time tracked the hub's peak inversely across all three -- 144s/134.8 MB,
+  176s/121.4 MB, 218s/114.1 MB -- so quote the ramp time beside any peak from this axis or the runs
+  read as unexplained scatter. That is the same arrival-rate effect that fills the budget at 120
+  visitors arriving in half a second but not at 300 spread over 25s. The ramps also got monotonically
+  slower as the machine did, so one in three is an underestimate and not a rate to quote. It also needs the node's own ceiling raised, because at the shipped 64m the node's
   per-visitor TLS state saturates first and the hub never reaches its heap -- which is why this axis
   read as harmless every time it was measured without that. Whether it fires and what it takes with
   it are both chance, which is the argument for bounding it rather than for waiting on a repro. `FlowBudget` is one byte total across every session, a quarter of
