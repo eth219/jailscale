@@ -51,6 +51,8 @@ final class Visitors {
     private final Map<String, SSLContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, SSLContext> domainContexts = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger inFlight = new java.util.concurrent.atomic.AtomicInteger();
+    /** A visitor handshake slower than this is worth a line; healthy is single-digit milliseconds. */
+    private static final long SLOW_HANDSHAKE_MS = 1_000;
 
     Visitors(NodeState state) {
         this.state = state;
@@ -145,6 +147,7 @@ final class Visitors {
             stream.reset(4);
             return;
         }
+        long tEnter = System.currentTimeMillis();
         TlsEndpoint tls = new TlsEndpoint(ctx, stream.in(), stream.out());
         try {
             // Remember that this node, and not the hub or another node, terminated it (§11.3).
@@ -163,6 +166,14 @@ final class Visitors {
             LOG.debug("TLS handshake for {} failed: {}", sni, e.getMessage());
             stream.reset(5);
             return;
+        }
+        // A visitor that waits seconds for its handshake is the thing §14 is chasing, and the hub
+        // cannot see which side spent them: its own timing ends at the node's first byte. If the
+        // handshake here is fast and the hub still saw a long wait, the time went before this
+        // method ran.
+        long handshakeMs = System.currentTimeMillis() - tEnter;
+        if (handshakeMs >= SLOW_HANDSHAKE_MS) {
+            LOG.warn("visitor handshake for {} took {} ms inside the node", sni, handshakeMs);
         }
         byte[] replay = null;
         InputStream plain = tls.plainIn();
