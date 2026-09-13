@@ -68,8 +68,16 @@ own. Neither has a runtime dependency and neither needs root to run.
 
 ### A binary
 
-Every tagged release carries four targets for both programs: `linux-amd64`,
-`linux-arm64`, `darwin-arm64`, `windows-amd64.exe`. Intel Macs run the JAR.
+v0.1.0 carries five targets for both programs: `linux-amd64`, `linux-arm64`,
+`darwin-arm64`, `darwin-amd64` and `windows-amd64.exe`, each 29.8 to 31.9 MiB.
+
+It is the only release so far, and it was tagged a day before the release
+toolchain changed, so it is not the build the numbers in this file describe.
+A release built from main carries four targets and not five, because GraalVM CE
+25.3 does not build `darwin-amd64` and Intel Macs get the JAR instead
+([ARCHITECTURE.md §3.2](docs/ARCHITECTURE.md)), and its binaries are about
+5 MiB smaller. Everything under [Resource usage](#resource-usage) is measured
+on main, not on the release this section downloads.
 
 ```sh
 base=https://github.com/eth219/jailscale/releases/download/v0.1.0
@@ -171,14 +179,22 @@ configurations for putting the hub behind nginx or HAProxy.
 
 ## Resource usage
 
-Measured with the native binaries by `./measure.sh`, which CI runs as a budget
-on every push to main. Two platforms, because an amd64 binary is bigger than an
-arm64 one and Linux counts the binary's own mapped pages in RSS where macOS
-largely does not.
+Measured on main with the native binaries by `./measure.sh`, which CI runs as a
+budget on every push there. Two platforms, because an amd64 binary is bigger
+than an arm64 one and Linux counts the binary's own mapped pages in RSS where
+macOS largely does not.
+
+**None of this is v0.1.0.** That release was built with the previous toolchain,
+Liberica NIK 25.0.4, which the release workflow dropped for GraalVM CE 25.3 the
+day after the tag. What you download from it is 29.8 to 31.9 MiB rather than 25
+to 26, idles 5 to 6 MB higher on linux-amd64, and starts `jailscale status` in
+4.7 ms rather than 2.4. [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) measures
+both toolchains side by side. The table below describes the next release, not
+the one [Install](#a-binary) downloads.
 
 | | jailhub | jailscale |
 |---|---|---|
-| Binary, as released | 25.3 / 26.1 MiB | 25.4 / 26.2 MiB |
+| Binary size | 25.3 / 26.1 MiB | 25.4 / 26.2 MiB |
 | Idle RSS | 25.3 / 35.1 MB | 24.8 / 34.4 MB |
 | Peak RSS, 1,000 visitors held open at once | 53 / 65 MB | 69 / 67 MB |
 | CLI cold start | — | 6.3 / 2.4 ms |

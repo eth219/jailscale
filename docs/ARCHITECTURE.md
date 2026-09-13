@@ -139,15 +139,17 @@ sleep by interrupt, which is exactly that path, so the release workflow builds o
 (JDK 25.0.4.1). Note that `setup-graalvm`'s `version:` and `java-version:` are different knobs:
 `java-version: '25'` on the community distribution still resolves **25.0.2**, which is why that
 distribution looked unusable until `version: '25.3'` was tried. **The 25.3 line does not build
-macos-amd64**, which is why releases carry four native targets and not five: Intel Macs get
-`jailscale.jar`. §14 has what that line is worth, which is most of a doubling in throughput. And **Windows cannot poll one socket for read and for write at the same
-time**: the JDK gives virtual threads one wepoll handle per direction, and with a thread parked on
-each direction of the same socket the AFD driver underneath completes the wrong one, leaving the
-thread that asked for the event asleep for good (JDK-8334574, open, and still present in 26). So one
-side of every socket two threads use at once runs on a platform thread, which enters no poller at
-all: `io.jailscale.proto.net.DuplexThread`, Windows only. The 60 s read timeout (§5.1) and 25 s
-keepalive (§5.3) stay as the backstop. Measured, with the variants that isolate the condition, in
-`docs/windows-virtual-thread-stall/`.
+macos-amd64**, which is why the release workflow builds four native targets and not five: Intel Macs
+get `jailscale.jar`. v0.1.0 was tagged the day before that pin landed and is the one release that
+carries five, `darwin-amd64` among them. §14 has what the line is worth, which is most of a doubling
+in throughput, and what v0.1.0 shipped instead. And **Windows cannot poll one socket for read and
+for write at the same time**: the JDK gives virtual threads one wepoll handle per direction, and
+with a thread parked on each direction of the same socket the AFD driver underneath completes the
+wrong one, leaving the thread that asked for the event asleep for good (JDK-8334574, open, and still
+present in 26). So one side of every socket two threads use at once runs on a platform thread, which
+enters no poller at all: `io.jailscale.proto.net.DuplexThread`, Windows only. The 60 s read timeout
+(§5.1) and 25 s keepalive (§5.3) stay as the backstop. Measured, with the variants that isolate the
+condition, in `docs/windows-virtual-thread-stall/`.
 
 ---
 
@@ -1248,9 +1250,17 @@ Measured with the native binaries by `./measure.sh`, which starts a real hub and
 loopback, joins them with the real CLI and opens a link. Both columns are measured, on the two
 platforms CI can run the gate on; the budgets differ per platform for the reason below the table.
 
-Both columns are the toolchain and options the release uses: GraalVM CE 25.3, `-O2`, no
+Both columns are the toolchain and options the release workflow uses: GraalVM CE 25.3, `-O2`, no
 profile-guided optimization. That was not always true of the macOS column, and the cost of it is
 below the table.
+
+**No release has been built with it yet, so this table is main and not v0.1.0.** The tag is from
+2026-09-12 and the 25.3 pin landed on 2026-09-13, which leaves v0.1.0 on Liberica NIK 25.0.4 -- the
+left-hand column of the edition table below. Measured on its own assets and that column: binaries of
+29.8 to 31.9 MiB against the 25.3 to 26.2 here, idle RSS on linux-amd64 of 40.6 MB for the hub and
+40.1 for the node against 35.1 and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries
+five native targets rather than four, since the 25.3 line is what dropped macos-amd64 (§3.2).
+README says the same where it tells people which file to download.
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
