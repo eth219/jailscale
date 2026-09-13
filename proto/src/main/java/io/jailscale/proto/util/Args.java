@@ -90,6 +90,12 @@ public final class Args {
 
     public static long parseSeconds(String v) {
         String s = v.trim();
+        if (s.isEmpty()) {
+            // `--ttl=` reaches here as "". Without this the parser leaves through charAt(-1), and a
+            // StringIndexOutOfBoundsException is not an IllegalArgumentException: both binaries fall
+            // past the handler that prints "error: ..." and exits 2.
+            throw new IllegalArgumentException("bad duration " + v);
+        }
         long mult = 1;
         char last = s.charAt(s.length() - 1);
         if (Character.isLetter(last)) {
