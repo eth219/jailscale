@@ -6,6 +6,7 @@ import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.mux.MuxSession;
 import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.tls.DomainProof;
 import io.jailscale.proto.tls.Tls;
@@ -295,6 +296,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return rows;
     }
 
+    /** "count mean/max" in milliseconds, which is how these read next to the hub's own line. */
+    private static String millis(MuxSession.Timing t) {
+        long n = t.observations();
+        double mean = n == 0 ? 0 : t.totalSeconds() * 1000 / n;
+        return String.format(java.util.Locale.ROOT, "%d %.1f/%.1f", n, mean, t.maxSeconds() * 1000);
+    }
+
     private JsonObject.Builder status() {
         JsonObject.Builder b = JsonObject.builder().put("ok", true)
             .put("machineKey", state.machineKeyText())
@@ -303,6 +311,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("connected", link.isConnected())
             .put("connections", link.connectionCount())
             .put("visitorsInFlight", visitors.inFlight())
+            // The multiplexer's own three waits, which `proto` records on both sides and only the
+            // hub publishes (ARCHITECTURE.md §14). The node is the busy writer in the saturation
+            // case -- the bulk travels node to hub -- so these are the numbers that say whether a
+            // visitor's handshake is waiting on this node's writer or on something after it.
+            .put("muxQueueWaitMs", millis(MuxSession.QUEUE_WAIT))
+            .put("muxSocketWriteMs", millis(MuxSession.SOCKET_WRITE))
+            .put("muxOpenDispatchMs", millis(MuxSession.OPEN_DISPATCH))
             .put("draining", link.drainingCount())
             .put("drainingDetail", link.drainingDetail())
             .put("registered", state.registered)
