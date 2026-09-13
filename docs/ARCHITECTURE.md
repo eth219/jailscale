@@ -373,6 +373,19 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
+It also names the build and the key it is running: the SHA-256 of the executable the kernel has
+mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's
+current Noise public key, plus the next one while a rotation is open (§5.2). Both are comparable
+with something the reader already holds -- the release's `SHA256SUMS.txt`, and the key the node
+pinned at `up`, which `jailscale status` prints -- and neither is evidence against a dishonest hub,
+which writes this page and can put anything on it (§11.2). What they catch is an operator running a
+build they did not mean to, and a key that changed without the rotation they expected. The page says
+so in those words rather than presenting them as an assurance. The digest is computed once, on the
+first request that needs it, so a hub nobody looks at never reads its own 26 MiB; only a native
+image is hashed, since under a JAR the executable is the JVM and its digest answers a different
+question. Printing the key gives nothing away: `/v1/key` already serves it unauthenticated, because
+a joining node has to fetch it before it can trust anything.
+
 ---
 
 ## 7. Certificates and ACME

@@ -146,6 +146,32 @@ class HomePageTest {
         assertTrue(html.contains(HttpFront.HANDSHAKE_BURST + " per address"), html);
     }
 
+    /**
+     * Which build and which key this hub is running. The key is the string a node pins, character
+     * for character, and {@code /v1/key} already serves it unauthenticated, so printing it gives
+     * nothing away; what it buys is a second place to compare against what the node kept.
+     */
+    @Test
+    void thePageNamesTheBuildAndTheKeyItIsRunning() throws Exception {
+        String html = http("GET", "/", null, null).bodyText();
+        assertTrue(html.contains("<code>" + hub.keys().publicText() + "</code>"), html);
+        assertFalse(html.contains("Next hub key"), "no rotation is in progress: " + html);
+        // No jailhub executable exists on a JVM, so the row is absent rather than a digest of java.
+        assertFalse(html.contains("<td>Binary</td>"), html);
+        // And what the two of them are worth is on the page beside them, not only in the docs.
+        assertTrue(html.contains("a dishonest hub prints whatever it likes here"), html);
+    }
+
+    /** During a rotation a node accepts either key, so the page has to name both or mislead. */
+    @Test
+    void aRotationInProgressNamesBothKeys() throws Exception {
+        String next = hub.keys().beginRotation();
+        String html = http("GET", "/", null, null).bodyText();
+        assertTrue(html.contains("<code>" + hub.keys().publicText() + "</code>"), html);
+        assertTrue(html.contains("Next hub key"), html);
+        assertTrue(html.contains("<code>" + next + "</code>"), html);
+    }
+
     @Test
     void anAdminSeesTheNodesAndCanRemoveOrBanFromTheSamePage() throws Exception {
         String cookie = loginAsAdmin();

@@ -159,6 +159,17 @@ final class HttpFront {
         long rss = Resources.rssBytes();
         b.append("<h2>Status</h2><table>");
         row(b, "Version", escape(Hub.version()));
+        // Which build, and which key: the two things about this hub that can be compared with
+        // something the reader already has. Both are self-reported, which the note below says.
+        String sha = Build.executableSha256();
+        if (sha != null) {
+            row(b, "Binary", "<code>sha256:" + sha + "</code>");
+        }
+        row(b, "Hub key", "<code>" + escape(hub.keys().publicText()) + "</code>");
+        String nextKey = hub.keys().nextPublicText();
+        if (nextKey != null) {
+            row(b, "Next hub key", "<code>" + escape(nextKey) + "</code>");
+        }
         row(b, "Uptime", Resources.humanDuration(Resources.uptimeMillis()));
         row(b, "Nodes", online + " online of " + hub.store().nodes().size() + " registered");
         row(b, "Links open", String.valueOf(hub.links().all().size()));
@@ -169,6 +180,14 @@ final class HttpFront {
             ? Resources.humanBytes(Resources.heapUsedBytes()) + " heap in use (resident size unavailable here)"
             : Resources.humanBytes(rss) + " resident");
         b.append("</table>");
+        // Saying what these two lines are not is the point of printing them. A hub that has been
+        // tampered with writes this page, so they catch a mistake and nothing more (§11.2).
+        b.append("<p><small>The hub key is the one a node pins when it joins, and <code>jailscale status</code>")
+            .append(" prints the one yours pinned. The binary hash is of the file this process is running: compare it")
+            .append(" with <code>SHA256SUMS.txt</code> in <a href=\"").append(REPO).append("/releases\">the release")
+            .append("</a> it claims to be, remembering that a container or source build is its own binary. Both are")
+            .append(" what this hub says about itself, so they tell you an operator is running what they think they")
+            .append(" are; a dishonest hub prints whatever it likes here.</small></p>");
 
         // A public hub is asking people to route their traffic through a stranger's machine. What it
         // can and cannot do with that traffic belongs on its own front page, not only in the docs.
