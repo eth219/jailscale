@@ -55,6 +55,11 @@ async def main(port, ca, count, workdir, path):
     with open(workdir + "/slow.txt", "w") as f:
         f.write("%d %.1f" % (len(held), time.time() - started))
     await asyncio.sleep(HOLD_SECONDS)
+    # Tell the caller the hold is over before tearing it down. Closing N sessions at once is a
+    # thundering herd of its own, and a latency probe that lands in it measures the teardown rather
+    # than the state being held -- which is exactly what it looked like when the probe's last sample
+    # was the only bad one, run after run, and was read as a stall that was still there.
+    open(workdir + "/closing.txt", "w").close()
     for _, w in held:
         w.close()
 

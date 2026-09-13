@@ -278,10 +278,15 @@ if [ -n "${SLOW:-}" ]; then
     h=$(rss_mb "$HUBPID"); n=$(rss_mb "$NODEPID")
     [ "$(echo "$h > $peak_h" | bc -l)" = 1 ] && peak_h=$h
     [ "$(echo "$n > $peak_n" | bc -l)" = 1 ] && peak_n=$n
-    ms=$(curl -sk -o /dev/null -w '%{time_total}' --max-time 20 \
-         --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null \
-         | awk '{printf "%.0f", $1 * 1000}')
-    probes="$probes ${ms:-timeout}"
+    # Only while the visitors are actually held: tools/slow-readers.py drops closing.txt before it
+    # tears them down, and a probe inside that herd measures the teardown. RSS sampling continues,
+    # because the peak there is real.
+    if [ ! -f "$W/closing.txt" ]; then
+      ms=$(curl -sk -o /dev/null -w '%{time_total}' --max-time 20 \
+           --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null \
+           | awk '{printf "%.0f", $1 * 1000}')
+      probes="$probes ${ms:-timeout}"
+    fi
     sleep 1
   done
   wait $SGPID 2>/dev/null || true
