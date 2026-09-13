@@ -1302,13 +1302,14 @@ Both columns are the toolchain and options the release workflow uses: GraalVM CE
 profile-guided optimization. That was not always true of the macOS column, and the cost of it is
 below the table.
 
-**No release has been built with it yet, so this table is main and not v0.1.0.** The tag is from
-2026-09-12 and the 25.3 pin landed on 2026-09-13, which leaves v0.1.0 on Liberica NIK 25.0.4 -- the
-left-hand column of the edition table below. Measured on its own assets and that column: binaries of
-29.8 to 31.9 MiB against the 25.3 to 26.2 here, idle RSS on linux-amd64 of 40.6 MB for the hub and
-40.1 for the node against 35.1 and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries
-five native targets rather than four, since the 25.3 line is what dropped macos-amd64 (§3.2).
-README says the same where it tells people which file to download.
+**This table is v0.1.1 and not v0.1.0.** The first tag is from 2026-09-12 and the 25.3 pin landed
+on 2026-09-13, which leaves v0.1.0 alone on Liberica NIK 25.0.4 -- the left-hand column of the
+edition table below -- and every release from v0.1.1 on the same toolchain and options this gate
+measures. Measured on v0.1.0's own assets and that column: binaries of 29.8 to 31.9 MiB against the
+25.3 to 26.2 here, idle RSS on linux-amd64 of 40.6 MB for the hub and 40.1 for the node against 35.1
+and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries five native targets rather than
+four, since the 25.3 line is what dropped macos-amd64 (§3.2). README says the same where it tells
+people which file to download.
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
