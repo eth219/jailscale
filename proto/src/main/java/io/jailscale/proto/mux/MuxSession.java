@@ -89,6 +89,9 @@ public final class MuxSession implements AutoCloseable {
      */
     private final ArrayDeque<Frame> controlQueue = new ArrayDeque<>();
     private final ArrayDeque<Frame> dataQueue = new ArrayDeque<>();
+    /** Enqueue times, parallel to the queues above, so a frame's wait for the writer is measurable. */
+    private final ArrayDeque<Long> controlAt = new ArrayDeque<>();
+    private final ArrayDeque<Long> dataAt = new ArrayDeque<>();
     private final Object sendLock = new Object();
     private int dataQueueBytes;
     /** Stream id to refill not yet sent, so repeated refills are one frame. Guarded by sendLock. */
@@ -281,9 +284,11 @@ public final class MuxSession implements AutoCloseable {
                     Integer prior = pendingWindow.put(id, pendingWindow.getOrDefault(id, 0) + delta);
                     if (prior == null) {
                         controlQueue.add(f); // a placeholder; the sum is read when it is sent
+                        controlAt.add(System.nanoTime());
                     }
                 } else {
                     controlQueue.add(f);
+                    controlAt.add(System.nanoTime());
                 }
             } else {
                 while (!dataQueue.isEmpty() && dataQueueBytes + f.payload().length > DATA_QUEUE_BYTES && !closed) {
@@ -298,6 +303,7 @@ public final class MuxSession implements AutoCloseable {
                     throw new IOException("session closed");
                 }
                 dataQueue.add(f);
+                dataAt.add(System.nanoTime());
                 dataQueueBytes += f.payload().length;
             }
             sendLock.notifyAll();
@@ -322,12 +328,57 @@ public final class MuxSession implements AutoCloseable {
         };
     }
 
+    /**
+     * How long frames wait for the writer, how long a write takes, and how long a peer-opened stream
+     * waits for its listener. Process-wide sums, counts and high-water marks, no labels, no names --
+     * the same bargain as the hub's stage metrics and for the same reason: the gap that mattered was
+     * never in the stage anyone had thought to time, and one number per stage measured at once beats
+     * one rebuild per guess. Nanos in, seconds out.
+     */
+    public static final class Timing {
+        private final java.util.concurrent.atomic.LongAdder nanos = new java.util.concurrent.atomic.LongAdder();
+        private final java.util.concurrent.atomic.LongAdder count = new java.util.concurrent.atomic.LongAdder();
+        private final AtomicLong maxNanos = new AtomicLong();
+
+        void record(long elapsed) {
+            if (elapsed <= 0) {
+                return;
+            }
+            nanos.add(elapsed);
+            count.increment();
+            long seen = maxNanos.get();
+            if (elapsed > seen) {
+                maxNanos.compareAndSet(seen, elapsed);
+            }
+        }
+
+        public long observations() {
+            return count.sum();
+        }
+
+        public double totalSeconds() {
+            return nanos.sum() / 1e9;
+        }
+
+        public double maxSeconds() {
+            return maxNanos.get() / 1e9;
+        }
+    }
+
+    /** A frame's wait between being handed over and the writer taking it. */
+    public static final Timing QUEUE_WAIT = new Timing();
+    /** One encrypt-and-write, which is where a congested peer shows up. */
+    public static final Timing SOCKET_WRITE = new Timing();
+    /** A peer-opened stream's wait between the frame arriving and the listener being done with it. */
+    public static final Timing OPEN_DISPATCH = new Timing();
+
     /** Drains control before data, one frame at a time, until the session ends. */
     private void writeLoop() {
         Throwable cause = null;
         try {
             while (true) {
                 Frame f;
+                Long queuedAt = null;
                 synchronized (sendLock) {
                     while (controlQueue.isEmpty() && dataQueue.isEmpty()) {
                         if (closed) {
@@ -336,6 +387,9 @@ public final class MuxSession implements AutoCloseable {
                         sendLock.wait();
                     }
                     f = controlQueue.poll();
+                    if (f != null) {
+                        queuedAt = controlAt.poll();
+                    }
                     if (f != null && f.type() == Frame.WINDOW) {
                         Integer sum = pendingWindow.remove(f.streamId());
                         if (sum == null) {
@@ -347,15 +401,21 @@ public final class MuxSession implements AutoCloseable {
                     }
                     if (f == null) {
                         f = dataQueue.poll();
+                        queuedAt = dataAt.poll();
                         dataQueueBytes -= f.payload().length;
                         sendLock.notifyAll(); // a producer may be waiting for the room this freed
                     }
+                }
+                long beforeWrite = System.nanoTime();
+                if (queuedAt != null) {
+                    QUEUE_WAIT.record(beforeWrite - queuedAt);
                 }
                 try {
                     ch.write(f);
                 } catch (NoiseException e) {
                     throw new IOException("encrypt failed", e);
                 }
+                SOCKET_WRITE.record(System.nanoTime() - beforeWrite);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -420,7 +480,9 @@ public final class MuxSession implements AutoCloseable {
                 }
                 MuxStream s = new MuxStream(this, budget, id, meta, (f.flags() & Frame.FLAG_DGRAM) != 0);
                 streams.put(id, s);
+                long beforeOpen = System.nanoTime();
                 listener.onOpen(this, s);
+                OPEN_DISPATCH.record(System.nanoTime() - beforeOpen);
             }
             case Frame.DATA -> {
                 MuxStream s = streams.get(id);

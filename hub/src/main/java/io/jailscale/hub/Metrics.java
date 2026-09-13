@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import io.jailscale.proto.mux.FlowBudget;
+import io.jailscale.proto.mux.MuxSession;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -66,6 +67,13 @@ final class Metrics {
         stage(b, "open", "opening a mux stream on the node's session", RelayStages.OPEN);
         stage(b, "reply", "waiting for the node's first byte", RelayStages.REPLY);
         stage(b, "first_byte", "accept to the visitor's first byte, end to end", RelayStages.FIRST_BYTE);
+        // The multiplexer's own three (§5.3). A frame waiting for the writer and a write that takes
+        // seconds are different faults with the same symptom, and neither is visible from the stages
+        // above: those stop at the hub's own edge.
+        mux(b, "queue_wait", "waiting for the session writer to take a frame", MuxSession.QUEUE_WAIT);
+        mux(b, "socket_write", "encrypting and writing one frame, where a congested peer shows",
+            MuxSession.SOCKET_WRITE);
+        mux(b, "open_dispatch", "handing a peer-opened stream to its listener", MuxSession.OPEN_DISPATCH);
         // The receive budget (§5.3). Queued against limit is the one to alert on: it reaching the
         // limit is the hub shedding visitor streams to stay alive, and reclaimed says how many.
         FlowBudget budget = hub.flowBudget();
@@ -88,6 +96,14 @@ final class Metrics {
         gauge(b, "jailhub_heap_used_bytes", "Heap in use, a fraction of resident size under a native image.",
             Resources.heapUsedBytes());
         return b.toString();
+    }
+
+    private static void mux(StringBuilder b, String name, String what, MuxSession.Timing t) {
+        counter(b, "jailhub_mux_" + name + "_total", "Frames measured " + what + ".", t.observations());
+        seconds(b, "jailhub_mux_" + name + "_seconds_total", "counter",
+            "Total seconds " + what + ".", t.totalSeconds());
+        seconds(b, "jailhub_mux_" + name + "_seconds_max", "gauge",
+            "The longest single wait " + what + " since this process started.", t.maxSeconds());
     }
 
     /** A stage's total and high-water mark. Two label-free series, because no metric here has labels. */
