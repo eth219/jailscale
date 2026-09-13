@@ -21,9 +21,13 @@ import ssl
 import sys
 import time
 
-HOLD_SECONDS = 15
-# Seconds of quiet before teardown, so no latency probe can still be running when it starts.
-PROBE_MARGIN = 4
+import os
+
+HOLD_SECONDS = int(os.environ.get("SR_HOLD", "15"))
+# Seconds of quiet before teardown, so no latency probe can still be running when it starts. Both are
+# overridable because proving a slow probe is not measuring the teardown needs a margin wider than the
+# probe itself, and a 4 s margin cannot settle an 8 s outlier -- that argument is circular.
+PROBE_MARGIN = int(os.environ.get("SR_MARGIN", "4"))
 STEP_TIMEOUT = 15
 BATCH = 50
 BATCH_PAUSE = 0.05

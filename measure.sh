@@ -282,10 +282,12 @@ if [ -n "${SLOW:-}" ]; then
     # tears them down, and a probe inside that herd measures the teardown. RSS sampling continues,
     # because the peak there is real.
     if [ ! -f "$W/quiet.txt" ]; then
-      ms=$(curl -sk -o /dev/null -w '%{time_total}' --max-time 20 \
-           --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null \
-           | awk '{printf "%.0f", $1 * 1000}')
-      probes="$probes ${ms:-timeout}"
+      # Fired and forgotten, one a second. A serial prober makes its own gaps: while one probe is
+      # slow no new connection arrives, so the hub's accept loop looks stalled for exactly as long as
+      # the probe took, which reads as a cause and is an effect.
+      ( curl -sk -o /dev/null -w '%{time_total}\n' --max-time 30 \
+          --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null \
+          | awk '{printf "%.0f\n", $1 * 1000}' >> "$W/probes.txt" ) &
     fi
     sleep 1
   done
@@ -301,7 +303,7 @@ if [ -n "${SLOW:-}" ]; then
   # Gated on B_NODE_SLOW_MB, not B_NODE_LOAD_MB: the node legitimately carries more here, for a
   # reason that is not the receive budget. The constant's comment has the numbers and the why.
   printf '  %-10s %6.1f  (peak)\n' jailscale "$peak_n"; gate "node RSS with stalled readers" "$peak_n" "$B_NODE_SLOW_MB"
-  printf '  ordinary visitor while held (ms):%s\n' "$probes"
+  printf '  ordinary visitor while held (ms): %s\n' "$(tr '\n' ' ' < "$W/probes.txt" 2>/dev/null)"
   # Surviving is the point, so a process that died is caught here and not inferred from RSS.
   oom_check
   kill -0 $HUBPID 2>/dev/null || { echo "  !! jailhub died under stalled readers"; fail=1; }
