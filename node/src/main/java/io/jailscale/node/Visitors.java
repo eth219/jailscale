@@ -50,6 +50,7 @@ final class Visitors {
     private final SelfProbe probe = new SelfProbe();
     private final Map<String, SSLContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, SSLContext> domainContexts = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger inFlight = new java.util.concurrent.atomic.AtomicInteger();
 
     Visitors(NodeState state) {
         this.state = state;
@@ -102,8 +103,31 @@ final class Visitors {
         domainContexts.remove("domain:" + domain);
     }
 
-    /** Serves one visitor stream to completion on the calling (virtual) thread. */
+    /**
+     * Serves one visitor stream to completion on the calling (virtual) thread, and counts it while
+     * it does. The count is the node's half of the hub's {@code jailhub_visitors_in_flight}
+     * (ARCHITECTURE.md §14): what a node holds per visitor is tens of kilobytes of TLS state, and
+     * until now the only way to see how many it was holding was to watch RSS, which cannot say
+     * whether the cause was visitors, a leak, or the heap simply expanding into its ceiling.
+     */
     void serve(HubLink link, HubLink.Session session, MuxStream stream) {
+        // Around the whole of it, not around the TlsEndpoint: several paths abandon a visitor
+        // before the endpoint is closed, and a count that leaks on those would invent visitors that
+        // are not there.
+        inFlight.incrementAndGet();
+        try {
+            serveVisitor(link, session, stream);
+        } finally {
+            inFlight.decrementAndGet();
+        }
+    }
+
+    /** Visitor streams being served right now, TLS and raw alike. */
+    int inFlight() {
+        return inFlight.get();
+    }
+
+    private void serveVisitor(HubLink link, HubLink.Session session, MuxStream stream) {
         int conn = session.conn;
         String linkId = stream.meta().optString("linkId", null);
         String kind = stream.meta().optString("kind", Message.LinkOpen.HTTPS);

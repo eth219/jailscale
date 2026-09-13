@@ -222,6 +222,36 @@ class LinkEndToEndTest {
         assertFalse(after.contains("mkey:"), after);
     }
 
+    /**
+     * The node's half of the hub's in-flight gauge (ARCHITECTURE.md §14). What a node holds per
+     * visitor is tens of kilobytes of TLS state, and RSS was the only way to see how many it held --
+     * a number that cannot tell visitors from a leak or from the heap expanding into its ceiling.
+     * A visitor that finishes its handshake and then says nothing holds the node in `serve`, which
+     * is what makes this deterministic: the count has to be 1 while it is there and 0 after it goes.
+     */
+    @Test
+    void theNodeCountsTheVisitorsItIsHolding() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "counted")));
+        waitFor(() -> hub.links().byName("counted") != null);
+
+        assertEquals(0L, nodeInFlight("alice"));
+        try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), "counted.hub.test", "127.0.0.1", port, true, 10_000)) {
+            s.startHandshake(); // and then nothing: the node is in serve(), waiting for a request
+            waitFor(() -> nodeInFlight("alice") == 1L);
+            assertEquals(1L, nodeInFlight("alice"));
+            assertEquals(1, hub.router().visitorsInFlight(), "the hub should be holding the same visitor");
+        }
+        waitFor(() -> nodeInFlight("alice") == 0L);
+    }
+
+    private long nodeInFlight(String name) throws IOException {
+        return cli(name, JsonObject.builder().put("cmd", "status")).lng("visitorsInFlight");
+    }
+
     @Test
     void hubReleasesAVisitorThatNeverClosesItsHalf() throws Exception {
         long previous = Relay.lingerMs;

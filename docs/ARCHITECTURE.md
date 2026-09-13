@@ -1472,6 +1472,15 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
+- **What the node holds per visitor has a number now.** `jailscale status` reports
+  `visitorsInFlight`, the visitor streams the node is serving at this instant, TLS and raw alike.
+  It is the node's half of the hub's `jailhub_visitors_in_flight` (§6.3) and it exists because the
+  node's cost is per visitor -- tens of kilobytes of TLS state each, below -- while the only number
+  available was RSS, which cannot tell visitors from a leak or from the heap expanding into its
+  ceiling. The count is taken around the whole of `Visitors.serve`, not around the `TlsEndpoint`:
+  several paths abandon a visitor without closing the endpoint, and a count that leaked on those
+  would invent visitors that are not there.
+
 - **Node idle RSS is about 24.8 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
   Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they
@@ -1505,6 +1514,16 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   private array in the stream's queue, put there by `Frame.decode`, so they can go to the socket
   without an intermediate. The visitor-to-node direction has no such shortcut: a socket read needs
   somewhere to land.
+
+  **Measured, the size is not a lever either.** At 4 KiB against 16 KiB the hub's peak under `SLOW=300`
+  came out 92.0 MB, then 58.9 MB, against 63.9 MB for the buffer it ships -- the spread at one fixed
+  size is several times the 7 MB the arithmetic says the change is worth, so RSS cannot see it. It is
+  not only invisible: a smaller buffer drains the receive queue in smaller pieces, so the queue
+  stays fuller, which pushes the number the other way. `LOAD=` cannot see it at all, and that is
+  worth knowing about the harness: those visitors send `Connection: close`, so the app answers, the
+  node closes, and **the relay is over before the sample** -- the hub is holding sockets in the
+  linger wait (§8.1), not copy buffers. `jailhub_visitors_in_flight` reads 0 through the whole of
+  `LOAD=1000` and 301 through `SLOW=300`, which is the two axes saying what each of them measures.
 
   The window caps what may sit queued (§5.3), not what is allocated, so a visitor whose reader keeps
   up holds none of it; shrinking it would lower single-stream throughput, which is bounded by the
