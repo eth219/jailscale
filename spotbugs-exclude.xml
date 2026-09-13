@@ -140,6 +140,26 @@
   </Match>
 
   <!--
+    MuxSession.shutdown notifies sendLock without touching anything sendLock guards, which is what
+    NN_NAKED_NOTIFY is named for. The state the sleepers are waiting on is `closed`, which is
+    volatile and set under `this` a few lines earlier, because the first-caller check and the flag
+    have to move together and the send path must not be behind that lock.
+
+    It is not the lost wakeup the pattern looks for. Both waiters read `closed` inside
+    `synchronized (sendLock)` and re-read it after every wake — the writer at the top of its
+    empty-queue loop (`writeLoop`), a producer in the full-queue loop and again after it (`write`)
+    — so a waiter cannot be between its own check and its `wait()` while the notifier holds
+    sendLock, and `closed` is already true before shutdown can acquire it. Writing the flag here as
+    well would satisfy the detector and tell the next reader that sendLock guards something it does
+    not.
+  -->
+  <Match>
+    <Class name="io.jailscale.proto.mux.MuxSession"/>
+    <Method name="shutdown"/>
+    <Bug pattern="NN_NAKED_NOTIFY"/>
+  </Match>
+
+  <!--
     A redundant null check on a value SpotBugs proved non-null. Harmless, and the check documents
     the JCE contract that engineSign may be reached without a key.
   -->
