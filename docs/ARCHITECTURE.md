@@ -123,7 +123,15 @@ the class this project's threading makes easy to write. Its exclusions are in
 finding nobody answered look identical six months later.
 
 **Three workflows.** `ci` is the gate: the tests on ubuntu, macos and
-Windows for every push and pull request, and the §14 budget on main and nightly. Windows was a
+Windows for every push and pull request, and on main and nightly two more jobs that are too heavy
+for a pull request -- the §14 budget, which needs a native build, and the `load`-tagged tests, which
+hold a thousand sockets open. Both of those were written before anything ran them: `-Dgroups=load`
+appeared in no workflow, so `LoadTest` ran only when somebody typed it, and the budget job left
+`SLOW=` out, so the one axis §14 records as over its budget was also the one axis nothing on main
+measured. A test excluded by a tag and a phase skipped by an unset variable fail the same way,
+which is silently. The first run of the saturation phase then found why leaving it out had been
+comfortable: at a thousand stalled readers it does not measure a peak, it reaches the open
+per-visitor defect (§14). It runs at 400, where it measures the node. Windows was a
 nightly job for a while, because the stall below failed about 2% of runs and a gate that is red
 2% of the time teaches people to ignore it; it is per-push now that the stall is fixed and measured
 at 0 in 3,000, and it costs 1.5 min against the other two at 1.2. The nightly run gates nothing any
@@ -1346,9 +1354,36 @@ holds visitor sessions open with no bytes in flight; `SLOW=` has each visitor as
 only the status line, which is the only shape that reaches the receive budget of §5.3. On that axis
 the hub is fine -- the receive queue pins at its budget, streams are shed, and its RSS stays under
 the load budget -- but **the node reaches 96.7 to 98.9 MB against an 88 MB budget** at about 1,000
-visitors (two people, one macOS arm64 machine; unconfirmed on linux). The cause is not the receive
+visitors (two people, one macOS arm64 machine). The cause is not the receive
 budget, which this direction barely touches: a visitor sends one GET line, so the node's receive
 queues hold tens of bytes.
+
+**At a thousand stalled readers this axis no longer measures the node. It reaches the defect.**
+Measured on main with the release toolchain, darwin-arm64, `SLOW=1000`: **817 of 1,000 held, and
+the ramp took 60.7 s against 5.4 s at 400**; six `OutOfMemoryError`s in the node's log, two of them
+taking `mux-reader` and `mux-writer`, so the hub connection dropped and was remade mid-phase; an
+ordinary visitor timed out at 30 s fourteen probes running; and the kernel refused 118,554 socket
+allocations at a 502 MB peak. The node's 106.6 MB there **is not its cost at a thousand visitors** —
+it is the ceiling it died against, with 183 visitors never admitted. This is the per-visitor
+`TlsEndpoint` term of the paragraph above, arriving as a fault rather than as a number, and it is
+the same shape `docs/mux-saturation` predicted on the JVM.
+
+**So the gate runs at 400, which measures the node, and the budget is pinned to that count.** The
+same run holds 400 of 400 in 5.4 s, serves the ordinary visitor in 13 to 31 ms, and pins the hub's
+receive queue at 24.0 MB of 24.0 with 116 streams shed — the assertion this phase exists for,
+working. The node peaks at 82.3 MB there, within the 82.0 to 86.8 above, and the budget is 95.
+`measure.sh` now carries `B_NODE_SLOW_AT` and **skips the node gate at any other count**: the cost
+being bounded is per visitor, so the budget is only a budget at the count it was measured at, and
+this gate was very nearly wired to `SLOW=1000` against a number measured at a thousand on a machine
+where a thousand no longer behaves. Gating on an open defect would have been red on every build
+until somebody bounds the per-visitor term, which is the same argument §3.2 makes for not gating on
+a job that fails 2% of the time.
+
+**The linux-amd64 budget is the part still owed a measurement.** 105 MB there is derived, not
+measured: the macOS number plus the 10 MB that separates the two platforms' node idle RSS, which is
+mapped binary and not anything this phase grows. Replace it with what the gate prints, here and in
+`measure.sh`; until then a red budget job on a build nobody changed is that guess before it is a
+regression.
 
 **The long tail on this axis was the machine, and it took four attributions to reach that.** This
 paragraph has said that an ordinary visitor's 7 to 19 s wait while slow readers arrive was the
