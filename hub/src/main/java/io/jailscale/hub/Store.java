@@ -410,7 +410,17 @@ final class Store implements AutoCloseable {
         }
     }
 
+    /**
+     * Checked here rather than in either caller, because there are two of them -- {@code jailhub
+     * authkey create} and the /admin form -- and an auth key's uses go to the record as given,
+     * unlike an invite's, where 0 is the sentinel that means "your default". A key created with
+     * none left is refused by {@link #consumeAuthKey} on its first use and reported to the node as
+     * {@code authkey-invalid}, days later and nowhere near the flag that caused it.
+     */
     synchronized AuthKeyRec createAuthKey(String secret, String owner, String tag, int uses, long ttlSeconds) throws IOException {
+        if (uses < 1) {
+            throw new IllegalArgumentException("uses must be at least 1; an auth key with none left can never be redeemed");
+        }
         AuthKeyRec r = new AuthKeyRec(Tokens.id("ak_"), Tokens.hash(secret), owner, tag, uses,
             System.currentTimeMillis() + ttlSeconds * 1000);
         append(JsonObject.builder().put("e", "authkey-created").put("id", r.id()).put("hash", r.hash())

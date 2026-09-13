@@ -142,6 +142,21 @@ class AdminWebTest {
         assertTrue(after.contains("/join/"), after);
         assertEquals(before + 1, hub.store().invites().size());
 
+        // Auth keys from the page. Cleared fields mean the defaults, the way omitting the flag does
+        // on the CLI and the way the invite form one row above already behaved -- they used to reach
+        // parseInt and parseSeconds as "" and hand the admin a 400 quoting a Java parse error.
+        assertEquals(302, http("POST", "/admin/authkey/create", cookie, "csrf=" + csrf + "&tag=ci&uses=&ttl=").status());
+        assertEquals(1, hub.store().authKeys().size());
+        Store.AuthKeyRec ak = hub.store().authKeys().get(0);
+        assertEquals(1, ak.usesLeft(), "a blank uses field means one use");
+        assertTrue(ak.expiresAt() > System.currentTimeMillis() + 6 * 86_400_000L, "a blank ttl field means 7d");
+
+        // And the page cannot make the key the CLI is now refused: one with no uses left.
+        HttpResponse dead = http("POST", "/admin/authkey/create", cookie, "csrf=" + csrf + "&tag=ci&uses=0&ttl=7d");
+        assertEquals(400, dead.status());
+        assertTrue(dead.bodyText().contains("uses must be at least 1"), dead.bodyText());
+        assertEquals(1, hub.store().authKeys().size(), "the refused key was not created");
+
         // Settings: switch invite policy to admins; bob (not admin) may then only self-invite.
         assertEquals(302, http("POST", "/admin/settings", cookie, "csrf=" + csrf + "&invitePolicy=admins&registration=invite&knock=on").status());
         assertEquals("admins", hub.store().setting(Store.SETTING_INVITE_POLICY, "?"));

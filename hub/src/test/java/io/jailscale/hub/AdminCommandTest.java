@@ -287,6 +287,41 @@ class AdminCommandTest {
         }
     }
 
+    /**
+     * An auth key's uses go to the record as given, unlike an invite's, where 0 is the sentinel
+     * meaning "your default" -- and the two sit on adjacent lines of the usage text under the same
+     * {@code --uses N}. Asked for 0, the hub used to create the key, print the secret and list it
+     * as "Uses left: 0"; the first machine to use it days later was told {@code authkey-invalid},
+     * which reads as a wrong or expired key rather than as one that was born spent.
+     *
+     * <p>Driven over the real socket, because the refusal an operator sees is the error reply
+     * {@code Ipc} makes out of the exception, not the exception.
+     */
+    @Test
+    void anAuthKeyWithNoUsesLeftIsRefusedRatherThanCreatedDead() throws Exception {
+        Hub hub = startedHub();
+        try {
+            // Not something the CLI does on its own: omitting --uses asks for one use.
+            assertEquals(1, req("authkey", "create", "--tag", "ci").lng("uses"));
+
+            for (int uses : new int[] {0, -1}) {
+                JsonObject r = Ipc.call(hub.config().socketPath(),
+                    JsonObject.builder().put("cmd", "authkey-create").put("tag", "ci").put("uses", uses).build());
+                assertFalse(r.optBool("ok", false), "--uses " + uses + " was accepted: " + r);
+                assertTrue(r.string("error").startsWith("uses must be at least 1"), r.toString());
+            }
+            assertEquals(0, hub.store().authKeys().size(), "a refused key must not have been written");
+
+            JsonObject ok = Ipc.call(hub.config().socketPath(),
+                JsonObject.builder().put("cmd", "authkey-create").put("tag", "ci").put("uses", 2).build());
+            assertTrue(ok.optBool("ok", false), ok.toString());
+            assertEquals(1, hub.store().authKeys().size());
+            assertEquals(2, hub.store().authKeys().get(0).usesLeft());
+        } finally {
+            hub.close();
+        }
+    }
+
     /** Sends one {@code setting} request; returns the refusal, or null when it was accepted. */
     private static String set(AdminIpc ipc, String key, String value) throws Exception {
         JsonObject[] last = new JsonObject[1];

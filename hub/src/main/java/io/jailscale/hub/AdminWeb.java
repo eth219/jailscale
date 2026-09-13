@@ -255,9 +255,14 @@ final class AdminWeb {
                 if ((owner == null) == (tag == null)) {
                     throw new IllegalArgumentException("enter either owner or tag, not both");
                 }
+                // Blank means the default, as it does one form above and as omitting the flag
+                // does on the CLI. Cleared fields used to reach parseInt and parseSeconds as "",
+                // and the admin got a 400 quoting a Java parse error.
+                int uses = f.getOrDefault("uses", "1").isBlank() ? 1 : Integer.parseInt(f.get("uses").trim());
+                long ttl = f.getOrDefault("ttl", "7d").isBlank() ? 7 * 86400
+                    : io.jailscale.proto.util.Args.parseSeconds(f.get("ttl"));
                 String secret = Tokens.authKey();
-                store.createAuthKey(secret, owner, tag, Integer.parseInt(f.getOrDefault("uses", "1")),
-                    io.jailscale.proto.util.Args.parseSeconds(f.getOrDefault("ttl", "7d")));
+                store.createAuthKey(secret, owner, tag, uses, ttl);
                 lastAuthKey = secret;
             }
             case "/admin/authkey/revoke" -> store.revokeAuthKey(need(f, "id"));
