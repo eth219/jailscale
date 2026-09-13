@@ -52,6 +52,9 @@ larger: a mesh between your own machines, of which Funnel is this one job.
    never involve that key at all. The node checks the hub's honesty from its own
    side ([Trust](#trust)), and the control channel is Noise IK inside TLS, so a
    compromised certificate authority still does not get you the control plane.
+   The node's side of this is smaller by construction — no root, no TUN device,
+   nothing listening — and the published container image puts a filesystem
+   boundary around it as well ([A container image](#a-container-image)).
 
 Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or
 frp, reading the visitor's HTTP — neither end parses it, so no routing on paths
@@ -100,13 +103,44 @@ jailscale` — and Windows SmartScreen warns for the same reason.
 
 ### A container image
 
-For linux/amd64 and linux/arm64. `:v0.1.0` pins this release, `:latest` follows
-releases, `:edge` follows main.
+For linux/amd64 and linux/arm64, built with the same toolchain and options as a
+release from main, so [Resource usage](#resource-usage) describes them and the
+paragraph above does not. `:v0.1.0` pins that tag, `:latest` follows releases,
+`:edge` follows main — though the images on the registry for v0.1.0 and
+`:latest` were built before any of that was true, and match it once rebuilt.
 
 ```
 docker pull ghcr.io/eth219/jailhub:v0.1.0
 docker pull ghcr.io/eth219/jailscale:v0.1.0
 ```
+
+Both images are distroless and run as a non-root user: the binary, glibc and
+zlib, no shell, no package manager, no JVM. That is worth most on the hub,
+which holds the wildcard private key and is the one part of this with a public
+address. On the node it adds a filesystem boundary — what reaches the process
+does not reach your home directory — around a program that needed no root to
+begin with.
+
+The container runs the daemon, and the CLI is `exec`ed into it:
+
+```sh
+docker network create demo   # the app joins this too, see below
+docker run -d --name jailscale --network demo \
+    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.0
+docker exec jailscale /jailscale up --hub jailscale.sinabro.io
+docker exec jailscale /jailscale open 3000 --host myapp --name myapp
+```
+
+The one thing to know first: `127.0.0.1` inside a container is the container's
+own loopback, and reaching a local service is the node's whole job. There are
+two ways out and they are not equally isolated. Put the app on the same
+container network and name it with `--host`, as above, which needs no published
+port on the app either and keeps both boundaries. Or run the node with
+`--network host` and keep `127.0.0.1`, which hands back the network namespace
+and leaves only the filesystem one. The state volume holds the machine key,
+which is the node's identity: lose it and you rejoin as a new node.
+
+macOS and Windows nodes run the binary. These images are Linux only.
 
 ### Anything else, with a JVM 25
 

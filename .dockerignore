@@ -1,6 +1,11 @@
-# Keep the build context small: everything below is produced by a build, not an input to one.
+# Keep the build context small: everything below is produced by a build, not an input to one. The
+# two exceptions are the point of the context now that the Dockerfiles only package a binary
+# somebody else built (deploy/Dockerfile.hub) -- they come after the rule that would exclude them,
+# because the last pattern to match a path wins.
 target/
 */target/
+!hub/target/jailhub
+!node/target/jailscale
 .git/
 docs/
 *.md

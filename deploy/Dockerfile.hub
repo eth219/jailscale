@@ -1,39 +1,46 @@
-# jailhub container. Builds the native binary with GraalVM, ships it on a distroless base: no JVM,
-# no shell, about 35 MB image.
+# jailhub container. Packaging, not building: the native binary is produced outside by the same
+# toolchain the release uses, and this file only puts it on a distroless base. No JVM, no shell,
+# about 35 MB image.
 #
-#   docker build -f deploy/Dockerfile -t jailhub .
+#   ./mvnw -B -ntp -DskipTests -Pnative -pl hub -am package   # -> hub/target/jailhub
+#   docker build -f deploy/Dockerfile.hub -t jailhub .
 #   docker run -d --name jailhub -p 443:443 -p 80:80 -p 53:53/udp -p 53:53/tcp -p 10000-10999:10000-10999 \
 #       -v jailhub-state:/var/lib/jailhub jailhub serve --base-url https://hub.example.com --acme-email ops@example.com
 #
 # The state volume holds hub.key, tls/ and the event log: back it up, it is the whole hub.
+#
+# It used to build the binary here, FROM ghcr.io/graalvm/native-image-community:25, and that tag is
+# GraalVM for JDK 25.0.2 -- the one range §3.2 forbids, because 25.0.0-25.0.2 lose timed
+# virtual-thread wake-ups once a delayed task is cancelled (JDK-8370887), which is exactly what
+# `serve --takeover` does to the old process's keepalive sleeps. That registry publishes nothing
+# newer for JDK 25 (25.0.3, 25.0.4, 25.3 are all absent), so the toolchain left the image instead:
+# the `images` workflow builds with graalvm-community 25.3 exactly as `release` does. Same toolchain
+# and options, so §14's numbers describe this binary too -- not byte-identical to the release asset,
+# which native-image does not promise, but no longer a different build.
+ARG BIN=hub/target/jailhub
 
-# The toolchain is not the release's: the release builds on GraalVM CE 25.3 (§3.2) and
-# ghcr.io/graalvm/native-image-community publishes major tags only, so :25 is the 25.0 line. The
-# binary works the same and is a few MiB larger and slower under load than the published one; §14's
-# numbers describe the published binary, not this. Pin a digest if you care which build you run.
-FROM ghcr.io/graalvm/native-image-community:25 AS build
-# The Maven wrapper needs both. Without a downloader it fetches nothing; without unzip it
-# silently switches to the .tar.gz distribution, whose checksum is not the pinned .zip one, and
-# then reports the distribution as compromised. Neither is in the base image.
-RUN microdnf install -y curl unzip || dnf install -y curl unzip || yum install -y curl unzip
-WORKDIR /src
-COPY . .
-RUN ./mvnw -B -ntp -DskipTests -Pnative -pl hub -am package
-# Whatever zlib it actually linked, and a state directory owned by the user that will run: Docker
-# copies an image directory's ownership into a fresh named volume, and without this the volume
-# arrives root-owned and the process cannot write its own state.
-RUN cp "$(ldd hub/target/jailhub | awk '/libz/{print $3}')" /tmp/libz.so.1 \
- && mkdir -p /tmp/state && chown 65532:65532 /tmp/state
+# Two things the runtime base does not carry, taken from the same distro it is built from so the
+# glibc matches: zlib, and a state directory owned by the user that will run.
+FROM debian:12-slim AS libs
+# zlib as a plain file rather than the symlink chain the package installs, since COPY would bring
+# the link and not its target. The find covers x86_64-linux-gnu and aarch64-linux-gnu both: these
+# images build one architecture per runner, so whichever this is, is the right one.
+RUN cp "$(readlink -f "$(find /usr/lib -name libz.so.1 | head -1)")" /libz.so.1 \
+ && mkdir -p /state && chown 65532:65532 /state
 
 # distroless/base, not distroless/static: a native image is dynamically linked against glibc, and
 # `static` has no libc at all -- the images published before this ran as far as
 # "exec /jailscale: no such file or directory" and no further. `base` carries glibc but not zlib,
-# which the binary also needs, so the build stage puts the one it linked against where the runtime
-# stage can take it. If native-image ever links something else, this is where it will say so.
+# and libc.so.6 plus libz.so.1 is the binary's whole dependency list -- hard-coded here, and
+# checked against the binary by the `images` workflow, which is where the old `ldd` line's guard
+# against a third library went. Docker copies an image
+# directory's ownership into a fresh named volume, which is why the state directory arrives with an
+# owner: without it the volume is root-owned and the process cannot write its own state.
 FROM gcr.io/distroless/base-debian12:nonroot
-COPY --from=build /tmp/libz.so.1 /usr/lib/libz.so.1
-COPY --from=build --chown=65532:65532 /tmp/state /var/lib/jailhub
-COPY --from=build /src/hub/target/jailhub /jailhub
+ARG BIN
+COPY --from=libs /libz.so.1 /usr/lib/libz.so.1
+COPY --from=libs --chown=65532:65532 /state /var/lib/jailhub
+COPY ${BIN} /jailhub
 ENV JAILHUB_STATE=/var/lib/jailhub
 VOLUME /var/lib/jailhub
 EXPOSE 443 80 53/udp 53/tcp 10000-10999
