@@ -49,20 +49,28 @@ class ArgsTest {
     }
 
     /**
-     * The documented rule -- "any option followed by another option (or nothing) takes no value" --
-     * is what saves an undeclared flag, and it costs an option that wanted one: {@code --name}
-     * before {@code --gate} silently becomes the string "true" rather than an error. Pinned here
-     * because both binaries rely on the saving half, and because the cost should be visible to
-     * whoever changes it.
+     * An option that wanted a value and did not get one is an error, not the string "true".
+     * {@code open 8080 --name --gate} used to open a link named "true" and have the hub claim that
+     * name for the user for good; the only way back was {@code jailhub name release true}.
+     *
+     * <p>Erring is only safe because both binaries declare every flag they read -- an undeclared
+     * one lands here instead -- which is the coupling {@link #aDeclaredFlagLeavesTheNextWordAlone}
+     * and the two {@code Main} flag lists have to keep.
      */
     @Test
-    void anOptionFollowedByAnotherOptionTakesNoValue() {
-        Args a = Args.parse(new String[] {"open", "8080", "--name", "--gate"}, "gate");
-        assertTrue(a.flag("gate"));
-        assertEquals("true", a.get("name"), "a link named \"true\"");
+    void anOptionThatWantedAValueAndDidNotGetOneIsAnError() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> Args.parse(new String[] {"open", "8080", "--name", "--gate"}, "gate"));
+        assertEquals("--name needs a value", e.getMessage());
 
-        Args end = Args.parse(new String[] {"open", "8080", "--name"});
-        assertEquals("true", end.get("name"));
+        // Same at the end of the line, where there is no next word at all.
+        assertEquals("--name needs a value", assertThrows(IllegalArgumentException.class,
+            () -> Args.parse(new String[] {"open", "8080", "--name"})).getMessage());
+
+        // The flag itself is unaffected: declared, it still takes no value and reads as on.
+        Args ok = Args.parse(new String[] {"open", "8080", "--gate"}, "gate");
+        assertTrue(ok.flag("gate"));
+        assertEquals(List.of("open", "8080"), ok.positional());
     }
 
     @Test
@@ -122,8 +130,10 @@ class ArgsTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
             () -> Args.parse(new String[] {"--port", "https"}).integer("port", 443));
         assertEquals("--port must be a number", e.getMessage());
-        // The "takes no value" rule turns a valueless --port into "true", which must not be a port.
-        assertThrows(IllegalArgumentException.class, () -> Args.parse(new String[] {"--port"}).integer("port", 443));
+        // A valueless --port never reaches integer() any more: the parser refuses it by name,
+        // which says what to fix rather than reporting that "true" is not a number.
+        assertEquals("--port needs a value", assertThrows(IllegalArgumentException.class,
+            () -> Args.parse(new String[] {"--port"})).getMessage());
     }
 
     // --- durations: --ttl, --grace ---------------------------------------------------------------

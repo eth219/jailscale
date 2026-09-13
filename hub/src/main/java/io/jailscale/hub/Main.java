@@ -39,11 +39,14 @@ public final class Main {
     private Main() {}
 
     /**
-     * Options that take no value. One list, because a flag missing from it is not a parse error:
-     * {@link Args#parse} then reads the next word as its value, so `--no-address-check serve` would
-     * lose the subcommand and leave the check on.
+     * Options that take no value. Every option this binary reads with {@code flag()} has to be
+     * here: {@link Args#parse} reads the next word as the value of anything else, so
+     * `--no-address-check serve` would lose the subcommand and leave the check on, and an option
+     * with no next word at all is refused as needing a value. {@code --proxy-protocol} was missing
+     * and survived on the old parser's guess.
      */
-    static final String[] FLAGS = {"debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check", "takeover"};
+    static final String[] FLAGS = {"debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check",
+        "takeover", "proxy-protocol"};
 
     public static void main(String[] argv) {
         Args a;

@@ -41,6 +41,26 @@ class ServeOptionsTest {
             () -> "accepted: jailhub serve " + String.join(" ", extra)).getMessage();
     }
 
+    /**
+     * Every option this binary reads with {@code flag()} has to be in {@link Main#FLAGS}, and the
+     * shape that proves it is the flag placed last: with no next word, an option the list does not
+     * know is refused as needing a value. {@code --proxy-protocol} was missing and got away with it
+     * under the old parser, which guessed "true" for any option followed by another option or by
+     * nothing -- so `jailhub serve --proxy-protocol` had never actually been parsed as a flag.
+     *
+     * <p>Kept as a list rather than derived, so adding an option here is the deliberate act that
+     * adding one to FLAGS should be.
+     */
+    @Test
+    void everyBooleanServeOptionIsInTheFlagsList() {
+        for (String flag : new String[] {"debug", "admin", "help", "acme-staging", "no-selfcheck",
+            "no-address-check", "takeover", "proxy-protocol"}) {
+            Args a = Args.parse(new String[] {"serve", "--" + flag}, Main.FLAGS);
+            assertTrue(a.flag(flag), "--" + flag + " is not in Main.FLAGS");
+            assertEquals("serve", a.positional(0), "--" + flag + " swallowed the subcommand");
+        }
+    }
+
     // --- what an operator gets by typing as little as possible -----------------------------------
 
     @Test

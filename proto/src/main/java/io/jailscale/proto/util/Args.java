@@ -8,6 +8,11 @@ import java.util.Map;
 /**
  * Command-line parsing for both binaries: {@code --key value}, {@code --key=value}, boolean
  * {@code --flag}, and positional words. Repeated options keep the last value.
+ *
+ * <p>Only a declared flag takes no value. Anything else written as {@code --key} with the next
+ * word missing or itself an option is an error, so a value-taking option cannot quietly become
+ * the string "true". This is why the flag lists in both {@code Main} classes have to be complete:
+ * an option read with {@link #flag} but left out of the list is refused as needing a value.
  */
 public final class Args {
 
@@ -33,9 +38,16 @@ public final class Args {
                 int eq = key.indexOf('=');
                 if (eq >= 0) {
                     a.options.put(key.substring(0, eq), key.substring(eq + 1));
-                } else if (flagList.contains(key) || i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
-                    // Declared flags, and any option followed by another option (or nothing), take no value.
+                } else if (flagList.contains(key)) {
                     a.options.put(key, "true");
+                } else if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+                    // An option that is not a declared flag wanted a value and did not get one. This
+                    // used to be read as the string "true", which is what every option in both
+                    // binaries is declared against -- so `open 8080 --name --gate` opened a link
+                    // named "true", and the hub claimed that name for the user for good. Erring
+                    // here is only safe because both binaries declare every flag they read; a value
+                    // that really does start with "--" is still passed as --key=value.
+                    throw new IllegalArgumentException("--" + key + " needs a value");
                 } else {
                     a.options.put(key, argv[++i]);
                 }
