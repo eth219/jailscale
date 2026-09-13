@@ -51,6 +51,7 @@ public final class Hub implements AutoCloseable {
     private final RawPorts rawPorts;
     private final Challenges challenges;
     private HttpChallengeFront http;
+    private MetricsFront metrics;
     private final SniRouter router;
     private final AdminWeb adminWeb;
     private io.jailscale.hub.dns.DnsResponder dns;
@@ -175,6 +176,15 @@ public final class Hub implements AutoCloseable {
                 http = new HttpChallengeFront(this, config.httpListenHost(), config.httpListenPort());
             } catch (IOException e) {
                 LOG.warn("port {} unavailable ({}); user domains are disabled until it is", config.httpListenPort(), e.getMessage());
+            }
+        }
+        if (config.hasMetrics()) {
+            // Warn and serve on, as port 80 does: a hub that cannot be scraped is still a hub that
+            // routes, and refusing to start would make the monitoring an outage of its own.
+            try {
+                metrics = new MetricsFront(this, config.metricsListenHost(), config.metricsListenPort());
+            } catch (IOException e) {
+                LOG.warn("metrics port {} unavailable ({}); /metrics is not served", config.metricsListenPort(), e.getMessage());
             }
         }
 
@@ -423,6 +433,9 @@ public final class Hub implements AutoCloseable {
         if (http != null) {
             http.close();
         }
+        if (metrics != null) {
+            metrics.close();
+        }
         if (acme != null) {
             acme.close();
         }
@@ -471,6 +484,11 @@ public final class Hub implements AutoCloseable {
         return dns == null ? 0 : dns.port();
     }
 
+    /** The port {@code /metrics} is on, or 0 when it is not served. */
+    public int metricsPort() {
+        return metrics == null ? 0 : metrics.port();
+    }
+
     @Override
     public void close() throws IOException {
         running = false;
@@ -491,6 +509,9 @@ public final class Hub implements AutoCloseable {
         rawPorts.close();
         if (http != null) {
             http.close();
+        }
+        if (metrics != null) {
+            metrics.close();
         }
         if (listener != null) {
             listener.close();

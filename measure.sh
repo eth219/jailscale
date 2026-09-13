@@ -80,6 +80,11 @@ PORT=${PORT:-18443}
 # run's app and both sampled RSS off a topology neither of them set up. Found by two sessions
 # measuring at the same time.
 APP_PORT=${APP_PORT:-$((PORT + 138))}
+# The metrics listener moves with PORT for the same reason the app port does. It is not optional:
+# jailhub defaults it to 127.0.0.1:9090, so two runs at once would fight over that one port and the
+# loser would silently scrape the winner's counters (ARCHITECTURE.md §6.3).
+METRICS_PORT=${METRICS_PORT:-$((PORT + 139))}
+METRICS_URL=http://127.0.0.1:$METRICS_PORT/metrics
 CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 
 # Budget (ARCHITECTURE.md §14). Change only with a reason, in the same commit as the design table.
@@ -223,7 +228,7 @@ net_denied() {
 # runtime options the native image reads before main, deliberately unquoted so several split.
 # shellcheck disable=SC2086
 "$HUB" ${HUB_OPTS:-} serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
-  --state "$W/hub" --port-range none --http-listen none > "$W/hub.log" 2>&1 &
+  --state "$W/hub" --port-range none --http-listen none --metrics-listen "127.0.0.1:$METRICS_PORT" > "$W/hub.log" 2>&1 &
 HUBPID=$!
 sleep 1.5
 INV=$(grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" "$W/hub.log" | head -1)
@@ -397,7 +402,7 @@ if [ -n "${SLOW:-}" ]; then
   # queue's high-water mark is exact and reproduced at exactly the budget across every run of this
   # phase. Over the budget means the bound leaked; zero reclaims with the peak AT the budget means
   # something other than the bound flattened it, which is the falsification FlowBudget asks for.
-  set -- $(curl -sk --resolve "hub.test:$PORT:127.0.0.1" "https://hub.test:$PORT/metrics" 2>/dev/null \
+  set -- $(curl -s "$METRICS_URL" 2>/dev/null \
       | awk '/^jailhub_streams_reclaimed_total /{r=$2} /^jailhub_receive_queued_peak_bytes /{p=$2} \
              /^jailhub_receive_budget_bytes /{b=$2} /^jailhub_nodes_online /{n=$2} \
              END{print r+0, p+0, b+0, n+0}')
@@ -416,7 +421,7 @@ if [ -n "${SLOW:-}" ]; then
   qslack=$((nodes * 4 * 16 * 1024))
   # The stage breakdown (ARCHITECTURE.md 6.3). first_byte running ahead of the sum of the others is
   # time in no stage at all, which is the finding that took eight rebuilds to reach by hand.
-  curl -sk --resolve "hub.test:$PORT:127.0.0.1" "https://hub.test:$PORT/metrics" 2>/dev/null \
+  curl -s "$METRICS_URL" 2>/dev/null \
     | awk '/^jailhub_visitor_admissions_total /{n=$2}
            /^jailhub_visitor_[a-z_]+_seconds_total /{split($1,a,"_"); k=$1; sub("jailhub_visitor_","",k); sub("_seconds_total","",k); sum[k]=$2}
            /^jailhub_visitor_[a-z_]+_seconds_max /{k=$1; sub("jailhub_visitor_","",k); sub("_seconds_max","",k); mx[k]=$2}
@@ -426,7 +431,7 @@ if [ -n "${SLOW:-}" ]; then
                  split("peek resolve open reply first_byte", o, " ");
                  for (i=1;i<=5;i++) printf " %s=%.0f/%.0f", o[i], sum[o[i]]/n*1000, mx[o[i]]*1000;
                  printf " unaccounted=%.0f\n", (sum["first_byte"]-parts)/n*1000 }}'
-  curl -sk --resolve "hub.test:$PORT:127.0.0.1" "https://hub.test:$PORT/metrics" 2>/dev/null \
+  curl -s "$METRICS_URL" 2>/dev/null \
     | awk '/^jailhub_mux_[a-z_]+_total /{k=$1; sub("jailhub_mux_","",k); sub("_total","",k); if (k !~ /seconds/) n[k]=$2}
            /^jailhub_mux_[a-z_]+_seconds_total /{k=$1; sub("jailhub_mux_","",k); sub("_seconds_total","",k); s[k]=$2}
            /^jailhub_mux_[a-z_]+_seconds_max /{k=$1; sub("jailhub_mux_","",k); sub("_seconds_max","",k); m[k]=$2}
