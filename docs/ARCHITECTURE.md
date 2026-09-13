@@ -826,9 +826,14 @@ from the app, and everything the app can still push lands in the kernel on the n
 outside any number the node reports. With 400 stalled visitors on loopback those sockets held 300 to
 400 MB, a megabyte each, while the machine's network memory sat at its cap and every socket on it
 froze (§14). A byte the stream cannot send yet is a byte it should not have taken from the app, so
-the kernel is told the window. macOS doubles what it is told at connect and then holds it there, so
-the node's share is about half a megabyte a visitor on macOS and the window itself on Linux -- 240 MB
-for the same 400, and a figure that stops growing. What the app puts in its own send buffer is the
+the kernel is told the window. What the kernel then reports is its own business, and it is not the
+same answer twice: macOS doubles what it is told at connect and holds it there, Linux gives the
+receive side the window as asked, and the send side comes back smaller wherever
+`net.core.wmem_max` sits below it -- 212,992 on the linux-amd64 CI runner. Smaller is the safe
+direction, and the clamp does not cost the property this is for, since Linux takes the lock that
+ends autotuning before it does the clamping. So the node's share is about half a megabyte a visitor
+on macOS and at most the window on Linux -- 240 MB for the same 400, and a figure that stops
+growing. What the app puts in its own send buffer is the
 app's; `measure.sh`'s app bounds its own. The app is local or on the node's network, where 256 KB is
 far past the bandwidth-delay product, and the warm throughput of §14 does not move: 42,500 requests
 a second with the buffers given, against about 38,000 recorded, at 83 and 94 µs of hub and node CPU
