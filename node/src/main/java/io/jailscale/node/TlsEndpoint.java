@@ -169,6 +169,58 @@ final class TlsEndpoint implements AutoCloseable {
         return engine.getApplicationProtocol();
     }
 
+    /**
+     * Writes whatever plaintext has been decrypted straight to {@code sink}, and returns how many
+     * bytes went or -1 at end of stream. The relay's other shape -- {@code plainIn().read(buf)} --
+     * needs a 16 KiB buffer per visitor that exists only to be copied out of, and a visitor's
+     * buffers are what the node's memory is (ARCHITECTURE.md §15). The bytes are already decrypted
+     * in {@code appInBuf}; a relay that is only moving them to a socket can take them from there.
+     *
+     * <p>The write is done outside the monitor, on a slice taken under it, so a local app that
+     * stops reading cannot block the engine. {@code appInBuf} is only ever filled by the thread
+     * that drains it, so the slice cannot be overwritten while it is in flight.
+     */
+    int drainTo(OutputStream sink) throws IOException {
+        while (true) {
+            byte[] array;
+            int off;
+            int n;
+            synchronized (appInBuf) {
+                if (appInBuf.hasRemaining()) {
+                    array = appInBuf.array();
+                    off = appInBuf.arrayOffset() + appInBuf.position();
+                    n = appInBuf.remaining();
+                    appInBuf.position(appInBuf.position() + n);
+                    firstApplicationRead();
+                } else {
+                    array = null;
+                    off = 0;
+                    n = 0;
+                }
+            }
+            if (array != null) {
+                sink.write(array, off, n);
+                sink.flush();
+                return n;
+            }
+            if (engine.isInboundDone()) {
+                return -1;
+            }
+            SSLEngineResult r = unwrapOnce();
+            if (r.getStatus() == SSLEngineResult.Status.CLOSED) {
+                return -1;
+            }
+            if (r.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
+                wrapAndWrite(ByteBuffer.allocate(0));
+            } else if (r.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_TASK) {
+                runTasks();
+            }
+            if (r.getStatus() == SSLEngineResult.Status.BUFFER_UNDERFLOW && netEof) {
+                return -1;
+            }
+        }
+    }
+
     InputStream plainIn() {
         return new InputStream() {
             @Override

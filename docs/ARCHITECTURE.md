@@ -1495,6 +1495,21 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   neighbourhood JCE has to stay out of. Restricting suites and protocols is already done, but
   through `SSLParameters` on each engine, which narrows what is negotiated and not what is
   initialised.
+- **Per-visitor memory on the node is about 99 KB, measured**, and was 118 KB until the plaintext
+  stopped being copied on its way to the local app. Both figures are live bytes after a full GC,
+  from a heap histogram with a known number of visitors in flight: 96 of them held 11,343,672 bytes
+  of arrays before, 9,769,672 after, which is 16.4 KB each and exactly the buffer that went. **RSS
+  does not move** -- the node peaked at 85.5 and 82.0 MB under `SLOW=400`, against 83.3 to 86.8
+  before -- because a collector working to a 64 MB ceiling sizes its footprint from the ceiling and
+  not from the live set. That is the same reason the relay buffer's size looked like a lever and was
+  not, and it is why the number below is counted rather than weighed.
+
+  What is left per visitor: `TlsEndpoint`'s packet buffer (16,709 bytes) and application buffer
+  (16,704), one 16 KiB copy array for the local-to-visitor direction, the engine's own record
+  buffers, and whatever frame is in flight. The figure the rest of this entry gives -- about 60 KB
+  -- counted the buffers this project allocates and not what JSSE keeps behind the engine, which is
+  why it reads low against the histogram.
+
 - **Per-visitor memory is about 60 KB on the node**: a 16,709-byte packet buffer and a 16,704-byte
   application buffer that a `TlsEndpoint` holds for the life of the connection, plus the two 16 KB
   copy arrays, one per direction. A **gated** link (§9.3) adds a 4 KB buffer for the request head,

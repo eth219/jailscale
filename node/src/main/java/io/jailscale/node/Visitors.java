@@ -371,7 +371,15 @@ final class Visitors {
                     local.getOutputStream().write(replay);
                     local.getOutputStream().flush();
                 }
-                copy(plain, local.getOutputStream());
+                // Straight from the engine's plaintext buffer where that is what `plain` is: a
+                // buffer per visitor that exists only to be copied out of is memory this node
+                // cannot spare (§15). A gated link wraps the stream to read the request head, and
+                // that wrapper holds bytes of its own, so it keeps the copy.
+                if (plain instanceof BufferedInputStream) {
+                    copy(plain, local.getOutputStream());
+                } else {
+                    drain(tls, local.getOutputStream());
+                }
                 local.shutdownOutput();
             } catch (IOException e) {
                 closeQuietly(local);
@@ -407,6 +415,13 @@ final class Visitors {
             tls.close();
         } catch (IOException ignored) {
             // visitor gone
+        }
+    }
+
+    /** Visitor to local app, taking the plaintext where the engine left it. */
+    private static void drain(TlsEndpoint tls, OutputStream out) throws IOException {
+        while (tls.drainTo(out) >= 0) {
+            // drainTo writes and flushes; the loop is only here to run it to end of stream
         }
     }
 
