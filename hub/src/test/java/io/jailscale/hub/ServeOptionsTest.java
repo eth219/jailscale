@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -154,7 +155,7 @@ class ServeOptionsTest {
         assertTrue(serve("--no-address-check").selfCheck());
     }
 
-    // --- the two listeners that can be switched off ----------------------------------------------
+    // --- the listeners that can be switched off --------------------------------------------------
 
     @Test
     void rawPortsAndPortEightyCanBeTurnedOffButNotTheDnsListener() {
@@ -169,8 +170,31 @@ class ServeOptionsTest {
         assertEquals(20100, range.portRangeHi());
         assertEquals(8080, serve("--http-listen", "127.0.0.1:8080").httpListenPort());
 
+        HubConfig noMetrics = serve("--metrics-listen", "none");
+        assertFalse(noMetrics.hasMetrics());
+
         // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here.
         assertEquals("--dns-listen must be host:port", refused("--dns-listen", "none"));
+    }
+
+    /**
+     * The default that is the access control (§6.3). An operator who never types
+     * {@code --metrics-listen} has to end up on loopback, because that is the whole of what keeps
+     * the scrape off the public internet -- nothing on that port asks who is calling. A default of
+     * {@code 0.0.0.0} here would publish every counter the hub has and no test elsewhere would
+     * notice, since every one of them binds an explicit address.
+     */
+    @Test
+    void metricsDefaultToLoopbackAndAreNeverOnTheHubsOwnListener() throws Exception {
+        HubConfig d = serve();
+        assertTrue(d.hasMetrics());
+        assertEquals(9090, d.metricsListenPort());
+        assertTrue(java.net.InetAddress.getByName(d.metricsListenHost()).isLoopbackAddress(),
+            "metrics default to " + d.metricsListenHost() + ", which is not loopback");
+        assertNotEquals(d.listenPort(), d.metricsListenPort(), "metrics share the hub's own listener");
+
+        assertEquals(19090, serve("--metrics-listen", "10.0.0.5:19090").metricsListenPort());
+        assertEquals("10.0.0.5", serve("--metrics-listen", "10.0.0.5:19090").metricsListenHost());
     }
 
     @Test
@@ -226,6 +250,7 @@ class ServeOptionsTest {
     void aListenerWithoutAPortIsRefused() {
         assertEquals("--listen must be host:port", refused("--listen", "0.0.0.0"));
         assertEquals("--http-listen must be host:port or none", refused("--http-listen", "8080"));
+        assertEquals("--metrics-listen must be host:port or none", refused("--metrics-listen", "9090"));
     }
 
     /**

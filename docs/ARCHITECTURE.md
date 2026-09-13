@@ -460,13 +460,35 @@ from the `Canvas` keyword while the text colour came from a media query let them
 browser that darkens the page on its own -- Chrome's auto dark theme -- then painted dark text on a
 dark background.
 
-Two endpoints say the same things to something that is not a person. **`GET /v1/status`** is the
-page's public facts as JSON -- build, hub key, uptime, nodes registered and online, links open, when
-the certificate expires, resident size, and the counters below -- for an uptime check or a script;
-fields may be added, so a monitor that reads the ones it knows keeps working (§5.4). **`GET /metrics`**
-is the Prometheus text format, which needs no library to produce: counters for visitors routed and
-refused, signatures issued and refused, control sessions and relayed bytes, and gauges for the state
-the page shows. Both are public, because they are the page's numbers and the page is public.
+Two endpoints answer something that is not a person, and they are deliberately not in the same
+place. **`GET /v1/status`** is liveness on the hub's own name: `ok`, the hostname, the version,
+uptime, and when the certificate expires -- the last being the one that takes every name down at
+once and the one worth alerting on. That is the whole list, and it is public because an uptime check
+has no credential to offer and a name that has stopped answering was never a secret. Fields may be
+added, so a monitor that reads the ones it knows keeps working (§5.4).
+
+**`GET /metrics`** is the Prometheus text format, which needs no library to produce, and it is **not
+on 443 at all**. It has a listener of its own -- plain HTTP, `--metrics-listen 127.0.0.1:9090` by
+default, `none` to turn it off -- and nothing else is served there: counters for visitors routed and
+refused, signatures issued and refused, control sessions and relayed bytes, gauges for what the hub
+is carrying, and the stage and mux timings below. **Where it listens is the authorisation**, exactly
+as the file mode is for the admin socket next door. This hub has no inside to be on -- its name is
+the public internet by construction -- so a credential checked on 443 would be one more secret to
+issue, rotate and get wrong, and not listening there is the shorter answer. etcd's
+`--listen-metrics-urls`, Spring Boot's management port and headscale's `metrics_listen_addr` are the
+same move. A scraper somewhere else reaches this through a tunnel or a proxy that can say who is
+asking, which a bare port cannot. The old path on the hub's name answers 404 and names the flag,
+because an operator who upgrades and loses their dashboard should not have to read the source to
+find out where it went.
+
+It was public on 443 until it was not, and `/v1/status` carried the same counters in JSON beside it
+-- build digest, hub key, nodes registered and online, links open, relayed bytes, the receive budget,
+resident size. Two things were wrong with that. Every one of those is a fact about what the hub is
+*carrying*, which is a different question from whether it is *up*, so the health check a load
+balancer polls had quietly become a second copy of the scrape. And a stranger had the throughput of
+everything behind the hub for the asking: no name and no address appear, but on a hub serving one
+node the byte counters *are* that node's traffic, and anonymity that holds only while the hub is
+busy is not a property, it is a coincidence.
 
 **No metric names anything.** Not a link, not a node, not an address -- a scrape says how much the
 hub is doing and never who is doing it, and the test asserts that no line carries a label except

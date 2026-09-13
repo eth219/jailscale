@@ -112,7 +112,9 @@ final class HttpFront {
             return HttpResponse.json(200, status().toString()).header("Cache-Control", "no-store");
         }
         if (path.equals("/metrics")) {
-            return HttpResponse.text(200, Metrics.prometheus(hub)).header("Cache-Control", "no-store");
+            // Moved off the public name rather than deleted (§6.3). Saying where it went would be
+            // saying an address that is deliberately not this one, so it says which flag instead.
+            return HttpResponse.text(404, "metrics are not served on this name; see --metrics-listen");
         }
         if (path.startsWith("/join/")) {
             String token = path.substring("/join/".length());
@@ -134,41 +136,22 @@ final class HttpFront {
     }
 
     /**
-     * The page's public facts, for something that is not a person: whether this hub is up, which
-     * build it is, how much it is carrying, and when its certificate runs out -- the last being the
-     * one that takes every name down at once and the one worth alerting on. Nothing per node, per
-     * link or per visitor, which is what {@code /admin} is for. Fields may be added; a monitor that
-     * reads the ones it knows keeps working (ARCHITECTURE.md §5.4).
+     * Liveness, for something that is not a person and has no credential: is this hub up, which
+     * build answered, how long it has been up, and when the certificate runs out -- the last being
+     * the one that takes every name down at once and the one worth alerting on. That is the whole
+     * list. It used to carry the counters and the hub's state as well, which made the public name's
+     * health check a second copy of {@code /metrics}; the counters live on the metrics listener now
+     * and the per-node detail behind {@code /admin} (ARCHITECTURE.md §6.3). Fields may be added; a
+     * monitor that reads the ones it knows keeps working (§5.4).
      */
     private JsonObject status() {
-        String sha = Build.executableSha256();
-        JsonObject.Builder b = JsonObject.builder()
+        return JsonObject.builder()
             .put("ok", true)
             .put("hostname", hub.config().hostname())
             .put("version", Hub.version())
-            .put("binary", sha == null ? null : "sha256:" + sha)
-            .put("hubKey", hub.keys().publicText())
             .put("uptimeSeconds", Resources.uptimeMillis() / 1000)
-            .put("nodesRegistered", hub.store().nodes().size())
-            .put("nodesOnline", hub.registry().size())
-            .put("linksOpen", hub.links().all().size())
-            .put("visitorsInFlight", hub.router().visitorsInFlight())
             .put("certificateNotAfter", hub.tls().isLoaded() ? hub.tls().leaf().getNotAfter().getTime() / 1000 : null)
-            .put("visitors", Metrics.VISITORS.sum())
-            .put("visitorsRefused", Metrics.VISITORS_REFUSED.sum())
-            .put("signatures", Metrics.SIGNATURES.sum())
-            .put("signaturesRefused", Metrics.SIGNATURES_REFUSED.sum())
-            .put("nodeSessions", Metrics.NODE_SESSIONS.sum())
-            .put("relayBytes", Metrics.RELAY_BYTES.sum())
-            .put("receiveBudgetBytes", hub.flowBudget().limitBytes())
-            .put("receiveQueuedBytes", hub.flowBudget().usedBytes())
-            .put("receiveQueuedPeakBytes", hub.flowBudget().peakBytes())
-            .put("streamsReclaimed", hub.flowBudget().reclaimedStreams());
-        long rss = Resources.rssBytes();
-        if (rss >= 0) {
-            b.put("residentBytes", rss);
-        }
-        return b.build();
+            .build();
     }
 
     /**

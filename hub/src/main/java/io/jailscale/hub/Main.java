@@ -27,6 +27,7 @@ public final class Main {
                       or your own files: --tls-cert FILE --tls-key FILE
                       [--port-range 10000-10999 | none]  ports for raw tcp/udp links (ARCHITECTURE.md §8.4)
                       [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (ARCHITECTURE.md §8.3)
+                      [--metrics-listen 127.0.0.1:9090 | none]  /metrics, plain HTTP, never on the hub's own name (ARCHITECTURE.md §6.3)
                       [--proxy-protocol [--trusted-proxy CIDR,...]]  behind nginx stream / HAProxy (ARCHITECTURE.md §8.5)
                       [--takeover]  replace a running jailhub without dropping nodes (ARCHITECTURE.md §13)
         jailhub status

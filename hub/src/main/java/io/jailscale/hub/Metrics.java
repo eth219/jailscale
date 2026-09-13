@@ -5,9 +5,9 @@ import io.jailscale.proto.mux.MuxSession;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * What the hub has done since it started, for {@code /metrics} and {@code /v1/status}
- * (ARCHITECTURE.md §6.3). Counters only here; everything else the endpoints report is current state
- * read from the hub itself, which needs no counting.
+ * What the hub has done since it started, for {@code /metrics} on the metrics listener
+ * (ARCHITECTURE.md §6.3). Counters only here; everything else that endpoint reports is current
+ * state read from the hub itself, which needs no counting.
  *
  * <p>Static, because a jailhub process runs one hub, and the alternative is threading an instance
  * through {@link Relay}'s copy loop for a pair of adds. {@link LongAdder} rather than an atomic:
