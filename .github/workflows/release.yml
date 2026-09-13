@@ -89,7 +89,7 @@ jobs:
           want=$(echo $names | wc -w)
           got=$(wc -l < "SHA256SUMS-${{ matrix.target }}.txt")
           [ "$got" -eq "$want" ] || { echo "hashed $got of $want files"; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: dist/*
