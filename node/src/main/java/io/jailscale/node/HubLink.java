@@ -4,7 +4,6 @@ import io.jailscale.crypto.NoiseException;
 import io.jailscale.proto.control.Codec;
 import io.jailscale.proto.control.CodecException;
 import io.jailscale.proto.control.Message;
-import io.jailscale.proto.mux.FlowBudget;
 import io.jailscale.proto.mux.MuxSession;
 import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.util.Log;
@@ -62,7 +61,7 @@ final class HubLink implements AutoCloseable {
         Session(int conn, HubClient.Connected c) {
             this.conn = conn;
             this.connected = c;
-            this.mux = new MuxSession(c.channel(), false, this, flowBudget);
+            this.mux = new MuxSession(c.channel(), false, this);
         }
 
         @Override
@@ -102,12 +101,6 @@ final class HubLink implements AutoCloseable {
         }
     }
 
-    /**
-     * One receive budget for every connection to the hub at once (§5.3). The mirror of the hub's
-     * exposure: here it is a stalled local app that makes the node hold a visitor's upload, and the
-     * heap being protected is again one pool shared by up to four connections.
-     */
-    private final FlowBudget flowBudget = FlowBudget.ofHeap();
     private final NodeState state;
     private final String version;
     private final Events events;
