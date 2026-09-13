@@ -1185,6 +1185,50 @@ would make it erase a registration the hub still holds. A ban is not a firewall 
 visitors. The point is to stop someone running nodes here, not to stop them reading a page.
 
 
+### 11.6 Side channels and the local attacker
+
+Two things sit outside everything above, and this says which, so that nothing is quietly assumed
+into them.
+
+**A process on the same machine is not defended against.** On the node that means the MachineKey and
+any user-domain keys; on the hub it means the wildcard private key, which is what the rest of §11 is
+written around. Key material is an ordinary heap object read from an ordinary file: nothing is
+pinned in memory, nothing is zeroed after use, and a core dump or a debugger attached to either
+process yields it. The boundary is the operating system's -- `node.json` and the hub's keys are
+written 0600 (§4; on Windows `setPosixFilePermissions` is unsupported and the directory ACL is what
+holds), the daemon needs no root and opens no port, and the container image adds a filesystem
+namespace around the node as well. Those are real and they are not cryptographic: an attacker
+already running as that user has the key. The self-probe does not help here either, because a node
+with a stolen MachineKey is, to the hub and to the probe, that node.
+
+**Timing is not a property anything here claims.** X25519 and ChaCha20-Poly1305 come from the JDK's
+own providers -- `XDH` and SunJCE -- and have whatever properties those have; this project adapts
+them to the Noise encodings and implements neither. What is written here is BLAKE2s and the HMAC and
+HKDF over it, which branch on nothing secret but are not audited for timing and claim nothing. They
+hash handshake material; they are never the thing that compares a presented secret against a stored
+one. The comparisons that do decide something:
+
+| What is compared | How | Where that leaves it |
+|---|---|---|
+| Self-probe keying material (§11.3) | `MessageDigest.isEqual` | Constant time, deliberately: the verdict is the whole feature |
+| Invite token, short code, auth-key (§10) | SHA-256, then a lookup by the hash | Timing follows the hash of what was presented, which does not walk back to the secret |
+| `/admin` CSRF token (§11.5) | `MessageDigest.isEqual` over the bytes | Constant time. It was `String.equals`, and nothing reachable turned on that; a comparison of a presented secret is the wrong place to keep the cheaper habit |
+| `/admin` session cookie and login link (§11.5) | 128-bit random, a `ConcurrentHashMap` key | **Not constant time, and not made so:** a hash lookup has no byte compare to replace. Reaching a useful prefix of 128 random bits over HTTP is not a path anyone has, and a correct guess needs no timing |
+
+**Traffic analysis is not addressed at all.** The hub sees the SNI, the visitor's address, byte
+counts and timing (§8.1), and nothing on either side pads, batches or delays anything. Sizes and
+arrival times say what they usually say, and a hub that wants to know which page went over a link it
+cannot decrypt has the ordinary means. What §11.2 claims is that the hub cannot read the bytes, not
+that it cannot count them.
+
+**None of this is a gap waiting on a fix.** A tunnel whose node runs unprivileged on a machine its
+owner already controls has no meaningful place to put a key the machine's owner cannot reach, and
+padding a proxy that forwards ciphertext buys latency and bandwidth against an adversary this design
+already grants the metadata to. They are written down because a security model that lists four axes
+and stops invites the reader to assume a fifth.
+
+---
+
 ## 12. Threading and memory
 
 There is no packet hot path, so there is no reason to insist on platform threads. The hub's 443
@@ -1280,13 +1324,14 @@ Both columns are the toolchain and options the release workflow uses: GraalVM CE
 profile-guided optimization. That was not always true of the macOS column, and the cost of it is
 below the table.
 
-**No release has been built with it yet, so this table is main and not v0.1.0.** The tag is from
-2026-09-12 and the 25.3 pin landed on 2026-09-13, which leaves v0.1.0 on Liberica NIK 25.0.4 -- the
-left-hand column of the edition table below. Measured on its own assets and that column: binaries of
-29.8 to 31.9 MiB against the 25.3 to 26.2 here, idle RSS on linux-amd64 of 40.6 MB for the hub and
-40.1 for the node against 35.1 and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries
-five native targets rather than four, since the 25.3 line is what dropped macos-amd64 (§3.2).
-README says the same where it tells people which file to download.
+**This table is v0.1.1 and not v0.1.0.** The first tag is from 2026-09-12 and the 25.3 pin landed
+on 2026-09-13, which leaves v0.1.0 alone on Liberica NIK 25.0.4 -- the left-hand column of the
+edition table below -- and every release from v0.1.1 on the same toolchain and options this gate
+measures. Measured on v0.1.0's own assets and that column: binaries of 29.8 to 31.9 MiB against the
+25.3 to 26.2 here, idle RSS on linux-amd64 of 40.6 MB for the hub and 40.1 for the node against 35.1
+and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries five native targets rather than
+four, since the 25.3 line is what dropped macos-amd64 (§3.2). README says the same where it tells
+people which file to download.
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
@@ -1625,6 +1670,23 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   on the hub, and it is not fixed the same way because the same fix costs what the node's does not:
   pinning the send buffer caps a far visitor's download at the window over its round trip, 20 Mbit/s
   at 100 ms. The right bound scales with the visitor's measured round trip, and nothing measures it.
+- **A visitor's handshake can wait on a machine that has run out of network memory, and nothing here
+  says so.** This entry used to put that wait on the multiplexer -- a `SignResponse` queued
+  behind other visitors' data inside `NoiseChannel`'s one write lock -- and name the fix as a writer
+  that puts control frames in front of data. That writer was built (§5.3) and **the wait survived
+  it**: under `SLOW=400` an ordinary visitor still took 12 to 17 s while the node's own socket write
+  blocked for 3.2 s. The cause was the machine and not the session. The kernel's socket memory was at
+  its cap, so every socket on the host froze while both processes' timers reported idle, which they
+  were; §5.3 and §14 carry the measurements, and the multiplexer's own head-of-line cost with 400
+  stalled streams behind one socket is 22 ms of queue wait and 16 ms of socket write over 81,000
+  frames.
+
+  What remains a limit is the blindness. Neither end can see that condition from the inside, because
+  a write blocked on the machine looks exactly like a slow peer, so the only signals are indirect:
+  the node logs a signature that took longer than `RemoteSigning.SLOW_SIGN_MS`, and `measure.sh`
+  samples `netstat -m` through the phase and prints the peak and the allocations the kernel refused.
+  Nothing gates on either. It was also intermittent at the occupancy that produced it, two of four
+  runs on the same binaries, so one clean run says nothing about the next.
 - **Node idle RSS is about 24.8 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
   Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they
@@ -1633,36 +1695,40 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   neighbourhood JCE has to stay out of. Restricting suites and protocols is already done, but
   through `SSLParameters` on each engine, which narrows what is negotiated and not what is
   initialised.
-- **Per-visitor memory on the node is about 99 KB, measured**, and was 118 KB until the plaintext
-  stopped being copied on its way to the local app. Both figures are live bytes after a full GC,
-  from a heap histogram with a known number of visitors in flight: 96 of them held 11,343,672 bytes
-  of arrays before, 9,769,672 after, which is 16.4 KB each and exactly the buffer that went. **RSS
-  does not move** -- the node peaked at 85.5 and 82.0 MB under `SLOW=400`, against 83.3 to 86.8
-  before -- because a collector working to a 64 MB ceiling sizes its footprint from the ceiling and
-  not from the live set. That is the same reason the relay buffer's size looked like a lever and was
-  not, and it is why the number below is counted rather than weighed.
+- **Per-visitor memory on the node is about 99 KB.** Live bytes after a full GC, from a heap
+  histogram taken with a known number of visitors in flight. It is the only figure here that counts
+  what JSSE keeps behind the `SSLEngine` as well as what this project allocates itself.
 
-  What is left per visitor: `TlsEndpoint`'s packet buffer (16,709 bytes) and application buffer
-  (16,704), one 16 KiB copy array for the local-to-visitor direction, the engine's own record
-  buffers, and whatever frame is in flight. The figure the rest of this entry gives -- about 60 KB
-  -- counted the buffers this project allocates and not what JSSE keeps behind the engine, which is
-  why it reads low against the histogram.
+  What holds it: `TlsEndpoint`'s packet buffer (16,709 bytes) and application buffer (16,704), both
+  for the life of the connection, one 16 KiB copy array for the local-to-visitor direction, the
+  engine's own record buffers, and whatever frame is in flight. A **gated** link (§9.3) adds a 4 KB
+  buffer for the request head, so 4 MB at the 1,024-visitor ceiling; against an ungated link under
+  the same load it does not rise above the run-to-run variance of the figure in §14.
 
-- **Per-visitor memory is about 60 KB on the node**: a 16,709-byte packet buffer and a 16,704-byte
-  application buffer that a `TlsEndpoint` holds for the life of the connection, plus the two 16 KB
-  copy arrays, one per direction. A **gated** link (§9.3) adds a 4 KB buffer for the request head,
-  so 4 MB at the 1,024-visitor ceiling; against an ungated link under the same load it does not
-  rise above the run-to-run variance of the figure in §14.
+  **There are two scales in this entry and they do not agree.** Adding up the buffers this project
+  allocates gives about 60 KB, and §14's `netInBuf`/`appInBuf`/engine estimate gives 50 to 60 KB;
+  both count allocations made here and neither counts what the engine keeps behind itself, which is
+  why they read low against the histogram. Use 99 KB for what a visitor costs the process, and the
+  breakdown for what a change to these buffers can move.
 
-  It used to be about 67 KB, because the wrap destination was a third per-connection buffer. That
-  one was **not** per-connection work: `wrapAndWrite` clears it on entry and has written every byte
-  out before it returns, so it belongs to the wrap, and instrumenting the 1,000-visitor load showed
-  256 wraps in flight at the busiest moment. The other 744 connections were each holding 16,709
-  bytes they were not using. Sharing them through a small pool moved the node's figure in §14 from
-  a mean of 91.8 MB over seven runs to 84.8 MB, and — the larger effect — from a 14.6 MB spread
-  between runs to 1.1 MB, because the heap high-water no longer depends on where the GC happened to
-  fall during the ramp. What remains is genuinely per-connection: a partly-arrived TLS record and
-  plaintext nobody has read yet both have to survive between calls.
+  **It was 118 KB until the plaintext stopped being copied on its way to the local app**, on the
+  histogram scale: 96 visitors held 11,343,672 bytes of arrays before and 9,769,672 after, which is
+  16.4 KB each and exactly the buffer that went. On the counted scale the same kind of change had
+  already taken it from about 67 KB to 60, when the wrap destination stopped being a third
+  per-connection buffer. That one was **not** per-connection work: `wrapAndWrite` clears it on entry
+  and has written every byte out before it returns, so it belongs to the wrap, and instrumenting the
+  1,000-visitor load showed 256 wraps in flight at the busiest moment. The other 744 connections were
+  each holding 16,709 bytes they were not using. Sharing them through a small pool moved the node's
+  figure in §14 from a mean of 91.8 MB over seven runs to 84.8 MB, and — the larger effect — from a
+  14.6 MB spread between runs to 1.1 MB, because the heap high-water no longer depends on where the
+  GC happened to fall during the ramp. What remains is genuinely per-connection: a partly-arrived TLS
+  record and plaintext nobody has read yet both have to survive between calls.
+
+  **RSS does not move when these figures do** -- the node peaked at 85.5 and 82.0 MB under
+  `SLOW=400`, against 83.3 to 86.8 before -- because a collector working to a 64 MB ceiling sizes its
+  footprint from the ceiling and not from the live set. That is why per-visitor cost is counted here
+  rather than weighed, and it is the same reason the relay buffer's size looked like a lever and was
+  not (below).
 
   **Pooling the other two would not work, and the 256 KB stream window is not the lever either.**
   Buffers a connection holds between calls are needed by every open connection at once, so a pool
@@ -1688,23 +1754,6 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   The price is a narrower contract than `in()` has: **one thread may drain a stream**, because a
   second would write a chunk the first has not removed yet. Both relays give a stream one thread per
   direction, and a second caller is refused rather than left to duplicate output.
-
-  **A saturated node session delays the handshakes of new visitors, and the node now says so.**
-  Under `SLOW=400` an ordinary visitor's first byte arrives after ten to thirteen seconds, once per
-  run, while the other probes in the same run are at 250-370 ms. It is not the receive budget (it
-  happens with zero reclaims), not the node's heap (it happens with the node's ceiling lifted to
-  768 MB, at a 137 MB peak), and not the signing rate limit (no refusals). The node's log says what
-  it is: *the hub took 12,852 ms to sign for stream 818*, and the stream next to it was released in
-  the same millisecond.
-
-  The path is one Noise channel. `NoiseChannel.write` encrypts and writes inside one lock, because
-  the nonce has to advance in wire order, so a frame whose socket write blocks holds every other
-  frame behind it -- including the `SignResponse` a visitor's handshake is waiting on. A node with
-  hundreds of stalled streams congests that channel, and a new visitor pays for it in the one place
-  the hub's own counters cannot see: the signature went out, so `jailhub_signatures_total` counted
-  it and nothing was refused. Signing above `RemoteSigning.SLOW_SIGN_MS` is logged on the node for
-  that reason, and what would actually fix it is a writer that can put a control frame in front of a
-  queued data frame rather than behind it.
 
   **Measured, the size is not a lever either.** At 4 KiB against 16 KiB the hub's peak under `SLOW=300`
   came out 92.0 MB, then 58.9 MB, against 63.9 MB for the buffer it ships -- the spread at one fixed
