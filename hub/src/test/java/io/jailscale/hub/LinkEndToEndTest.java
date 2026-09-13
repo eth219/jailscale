@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -194,6 +195,31 @@ class LinkEndToEndTest {
             t.join();
         }
         assertEquals(8, okCount[0]);
+    }
+
+    /**
+     * The hub's own page lists what it is serving. The addresses are public by construction -- a
+     * visitor reaches one by typing it -- but who opened it and which local port it reaches are not,
+     * and the page is fetched here the way a stranger fetches it: no session, over the real router.
+     */
+    @Test
+    void theOpenLinksAreListedOnTheHubsOwnPageWithoutTheirOwners() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+
+        String before = visit("hub.test", "/").bodyText();
+        assertTrue(before.contains("None open right now"), before);
+
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
+
+        String after = visit("hub.test", "/").bodyText();
+        assertTrue(after.contains("<a href=\"https://myapp.hub.test\">myapp.hub.test</a>"), after);
+        assertFalse(after.contains("alice"), "the owner must not be on the public page: " + after);
+        assertFalse(after.contains("127.0.0.1:" + localApp.getLocalPort()),
+            "the local target must not be on the public page: " + after);
+        assertFalse(after.contains("mkey:"), after);
     }
 
     @Test

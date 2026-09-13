@@ -11,6 +11,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * The hub's own HTTP endpoints on its name (ARCHITECTURE.md §5.1): {@code /v1/key}, {@code /v1/noise}
@@ -32,6 +35,8 @@ final class HttpFront {
     static final double HANDSHAKE_PER_SECOND = 1.0;
     /** Where the page sends someone who does not have the binary yet. */
     private static final String REPO = "https://github.com/eth219/jailscale";
+    /** How many open links the page lists before it stops and says how many are left. */
+    private static final int LINKS_SHOWN = 50;
 
     private final Hub hub;
     private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
@@ -189,6 +194,26 @@ final class HttpFront {
             .append(" what this hub says about itself, so they tell you an operator is running what they think they")
             .append(" are; a dishonest hub prints whatever it likes here.</small></p>");
 
+        // What this hub is actually serving. The addresses are public by construction -- a visitor
+        // reaches one by typing it -- so listing them tells nobody anything a DNS lookup would not.
+        // Who owns a name and which local port it reaches are a different matter and stay behind the
+        // admin session, as the node list does.
+        b.append("<h2>Open links</h2>");
+        List<Links.Link> links = new ArrayList<>(hub.links().all());
+        links.sort(Comparator.comparing(Links.Link::name));
+        if (links.isEmpty()) {
+            b.append("<p>None open right now.</p>");
+        } else {
+            b.append("<table>");
+            for (Links.Link l : links.subList(0, Math.min(links.size(), LINKS_SHOWN))) {
+                row(b, address(l), l.kind());
+            }
+            b.append("</table>");
+            if (links.size() > LINKS_SHOWN) {
+                b.append("<p>and ").append(links.size() - LINKS_SHOWN).append(" more.</p>");
+            }
+        }
+
         // A public hub is asking people to route their traffic through a stranger's machine. What it
         // can and cannot do with that traffic belongs on its own front page, not only in the docs.
         b.append("<h2>What this hub can see</h2>");
@@ -217,6 +242,18 @@ final class HttpFront {
                 "<input type=hidden name=csrf value=\"" + escape(s.csrf()) + "\">", "/"));
         }
         return b.toString();
+    }
+
+    /**
+     * Where a visitor goes for this link: a raw port is a host and a port and nothing to click,
+     * an https link is the name itself, which is also the only useful thing to do with the row.
+     */
+    private String address(Links.Link l) {
+        String host = escape(l.host(hub.config()));
+        if (l.raw()) {
+            return "<code>" + escape(hub.config().hostname()) + ":" + l.port() + "</code>";
+        }
+        return "<a href=\"https://" + host + "\">" + host + "</a>";
     }
 
     /**

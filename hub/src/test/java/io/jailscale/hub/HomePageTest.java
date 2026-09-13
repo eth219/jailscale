@@ -172,6 +172,14 @@ class HomePageTest {
         assertTrue(html.contains("<code>" + next + "</code>"), html);
     }
 
+    /** With nothing open the section still exists, and says so rather than showing an empty table. */
+    @Test
+    void anEmptyHubSaysSoInsteadOfShowingAnEmptyTable() throws Exception {
+        String html = http("GET", "/", null, null).bodyText();
+        assertTrue(html.contains("Open links"), html);
+        assertTrue(html.contains("None open right now"), html);
+    }
+
     @Test
     void anAdminSeesTheNodesAndCanRemoveOrBanFromTheSamePage() throws Exception {
         String cookie = loginAsAdmin();

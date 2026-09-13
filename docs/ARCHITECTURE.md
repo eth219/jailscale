@@ -374,6 +374,13 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
+It lists the open links as well -- the address a visitor would type and whether it is https, tcp or
+udp -- because a hub that serves nothing and a hub that is busy look identical without it. Those
+addresses are public by construction: a visitor reaches one by typing it, and a DNS lookup finds it
+either way. What stays behind the admin session is the part that is nobody else's business -- who
+opened a name and which local port it reaches -- and the list stops at fifty rows and says how many
+are left, so a busy hub does not turn its front page into a directory dump.
+
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's
 current Noise public key, plus the next one while a rotation is open (§5.2). Both are comparable
