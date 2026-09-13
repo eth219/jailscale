@@ -83,6 +83,32 @@ class AdminCommandTest {
     }
 
     /**
+     * And the third side: a command an admin can run is a command the binary tells them about.
+     * {@code name list}, {@code name reassign} and {@code name release} were routed, handled and
+     * written up in ARCHITECTURE.md 11.4, and absent from the usage text -- so the way to take
+     * back a claimed name was discoverable only by reading the source.
+     *
+     * <p>{@code handoff} is the exception and stays one: it is not an operator's command but the
+     * message a second process sends with {@code --takeover}, and listing it would invite someone
+     * to dismantle a running hub by hand.
+     */
+    @Test
+    void everyRoutedVerbIsInTheUsageText() {
+        for (Route r : routes()) {
+            if (r.verb().equals("handoff")) {
+                continue;
+            }
+            String line = Main.USAGE.lines()
+                .filter(l -> l.strip().startsWith("jailhub " + r.argv()[0]))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no usage line for " + r.typed()));
+            if (r.argv().length > 1 && !r.argv()[1].startsWith("--")) {
+                assertTrue(line.contains(r.argv()[1]), r.typed() + " is not on its usage line: " + line.strip());
+            }
+        }
+    }
+
+    /**
      * And the other half of the pair: each of those verbs reaches a case in {@link AdminIpc#handle}
      * on a running hub. Only the fall-through reply proves a missing handler -- a verb that lands
      * and then refuses ("no node matches 3") has been routed, which is all this asserts.

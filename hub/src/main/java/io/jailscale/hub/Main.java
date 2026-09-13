@@ -10,7 +10,13 @@ import java.nio.file.Path;
 /** Entry point of the {@code jailhub} binary: {@code serve}, or an admin command over IPC. */
 public final class Main {
 
-    private static final String USAGE = """
+    /**
+     * What the binary can be told to do. Package-private so {@link io.jailscale.hub.AdminCommandTest}
+     * can hold it against the commands that are actually routed -- the three {@code name} ones were
+     * implemented, documented in ARCHITECTURE.md 11.4 and missing from here, which is how an admin
+     * looking for the way to take a claimed name back found nothing.
+     */
+    static final String USAGE = """
         jailhub serve --base-url https://hub.example.com
                       [--listen 0.0.0.0:443] [--state DIR] [--registration invite|open]
                       [--invite-policy members|admins] [--knock on|off] [--dns-suffix HOST] [--debug]
@@ -26,6 +32,7 @@ public final class Main {
         jailhub status
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
+        jailhub name list | reassign <name> --user NAME | release <name>
         jailhub domain list | release <domain>
         jailhub ban list | add <ip|cidr> [--reason R] | remove <ip|cidr>
         jailhub invite create [--user NAME] [--uses N] [--ttl 24h] [--admin] | list | revoke <id>

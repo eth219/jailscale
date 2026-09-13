@@ -838,7 +838,10 @@ kernel's pipelining is for (§15).
 
 A link that should not be public is locked behind a visit link, the same capability model as invites.
 `jailscale open 3000 --gate` prints `https://q7x2k.hub.example.com/?jail=<token>` alongside the
-public URL, and `jailscale gate <name> --new-link --ttl 7d` or `--off` manages it afterwards.
+public URL, and `jailscale gate <name> --ttl 7d` or `--off` manages it afterwards. Each run of the
+former issues a fresh link and retires the one before it, so it is not a way to look at the gate.
+There is no `--new-link`: it was documented here, declared in the CLI and read by nothing, because
+the command has only ever had the one behaviour.
 Immediately after TLS termination the node reads only **the first request head** of the connection
 (request line and headers, at most 16 KB): a valid `Cookie: jail=<token>` lets the whole connection
 through, because the same TCP connection is the same client; a valid `?jail=<token>` query gets

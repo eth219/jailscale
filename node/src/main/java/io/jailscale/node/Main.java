@@ -13,7 +13,12 @@ import java.util.List;
 /** Entry point of the {@code jailscale} binary: a CLI that talks to the resident daemon over IPC. */
 public final class Main {
 
-    private static final String USAGE = """
+    /**
+     * What the binary can be told to do. Package-private so {@link CliFlagsTest} can hold
+     * {@link #FLAGS} against it: a flag that is declared and named nowhere here is one nothing
+     * reads, which is what {@code --new-link} and {@code --foreground} both turned out to be.
+     */
+    static final String USAGE = """
         jailscale up --invite https://hub.example.com/join/TOKEN [--user NAME]
         jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
@@ -21,7 +26,7 @@ public final class Main {
         jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (ARCHITECTURE.md §8.4)
         jailscale open PORT --domain app.example.com [--acme-email E] [--acme-staging | --acme-directory URL]
                                                               your own domain, CNAME'd to the hub (ARCHITECTURE.md §8.3)
-        jailscale gate NAME [--new-link [--ttl 24h] | --off]
+        jailscale gate NAME [--ttl 24h | --off]              each run issues a fresh visit link
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | admin | daemon
         jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
@@ -31,12 +36,22 @@ public final class Main {
         jailscale version
         """;
 
+    /**
+     * Options that take no value. Every option this binary reads with {@code flag()} has to be
+     * here, or {@link Args#parse} reads the next word as its value -- and anything here that
+     * nothing reads is a flag the CLI accepts and ignores. {@code --new-link} was the second kind:
+     * documented on {@code gate}, declared here, read nowhere, because {@code gate NAME} issues a
+     * fresh link every run with or without it.
+     */
+    static final String[] FLAGS = {"debug", "self", "tls-insecure", "help", "gate", "off", "tcp", "udp",
+        "acme-staging", "proxy-protocol"};
+
     private Main() {}
 
     public static void main(String[] argv) {
         Args a;
         try {
-            a = Args.parse(argv, "debug", "self", "tls-insecure", "foreground", "help", "gate", "new-link", "off", "tcp", "udp", "acme-staging", "proxy-protocol");
+            a = Args.parse(argv, FLAGS);
         } catch (IllegalArgumentException e) {
             System.err.println(e.getMessage());
             System.exit(2);
