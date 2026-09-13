@@ -145,9 +145,9 @@ sleep by interrupt, which is exactly that path, so the release workflow builds o
 distribution looked unusable until `version: '25.3'` was tried. **The 25.3 line does not build
 macos-amd64**, which is why the release workflow builds four native targets and not five: Intel Macs
 get `jailscale.jar`. v0.1.0 was tagged the day before that pin landed and is the one release that
-carries five, `darwin-amd64` among them. §14 has what the line is worth, which is most of a doubling
-in throughput, and what v0.1.0 shipped instead. And **Windows cannot poll one socket for read and
-for write at the same time**: the JDK gives virtual threads one wepoll handle per direction, and
+carries five, `darwin-amd64` among them; v0.1.1 is the first built on this pin. §14 has what the line
+is worth, which is most of a doubling in throughput, and what v0.1.0 shipped instead. And **Windows
+cannot poll one socket for read and for write at the same time**: the JDK gives virtual threads one wepoll handle per direction, and
 with a thread parked on each direction of the same socket the AFD driver underneath completes the
 wrong one, leaving the thread that asked for the event asleep for good (JDK-8334574, open, and still
 present in 26). So one side of every socket two threads use at once runs on a platform thread, which

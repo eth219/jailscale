@@ -105,6 +105,11 @@ options as the binaries above, so [Resource usage](#resource-usage) describes
 them too. `:v0.1.1` pins that tag, `:latest` follows releases, `:edge` follows
 main.
 
+The images tagged `:v0.1.0` are not worth pulling: they were built before the
+runtime base carried a libc, so they answer `exec /jailscale: no such file or
+directory` instead of starting, and `:latest` pointed at one of them until this
+release.
+
 ```
 docker pull ghcr.io/eth219/jailhub:v0.1.1
 docker pull ghcr.io/eth219/jailscale:v0.1.1
