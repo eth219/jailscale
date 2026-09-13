@@ -5,6 +5,13 @@ name: images
 # Each architecture builds on its own runner rather than under emulation: native-image cannot
 # cross-compile, and building arm64 under qemu takes long enough to be useless. The per-arch
 # images are pushed by digest, then a manifest list joins them under one tag.
+#
+# The native binary is built here, by this workflow, and the Dockerfiles only package it. They used
+# to build it themselves FROM ghcr.io/graalvm/native-image-community:25 -- which is GraalVM for JDK
+# 25.0.2, the range ARCHITECTURE.md §3.2 forbids and release.yml is pinned away from, and that
+# registry publishes nothing newer for JDK 25. So the toolchain moved out of the image and is now
+# the release's: same distribution, same version, same options. That makes this the release binary
+# in the sense that matters, though not byte-identical, which native-image does not promise.
 
 on:
   push:
@@ -44,6 +51,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The release's toolchain, and the reasoning for the pin is in release.yml: GraalVM CE on the
+      # 25.3 line, a JDK newer than 25.0.2, and `version:` rather than `java-version:` because the
+      # latter resolves 25.0.2 on this distribution. Two files now pin this and they have to move
+      # together; the images shipped a forbidden JDK for as long as they did because this one was a
+      # base-image tag instead, where nothing made the mismatch visible.
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          version: '25.3'
+
+      - name: Set version from the tag
+        # Without this the binary in the image reports the pom's 0.x.y-SNAPSHOT, whatever tag the
+        # image is published under. release.yml does the same thing for the same reason.
+        if: github.ref_type == 'tag'
+        run: ./mvnw -B -ntp versions:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false
+
+      # -DskipTests on purpose: `ci` is the gate and these images are packaging, not verification
+      # (ARCHITECTURE.md §3.2). One module, not the whole build: each job packages one component.
+      - name: Build the native binary
+        run: ./mvnw -B -ntp -DskipTests -Pnative -pl ${{ matrix.component }} -am package
+
+      # The runtime base carries glibc, and the Dockerfile adds zlib because the binary needs it and
+      # distroless/base does not have it. That list is hard-coded now, where the old Dockerfile read
+      # it off `ldd` and would have failed loudly on a third library, so the check moves here: a new
+      # dependency is a red job rather than an image that builds and dies at exec.
+      - name: Check what the binary links against
+        run: |
+          set -eu
+          bin=${{ matrix.component }}/target/${{ matrix.image }}
+          ldd "$bin"
+          unexpected=$(ldd "$bin" | awk '{print $1}' | grep -vE \
+            '^(linux-vdso\.so\.1|libc\.so\.6|libz\.so\.1|/lib64/ld-linux-x86-64\.so\.2|/lib/ld-linux-aarch64\.so\.1)$' || true)
+          if [ -n "$unexpected" ]; then
+            echo "the image carries libc and zlib only, and this also needs: $unexpected"
+            echo "either add it to deploy/Dockerfile.${{ matrix.component }} or to the list above"
+            exit 1
+          fi
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -59,9 +105,14 @@ jobs:
           context: .
           file: deploy/Dockerfile.${{ matrix.component }}
           platforms: linux/${{ matrix.arch }}
+          # The binary the step above produced. It is the Dockerfile's default as well, so a local
+          # `docker build -f deploy/Dockerfile.node .` needs no argument.
+          build-args: |
+            BIN=${{ matrix.component }}/target/${{ matrix.image }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.arch }}
+          # No layer cache: what was expensive to build is no longer built here, and the image is
+          # now two small COPYs whose cache would save nothing worth the chance of serving a stale
+          # layer for a binary that changed.
 
       # Start what was just pushed. Three faults shipped at once because this workflow built and
       # pushed images and never ran one: a runtime base with no libc, so every image ever published

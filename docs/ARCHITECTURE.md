@@ -122,14 +122,18 @@ the class this project's threading makes easy to write. Its exclusions are in
 `spotbugs-exclude.xml` and each one states its reason, because an exclusion with no reason and a
 finding nobody answered look identical six months later.
 
-**Two workflows, two jobs each way round.** `ci` is the gate: the tests on ubuntu, macos and
+**Three workflows.** `ci` is the gate: the tests on ubuntu, macos and
 Windows for every push and pull request, and the §14 budget on main and nightly. Windows was a
 nightly job for a while, because the stall below failed about 2% of runs and a gate that is red
 2% of the time teaches people to ignore it; it is per-push now that the stall is fixed and measured
 at 0 in 3,000, and it costs 1.5 min against the other two at 1.2. The nightly run gates nothing any
 more and stays for drift in the runner images and in what `graalvm-community` + `25.3` resolves to. `release`
-builds the four native targets on a tag. The container images build with `-DskipTests`, deliberately: they are packaging,
-not verification.
+builds the four native targets on a tag, and `images` the two container images. The images build with
+`-DskipTests`, deliberately: they are packaging, not verification. They build the binary with the
+release's toolchain and copy it onto a distroless base, rather than building it inside the image as
+they used to -- the only JDK 25 `ghcr.io/graalvm/native-image-community` publishes is 25.0.2, the
+version the next paragraph forbids, so every image published before this carried the one JDK the
+release is pinned away from.
 
 Two toolchain hazards are load-bearing. **JDK 25.0.0 to 25.0.2 must not be used**: moving
 virtual-thread timed park onto ForkJoinPool delayed tasks (JDK-8351927) made cancelling a delayed
