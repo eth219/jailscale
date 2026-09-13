@@ -71,13 +71,29 @@ jobs:
           # binary is a question nothing in the binary itself can answer (see Version.java), and a
           # locally built one can differ from this in size and speed without differing in
           # behaviour, so the answer is published next to the checksums.
+          #
+          # Asking native-image takes three tries and then refuses to give up quietly. On Windows it
+          # is `native-image.cmd`, which bash does not find under the plain name, so `$(native-image
+          # --version)` was the empty string and v0.1.1 published `toolchain:` followed by nothing
+          # for windows-amd64 -- the one field this file exists for. A command substitution that
+          # fails does not fail the step around it, which is why nothing said so.
+          toolchain=""
+          for ni in native-image "$GRAALVM_HOME/bin/native-image" "$GRAALVM_HOME/bin/native-image.cmd"; do
+            if v=$("$ni" --version 2>/dev/null | tail -1) && [ -n "$v" ]; then toolchain="$v"; break; fi
+          done
+          if [ -z "$toolchain" ]; then
+            echo "no native-image answered --version, so BUILDINFO would say nothing about the"
+            echo "toolchain; tried the plain name and GRAALVM_HOME=$GRAALVM_HOME"
+            exit 1
+          fi
           {
             echo "target:        ${{ matrix.target }}"
             echo "commit:        ${{ github.sha }}"
             echo "ref:           ${{ github.ref_name }}"
-            echo "toolchain:     $(native-image --version | tail -1)"
+            echo "toolchain:     $toolchain"
             echo "options:       -Pnative (no profile-guided optimization, see ARCHITECTURE.md §14)"
           } > "dist/BUILDINFO-${{ matrix.target }}.txt"
+          grep -q "^toolchain:     ." "dist/BUILDINFO-${{ matrix.target }}.txt"
           cd dist
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum $names > "SHA256SUMS-${{ matrix.target }}.txt"
