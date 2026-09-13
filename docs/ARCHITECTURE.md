@@ -374,6 +374,13 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
+The page is two columns on a wide screen -- what to read on one side, what the hub is doing on the
+other -- and one column under 56rem, which is the only breakpoint. It was 40rem of centred prose,
+which is the right measure for a page of prose and the wrong one for a page that is now mostly
+tables: the binary hash ran to the edge of its cell with two thirds of the window empty beside it.
+The stylesheet is inline and under a kilobyte, there is no script and no image, and dark is whatever
+the system asked for, since a toggle would need somewhere to remember the answer.
+
 Two endpoints say the same things to something that is not a person. **`GET /v1/status`** is the
 page's public facts as JSON -- build, hub key, uptime, nodes registered and online, links open, when
 the certificate expires, resident size, and the counters below -- for an uptime check or a script;
@@ -391,7 +398,9 @@ the signature counter sits at the one point that decides, so a refusal added lat
 be counted.
 
 It lists the open links as well -- the address a visitor would type and whether it is https, tcp or
-udp -- because a hub that serves nothing and a hub that is busy look identical without it. Those
+udp -- because a hub that serves nothing and a hub that is busy look identical without it. The count
+that used to sit in the status table is gone with it: the list is the count, and saying both invited
+them to disagree. Those
 addresses are public by construction: a visitor reaches one by typing it, and a DNS lookup finds it
 either way. What stays behind the admin session is the part that is nobody else's business -- who
 opened a name and which local port it reaches -- and the list stops at fifty rows and says how many
