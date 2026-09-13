@@ -62,7 +62,10 @@ class DaemonCommandTest {
         String[] tail = cmd.subList(cmd.indexOf("daemon"), cmd.size()).toArray(new String[0]);
 
         NodeConfig asTheDaemonReadsIt = Main.configOf(Args.parse(tail));
-        assertEquals(cfg.socketPath(), asTheDaemonReadsIt.socketPath(), cmd.toString());
+        // Absolute on both sides, for the same reason the home is: an ExecStart has no working
+        // directory of ours. On Windows "/run/..." is a path relative to the current drive, so the
+        // one the command carries is the one to compare with.
+        assertEquals(cfg.socketPath().toAbsolutePath(), asTheDaemonReadsIt.socketPath(), cmd.toString());
         assertEquals(cfg.configDir().toAbsolutePath(), asTheDaemonReadsIt.configDir(), cmd.toString());
     }
 
