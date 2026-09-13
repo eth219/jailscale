@@ -119,11 +119,16 @@ public final class Main {
     }
 
     private static void runDaemon(NodeConfig cfg) throws Exception {
+        // Before anything is opened: a second daemon on this directory would share the MachineKey
+        // and the state file with the first (ARCHITECTURE.md §9.4). The lock is held for the life
+        // of the process and released by the kernel when it ends.
+        DaemonLock lock = DaemonLock.acquire(cfg);
         Daemon d = new Daemon(cfg);
         d.start();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 d.close();
+                lock.close();
             } catch (IOException ignored) {
                 // exiting
             }
@@ -262,12 +267,20 @@ public final class Main {
     }
 
     /** Sends a request to the daemon, starting it if needed. Progress lines are printed as they arrive. */
-    private static JsonObject call(NodeConfig cfg, JsonObject req, boolean startDaemon) throws Exception {
+    private static JsonObject call(NodeConfig config, JsonObject req, boolean startDaemon) throws Exception {
+        NodeConfig cfg = config;
         if (!Ipc.isAlive(cfg.socketPath())) {
-            if (!startDaemon) {
+            // Where the socket is depends on the environment that asks -- XDG_RUNTIME_DIR is set in
+            // a login session and not in cron -- so before concluding that nothing is running, ask
+            // the daemon that is running where it put its socket (§9.4).
+            NodeConfig recorded = runningElsewhere(cfg);
+            if (recorded != null) {
+                cfg = recorded;
+            } else if (!startDaemon) {
                 throw new IOException("daemon is not running (start with 'jailscale up' or 'jailscale daemon')");
+            } else {
+                spawnDaemon(cfg);
             }
-            spawnDaemon(cfg);
         }
         JsonObject[] last = new JsonObject[1];
         Ipc.stream(cfg.socketPath(), req, line -> {
@@ -281,6 +294,24 @@ public final class Main {
             throw new IOException(r.optString("error", "failed"));
         }
         return r;
+    }
+
+    /**
+     * The socket of a daemon that is running but listening somewhere this process would not have
+     * looked, taken from the lock file it holds. Null unless something is answering there, so a
+     * file left by a daemon that has since died sends nobody anywhere.
+     */
+    private static NodeConfig runningElsewhere(NodeConfig cfg) {
+        JsonObject holder = DaemonLock.holder(cfg);
+        if (holder == null) {
+            return null;
+        }
+        String socket = holder.optString("socket", null);
+        if (socket == null || socket.equals(cfg.socketPath().toAbsolutePath().toString())) {
+            return null;
+        }
+        Path path = Path.of(socket);
+        return Ipc.isAlive(path) ? new NodeConfig(cfg.configDir(), path) : null;
     }
 
     private static void print(JsonObject r) {

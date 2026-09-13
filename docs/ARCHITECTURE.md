@@ -751,7 +751,23 @@ only its home would bind the one next to the config file while the CLI waited on
 `$XDG_RUNTIME_DIR` -- so on any systemd login session `up` reported that the daemon did not start,
 five seconds after starting it, and left it running. One more orphan for every command typed.
 `Service.daemonCommand` is the single place that builds that command, so the CLI and an installed
-unit cannot drift apart on it. Commands
+unit cannot drift apart on it.
+
+**One daemon per state directory, enforced by a lock on `daemon.lock`.** Passing both paths settles
+what the CLI starts; it does not settle what someone starts by hand, or what an installed unit and a
+`jailscale daemon` in a terminal do between them, and two daemons on one directory share a
+MachineKey and a state file and connect to the hub as the same node. The daemon takes the lock
+before it opens anything and holds it for its lifetime, and a second one exits saying who has it.
+The lock is an `fcntl` record lock, so the kernel releases it however the process ends: there is no
+stale lock to clear and no pid to test for liveness. The byte locked is past the end of the content,
+because a Windows lock is mandatory and locking the bytes themselves would stop a reader.
+
+Holding the lock is also what makes its contents trustworthy, which is why there is no separate
+pointer file: the holder writes its pid and **the socket it actually bound**, and a CLI that finds
+nothing at the socket its own environment implies reads that file before concluding the daemon is
+down. So `jailscale status` from cron, with no `XDG_RUNTIME_DIR`, still finds the daemon a login
+session started in `/run/user/<uid>`. The path is used only if something answers there, so a file
+left behind by a daemon that has died sends nobody anywhere. Commands
 are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify`
 (§11.3), `leave`, `update` and `service install|uninstall|status`; service registration uses only
 what the OS already has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with
