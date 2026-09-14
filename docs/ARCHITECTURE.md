@@ -1409,17 +1409,19 @@ people which file to download.
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
-| Binary size | 25.3 MiB (`jailhub`), 25.4 MiB (`jailscale`) | 26.1 MiB, 26.4 MiB | 28 / 28 MiB |
-| Node idle RSS | about 24.8 MB | about 34.4 MB (2.1 anonymous) | 28 / 38 MB |
-| Hub idle RSS | about 25.3 MB | about 35.6 MB (3.3 anonymous) | 28 / 38 MB |
-| RSS with 1,000 visitor sessions held open | node 69 MB, hub 53 MB | node 55 MB, hub 62 MB | node 88 MB, hub 88 MB |
+| Binary size | 25.3 MiB (`jailhub`), 25.5 MiB (`jailscale`) | 26.1 MiB, 26.4 MiB | 28 / 28 MiB |
+| Node idle RSS | about 25.0 MB | about 34.4 MB (2.1 anonymous) | 28 / 38 MB |
+| Hub idle RSS | about 25.1 MB | about 35.6 MB (3.3 anonymous) | 28 / 38 MB |
+| RSS with 1,000 visitor sessions held open | node 52 MB, hub 52 MB | node 55 MB, hub 62 MB | node 88 MB, hub 88 MB |
 | CLI cold start | about 6.3 ms (`jailscale status`, median of 10, IPC round trip included) | about 2.6 ms | 50 ms |
 
-The two columns are not the same run. linux-amd64 is the gate's own output at the commit v0.1.2 was
-cut from, so it describes what shipped. The macOS column is a local run from before §9.3's visitor
-bound landed, which took the node's held-open peak from 67 MB to 55 MB where it has been measured
-again; its 69 MB is therefore an upper bound and not a current figure. Re-measuring it needs a
-macOS machine with the toolchain, which is also why it lags.
+The two columns are different runs of the same script on the same tree: linux-amd64 is the gate's
+own output at the commit v0.1.2 was cut from, macOS a local run on binaries built by `./native.sh`,
+whose `native-image` banner and byte size match the release assets to within the version string.
+§9.3's visitor bound is visible in both, taking the node's held-open peak from 67 MB to 55 on linux
+and from 69 to 52 here. The held-open peaks are the noisy row: two macOS runs gave hub 50.7 and
+52.1, node 49.4 and 51.8, so read that line as "about 52" rather than a figure to compare at one
+decimal.
 
 ### How many visitors this serves, and what stops it
 
@@ -1905,7 +1907,7 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   samples `netstat -m` through the phase and prints the peak and the allocations the kernel refused.
   Nothing gates on either. It was also intermittent at the occupancy that produced it, two of four
   runs on the same binaries, so one clean run says nothing about the next.
-- **Node idle RSS is about 24.8 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
+- **Node idle RSS is about 25.0 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
   Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). Roughly 7.6 MB is JSSE
   initialisation for a single TLS client (§12), and both levers against it are smaller than they
   look. There is no build-time initialisation whitelist to widen, because the build configures none

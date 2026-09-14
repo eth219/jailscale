@@ -229,16 +229,16 @@ side.
 
 | | jailhub | jailscale |
 |---|---|---|
-| Binary size | 25.3 / 26.1 MiB | 25.4 / 26.4 MiB |
-| Idle RSS | 25.3 / 35.6 MB | 24.8 / 34.4 MB |
-| Peak RSS, 1,000 visitors held open at once | 53 / 62 MB | 69 / 55 MB |
+| Binary size | 25.3 / 26.1 MiB | 25.5 / 26.4 MiB |
+| Idle RSS | 25.1 / 35.6 MB | 25.0 / 34.4 MB |
+| Peak RSS, 1,000 visitors held open at once | 52 / 62 MB | 52 / 55 MB |
 | CLI cold start | — | 6.3 / 2.6 ms |
 
-*arm64 macOS / linux-amd64.* The linux-amd64 column is the gate's own numbers
-from the commit this release was cut at. The macOS column is a local run and
-predates the node's visitor bound ([ARCHITECTURE.md §9.3](docs/ARCHITECTURE.md)),
-which took 12 MB off the node's peak where it has been re-measured, so read its
-peak as an upper bound rather than a current figure.
+*arm64 macOS / linux-amd64.* Both columns are v0.1.2's own tree and toolchain:
+linux-amd64 is the gate's output on the release commit, macOS a local run of the
+same script on the same binaries. The node's peak fell from 69 MB to 52 with the
+visitor bound ([ARCHITECTURE.md §9.3](docs/ARCHITECTURE.md)), which is the same
+drop Linux shows.
 
 On Linux most of that idle RSS is the binary mapped into the process, clean pages
 the kernel takes back when it needs them. The anonymous memory, the part that is
