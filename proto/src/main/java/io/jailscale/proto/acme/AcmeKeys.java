@@ -13,7 +13,6 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.spec.ECGenParameterSpec;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.EnumSet;
@@ -59,9 +58,5 @@ public final class AcmeKeys {
         } catch (UnsupportedOperationException ignored) {
             // Windows
         }
-    }
-
-    public static PrivateKey pkcs8(byte[] der) throws GeneralSecurityException {
-        return KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(der));
     }
 }

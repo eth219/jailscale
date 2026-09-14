@@ -69,10 +69,6 @@ public final class DnsResponder implements AutoCloseable {
         txt.addAll(values);
     }
 
-    public void addTxt(String value) {
-        txt.add(value);
-    }
-
     public void clearTxt() {
         txt.clear();
     }

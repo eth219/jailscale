@@ -45,14 +45,31 @@ they were not worth putting the GraalVM Free Terms and Conditions on every relea
 ## A profile from your own traffic
 
 Better than this one, for your own build, because it profiles the work you actually do. Instrument,
-run your own node or hub under its normal load for a while, then rebuild against what it dumped:
+run your own node or hub under its normal load for a while, then put what it dumped where the build
+already looks for that binary's profile:
 
 ```sh
 ./native.sh -DskipTests -Ppgo-instrument
 JAILSCALE_DAEMON_OPTS=-XX:ProfilesDumpFile=$PWD/mine.iprof ./node/target/jailscale up ...
 # ... use it, then stop it cleanly so the profile is written ...
-./native.sh -DskipTests -Ppgo -Dpgo.profile=$PWD/mine.iprof
+cp $PWD/mine.iprof profiles/node.iprof
+./native.sh -DskipTests -Ppgo
 ```
+
+`profiles/hub.iprof` for the hub, whose dump file goes on its own command line --
+`./hub/target/jailhub -XX:ProfilesDumpFile=$PWD/mine.iprof serve ...`, before the subcommand, since
+the native runtime takes it before the CLI parses anything. Only the node has an environment
+variable for this, because only the node has a CLI that spawns its own daemon; `HUB_OPTS` further
+down this page is `measure.sh`'s shell variable and not something `jailhub` reads. Whichever one you
+replace, the other still builds against the profile committed for it.
+
+Copied into place rather than passed as `-Dnative.pgoProfile=$PWD/mine.iprof`, which `pom.xml` also
+accepts: that property is a single value for every module in the build, where the default it
+replaces is per-binary (`profiles/${project.artifactId}.iprof`). It aims at one binary only when the
+build contains one, and `-pl hub -am` is not that -- hub depends on node for its tests, so `-am`
+brings node into the reactor and it would be rebuilt against the hub's profile without saying so.
+The unpacked profiles are git-ignored, and `native.sh` only unpacks a `.gz` when the plain file
+beside it is missing or older, so yours stays yours until you delete it.
 
 An instrumented binary is slower and larger; do not serve anything you care about with it for long.
 

@@ -61,10 +61,6 @@ final class Links {
         return byDomain.get(domain);
     }
 
-    Link byPort(int port) {
-        return byPort.get(port);
-    }
-
     Link byName(String name) {
         return byName.get(name);
     }

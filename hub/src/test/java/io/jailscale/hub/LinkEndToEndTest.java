@@ -21,7 +21,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
@@ -244,8 +243,16 @@ class LinkEndToEndTest {
             waitFor(() -> nodeInFlight("alice") == 1L);
             assertEquals(1L, nodeInFlight("alice"));
             assertEquals(1, hub.router().visitorsInFlight(), "the hub should be holding the same visitor");
+            assertEquals(1, hub.router().trackedNames(), "and counting the name it is holding it for");
         }
         waitFor(() -> nodeInFlight("alice") == 0L);
+        // The per-name count has to come back down too. It is acquired before the try that
+        // releases it (SniRouter.acquire/release), so a path that leaves in between strands the
+        // name's slot for the hub's lifetime and quietly lowers its MAX_PER_NAME. perIp is
+        // released in an outer finally and has SniRouterCountersTest watching it drain; this is
+        // the same guard for the other map, here because this is the only test that drives a
+        // visitor far enough to be counted against a name at all.
+        waitFor(() -> hub.router().trackedNames() == 0);
     }
 
     private long nodeInFlight(String name) throws IOException {
