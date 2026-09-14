@@ -1398,10 +1398,9 @@ queues hold tens of bytes.
 thousand stalled readers did to an unbounded node, kept because it is what the bound is measured
 against and because the gate's count was chosen from it. With `Visitors.MAX_IN_FLIGHT` in place the
 same thousand hold 450, the rest are reset before their handshake, the node peaks at 86.2 to 86.8 MB
-across three runs with no `OutOfMemoryError`, an ordinary visitor is served in 1 to 36 ms, **and the
-hub's receive queue pins at 24.0 MB of 24.0 with streams shed** — which is why the budget job asks
-for a thousand again: at 400 the queue never passed 4.7 MB on the CI runner, so the one exact
-assertion in this phase could not fail where it runs.
+across three runs with no `OutOfMemoryError`, and an ordinary visitor is served in 1 to 36 ms. The
+budget job asks for a thousand again, because that is what exercises the bound: 450 held, 550
+refused, and a node still running afterwards.
 
 **At a thousand stalled readers this axis used to stop measuring the node and reach the defect.**
 Measured on main with the release toolchain, darwin-arm64, `SLOW=1000`: **817 of 1,000 held, and
@@ -1425,22 +1424,26 @@ bounded is per visitor, so the budget is only a budget at the count it was measu
 earned itself before the bound existed, when this gate was very nearly wired to `SLOW=1000` against
 a number measured at a thousand on a machine where a thousand no longer behaved.
 
-**The linux-amd64 budget is 100 and is the one number here still at the old count.** Four
-`workflow_dispatch` runs on `ubuntu-24.04` measured the node at 88.5 to 89.7 MB **at `SLOW=400`**,
-and the gate now asks for a thousand; the runner has not been measured there, so 100 is carried over
-rather than derived, and the first dispatch after this replaces it. It was 105 for a day, derived
-from the two platforms' idle difference rather than measured, and the measurement came in 15 MB
-under the guess.
+**The linux-amd64 budget is 105, measured at the count the gate runs.** Two `workflow_dispatch`
+runs on `ubuntu-24.04` at `SLOW=1000` put the node at **92.5 and 94.6 MB**; 105 is about 11% over
+the higher. This constant was 105 once before and the coincidence is worth naming rather than
+claiming: that one was *derived*, from the macOS figure plus the two platforms' idle difference, and
+it was applied to `SLOW=400`, where four runs on the same runner read 88.5 to 89.7 — loose by more
+than the margin it was meant to carry. A derived number that later lands near a measurement of a
+different thing is still a number nobody measured.
 
-**What raising the count is for.** At 400 those same runs put the hub's receive queue at 2.0 to
-4.7 MB of its 24.0 MB budget with nothing reclaimed, where the same count on a developer's machine
-pins it: the runner is about five times slower per warm request (8,360 a second against 44,721
-here), so the harness could not fill the queue faster than the hub drained it, and `measure.sh`'s
-queue check is an upper bound, which at 2 MB of 24 cannot fail. A green budget job therefore
-asserted the node's RSS and said nothing about the receive bound. A thousand is the count that
-reaches it, and a thousand is survivable only because the node bounds its visitors — so the
-per-visitor bound of §9.3 is what made the hub's bound testable where the gate runs, which was not
-why it was written.
+**What raising the count did not buy, which is what it was raised for.** The reasoning was that at
+400 the runner's receive queue peaked at 2.0 to 11.9 MB of its 24.0 MB budget with nothing
+reclaimed, so `measure.sh`'s queue check — an upper bound — could not fail where the gate runs, and
+that a thousand would reach it. On a developer's machine it does, at 400 and at 1,000 alike: 24.0 of
+24.0 with 27 to 116 streams shed. **On the runner it does not, at either count** — two runs at a
+thousand read 0.1 and 10.2 MB, *lower* on average than at four hundred, because the node refuses 550
+of them and the ramp stretches to 18 s, so the hub drains what arrives as fast as it arrives. The
+runner is about five times slower per warm request (8,360 a second against 44,721 here) and the
+honest reading is that it cannot fill the queue at all. That assertion lives with whoever runs this
+by hand; a green budget job asserts the node's RSS and its bound, and says nothing about the receive
+bound. What the count does buy is the bound itself under load, which is new and which nothing in CI
+would otherwise exercise.
 
 **The long tail on this axis was the machine, and it took four attributions to reach that.** This
 paragraph has said that an ordinary visitor's 7 to 19 s wait while slow readers arrive was the

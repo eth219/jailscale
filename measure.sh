@@ -138,11 +138,20 @@ B_NODE_SLOW_AT=1000
 # 1,000 held with the rest refused, node peak 86.2, 86.8, 86.8 MB, no OutOfMemoryError, and the
 # ordinary visitor served in 1 to 36 ms.
 #
-# AND THIS IS THE COUNT THAT REACHES THE HUB'S ASSERTION. At 400 the receive queue peaked at 2.0 to
-# 4.7 MB of 24.0 on the CI runner with nothing reclaimed, so the check below could not fail there
-# and the gate had teeth on the node's RSS only. At 1,000 it pins at 24.0 of 24.0 with streams shed.
-# That is the whole reason to raise the count: the per-visitor bound was what made the receive
-# budget testable where the gate actually runs.
+# WHAT RAISING THE COUNT DID NOT BUY, WHICH IS WHAT IT WAS RAISED FOR. The reasoning was that 400
+# never got the hub's receive queue past 4.7 MB of its 24 MB budget on the CI runner, so the one
+# exact assertion in this phase could not fail where the gate runs, and that a thousand would reach
+# it. It does on a developer's machine -- 24.0 of 24.0 with 27 to 91 streams shed, at 400 as well as
+# at 1,000 -- and it does NOT on the runner: two runs at a thousand read 0.1 and 10.2 MB with
+# nothing reclaimed, against 2.0, 4.4, 4.7 and 11.9 at four hundred. Lower on average, not higher,
+# because the node refuses 550 of the thousand and the ramp stretches to 18 s, so the hub drains
+# what it is given as fast as it arrives. The queue's occupancy on that runner is somewhere between
+# 0.1 and 11.9 MB whatever it is asked for, and the honest reading is that this machine cannot fill
+# the queue at all: the assertion lives with whoever runs this by hand.
+#
+# So what 1,000 buys is the node's bound under load -- 450 held, 550 refused, and a node that is
+# still there afterwards -- which is the thing that changed and the thing worth a gate. Left at 400
+# nothing in CI would ever exercise it.
 #
 # The number itself is per platform, below, for the same RSS-accounting reason as the idle budgets:
 # it was derived on darwin-arm64, and a Linux peak carries the binary's own mapped pages on top of
@@ -159,16 +168,20 @@ case "$(uname -s)-$(uname -m)" in
     # MAX_IN_FLIGHT visitors either way, so past the bound the count stops moving this number.
     B_BINARY_MIB=28; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=28; B_NODE_SLOW_MB=95 ;;
   Linux-x86_64)
-    # Measured on the ubuntu-24.04 runner at SLOW=400: 88.5, 89.1, 89.7 MB across four runs. THIS
-    # NUMBER IS STILL AT THE OLD COUNT -- the gate now asks for 1,000 and the runner has not been
-    # measured there, so 100 is carried over rather than derived, and the first dispatch after this
-    # is what replaces it. It was 105 once, derived from the two platforms' idle difference, and the
-    # measurement came in 15 MB under that guess.
-    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=100 ;;
+    # Measured on the ubuntu-24.04 runner at SLOW=1000, the count the gate runs: 92.5 and 94.6 MB.
+    # 105 is ~11% over the higher, the margin the macOS one carries.
+    #
+    # This constant has been 105 before, and the fact that it is 105 again is a coincidence worth
+    # naming rather than a vindication. That 105 was derived -- the macOS figure plus the two
+    # platforms' idle difference -- and it was applied to SLOW=400, where the runner actually reads
+    # 88.5 to 89.7, so it was loose by more than the margin it was supposed to carry. A derived
+    # number that lands near a later measurement of a different thing is still a number nobody
+    # measured.
+    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=105 ;;
   *)
     # An unmeasured platform gets the loosest of the measured ones rather than a guess of its own.
     echo "note: no budget measured for $(uname -s)-$(uname -m); using the widest known"
-    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=100 ;;
+    B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=105 ;;
 esac
 
 mkdir -p "$W/hub" "$W/app"
