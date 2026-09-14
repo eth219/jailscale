@@ -1963,21 +1963,29 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   resident. That gain was measured against the 25.0-line builds and is smaller against what ships
   now, and §14 gives the reasons PGO is not what releases use; the point here is only that the
   lever which moves this number is layout, not initialisation.
-- **The idle budget measures a trust configuration nobody ships, and it is 2.5 MB cheap.**
-  `measure.sh` always joins with `--ca-file`, so every published idle figure describes a node whose
-  trust manager holds two certificates. A node joined to a hub with an ordinary web-PKI certificate
-  — every real deployment, the live hub included — leaves `caFile` null, and JSSE builds its default
-  trust manager over the platform root store instead. Isolating that and nothing else costs
-  **+2.5 MB of RSS, 272 KB of it written** (`docs/jsse-idle-cost`: two handshakes, both rejected by
-  PKIX, differing only in their anchors). It nearly cancels against the join: a node that has
-  restarted and is not carrying the join's 2.0 MB idles at 23.1 MB pinned, so **about 25.6 MB with
-  the platform store** against the 25.0 published — by addition, since nothing local has a publicly
-  trusted certificate to measure the whole of it in one process. Two corrections in opposite
-  directions is a poor reason to leave either one unwritten. What makes this worth more than the
-  arithmetic is that
-  the node already pins the hub's Noise static key (§5.2) and authenticates the control channel with
-  it, so what the platform store is buying on that connection is a second opinion about a peer the
-  next message will prove anyway.
+- **The idle budget measures a trust configuration nobody ships, and it is worth about half a
+  megabyte.** `measure.sh` always joins with `--ca-file`, so every published idle figure describes a
+  node whose trust manager holds two certificates. A node joined to a hub with an ordinary web-PKI
+  certificate — every real deployment, the live hub included — leaves `caFile` null and JSSE builds
+  its default trust manager over the store `native-image` baked into the binary.
+  `docs/jsse-idle-cost/truststore.sh` measures that by building a second image whose embedded store
+  also trusts the test certificate, so a loopback hub validates through the same path a public CA
+  would: **+0.55 MB of RSS and no measurable written memory** (a second build against a larger store,
+  sampled with a link open, read +0.81; the range is half a megabyte to eight tenths). Against the
+  join's 2.0 MB the other way, a restarted node on a public-CA hub settles near 23.7 MB, below the
+  25.0 published rather than above it.
+
+  **The number was 2.5 MB here until that second binary existed**, from a pair of handshakes that
+  were both rejected by PKIX and differed only in their anchors. Failing a path build is not the
+  shipped path — it builds and abandons candidates and runs code a successful validation never does.
+  A run-time `-Djavax.net.ssl.trustStore`, which the binary does honour, is wrong the other way and
+  reads +5.7 MB, because it parses a PKCS12 file into the heap where the shipped node has its
+  anchors in the image heap already. Both were believed; `truststore.sh` carries the reasons.
+
+  What remains true is that no budget sees this, and that it is small. Dropping certificate
+  validation on the control channel altogether — which the node could do, since it pins the hub's
+  Noise static key (§5.2) and authenticates the channel with it — buys **1.06 MB**, 4% of idle RSS
+  and none of it written, against giving up a layer the pin does not replace on first contact.
 - **Per-visitor memory on the node is about 99 KB.** Live bytes after a full GC, from a heap
   histogram taken with a known number of visitors in flight. It is the only figure here that counts
   what JSSE keeps behind the `SSLEngine` as well as what this project allocates itself.

@@ -15,35 +15,28 @@
 #
 #   A     fresh home, never joined         no SSLContext is ever built
 #   Bpin  joined (--ca-file), hub down     SSLContext with a pinned CA; connect refused, no handshake
-#   Bsys  same with caFile removed         SSLContext with no trust managers, so JSSE's default one
-#                                          (the platform root store) is built lazily and, with no
-#                                          handshake, never demanded
-#   Dpin  pinned WRONG CA, hub up          handshake attempted and rejected
-#   Dsys  caFile removed, hub up           rejected too -- but the platform store is loaded to reject
 #   C     restarted daemon, connected      handshake, Noise, mux, registration
 #   E     C plus one link open             what a long-running node idles at
-#   J     joined and opened in one life     what measure.sh measures: the daemon that did the join
+#   J     joined and opened in one life    what measure.sh measures: the daemon that did the join
 #
-# Three differences are the point.
+# Two differences are the point.
 #
 #   C - Bpin separates standing JSSE up from using it.
-#
-#   (Dsys - Bsys) - (Dpin - Bpin) is the platform root store and nothing else: both sides attempt a
-#   handshake and both are rejected, so what is left between them is the trust anchors. It cannot be
-#   measured by a successful handshake here, because nothing local has a publicly trusted
-#   certificate -- but a failing PKIX path build loads the anchors before it rejects the chain,
-#   which is all this needs. It matters because measure.sh always joins with --ca-file and a node
-#   pointed at a public-CA hub does not, so the gate measures a configuration nobody ships.
 #
 #   J - E is the join itself: /v1/key, the join request, the first certificate. measure.sh samples
 #   idle in the same daemon that just performed it, so the published figure carries one-time work
 #   that a node which restarts never pays again.
 #
+# What this script deliberately does NOT try to answer is what the trust configuration costs. Every
+# state here pins the test CA, because a loopback hub has nothing else it can present, and the two
+# ways of faking the shipped configuration without a second binary both give wrong answers by a
+# factor of three or more. truststore.sh beside this file builds that second binary and says why.
+#
 # EVERY STATE ASSERTS THAT IT IS THE STATE IT CLAIMS TO BE, and that is not defensive dressing: the
 # first version of this script swallowed a failed `open` behind `|| true` and reported E as 0.1 MB
-# above C, a plausible number for a measurement that never happened. A second version sampled Dsys
-# while the daemon was still in its reconnect backoff and had not yet reached PKIX, which read as a
-# 3 MB spread in the trust-store figure. Both looked like results.
+# above C, a plausible number for a measurement that never happened. Another version let its wait
+# for "connected" give up quietly, and a daemon that never connected read 4 MB light. Both looked
+# like results.
 #
 # Usage: ./native.sh -DskipTests && docs/jsse-idle-cost/decompose.sh
 #   PORT=19643   the hub's port; the local app and the metrics listener follow it
@@ -116,11 +109,6 @@ measure() {
   naps 1
 }
 
-# A certificate the hub does not present, so the pinned side of the trust-store comparison fails its
-# handshake exactly where the platform-store side fails its own.
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout "$W/wrong.key" -out "$W/wrong.crt" \
-  -days 2 -nodes -subj "/CN=not-the-hub" > /dev/null 2>&1 || die "openssl could not make the wrong certificate"
-
 python3 -c "
 import http.server, socketserver
 class H(http.server.BaseHTTPRequestHandler):
@@ -135,21 +123,11 @@ INV=$(grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" "$W/hub.log" | head -
 "$NODE" down --home "$W/a" > /dev/null 2>&1 || true
 naps 0.5; pkill -f "daemon --home $W" 2>/dev/null || true; naps 0.5
 
-# The two variants are copies of the joined state with one field changed, so nothing but the trust
-# configuration differs: same machine key, same pinned hub key, same hub.
-for d in pin sys; do cp -R "$W/a" "$W/$d"; rm -f "$W/$d/daemon.lock" "$W/$d/daemon.log"; done
-sed -e "s#\"caFile\":\"[^\"]*\"#\"caFile\":\"$W/wrong.crt\"#" "$W/a/node.json" > "$W/pin/node.json"
-sed -e 's/"caFile":"[^"]*",//' "$W/a/node.json" > "$W/sys/node.json"
-grep -q caFile "$W/sys/node.json" && die "caFile survived the edit; the sys states would be pinned"
-grep -q "$W/wrong.crt" "$W/pin/node.json" || die "the wrong certificate did not go into the pinned state"
-
 n=0
 while [ $n -lt "$RUNS" ]; do
   n=$((n + 1)); echo "run $n/$RUNS"
 
-  measure C    "$W/a"   "connected to hub"
-  measure Dpin "$W/pin" "certificate_unknown"
-  measure Dsys "$W/sys" "certificate_unknown"
+  measure C "$W/a" "connected to hub"
 
   # E: the restarted daemon, with a link. Asserted through `ls`, not through open's exit code.
   rm -f "$W/E.out"
@@ -175,19 +153,16 @@ while [ $n -lt "$RUNS" ]; do
   naps "$SETTLE"; sample J "$j"; kill -TERM "$j" 2>/dev/null || true; naps 1
 
   stop_hub
-  measure Bpin "$W/pin"   "Connection refused"
-  measure Bsys "$W/sys"   "Connection refused"
+  measure Bpin "$W/a"     "Connection refused"
   measure A    "$W/fresh" -
   grep -q "\[link\]" "$W/A.out" && die "A: the fresh daemon tried to connect, so it is not state A"
   start_hub; naps 2
 done
 
-echo
-grep -m1 "certificate_unknown" "$W/Dpin.out" 2>/dev/null | sed 's/^/  Dpin: /' || true
-grep -m1 "certificate_unknown" "$W/Dsys.out" 2>/dev/null | sed 's/^/  Dsys: /' || true
+
 echo
 printf 'state  RSS MB (min-max)      written KB   code KB\n'
-for s in A Bpin Bsys Dpin Dsys C E J; do
+for s in A Bpin C E J; do
   awk -F'\t' -v s="$s" '$1==s { n++; r=$2/1024; sr+=r; sw+=$3; st+=$4; if(r>mx||n==1)mx=r; if(r<mn||n==1)mn=r }
     END { if (n) printf "%-6s %5.1f (%.1f-%.1f)%9s%.0f%9s%.0f\n", s, sr/n, mn, mx, "", sw/n, "", st/n }' "$W/t.tsv"
 done
@@ -198,6 +173,4 @@ awk -F'\t' '{ n[$1]++; r[$1]+=$2/1024; w[$1]+=$3; t[$1]+=$4 }
     printf "  Bpin -> C     handshake, Noise, mux, register RSS %+.1f MB  written %+.0f KB  code %+.0f KB\n", r["C"]-r["Bpin"], w["C"]-w["Bpin"], t["C"]-t["Bpin"]
     printf "  C    -> E     open one link                   RSS %+.1f MB  written %+.0f KB  code %+.0f KB\n", r["E"]-r["C"], w["E"]-w["C"], t["E"]-t["C"]
     printf "  E    -> J     having joined in this process   RSS %+.1f MB  written %+.0f KB  code %+.0f KB\n", r["J"]-r["E"], w["J"]-w["E"], t["J"]-t["E"]
-    printf "  A    -> J     the whole of what §12 splits    RSS %+.1f MB  written %+.0f KB  code %+.0f KB\n", r["J"]-r["A"], w["J"]-w["A"], t["J"]-t["A"]
-    printf "\n  the platform root store, alone              RSS %+.1f MB  written %+.0f KB  code %+.0f KB\n", \
-      (r["Dsys"]-r["Bsys"])-(r["Dpin"]-r["Bpin"]), (w["Dsys"]-w["Bsys"])-(w["Dpin"]-w["Bpin"]), (t["Dsys"]-t["Bsys"])-(t["Dpin"]-t["Bpin"]) }' "$W/t.tsv"
+    printf "  A    -> J     the whole of what §12 splits    RSS %+.1f MB  written %+.0f KB  code %+.0f KB\n", r["J"]-r["A"], w["J"]-w["A"], t["J"]-t["A"] }' "$W/t.tsv"

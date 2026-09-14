@@ -253,10 +253,10 @@ anything. It is sampled in the daemon that has just joined, and joining is 2.0 M
 that a node pays once — restarted, the same node idles about 2 MB lower. And
 `measure.sh` joins with `--ca-file`, so it describes a node whose trust manager
 holds two certificates; a node joined to a hub with an ordinary web-PKI
-certificate leaves that null and idles about 2.5 MB higher, which no budget here
-measures. The two nearly cancel — such a node settles around 25.6 MB against the
-25.0 in the table — but they are different numbers about different nodes, and
-only one of them is gated. Both figures are darwin-arm64.
+certificate leaves that null and pays about 0.55 MB more for the trust store the
+binary carries, which no budget here measures. Together, a long-running node on a
+public-CA hub settles near 23.7 MB against the 25.0 in the table. Both figures
+are darwin-arm64.
 
 Idle is a fresh start, not a steady state. The heap has a ceiling, 96 MB for the
 hub and 64 MB for the node, and a long-running process drifts up towards it: the

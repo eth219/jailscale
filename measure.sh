@@ -56,12 +56,13 @@
 #
 #   The configuration this harness chooses is part of what it measures, and two of its choices make
 #   the idle row describe a node nobody runs. It joins with --ca-file, so the node's trust manager
-#   holds two certificates; a node joined to a public-CA hub leaves caFile null, JSSE builds its
-#   default trust manager over the platform root store, and idle RSS is 2.5 MB higher. And it samples
-#   idle in the daemon that just performed the join, which is 2.0 MB that a node pays once -- the
-#   same node restarted idles about 2 MB lower. Neither is a bug in the budget, which is a gate on
-#   this tree against itself, but neither number is what an operator's node does, and the README
-#   said it was. docs/jsse-idle-cost has both measurements.
+#   holds two certificates; a node joined to a public-CA hub leaves caFile null and pays about
+#   0.55 MB more for the trust store the binary carries. And it samples idle in the daemon that just
+#   performed the join, which is 2.0 MB that a node pays once -- the same node restarted idles about
+#   2 MB lower. Neither is a bug in the budget, which is a gate on this tree against itself, and the
+#   two are small and point opposite ways, so nothing here is mis-gated. But neither number is what
+#   an operator's node does, and the README said it was. docs/jsse-idle-cost has both, and
+#   truststore.sh there has the two ways of measuring the first one that give wrong answers.
 #
 #   The kernel is shared state too, and it was the one nobody sampled. SLOW= visitors asked for
 #   8 MB on loopback and the kernel autotuned every socket in the chain to megabytes, so 400 of

@@ -15,9 +15,6 @@ runs, `darwin-arm64`, GraalVM CE 25.3.4.1, `-O2`, the release toolchain. The spr
 |---|---|---|---|---|
 | `A` | fresh home, never joined — no `SSLContext` is ever built | 17.1 MB | 2,316 KB | 4,560 KB |
 | `Bpin` | joined with `--ca-file`, hub down: context built, no handshake | 19.6 | 2,454 | 6,112 |
-| `Bsys` | same with `caFile` removed: context built, default trust manager not yet demanded | 18.4 | 2,422 | 5,312 |
-| `Dpin` | pinned *wrong* CA, hub up: handshake attempted and rejected | 22.5 | 3,148 | 7,712 |
-| `Dsys` | `caFile` removed, hub up: rejected too, but the platform store is loaded to reject it | 23.7 | 3,388 | 7,760 |
 | `C` | restarted daemon, connected | 22.8 | 2,961 | 8,096 |
 | `E` | `C` with one link open | 23.1 | 3,132 | 8,144 |
 | `J` | joined **and** opened within one daemon's life — what `measure.sh` samples | 25.0 | 3,862 | 8,272 |
@@ -65,21 +62,43 @@ nothing except which process did the join — `/v1/key`, the join request, the f
 minutes. The same node restarted idles at **23.1 MB**. This is the one line in the table that is
 purely an artefact of how the budget is measured.
 
-**The platform root store costs 2.5 MB, and the gate has never measured it.** `measure.sh` always
-joins with `--ca-file`, so every published figure describes a node with a pinned CA and a
-two-certificate trust manager. A node joined to a hub with an ordinary web-PKI certificate — which
-is every real deployment, including `jailscale.sinabro.io` — passes `caFile: null`, and JSSE builds
-its default trust manager over the platform store instead. `(Dsys − Bsys) − (Dpin − Bpin)` isolates
-it: both sides attempt a handshake, both are rejected by PKIX, and what is left between them is
-**+2.5 MB of RSS, 272 KB of it written**. It cannot be measured with a successful handshake here,
-because nothing local has a publicly trusted certificate, but a failing path build loads the anchors
-before it rejects the chain, which is all this needs.
+**The gate measures a trust configuration nobody ships, and it is worth about half a megabyte.**
+`measure.sh` always joins with `--ca-file`, so every published figure describes a node with a pinned
+CA and a two-certificate trust manager. A node joined to a hub with an ordinary web-PKI certificate
+— every real deployment, including `jailscale.sinabro.io` — leaves `caFile` null and JSSE builds its
+default trust manager over the store `native-image` baked into the binary.
 
-It nearly cancels against the join, which is why neither correction showed up as a surprise in the
-budget: a restarted node against a public-CA hub should settle around **25.6 MB** against the 25.0
-published — by addition, since the whole of it cannot be measured in one process here. Two
-corrections in opposite directions is a poor reason to leave either one unwritten, and only one of
-the two configurations is gated.
+`truststore.sh` beside this file measures that by building a second image whose embedded store also
+trusts the test certificate, so a loopback hub validates through the same path a public CA would.
+Within that one binary, five runs each, handshakes that succeed:
+
+| trust configuration | RSS | written |
+|---|---|---|
+| `tlsInsecure`, `TrustAll`, no PKIX at all | 21.95 MB | 2,887 KB |
+| `--ca-file`, two anchors — what the gate uses | 22.47 | 2,942 |
+| `caFile` null, the image's own 112 anchors — what ships | 23.01 | 2,929 |
+
+**+0.55 MB for the shipped configuration, and no measurable written memory at all.** (A second
+build against a 119-anchor store, sampled with a link open, read +0.81 MB; the honest range is half
+a megabyte to eight tenths.) Dropping certificate validation on the control channel altogether would
+buy **1.06 MB**, which is the ceiling on anything that can be done here.
+
+**Two cheaper-looking methods answered this wrongly first, and both were believed.** They are
+written up in `truststore.sh` because the shapes recur:
+
+- *A failing handshake.* Point a `caFile`-null node at the test hub; PKIX loads the anchors in order
+  to reject the chain, so the difference against a pinned-CA node that also fails should be the
+  store. It reads **+2.5 MB** — because failing a path build is not the shipped path. It builds and
+  abandons candidate paths and runs code a successful validation never does.
+- *A run-time store.* The binary does honour `-Djavax.net.ssl.trustStore`, so a full-size store can
+  be handed to the shipped binary and the handshake succeeds. It reads **+5.7 MB, 4.9 MB of it
+  written** — wrong in the other direction, because it parses a PKCS12 file into the heap where the
+  shipped node has its anchors in the image heap already, mapped from the binary and mostly clean.
+
+The first of those was in this file, and in §15 and the README, before the second build existed.
+
+Against the join, which is 2.0 MB the other way, a restarted node on a public-CA hub settles around
+**23.7 MB** against the 25.0 published — below it, not above.
 
 ## What this says about replacing JSSE
 
@@ -98,10 +117,11 @@ measurement changes what the answer rests on.
   (Against the 25.0-line builds it was measured on; smaller against what ships. §14 also has the
   reasons releases do not use it.)
 
-The cheap levers this leaves, in order: measure the shipped trust configuration rather than the
-pinned one; decide whether a node that pins its hub's Noise key ([§5.2](../ARCHITECTURE.md)) needs
-the whole platform store behind its transport as well; and, if the number still matters after that,
-spend the effort on code layout rather than on a TLS stack.
+What this leaves is thinner than it looked when the trust store was thought to be worth 2.5 MB. The
+shipped configuration costs 0.55 MB more than the gate measures, and abandoning certificate
+validation on a control channel that a pinned Noise key ([§5.2](../ARCHITECTURE.md)) already
+authenticates would buy 1.06 MB — 4% of idle RSS, none of it written, against giving up a layer of
+defence. If this number is ever worth moving, the lever is code layout.
 
 ## What this does not cover
 
