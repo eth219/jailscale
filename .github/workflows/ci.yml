@@ -113,8 +113,11 @@ jobs:
         # queue high-water, which is exact and reproduces at the budget every run -- and the failure
         # they exist to catch drove the node past 200 MB.
         #
-        # 400 and not the 1,000 that LOAD= uses: at a thousand stalled readers this measures the
-        # open per-visitor defect rather than the node, and gating on a defect nobody has fixed is
-        # a red main on every build. measure.sh's B_NODE_SLOW_AT carries the figures and refuses to
-        # apply the budget at any other count. It costs about 20 s: a 5 s ramp and a 15 s hold.
-        run: LOAD=1000 SLOW=400 RATE=8 RATE_HANDSHAKES=200 ./measure.sh --check
+        # SLOW=1000 because the node bounds its concurrent visitors now (§9.3), and this is what
+        # exercises that bound: 450 held, 550 refused, and a node still running afterwards. It ran
+        # at 400 for a day, when a thousand reached the open per-visitor defect instead of a peak.
+        # It was NOT raised for the reason first given -- that a thousand would push the hub's
+        # receive queue to its budget where 400 could not. On this runner it does not, at either
+        # count; measure.sh has the figures. measure.sh's B_NODE_SLOW_AT holds the count the node
+        # budget was measured at and refuses to apply it at any other.
+        run: LOAD=1000 SLOW=1000 RATE=8 RATE_HANDSHAKES=200 ./measure.sh --check

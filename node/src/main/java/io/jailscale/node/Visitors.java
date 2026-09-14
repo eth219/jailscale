@@ -51,8 +51,83 @@ final class Visitors {
     private final Map<String, SSLContext> contexts = new ConcurrentHashMap<>();
     private final Map<String, SSLContext> domainContexts = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger inFlight = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicLong refused = new java.util.concurrent.atomic.AtomicLong();
+    private volatile long lastRefusalLog;
     /** A visitor handshake slower than this is worth a line; healthy is single-digit milliseconds. */
     private static final long SLOW_HANDSHAKE_MS = 1_000;
+
+    /**
+     * What the shipped 64 MiB ceiling was measured to hold, and the unit the bound scales in.
+     *
+     * <p>Found by running {@code measure.sh SLOW=} against an unbounded node on darwin-arm64,
+     * GraalVM CE 25.3, the release build. Peak RSS and whether it lived:
+     *
+     * <pre>
+     *   400   82.1, 82.3, 83.2 MB   lives (and four more runs on the CI runner, 88.5 to 89.7)
+     *   450   88.3 MB               lives
+     *   500   92.3, 92.4, 93.3 MB   lives, three for three
+     *   550   98.5 MB               lives
+     *   600   99.6 MB               DIES, 550 of 600 admitted
+     *   1000  106.6 MB              DIES, 817 of 1000 admitted, six OutOfMemoryErrors
+     * </pre>
+     *
+     * <p>RSS climbs about 99 KB per visitor across that range, which is the per-visitor figure of
+     * §15 arriving from a second direction. The cliff is between 550 and 600.
+     *
+     * <p><b>450 and not 550, for two reasons that are not caution.</b> Whether the heap is exhausted
+     * depends on arrival rate as well as count -- FlowBudget's own measurements have the same axis
+     * behaving differently at three ramp speeds -- so the counts next to the cliff are the ones a
+     * slower ramp would move, and 550 lived exactly once. And the budget gate runs at 400 (§14): a
+     * ceiling at 400 would refuse the harness's own ordinary visitor, the one whose latency the
+     * phase reports, so the bound has to sit above the count anyone measures at, not on it.
+     */
+    private static final int VISITORS_PER_64MIB = 450;
+
+    /**
+     * How many visitor streams this node will serve at once (ARCHITECTURE.md §9.3): the bound that
+     * the hub's {@link io.jailscale.proto.mux.FlowBudget} is for queued bytes. Derived at startup
+     * from the heap this process was actually given, so the diagnosis hatch keeps working --
+     * {@code -XX:MaxHeapSize=} through {@code JAILSCALE_DAEMON_OPTS} (§14) raises the ceiling, and
+     * a node whose ceiling was raised should serve more visitors rather than hold the number that
+     * suited 64 MiB. Linear in the ceiling because the cost is per visitor; the floor of 64 is for
+     * a ceiling small enough that the arithmetic would otherwise say single digits, where a node
+     * has a configuration problem this bound cannot fix.
+     *
+     * <p><b>A count and not a byte budget, which is the opposite of the hub's choice and for the
+     * reason that made the hub's the right one there.</b> The hub bounds bytes because what a
+     * visitor costs it depends entirely on the visitor's behaviour -- a thousand who read what they
+     * asked for hold almost nothing, and deriving a connection count would have to assume the worst
+     * case for all of them. On the node the cost is the visitor's TLS state, which is the same
+     * whether it reads or stalls, so the count *is* the resource and a byte budget would be a
+     * harder way to say the same number.
+     *
+     * <p><b>Refusing, where the hub reclaims, and the asymmetry is real rather than an
+     * inconsistency.</b> The hub can pick a provably stalled stream -- one that has not consumed a
+     * byte in {@code STALL_MS} -- so it frees memory from a connection that is not using it.
+     * Nothing on the node is idle in that sense: a visitor's TLS state is live for as long as the
+     * visitor is, so reclaiming here means choosing a victim among connections that are all making
+     * progress. FlowBudget's argument against refusing still stands and is the cost of this: an
+     * attacker who holds {@code MAX_IN_FLIGHT} connections open keeps everyone else out. What that
+     * is measured against is not a healthy node, it is the node as it behaves today -- at a
+     * thousand stalled readers it exhausts its heap, and the OutOfMemoryError lands on whichever
+     * thread allocates next, which in the measured runs took `mux-reader` and `mux-writer` with it
+     * and dropped the hub connection and every visitor on it (§14). Refusing the thousandth visitor
+     * costs that visitor; not refusing it costs all of them, and the hub caps a name at
+     * {@code SniRouter.MAX_PER_NAME} = 1,024 by the same kind of reasoning.
+     */
+    static final int MAX_IN_FLIGHT = ceilingFor(Runtime.getRuntime().maxMemory());
+
+    /**
+     * The arithmetic on its own, so the numbers above can be held against something. A heap of
+     * {@link Long#MAX_VALUE} means no ceiling was set, which is a JVM run and not a shipped binary:
+     * the native images are built with {@code -R:MaxHeapSize} (native.maxHeap in the poms) and
+     * always give a real answer here.
+     */
+    static int ceilingFor(long heapBytes) {
+        long heap = heapBytes == Long.MAX_VALUE ? 64L * 1024 * 1024 : heapBytes;
+        long n = heap * VISITORS_PER_64MIB / (64L * 1024 * 1024);
+        return (int) Math.max(64, Math.min(Integer.MAX_VALUE, n));
+    }
 
     Visitors(NodeState state) {
         this.state = state;
@@ -116,7 +191,11 @@ final class Visitors {
         // Around the whole of it, not around the TlsEndpoint: several paths abandon a visitor
         // before the endpoint is closed, and a count that leaks on those would invent visitors that
         // are not there.
-        inFlight.incrementAndGet();
+        if (inFlight.incrementAndGet() > MAX_IN_FLIGHT) {
+            inFlight.decrementAndGet();
+            refuse(stream);
+            return;
+        }
         try {
             serveVisitor(link, session, stream);
         } finally {
@@ -124,9 +203,36 @@ final class Visitors {
         }
     }
 
+    /**
+     * Turns away one visitor over {@link #MAX_IN_FLIGHT}. Here rather than after the handshake:
+     * what is being conserved is the TLS state, so the visitor has to be refused before there is
+     * any. Nothing is sent back but the reset, because saying anything politer would mean
+     * completing the handshake that this exists to avoid.
+     */
+    private void refuse(MuxStream stream) {
+        long n = refused.incrementAndGet();
+        stream.reset(Frame.RST_NO_CAPACITY);
+        // One line a minute. A node at its ceiling refuses continuously, and a log that says so on
+        // every stream buries the reason among its own symptoms.
+        long now = System.currentTimeMillis();
+        if (now - lastRefusalLog >= REFUSAL_LOG_MS) {
+            lastRefusalLog = now;
+            LOG.warn("at the visitor ceiling ({}), refusing new visitors; {} refused so far. "
+                + "Raise it with -XX:MaxHeapSize= in JAILSCALE_DAEMON_OPTS (ARCHITECTURE.md §9.3)",
+                MAX_IN_FLIGHT, n);
+        }
+    }
+
+    private static final long REFUSAL_LOG_MS = 60_000;
+
     /** Visitor streams being served right now, TLS and raw alike. */
     int inFlight() {
         return inFlight.get();
+    }
+
+    /** Visitors turned away at {@link #MAX_IN_FLIGHT} since this daemon started. */
+    long refused() {
+        return refused.get();
     }
 
     private void serveVisitor(HubLink link, HubLink.Session session, MuxStream stream) {
