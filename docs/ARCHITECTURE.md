@@ -1820,6 +1820,21 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
+- **The CLI copies a link to the clipboard only when its stdout is a terminal, and that is verified
+  on two of the three platforms that have a clipboard.** `Console.isTerminal()` is the question
+  asked, rather than `System.console() != null`, which since JDK 22 is non-null for a redirected
+  stream as well. The tests assert the negative direction everywhere — piped, nothing is copied —
+  and that is the direction that would still pass if the detection were broken and the feature
+  simply dead, so the positive direction has to be checked by hand against a real terminal.
+  Done on **darwin-arm64** and on **linux-arm64**, both on the native binary, the second under
+  `xvfb-run` with `script -q FILE -c` so that stdout is genuinely the pty: the CLI printed
+  `<- copied to clipboard`, `xclip` held the selection, and the clipboard contained exactly the
+  link that was printed. **windows-amd64 is unverified.** It is the platform where the feature is
+  most certainly live — `clip.exe` is in System32, so it is always found — and the hardest to test,
+  since there is no `script` and driving a ConPTY from CI is more machinery than a convenience
+  feature is worth. A Linux node is usually headless and has no `xclip` at all, so there the
+  feature is normally inactive whatever `isTerminal()` answers.
+
 - **A node's visitors are first come, first served, so one name can starve the others on it.** The
   bound of §9.3 is per node, and a node may serve up to `MAX_LINKS_PER_NODE` = 20 links; nothing
   shares the 450 between them. One name that fills the node takes every slot and the other nineteen
