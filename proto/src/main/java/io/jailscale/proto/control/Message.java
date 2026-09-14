@@ -37,8 +37,9 @@ public sealed interface Message {
          * the wire and {@code optInt} supplies the default -- and the hub reads it as "no bound I
          * know of" and falls back to its own caps, which is what it did before this field existed.
          *
-         * <p>This is the first field added to an existing message since the protocol shipped, so it
-         * is the first test of the compatibility §5.4 claims: the decoder reads by name and ignores
+         * <p>This is the second field added to an existing message since the protocol shipped --
+         * {@code host} was the first, between v0.1.0 and v0.1.1 -- and it rests on the same
+         * compatibility §5.4 claims: the decoder reads by name and ignores
          * what it does not recognise, so a new node's Hello is read by an old hub exactly as it
          * always was. That is also why it is a field on Hello rather than a message of its own -- an
          * old hub answers an unknown type with {@code Error{unknown-type}}, which is a reply saying

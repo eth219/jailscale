@@ -1398,22 +1398,28 @@ Both columns are the toolchain and options the release workflow uses: GraalVM CE
 profile-guided optimization. That was not always true of the macOS column, and the cost of it is
 below the table.
 
-**This table is v0.1.1 and not v0.1.0.** The first tag is from 2026-09-12 and the 25.3 pin landed
+**This table is v0.1.2 and not v0.1.0.** The first tag is from 2026-09-12 and the 25.3 pin landed
 on 2026-09-13, which leaves v0.1.0 alone on Liberica NIK 25.0.4 -- the left-hand column of the
 edition table below -- and every release from v0.1.1 on the same toolchain and options this gate
 measures. Measured on v0.1.0's own assets and that column: binaries of 29.8 to 31.9 MiB against the
-25.3 to 26.2 here, idle RSS on linux-amd64 of 40.6 MB for the hub and 40.1 for the node against 35.1
+25.3 to 26.4 here, idle RSS on linux-amd64 of 40.6 MB for the hub and 40.1 for the node against 35.1
 and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries five native targets rather than
 four, since the 25.3 line is what dropped macos-amd64 (§3.2). README says the same where it tells
 people which file to download.
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
-| Binary size | 25.3 MiB (`jailhub`), 25.4 MiB (`jailscale`) | 26.1 MiB, 26.2 MiB | 28 / 28 MiB |
+| Binary size | 25.3 MiB (`jailhub`), 25.4 MiB (`jailscale`) | 26.1 MiB, 26.4 MiB | 28 / 28 MiB |
 | Node idle RSS | about 24.8 MB | about 34.4 MB (2.1 anonymous) | 28 / 38 MB |
-| Hub idle RSS | about 25.3 MB | about 35.1 MB (3.3 anonymous) | 28 / 38 MB |
-| RSS with 1,000 visitor sessions held open | node 69 MB, hub 53 MB | node 67 MB, hub 65 MB | node 88 MB, hub 88 MB |
-| CLI cold start | about 6.3 ms (`jailscale status`, median of 10, IPC round trip included) | about 2.4 ms | 50 ms |
+| Hub idle RSS | about 25.3 MB | about 35.6 MB (3.3 anonymous) | 28 / 38 MB |
+| RSS with 1,000 visitor sessions held open | node 69 MB, hub 53 MB | node 55 MB, hub 62 MB | node 88 MB, hub 88 MB |
+| CLI cold start | about 6.3 ms (`jailscale status`, median of 10, IPC round trip included) | about 2.6 ms | 50 ms |
+
+The two columns are not the same run. linux-amd64 is the gate's own output at the commit v0.1.2 was
+cut from, so it describes what shipped. The macOS column is a local run from before §9.3's visitor
+bound landed, which took the node's held-open peak from 67 MB to 55 MB where it has been measured
+again; its 69 MB is therefore an upper bound and not a current figure. Re-measuring it needs a
+macOS machine with the toolchain, which is also why it lags.
 
 ### How many visitors this serves, and what stops it
 
