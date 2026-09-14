@@ -854,6 +854,42 @@ visitors really does overflow a small listen backlog (macOS defaults to 128) and
 immediate refusal. That page and the gate are the only two places where the node *writes* HTTP, and
 only on https links.
 
+**The node serves at most `Visitors.MAX_IN_FLIGHT` visitor streams at once, and resets the rest.**
+What a visitor costs the node is its TLS state — about 99 KB live (§15) — and that is the same
+whether the visitor reads what it asked for or stalls, so the bound is a count where the hub's is a
+byte budget (§5.3). The hub bounds bytes because there a thousand well-behaved visitors hold almost
+nothing and a count would have to assume the worst case for all of them; here the count *is* the
+resource. It is derived at startup from the heap the process was given — 450 at the shipped 64 MiB
+ceiling, linear above it — so raising the ceiling with `-XX:MaxHeapSize=` through
+`JAILSCALE_DAEMON_OPTS` (§14) buys visitors rather than leaving a node with a number that suited a
+smaller heap. Over the bound the stream is reset with `RST_NO_CAPACITY` before the handshake, since
+what is being conserved is the state the handshake would create; the node logs at most one line a
+minute saying it is at its ceiling, and `jailscale status` reports `visitorCeiling` and
+`visitorsRefused` beside `visitorsInFlight`.
+
+**450 was measured, not chosen, and the alternative it is measured against is not a healthy node.**
+Against an unbounded node on darwin-arm64 at the shipped ceiling: 400, 450, 500 and 550 stalled
+readers all live, peaking at 82.1 to 98.5 MB of RSS and climbing about 99 KB a visitor; **600 dies**,
+admitting 550 of them, and 1,000 dies admitting 817, with six `OutOfMemoryError`s that took
+`mux-reader` and `mux-writer` with them, dropped the hub connection and every visitor on it, and
+left an ordinary visitor timing out at 30 s fourteen probes running. The bound is below the cliff
+rather than at it because whether the heap is exhausted depends on arrival rate as well as count —
+`FlowBudget`'s own figures show the same axis behaving differently at three ramp speeds — and
+because the budget gate measures at a count that has to stay admissible (§14). With the bound, the
+same thousand hold 450, refuse the rest, peak at 86.2 to 86.8 MB across three runs, and serve an
+ordinary visitor in 1 to 36 ms.
+
+**What it costs is what `FlowBudget` warns about: refusing hands an attacker a cheaper denial than
+the one being fixed.** Someone who holds `MAX_IN_FLIGHT` connections open keeps everyone else out.
+The hub avoids that by reclaiming instead — it can pick a stream that has provably not consumed a
+byte in `STALL_MS`, so it frees memory from a connection that is not using it. Nothing on the node
+is idle in that sense: a visitor's TLS state is live for as long as the visitor is, so reclaiming
+here means choosing a victim among connections that are all making progress. Refusing the
+thousand-and-first visitor costs that visitor; not refusing it costs all of them and the hub link
+besides, which is what the measurements above are of. The hub already caps a name at
+`SniRouter.MAX_PER_NAME` = 1,024 on the same reasoning, and nothing yet tells the hub what a node's
+bound is, so the hub keeps sending visitors a full node will reset.
+
 **The socket to the local app is given the stream window, 256 KB each way, before it connects.**
 Left to the kernel both buffers autotune to megabytes -- measured at up to 8 MB on macOS, whose
 default ceiling is 4 MB a side; Linux allows 6 -- and what they hold is bytes the visitor has not
@@ -1358,7 +1394,16 @@ visitors (two people, one macOS arm64 machine). The cause is not the receive
 budget, which this direction barely touches: a visitor sends one GET line, so the node's receive
 queues hold tens of bytes.
 
-**At a thousand stalled readers this axis no longer measures the node. It reaches the defect.**
+**This was the axis's open defect, and it is bounded now (§9.3).** The paragraph below is what a
+thousand stalled readers did to an unbounded node, kept because it is what the bound is measured
+against and because the gate's count was chosen from it. With `Visitors.MAX_IN_FLIGHT` in place the
+same thousand hold 450, the rest are reset before their handshake, the node peaks at 86.2 to 86.8 MB
+across three runs with no `OutOfMemoryError`, an ordinary visitor is served in 1 to 36 ms, **and the
+hub's receive queue pins at 24.0 MB of 24.0 with streams shed** — which is why the budget job asks
+for a thousand again: at 400 the queue never passed 4.7 MB on the CI runner, so the one exact
+assertion in this phase could not fail where it runs.
+
+**At a thousand stalled readers this axis used to stop measuring the node and reach the defect.**
 Measured on main with the release toolchain, darwin-arm64, `SLOW=1000`: **817 of 1,000 held, and
 the ramp took 60.7 s against 5.4 s at 400**; six `OutOfMemoryError`s in the node's log, two of them
 taking `mux-reader` and `mux-writer`, so the hub connection dropped and was remade mid-phase; an
@@ -1368,28 +1413,34 @@ it is the ceiling it died against, with 183 visitors never admitted. This is the
 `TlsEndpoint` term of the paragraph above, arriving as a fault rather than as a number, and it is
 the same shape `docs/mux-saturation` predicted on the JVM.
 
-**So the gate runs at 400, which measures the node, and the budget is pinned to that count.** On
-darwin-arm64 that run holds 400 of 400 in 5.4 s, serves the ordinary visitor in 13 to 31 ms, and
-pins the hub's receive queue at 24.0 MB of 24.0 with 116 streams shed — the assertion this phase
-exists for, working. The node peaks at 82.1 and 82.3 MB there, within the 82.0 to 86.8 above, and
-the budget is 95. `measure.sh` now carries `B_NODE_SLOW_AT` and **skips the node gate at any other
-count**: the cost being bounded is per visitor, so the budget is only a budget at the count it was
-measured at, and this gate was very nearly wired to `SLOW=1000` against a number measured at a
-thousand on a machine where a thousand no longer behaves. Gating on an open defect would have been
-red on every build until somebody bounds the per-visitor term, which is the same argument §3.2
-makes for not gating on a job that fails 2% of the time.
+**The gate runs at 1,000 now, and the budget is pinned to whatever count it runs at.** On
+darwin-arm64 that run holds 450 of 1,000 — the node's bound — refuses the rest, peaks at 86.2 to
+86.8 MB across three runs, serves the ordinary visitor in 1 to 36 ms, and pins the hub's receive
+queue at 24.0 MB of 24.0 with streams shed. The budget is 95, about 10% over the highest of the
+three; it was also 95 at `SLOW=400`, where the figures were 82.1 to 83.2, because past the bound the
+node holds `MAX_IN_FLIGHT` visitors whatever the count asked for and this number stops moving.
 
-**On linux-amd64 the budget is 100, measured, and the gate there has teeth on the node only.** Two
-`workflow_dispatch` runs of the CI command on `ubuntu-24.04` put the node at **89.7 and 88.5 MB**;
-100 is about 11% over the higher, the margin the macOS budget carries. It was 105 for a day, derived
+`measure.sh` carries `B_NODE_SLOW_AT` and **skips the node gate at any other count**: the cost being
+bounded is per visitor, so the budget is only a budget at the count it was measured at. That check
+earned itself before the bound existed, when this gate was very nearly wired to `SLOW=1000` against
+a number measured at a thousand on a machine where a thousand no longer behaved.
+
+**The linux-amd64 budget is 100 and is the one number here still at the old count.** Four
+`workflow_dispatch` runs on `ubuntu-24.04` measured the node at 88.5 to 89.7 MB **at `SLOW=400`**,
+and the gate now asks for a thousand; the runner has not been measured there, so 100 is carried over
+rather than derived, and the first dispatch after this replaces it. It was 105 for a day, derived
 from the two platforms' idle difference rather than measured, and the measurement came in 15 MB
-under the guess. **The same two runs put the hub's receive queue at 2.0 and 4.7 MB of its 24.0 MB
-budget with nothing reclaimed** — where the same count on a developer's machine pins it. The runner
-is about five times slower per warm request (8,360 a second against 44,721 here), so the harness
-cannot fill the queue faster than the hub drains it, and `measure.sh`'s queue check is an upper
-bound, which at 2 MB of 24 cannot fail. So a green budget job asserts the node's RSS and says
-nothing about the receive bound; that assertion lives with whoever runs this by hand, until the
-count that would reach it on a runner is one the node survives — the same per-visitor term again.
+under the guess.
+
+**What raising the count is for.** At 400 those same runs put the hub's receive queue at 2.0 to
+4.7 MB of its 24.0 MB budget with nothing reclaimed, where the same count on a developer's machine
+pins it: the runner is about five times slower per warm request (8,360 a second against 44,721
+here), so the harness could not fill the queue faster than the hub drained it, and `measure.sh`'s
+queue check is an upper bound, which at 2 MB of 24 cannot fail. A green budget job therefore
+asserted the node's RSS and said nothing about the receive bound. A thousand is the count that
+reaches it, and a thousand is survivable only because the node bounds its visitors — so the
+per-visitor bound of §9.3 is what made the hub's bound testable where the gate runs, which was not
+why it was written.
 
 **The long tail on this axis was the machine, and it took four attributions to reach that.** This
 paragraph has said that an ordinary visitor's 7 to 19 s wait while slow readers arrive was the
@@ -1431,8 +1482,10 @@ after any run.
 
 **What the node's RSS on this axis is, separately from the tail.** It is `TlsEndpoint`'s per-visitor
 state -- `netInBuf`, `appInBuf` and the `SSLEngine`'s own, 50 to 60 KB each -- times however many
-visitors are live at once, an unbounded per-connection term of exactly the kind §5.3's budget bounds
-for receive queues, and a separate change. The node's RSS on this axis repeats to 0.1 MB across runs,
+visitors are live at once. That was an unbounded per-connection term of exactly the kind §5.3's
+budget bounds for receive queues; §9.3 bounds it now, by count rather than by bytes, and what this
+axis measures past the bound is `MAX_IN_FLIGHT` visitors and not the count asked for. The node's RSS
+on this axis repeats to 0.1 MB across runs,
 unlike the hub's, because per-visitor state scales with the visitor count where queue occupancy
 moves with the collector. `measure.sh` gates the node on this axis at `B_NODE_SLOW_MB`, which is set
 above today's figure on purpose and says so.
@@ -1701,7 +1754,10 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   available was RSS, which cannot tell visitors from a leak or from the heap expanding into its
   ceiling. The count is taken around the whole of `Visitors.serve`, not around the `TlsEndpoint`:
   several paths abandon a visitor without closing the endpoint, and a count that leaked on those
-  would invent visitors that are not there.
+  would invent visitors that are not there. It is now also what the bound of §9.3 is taken
+  against, and `status` reports the bound (`visitorCeiling`) and how many it has turned away
+  (`visitorsRefused`) beside it: in flight on its own cannot tell a busy node from a full one, and
+  those are different problems with different answers.
 
 - **What the kernel holds per stalled visitor is bounded on the node and not on the hub.** The node
   gives its app socket the stream window (§9.3). The hub's visitor sockets autotune, so a visitor

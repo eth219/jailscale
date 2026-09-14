@@ -114,11 +114,10 @@ B_HUB_LOAD_MB=88
 #
 # BECAUSE THAT TERM IS PER VISITOR, THE BUDGET IS ONLY A BUDGET AT ONE COUNT. B_NODE_SLOW_AT is the
 # count it was measured at, and the gate below is skipped at any other: applied to a different SLOW=
-# this number means nothing in either direction, and the failure it exists to catch is the one that
-# blows through it rather than creeps past it. That check exists because the gate was very nearly
-# wired to SLOW=1000 against a budget measured at 1,000 on a machine where 1,000 no longer behaves:
-# see the figures below.
-B_NODE_SLOW_AT=400
+# this number means nothing in either direction. That check earned itself once already -- the gate
+# was very nearly wired to SLOW=1000 against a budget measured at 1,000 on a machine where 1,000 no
+# longer behaved.
+B_NODE_SLOW_AT=1000
 #
 # RSS is the right metric here and the wrong one for the hub, which is worth knowing rather than
 # looking inconsistent. The hub's growth is receive queues that the collector expands and reclaims on
@@ -128,31 +127,22 @@ B_NODE_SLOW_AT=400
 # reproducible. Replace this with a direct count of concurrent visitor TLS endpoints when the node
 # exposes one; RSS is standing in for that number.
 #
-# WHY 400 AND NOT 1,000, WHICH IS WHERE ARCHITECTURE.md 14 TOOK ITS FIGURES. At 1,000 stalled
-# readers this machine does not reach a peak worth gating; it reaches the open defect. Measured on
-# main, GraalVM CE 25.3, darwin-arm64: 817 of 1,000 held and the ramp 60.7 s against 5.4 s at 400,
-# six OutOfMemoryErrors in the node's log taking mux-reader and mux-writer with them, the hub
-# connection dropped and remade, an ordinary visitor timing out at 30 s fourteen times in a row,
-# and 118,554 refused kernel socket allocations. The node's 106.6 MB peak there is not the node's
-# cost at 1,000 visitors -- it is the ceiling it died against, with 183 of the visitors never
-# admitted. A gate on that is red on every build until the per-visitor term is bounded, which is a
-# change nobody has made, and a permanently red gate is one people learn to ignore (3.2 makes the
-# same argument about the Windows job).
+# WHY 1,000, WHEN THIS RAN AT 400 FOR A DAY. It ran at 400 because at a thousand stalled readers the
+# node reached the open per-visitor defect instead of a peak: 817 of 1,000 admitted, the ramp 60.7 s
+# against 5.4 s at 400, six OutOfMemoryErrors taking mux-reader and mux-writer with them, the hub
+# connection dropped and remade, an ordinary visitor timing out at 30 s fourteen probes running.
+# Gating that would have been a red main on every build.
 #
-# 400 is the largest count that measures the node rather than the defect. On darwin-arm64 it holds
-# 400 of 400 in 5.4 s, serves the ordinary visitor in 13 to 31 ms, and pins the hub's receive queue
-# at 24.0 MB of 24.0 with 116 streams shed; node peak 82.1 and 82.3 across two runs, inside the
-# 82.0 to 86.8 of 14.
+# The node bounds its concurrent visitors now (Visitors.MAX_IN_FLIGHT, ARCHITECTURE.md 9.3), so a
+# thousand is survivable and worth asking for. Three runs on darwin-arm64 with the bound: 450 of
+# 1,000 held with the rest refused, node peak 86.2, 86.8, 86.8 MB, no OutOfMemoryError, and the
+# ordinary visitor served in 1 to 36 ms.
 #
-# WHAT THE GATE ACTUALLY HAS TEETH ON, WHICH IS NOT THE SAME ON BOTH PLATFORMS. On the ubuntu-24.04
-# runner this count does not reach the receive budget at all: two measured runs put the queue's peak
-# at 2.0 and 4.7 MB of 24.0 with nothing reclaimed, where the same count on a developer's machine
-# pins it. The runner is about five times slower per warm request, so the harness cannot fill the
-# queue faster than the hub drains it. The check below is an upper bound, so at 2 MB of 24 it cannot
-# fail -- meaning that where this gate runs, it is the node's RSS that is asserted and not the hub's
-# bound. Do not read a green budget job as the receive budget having been exercised; that assertion
-# lives on whoever runs this by hand at this count, until the count that reaches it on a runner is
-# survivable, which is the same per-visitor term as above.
+# AND THIS IS THE COUNT THAT REACHES THE HUB'S ASSERTION. At 400 the receive queue peaked at 2.0 to
+# 4.7 MB of 24.0 on the CI runner with nothing reclaimed, so the check below could not fail there
+# and the gate had teeth on the node's RSS only. At 1,000 it pins at 24.0 of 24.0 with streams shed.
+# That is the whole reason to raise the count: the per-visitor bound was what made the receive
+# budget testable where the gate actually runs.
 #
 # The number itself is per platform, below, for the same RSS-accounting reason as the idle budgets:
 # it was derived on darwin-arm64, and a Linux peak carries the binary's own mapped pages on top of
@@ -164,14 +154,16 @@ case "$(uname -s)-$(uname -m)" in
     # the release shipped 30.1 MiB darwin-arm64 binaries, and the idle budget was 28 while that
     # binary idled at 29.0. Both had been set against whichever GraalVM this machine happened to
     # have, and the gate only runs on linux, so neither could ever fail.
-    # 95 is ~10% over the highest seen at SLOW=400 (86.8), the same margin the other budgets carry.
+    # ~10% over the highest seen at SLOW=1000 with the visitor bound in place (86.2, 86.8, 86.8).
+    # It was the same 95 at SLOW=400, where the figures were 82.1 to 83.2: the node holds at most
+    # MAX_IN_FLIGHT visitors either way, so past the bound the count stops moving this number.
     B_BINARY_MIB=28; B_NODE_IDLE_MB=28; B_HUB_IDLE_MB=28; B_NODE_SLOW_MB=95 ;;
   Linux-x86_64)
-    # B_NODE_SLOW_MB measured on the ubuntu-24.04 runner, two workflow_dispatch runs of this exact
-    # command: 89.7 and 88.5 MB. 100 is ~11% over the higher, the margin the macOS one carries. It
-    # was 105 for a day, derived from the two platforms' idle difference rather than measured, and
-    # the measurement came in 15 MB under that guess -- which is the argument for not shipping a
-    # derived budget, not for deriving them more carefully.
+    # Measured on the ubuntu-24.04 runner at SLOW=400: 88.5, 89.1, 89.7 MB across four runs. THIS
+    # NUMBER IS STILL AT THE OLD COUNT -- the gate now asks for 1,000 and the runner has not been
+    # measured there, so 100 is carried over rather than derived, and the first dispatch after this
+    # is what replaces it. It was 105 once, derived from the two platforms' idle difference, and the
+    # measurement came in 15 MB under that guess.
     B_BINARY_MIB=28; B_NODE_IDLE_MB=38; B_HUB_IDLE_MB=38; B_NODE_SLOW_MB=100 ;;
   *)
     # An unmeasured platform gets the loosest of the measured ones rather than a guess of its own.
@@ -432,6 +424,10 @@ if [ -n "${SLOW:-}" ]; then
   # The node's side of the multiplexer, which the hub's line below cannot see: the bulk travels
   # node to hub, so the writer that blocks under saturation is this one ("count mean/max" ms).
   "$NODE" status --home "$W/a" 2>/dev/null | sed -n 's/.*"muxQueueWaitMs":"\([^"]*\)".*"muxSocketWriteMs":"\([^"]*\)".*/  node mux, count mean\/worst ms: queue_wait=\1 socket_write=\2/p'
+  # The node's own bound (ARCHITECTURE.md 9.3) next to the count it refused. Without this a phase
+  # that asks for more visitors than the node will hold reads as a node that quietly lost them.
+  "$NODE" status --home "$W/a" 2>/dev/null \
+    | sed -n 's/.*"visitorCeiling":\([0-9]*\).*"visitorsRefused":\([0-9]*\).*/  node visitor ceiling \1, refused \2/p'
   denied1=$(net_denied)
   if [ "$denied0" = n/a ]; then refused=n/a; else refused=$((${denied1:-0} - ${denied0:-0})); fi
   printf '  kernel socket memory %.0f MB before, %.0f MB peak; allocations refused during the phase: %s\n' \

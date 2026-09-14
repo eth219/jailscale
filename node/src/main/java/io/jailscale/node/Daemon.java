@@ -311,6 +311,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("connected", link.isConnected())
             .put("connections", link.connectionCount())
             .put("visitorsInFlight", visitors.inFlight())
+            // The ceiling next to the count, and how many it has turned away: in flight on its own
+            // cannot say whether a node is busy or full, and those are different problems.
+            .put("visitorCeiling", Visitors.MAX_IN_FLIGHT)
+            .put("visitorsRefused", visitors.refused())
             // The multiplexer's own three waits, which `proto` records on both sides and only the
             // hub publishes (ARCHITECTURE.md §14). The node is the busy writer in the saturation
             // case -- the bulk travels node to hub -- so these are the numbers that say whether a

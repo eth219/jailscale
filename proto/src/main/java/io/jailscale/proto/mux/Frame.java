@@ -33,6 +33,17 @@ public record Frame(long streamId, int type, int flags, byte[] payload) {
     /** The peer sent past the window it had been granted on this stream. */
     public static final int RST_WINDOW_OVERRUN = 101;
 
+    /**
+     * The receiver has as many visitor streams open as it will hold (ARCHITECTURE.md §9.3). Sent by
+     * the node, which bounds a count where the hub bounds bytes, because what a visitor costs a
+     * node is its TLS state and that does not depend on what the visitor does.
+     *
+     * <p>Like every reason in this range it is informational: RST is already in the protocol and
+     * carries whatever number the sender likes, so a peer of any age sees a reset stream and needs
+     * no upgrade to understand it.
+     */
+    public static final int RST_NO_CAPACITY = 102;
+
     public static final long CONTROL_STREAM = 0;
 
     public Frame {
