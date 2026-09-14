@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.jailscale</groupId>
+    <artifactId>jailscale-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>coverage</artifactId>
+  <packaging>pom</packaging>
+  <name>coverage</name>
+
+  <!--
+    Nothing is built here. This module exists so that one report can cover all four, and it exists
+    only inside -Pcoverage: the root pom lists it under that profile, so an ordinary build does not
+    know it is here.
+
+    It has to be a module of its own because jacoco's report-aggregate reads the DIRECT dependencies
+    of the project it runs in, at compile scope. Run from `hub` it covered hub and proto and silently
+    dropped the other two — `node` because hub depends on it only for tests, `crypto` because it
+    reaches hub through proto rather than directly. A report missing `node` is worse than no report:
+    it is the module the aggregation exists for, and its own tests cover a third of what hub's
+    end-to-end tests reach.
+
+    Every dependency below is therefore direct and at compile scope, whatever the real relationship
+    between the modules is. Adding a module to the build means adding it here too, or the report
+    quietly stops covering it.
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>io.jailscale</groupId>
+      <artifactId>crypto</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.jailscale</groupId>
+      <artifactId>proto</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.jailscale</groupId>
+      <artifactId>node</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.jailscale</groupId>
+      <artifactId>hub</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco-maven-plugin.version}</version>
+        <executions>
+          <execution>
+            <id>coverage-report</id>
+            <phase>verify</phase>
+            <goals><goal>report-aggregate</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

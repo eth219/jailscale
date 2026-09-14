@@ -122,6 +122,25 @@ the class this project's threading makes easy to write. Its exclusions are in
 `spotbugs-exclude.xml` and each one states its reason, because an exclusion with no reason and a
 finding nobody answered look identical six months later.
 
+**Coverage is a profile too, and nothing is gated on the number.** `./mvnw -Pcoverage verify`
+writes a report to `coverage/target/site/jacoco-aggregate`. JaCoCo is a third party with a
+dependency tree, so it lives behind a profile for the same supply-chain reason SpotBugs does; what
+it is *not* is a threshold. `node.Main` reads 3.9% of its lines covered while being one of the
+better tested classes here, because `CliTest` runs the CLI as a process and an agent attached to the
+test JVM cannot see into a child. A threshold would have punished that test for having the right
+shape and pushed its assertions back in-process, giving up the argument parsing, the exit codes and
+the daemon spawn that are the point of it. Coverage here is a way to find code nothing runs, not a
+number to defend.
+
+**The number is only right when it is aggregated, and getting that wrong is silent.** Per-module
+figures mislead badly in this build: hub's end-to-end tests exercise most of `node`, which alone
+reports 23.2% against 68.1% merged. The aggregation lives in `coverage/`, a module that exists only
+inside the profile, because jacoco's `report-aggregate` reads the *direct compile* dependencies of
+wherever it runs — run from `hub` it covered hub and proto and dropped `node` (a test-scope
+dependency) and `crypto` (reached through proto), printing a plausible number for two thirds of the
+code. `CoverageModuleTest` holds the root pom's module list against that module's dependency list,
+because the next module added is the next one silently left out.
+
 **Three workflows.** `ci` is the gate: the tests on ubuntu, macos and
 Windows for every push and pull request, and on main and nightly two more jobs that are too heavy
 for a pull request -- the §14 budget, which needs a native build, and the `load`-tagged tests, which
@@ -1801,6 +1820,21 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
+- **The CLI copies a link to the clipboard only when its stdout is a terminal, and that is verified
+  on two of the three platforms that have a clipboard.** `Console.isTerminal()` is the question
+  asked, rather than `System.console() != null`, which since JDK 22 is non-null for a redirected
+  stream as well. The tests assert the negative direction everywhere — piped, nothing is copied —
+  and that is the direction that would still pass if the detection were broken and the feature
+  simply dead, so the positive direction has to be checked by hand against a real terminal.
+  Done on **darwin-arm64** and on **linux-arm64**, both on the native binary, the second under
+  `xvfb-run` with `script -q FILE -c` so that stdout is genuinely the pty: the CLI printed
+  `<- copied to clipboard`, `xclip` held the selection, and the clipboard contained exactly the
+  link that was printed. **windows-amd64 is unverified.** It is the platform where the feature is
+  most certainly live — `clip.exe` is in System32, so it is always found — and the hardest to test,
+  since there is no `script` and driving a ConPTY from CI is more machinery than a convenience
+  feature is worth. A Linux node is usually headless and has no `xclip` at all, so there the
+  feature is normally inactive whatever `isTerminal()` answers.
+
 - **A node's visitors are first come, first served, so one name can starve the others on it.** The
   bound of §9.3 is per node, and a node may serve up to `MAX_LINKS_PER_NODE` = 20 links; nothing
   shares the 450 between them. One name that fills the node takes every slot and the other nineteen
