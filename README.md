@@ -317,12 +317,17 @@ What a compromised hub can and cannot do is written out in
 - Idle memory is 25 MB against the 20 MB originally aimed at (34.4 MB as Linux
   counts it, 2 MB of it anonymous). Most of the gap is JSSE standing up a single
   TLS client.
-- v0.1.2 is the third tagged release, and nobody has performed an upgrade yet.
-  The wire across all three is compatible: each step added one optional `Hello`
-  field — `host` before v0.1.1, `visitors` before v0.1.2 — which is the additive
-  case [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md) permits, and `WireFormatTest`
-  pins v0.1.0's own `Hello` line as still decoding and re-encoding unchanged. A
-  hub and its nodes can be replaced separately rather than together.
+- Upgrades have been exercised once each way they have been tried, on one hub
+  and one node. v0.1.2 is the third tagged release, and each step added one
+  optional `Hello` field — `host` before v0.1.1, `visitors` before v0.1.2 —
+  which is the additive case [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)
+  permits, pinned in `WireFormatTest` against v0.1.0's own `Hello` line. Both
+  steps have also run mismatched on the hub above: a released v0.1.0 node
+  against a hub that reads `host`, and the hub on v0.1.2 for half an hour while
+  its node was not, the capacity row reading `not advertised` throughout. So a
+  hub and its nodes can be replaced separately rather than together. Not tried:
+  the other order, a newer node against an older hub, and rolling either half
+  back.
 
 [ARCHITECTURE.md §15](docs/ARCHITECTURE.md) has the rest, in more detail.
 
