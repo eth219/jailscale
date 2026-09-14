@@ -208,9 +208,17 @@ jobs:
           # pull on the other arch starts failing.
           count=$(echo $refs | wc -w)
           [ "$count" -eq 2 ] || { echo "expected 2 digests, found $count in /tmp/digests/${{ matrix.component }}"; exit 1; }
-          # A tag push gets both the version and latest; a main push only gets edge.
+          # A tag push gets the version, and :latest only when the tag is a release rather than a
+          # pre-release; a main push only gets edge. The hyphen is the test because that is what a
+          # pre-release tag has in it (v0.2.0-rc1), and it is the same rule Updates.compare uses to
+          # sort a snapshot below the version it is heading for. Without it, tagging a release
+          # candidate moves :latest -- which README calls "follows releases" -- onto a build nobody
+          # released, and a `docker pull` that asks for nothing in particular gets it.
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            tags="${{ github.ref_name }} latest"
+            case "${{ github.ref_name }}" in
+              *-*) tags="${{ github.ref_name }}" ;;
+              *)   tags="${{ github.ref_name }} latest" ;;
+            esac
           else
             tags="edge"
           fi
