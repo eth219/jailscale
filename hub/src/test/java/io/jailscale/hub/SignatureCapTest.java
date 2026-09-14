@@ -188,18 +188,44 @@ class SignatureCapTest {
         assertTrue(!group.reserveSignature(0xDEADBEEFL), "an unknown stream must not be reservable");
     }
 
-    /** One connected node still completes a real visitor handshake on one signature. */
+    /**
+     * One connected node still completes a real visitor handshake on one signature.
+     *
+     * <p>The local app answers every connection rather than exactly one, which is what every other
+     * end-to-end test here does and what this one did not. It failed twice on macos-15 with
+     * {@code EOFException: no response} — the visitor's stream closing with nothing on it, about
+     * 3 ms after the link opened, with neither the hub nor the node logging a complaint at any
+     * level. Twenty runs here, including six under deliberate CPU contention, did not reproduce it.
+     *
+     * <p><b>So this is a robustness change on circumstantial evidence and not a diagnosis.</b> What
+     * is circumstantial: a one-shot accept has nothing to answer a second local connection with, and
+     * the node opens one per visitor and retries a refused or reset one five times (§9.3), so any
+     * second arrival left the real visitor waiting on a socket nobody would ever write to — which is
+     * the symptom. The stable siblings serve in a loop and do not flake.
+     *
+     * <p>The count is kept and reported so the next failure is evidence rather than another guess:
+     * if it fails again with one connection seen, the single accept was never the cause.
+     */
     @Test
     void anOrdinaryVisitorSpendsOneSignature() throws Exception {
         NodeGroup group = connectedGroup();
+        java.util.concurrent.atomic.AtomicInteger localConnections = new java.util.concurrent.atomic.AtomicInteger();
         Thread.ofVirtual().start(() -> {
-            try {
-                java.net.Socket c = app.accept();
-                c.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".getBytes());
-                c.getOutputStream().flush();
-                c.close();
-            } catch (IOException e) {
-                // the assertion below reports it
+            while (!app.isClosed()) {
+                try {
+                    java.net.Socket c = app.accept();
+                    localConnections.incrementAndGet();
+                    Thread.ofVirtual().start(() -> {
+                        try (c) {
+                            c.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".getBytes());
+                            c.getOutputStream().flush();
+                        } catch (IOException e) {
+                            // the assertion below reports it
+                        }
+                    });
+                } catch (IOException e) {
+                    return;
+                }
             }
         });
         try (javax.net.ssl.SSLSocket s = io.jailscale.proto.tls.Tls.connect(
@@ -207,7 +233,13 @@ class SignatureCapTest {
             s.startHandshake();
             io.jailscale.proto.http.Http.writeRequest(s.getOutputStream(), "GET", "capped.hub.test", "/",
                 new io.jailscale.proto.http.Headers(), null);
-            assertEquals(200, io.jailscale.proto.http.Http.readResponse(s.getInputStream(), 4096).status());
+            try {
+                assertEquals(200, io.jailscale.proto.http.Http.readResponse(s.getInputStream(), 4096).status());
+            } catch (java.io.EOFException e) {
+                throw new AssertionError("the visitor's stream closed with no response; the local app saw "
+                    + localConnections.get() + " connection(s). One means the single accept this test "
+                    + "used to do was not what was starving it, and the cause is still open.", e);
+            }
         }
         assertTrue(group.peakConcurrentSignatures() >= 1, "the handshake should have needed a signature");
     }
