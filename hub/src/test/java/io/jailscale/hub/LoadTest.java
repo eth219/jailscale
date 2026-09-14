@@ -45,6 +45,10 @@ class LoadTest {
     private static final Path KEY = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
     private static final int VISITORS = Integer.getInteger("load.visitors", 1000);
 
+    /** The ramp, matching {@code tools/hold-visitors.py}: the two harnesses should arrive alike. */
+    private static final int ARRIVAL_BATCH = Integer.getInteger("load.arrivalBatch", 100);
+    private static final long ARRIVAL_PAUSE_MS = Long.getLong("load.arrivalPauseMs", 50);
+
     private Path root;
     private Hub hub;
     private int port;
@@ -131,6 +135,27 @@ class LoadTest {
         List<String> failures = new java.util.concurrent.CopyOnWriteArrayList<>();
         long t0 = System.nanoTime();
         for (int i = 0; i < VISITORS; i++) {
+            // Arrivals are ramped, in the same batches tools/hold-visitors.py uses for the native
+            // measurement. What §14 claims is a thousand visitors HELD at once, and the two
+            // harnesses should arrive alike; this one was the outlier, starting all thousand in a
+            // tight loop.
+            //
+            // MEASURED, because this test was flaky from the day it was written and nobody saw it
+            // until it went into CI: unramped it fails 3 runs in 10 on this machine, ramped 0 in
+            // 10, and it failed on main the first week it was gated. The failures are connection
+            // resets, terminated handshakes and "no response" EOFs, in that mixture, with the hub
+            // and the node saying nothing at DEBUG beyond one "visitor -> node ended: Socket
+            // closed" -- so nothing refused anything and no bound was reached.
+            //
+            // WHAT IS NOT ESTABLISHED is the mechanism. connectWithRetry's comment below says the
+            // listen backlog overflows -- the hub asks for 1024 and the kernel caps it at
+            // somaxconn, 128 on macOS -- and that is the obvious candidate, but the kernel does not
+            // agree: `netstat -s -p tcp` showed "listen queue overflow" at 0 before and after a
+            // failing run. So the burst is the trigger and the ramp removes it, and why is open.
+            // Reproduce either way with -Dload.arrivalBatch= and -Dload.arrivalPauseMs=.
+            if (i > 0 && i % ARRIVAL_BATCH == 0) {
+                Thread.sleep(ARRIVAL_PAUSE_MS);
+            }
             int n = i;
             threads.add(Thread.ofVirtual().start(() -> {
                 try (SSLSocket s = connectWithRetry(ctx)) {
