@@ -276,4 +276,22 @@ class HomePageTest {
     private static String enc(String s) {
         return URLEncoder.encode(s, StandardCharsets.UTF_8);
     }
+
+    /**
+     * A build that is not a release has to say so where the version is printed. The string on its
+     * own does not: "0.1.0-SNAPSHOT" reads as a release to anyone who does not know Maven, and the
+     * live hub served exactly that for a fortnight after v0.1.2 shipped, from a binary that was
+     * neither 0.1.0 nor current. Only a tag build replaces the pom's version, so every source,
+     * `edge` and workflow_dispatch build lands here.
+     */
+    @Test
+    void aBuildThatIsNotAReleaseSaysSoBesideItsVersion() throws Exception {
+        String page = http("GET", "/", null, null).bodyText();
+        boolean release = !Hub.version().endsWith("-SNAPSHOT") && !Hub.version().equals("dev");
+        assertEquals(!release, page.contains("(not a release build)"),
+            "the page and the version disagree about whether this is a release: " + Hub.version());
+        // The tests run from a snapshot pom, so this is the branch that is actually exercised here;
+        // if the pom ever carries a release version this assertion is what says the other one is.
+        assertFalse(release, "expected the test build to be a snapshot, not " + Hub.version());
+    }
 }

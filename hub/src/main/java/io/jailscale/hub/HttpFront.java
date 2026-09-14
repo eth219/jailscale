@@ -202,7 +202,13 @@ final class HttpFront {
         int online = hub.registry().size();
         long rss = Resources.rssBytes();
         b.append("<h2>Status</h2><table>");
-        row(b, "Version", escape(Hub.version()));
+        // Said plainly when it is not a release, because the string alone does not say so to
+        // anyone who does not read Maven: a hub built from main reports the pom's version, which
+        // only a tag build replaces (`versions:set` in release.yml), so every source, `edge` and
+        // workflow_dispatch build carries a number that reads like a release. One of them served
+        // this page as "0.1.0-SNAPSHOT" long after v0.1.2 shipped, and the operator reading it had
+        // no way to tell from here that it was neither 0.1.0 nor current.
+        row(b, "Version", escape(Hub.version()) + (released(Hub.version()) ? "" : " (not a release build)"));
         // Which build, and which key: the two things about this hub that can be compared with
         // something the reader already has. Both are self-reported, which the note below says.
         String sha = Build.executableSha256();
@@ -351,6 +357,15 @@ final class HttpFront {
             + "@media(prefers-color-scheme:dark){:root{--bg:#131517;--ink:#e6e8eb;--dim:#8b9096;--rule:#282b30;"
             + "--wash:#1c1f23;--link:#8ab4f8}}"
             + "</style></head><body><h1>" + escape(title) + "</h1>" + body + "</body></html>";
+    }
+
+    /**
+     * Whether this version names a release rather than a build on the way to one. `dev` is what a
+     * build with no manifest reports; a `-SNAPSHOT` is Maven's word for the same thing, and
+     * {@code Updates} already treats it as sorting below the release it heads for.
+     */
+    private static boolean released(String version) {
+        return version != null && !version.equals("dev") && !version.endsWith("-SNAPSHOT");
     }
 
     static String escape(String s) {
