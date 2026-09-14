@@ -261,7 +261,7 @@ final class HttpFront {
         // goes away, and why it reads 0 on a hub whose nodes are older than that field.
         row(b, "Visitors per name", SniRouter.MAX_PER_NAME + " at once, and no more than the node"
             + " serving it will hold");
-        int capacity = hub.registry().visitorCapacity();
+        long capacity = hub.registry().visitorCapacity();
         row(b, "Visitors the nodes will hold", (capacity > 0 ? capacity + " together" : "not advertised")
             + ", " + hub.router().visitorsInFlight() + " being served right now");
         // Both numbers, because either one alone misleads. The count is what admission checks; the

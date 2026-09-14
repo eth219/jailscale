@@ -220,6 +220,35 @@ class NodeCapacityTest {
         assertFalse(appHits.get() > CEILING, "the local app saw more visitors than the node's bound");
     }
 
+    /**
+     * The hub sums what its nodes claim, and nothing validates the claim -- deliberately, since a
+     * node that overstates only stops the hub refusing on its behalf and then resets what it cannot
+     * take. The sum is the one place a claim reaches something other than its own node, so it is a
+     * long: two nodes at Integer.MAX_VALUE wrapped an int sum negative and put a negative capacity
+     * on the hub's public page.
+     */
+    @Test
+    void twoNodesClaimingEverythingCannotWrapTheHubsCapacityNegative() throws Exception {
+        node = new Daemon(NodeConfig.in(root.resolve("alice")), Integer.MAX_VALUE);
+        node.start();
+        joinAs(root.resolve("alice/jailscale.sock"), "alice");
+        Daemon second = new Daemon(NodeConfig.in(root.resolve("bob")), Integer.MAX_VALUE);
+        try {
+            second.start();
+            joinAs(root.resolve("bob/jailscale.sock"), "bob");
+            waitFor(() -> hub.registry().size() == 2);
+            long capacity = hub.registry().visitorCapacity();
+            assertTrue(capacity >= 2L * Integer.MAX_VALUE, "the sum wrapped: " + capacity);
+        } finally {
+            second.close();
+        }
+    }
+
+    private void joinAs(Path sock, String user) throws Exception {
+        assertTrue(Ipc.call(sock, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1")
+            .put("port", port).put("user", user).put("caFile", CERT.toString()).build()).optBool("ok", false));
+    }
+
     private interface Check {
         boolean ok() throws Exception;
     }

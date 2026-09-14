@@ -49,10 +49,16 @@ final class Registry {
      * that advertises nothing -- any build older than the field -- contributes 0, so this is a
      * lower bound on what the deployment can serve and not a total to divide by.
      */
-    int visitorCapacity() {
-        int n = 0;
+    long visitorCapacity() {
+        // Summed as a long, and it has to be: this adds up numbers the nodes chose. A node that
+        // sends Integer.MAX_VALUE is only lying to itself about admission -- the hub then never
+        // refuses on its behalf and its own bound resets what it cannot take, which is what a node
+        // that says nothing gets -- but two of them would wrap an int sum negative and put a
+        // negative capacity on the hub's public page. Nothing else here validates it, on purpose:
+        // any positive number a node names is a number it is entitled to name.
+        long n = 0;
         for (NodeGroup g : byKey.values()) {
-            n += g.visitorCeiling();
+            n += Math.max(0, g.visitorCeiling());
         }
         return n;
     }
