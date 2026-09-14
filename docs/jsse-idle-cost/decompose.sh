@@ -5,7 +5,7 @@
 # 24.3 MB the moment it connects, so roughly 7.6 MB is JSSE initialisation for one TLS client" -- and
 # §15 carries it as the reason idle RSS is 25 MB against the 20 MB aimed at. That delta is measured
 # between two processes in two configurations and attributed entirely to JSSE. This takes it apart:
-# one daemon, held in each of eight states, measured three ways.
+# one daemon, held in each of five states, measured three ways.
 #
 #   RSS          what `ps` reports, which is what measure.sh gates on and README publishes
 #   written      vmmap's writable-regions figure: the pages this process owns and has dirtied
@@ -53,6 +53,10 @@ CERT=$R/hub/src/test/resources/tls/hub-test.crt
 KEY=$R/hub/src/test/resources/tls/hub-test.key
 PORT=${PORT:-19643}; APP_PORT=$((PORT + 138)); METRICS_PORT=$((PORT + 139))
 RUNS=${RUNS:-3}; SETTLE=${SETTLE:-8}
+# State A's whole definition is that no SSLContext is ever built, and the daemon's first update check
+# fires 60 to 300 s after start (Daemon.updateLoop), reaching api.github.com over the default trust
+# manager. A settle long enough to contain it would make A a measurement of something else.
+[ "$SETTLE" -lt 55 ] || { echo "SETTLE must stay under 55s: see the note above" >&2; exit 1; }
 W=/tmp/jsse-decompose.$$
 [ -x "$HUB" ] && [ -x "$NODE" ] || { echo "build first: ./native.sh -DskipTests" >&2; exit 1; }
 command -v vmmap > /dev/null || { echo "needs vmmap (macOS)" >&2; exit 1; }
@@ -93,7 +97,9 @@ sample() { # sample <label> <pid>
   [ -n "$rss" ] || die "$1: the daemon is gone"
   vmmap "$2" > "$W/$1.vmmap" 2>&1 || true
   wr=$(awk -F'written=' '/^Writable regions:/{split($2,a,"K"); print a[1]; exit}' "$W/$1.vmmap")
-  tx=$(awk '/^__TEXT .*target\/jailscale$/{print $5; exit}' "$W/$1.vmmap" | tr -d 'K')
+  tx=$(awk '/^__TEXT .*target\/jailscale$/{ v = $5; u = substr(v, length(v), 1); n = v + 0
+        if (u == "M") n *= 1024; else if (u == "G") n *= 1048576
+        printf "%d", n; exit }' "$W/$1.vmmap")
   [ -n "${wr:-}" ] && [ -n "${tx:-}" ] || die "$1: vmmap gave no figures"
   printf '%s\t%s\t%s\t%s\n' "$1" "$rss" "$wr" "$tx" >> "$W/t.tsv"
 }
@@ -139,7 +145,10 @@ while [ $n -lt "$RUNS" ]; do
   # The invite for J comes out of this daemon while it is still up -- `invite` talks to a running
   # one -- and after E is sampled, so that issuing it cannot move E's own figures.
   INVJ=$("$NODE" invite --user "j$n" --home "$W/a" 2>/dev/null | grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" | head -1)
+  # Asserted, not hoped for: a link survives in node.json and Daemon.onConnected reopens it, so a
+  # close that quietly failed would make the next run's C state an E and the C -> E delta vanish.
   "$NODE" close demo --home "$W/a" > /dev/null 2>&1 || true
+  "$NODE" ls --home "$W/a" 2>/dev/null | grep -q "demo" && die "the link did not close; C would be an E next run"
   kill -TERM "$e" 2>/dev/null || true; naps 1
 
   # J: a node that joins and opens within one daemon's life -- measure.sh's shape. A new home and a

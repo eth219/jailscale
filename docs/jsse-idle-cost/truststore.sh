@@ -22,7 +22,9 @@
 #   PKCS12 file into the heap at run time, where the shipped node has the anchors in its image heap
 #   already, mapped from the binary and mostly clean.
 #
-# Both were believed before this script existed. The answer is +0.8 MB.
+# Both were believed before this script existed. The answer this script measures is +0.55 MB; a
+# second build against a 119-anchor store, sampled with a link open, read +0.81, so the honest range
+# is half a megabyte to eight tenths.
 #
 # Usage: ./native.sh -DskipTests && docs/jsse-idle-cost/truststore.sh
 #   RUNS=5       repeats per state; the spread is under 0.1 MB
@@ -33,6 +35,10 @@ HUB=$R/hub/target/jailhub
 CERT=$R/hub/src/test/resources/tls/hub-test.crt
 KEY=$R/hub/src/test/resources/tls/hub-test.key
 PORT=${PORT:-19943}; METRICS_PORT=$((PORT + 139)); RUNS=${RUNS:-5}; SETTLE=${SETTLE:-8}
+# The daemon's first update check fires 60 to 300 s after start (Daemon.updateLoop) and goes to
+# api.github.com over the default trust manager -- which is the very thing being priced here, built
+# by something other than the hub connection. A long settle would put it inside the measurement.
+[ "$SETTLE" -lt 55 ] || { echo "SETTLE must stay under 55s: see the note above" >&2; exit 1; }
 W=/tmp/jsse-truststore.$$
 [ -x "$HUB" ] || { echo "build first: ./native.sh -DskipTests" >&2; exit 1; }
 mkdir -p "$W/hub"
@@ -87,11 +93,17 @@ measure() {
   while [ $i -lt 250 ]; do grep -q "connected to hub" "$W/$1.out" 2>/dev/null && { ok=yes; break; }; i=$((i + 1)); naps 0.1; done
   [ "$ok" = yes ] || { tail -3 "$W/$1.out" >&2; die "$1: never connected"; }
   naps "$SETTLE"
-  rss=$(ps -o rss= -p "$p" | tr -d ' ') || die "$1: the daemon is gone"
+  # `ps | tr` reports tr's status, so this is tested for emptiness rather than for exit code -- a
+  # daemon that died during SETTLE would otherwise be recorded as a blank field and averaged as 0 MB.
+  rss=$(ps -o rss= -p "$p" | tr -d ' ')
+  [ -n "$rss" ] || die "$1: the daemon is gone"
   vmmap "$p" > "$W/$1.vmmap" 2>&1 || true
   wr=$(awk -F'written=' '/^Writable regions:/{split($2,a,"K"); print a[1]; exit}' "$W/$1.vmmap")
+  # Not defaulted to 0: "written 0 KB" is this script's own headline conclusion, so a vmmap that
+  # failed to parse would be indistinguishable from the result it is here to establish.
+  [ -n "$wr" ] || die "$1: vmmap gave no writable-regions figure"
   kill -TERM "$p" 2>/dev/null || true; naps 1
-  printf '%s\t%s\t%s\n' "$1" "$rss" "${wr:-0}" >> "$W/t.tsv"
+  printf '%s\t%s\t%s\n' "$1" "$rss" "$wr" >> "$W/t.tsv"
 }
 
 start_hub; naps 1.5
@@ -128,4 +140,4 @@ echo
 awk -F'\t' '{ n[$1]++; r[$1]+=$2/1024; w[$1]+=$3 }
   END { for (s in n) { r[s]/=n[s]; w[s]/=n[s] }
     printf "  what the shipped trust config costs over the gate'"'"'s   %+.2f MB  (written %+.0f KB)\n", r["emb"]-r["pin"], w["emb"]-w["pin"]
-    printf "  what dropping certificate validation entirely buys   %+.2f MB  (written %+.0f KB)\n", r["ins"]-r["emb"], w["ins"]-w["emb"] }' "$W/t.tsv"
+    printf "  what dropping certificate validation entirely buys   %+.2f MB  (written %+.0f KB)\n", r["emb"]-r["ins"], w["emb"]-w["ins"] }' "$W/t.tsv"

@@ -284,7 +284,7 @@ HUBPID=$!
 sleep 1.5
 INV=$(grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" "$W/hub.log" | head -1)
 # --ca-file pins the test certificate, which is what a loopback hub needs and is also, deliberately,
-# not what a real node does (see the header: it is worth 2.5 MB of the idle figure below).
+# not what a real node does (see the header: it is worth about 0.55 MB of the idle figure below).
 "$NODE" up --invite "$INV" --hub-addr 127.0.0.1 --user alice --ca-file "$CERT" --home "$W/a" > /dev/null
 INV2=$("$NODE" invite --user bob --home "$W/a" | grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" | head -1)
 "$NODE" up --invite "$INV2" --hub-addr 127.0.0.1 --ca-file "$CERT" --home "$W/b" > /dev/null
