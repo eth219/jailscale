@@ -114,6 +114,13 @@ jobs:
     needs: native
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/')
+    # Job-scoped, and contents: write is restated because a job-level block replaces the top-level
+    # one rather than adding to it. The other two are what an attestation needs: an OIDC token to
+    # prove to Sigstore which workflow is asking, and the right to record the result.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v8
         with: { path: dist, merge-multiple: true }
@@ -122,7 +129,37 @@ jobs:
           cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
           cat dist/BUILDINFO-*.txt > dist/BUILDINFO.txt && rm dist/BUILDINFO-*.txt
           cat dist/BUILDINFO.txt
+      # Provenance for every file in SHA256SUMS.txt, which is the whole release: signed by Sigstore
+      # against this workflow's own identity, so `gh attestation verify jailscale-linux-amd64 --repo
+      # eth219/jailscale` says which workflow of which repository built it, from which commit.
+      #
+      # This is not the signature `update --download` checks, and it is not a second opinion on it
+      # (§9.4). It answers "what built this", where the release key answers "who approved this" --
+      # and only the second survives an account that has been taken over, because whoever can push a
+      # tag can also make this workflow run and produce a perfectly valid attestation. What it is
+      # load-bearing for is the signing step, which requires every asset to be attested as built
+      # from the commit the maintainer's own clone says the tag names.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dist/SHA256SUMS.txt
+
+      # A draft, on purpose (§9.4). The release is signed after this, from a machine the pipeline
+      # cannot reach -- `tools/sign-release.sh vX.Y.Z` re-hashes every asset, writes and signs
+      # RELEASE.txt (the tag and the digest of SHA256SUMS.txt), and publishes. The signed manifest
+      # is written by the person, not here: a release this job could sign on its own would be worth
+      # what the checksums it also writes are worth. A release visible before its signature is up is
+      # one that `jailscale update --download` refuses and that `update` has already announced.
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
+          draft: true
           generate_release_notes: true
+      - name: Say what is left to do
+        run: |
+          {
+            echo "### ${GITHUB_REF_NAME} is a draft"
+            echo
+            echo 'Sign and publish it from a machine that is not this one:'
+            echo
+            echo "    tools/sign-release.sh ${GITHUB_REF_NAME}"
+          } >> "$GITHUB_STEP_SUMMARY"

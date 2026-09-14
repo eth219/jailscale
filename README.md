@@ -94,6 +94,55 @@ on the way down leaves nothing in `SHA256SUMS.txt` to match, and
 `--ignore-missing` then reports success for having verified nothing.
 `jailhub-$target` is the same download for the hub.
 
+Once there is a `jailscale` on the machine, it can do the above for you.
+`jailscale update` says whether a newer release is out; `jailscale update
+--download` picks the right target, verifies `SHA256SUMS.txt` against the
+Ed25519 signature published beside it, verifies the binary against that file,
+and prints the one command that installs it:
+
+```sh
+jailscale update --download
+# jailscale 0.2.0 is out; this is 0.1.3. https://github.com/eth219/jailscale/releases/latest
+# downloaded  jailscale-darwin-arm64  25.5 MiB
+# verified    sha256 3f2a...
+#             against a RELEASE.txt for v0.2.0 signed by release key fa85db4931653cbb
+#
+# install it with:
+#   sudo install -m 755 /var/folders/.../jailscale-darwin-arm64 /usr/local/bin/jailscale
+```
+
+It stops there on purpose: nothing here replaces a binary you are running
+([ARCHITECTURE.md §9.4](docs/ARCHITECTURE.md)). The signing key lives in Cloud
+KMS and is used from the maintainer's own machine after the build, never from
+the release workflow; its public half is compiled into the binary, so a build
+that carries no key refuses to download rather than trusting the checksum file
+alone.
+
+What is signed is `RELEASE.txt` — the release's tag and the SHA-256 of
+`SHA256SUMS.txt` — rather than the checksum list on its own, which would say
+nothing about *which* release it belongs to. To check a release by hand:
+
+```sh
+curl -fsSL -O "$base/RELEASE.txt" -O "$base/RELEASE.txt.sig" -O "$base/SHA256SUMS.txt"
+openssl pkeyutl -verify -pubin -inkey release-key.pem -rawin \
+  -in RELEASE.txt -sigfile RELEASE.txt.sig    # the tag in it must be the one you downloaded
+shasum -a 256 SHA256SUMS.txt                  # must equal the sha256sums: line in RELEASE.txt
+shasum -a 256 --ignore-missing -c SHA256SUMS.txt
+```
+
+The public key is in
+[`ReleaseKey.java`](node/src/main/java/io/jailscale/node/ReleaseKey.java), base64
+of the DER SubjectPublicKeyInfo; `base64 -d > release-key.der` and `openssl pkey
+-pubin -inform DER -in release-key.der -out release-key.pem` turns it into the
+file above.
+
+Separately, every released file carries a build attestation, which says which
+workflow built it rather than who approved it:
+
+```sh
+gh attestation verify jailscale-darwin-arm64 --repo eth219/jailscale
+```
+
 The binaries are not code-signed. That does not affect a `curl` download, but
 macOS quarantines what a browser downloaded — `xattr -d com.apple.quarantine
 jailscale` — and Windows SmartScreen warns for the same reason.
@@ -324,8 +373,13 @@ What a compromised hub can and cannot do is written out in
   replication. Losing the host means downtime. Replacing the binary without
   dropping nodes works with `serve --takeover`, but not under a systemd unit,
   where an upgrade is a restart.
-- Upgrading is manual. `jailscale update` says when a release is out; nothing
-  installs it for you.
+- Upgrading stops one step short of automatic. `jailscale update --download`
+  fetches a release and checks it against the signature; you run the one
+  `install` command it prints. A binary built before the signing key existed
+  carries no key and refuses to download at all. Which release is *current*
+  comes from an unsigned index, so publishing can withhold an upgrade from a
+  node that is behind, though never move one backwards
+  ([ARCHITECTURE.md §15](docs/ARCHITECTURE.md)).
 - `service install` is verified on macOS only. Linux and Windows are untested
   outside CI.
 - Idle memory is 25 MB against the 20 MB originally aimed at (34.4 MB as Linux

@@ -100,6 +100,13 @@ class HttpTest {
         assertEquals("Wikipedia in\r\n\r\nchunks.", chunked.bodyText());
         assertThrows(HttpException.class, () -> Http.readResponse(in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"), 1024));
         assertThrows(HttpException.class, () -> Http.readResponse(in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1000\r\n"), 16));
+        // A chunk size that makes the cap arithmetic overflow, which only happens once something
+        // has already been counted -- the case above starts at zero and would pass either way.
+        // Unchecked, this copies until the peer stops sending, with maxBody meaning nothing.
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n7fffffffffffffff\r\n" + "x".repeat(100)), 1024));
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\nffffffffffffffff\r\n" + "x".repeat(100)), 1024));
 
         // HEAD: headers only, even with a Content-Length.
         HttpResponse head = Http.readResponse(in("HTTP/1.1 200 OK\r\nContent-Length: 99\r\nReplay-Nonce: n1\r\n\r\n"), 1024, true);

@@ -31,7 +31,8 @@ public final class Main {
         jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
         jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
-        jailscale update                                     say whether a newer release is out; never installs it
+        jailscale update                                     say whether a newer release is out
+        jailscale update --download [--dir DIR]               fetch that release and check its signature; installing it stays yours
         jailscale version
         """;
 
@@ -43,7 +44,7 @@ public final class Main {
      * fresh link every run with or without it.
      */
     static final String[] FLAGS = {"debug", "self", "tls-insecure", "help", "gate", "off", "tcp", "udp",
-        "acme-staging", "proxy-protocol"};
+        "acme-staging", "proxy-protocol", "download"};
 
     private Main() {}
 
@@ -73,15 +74,7 @@ public final class Main {
         try {
             switch (cmd) {
                 case "version" -> System.out.println("jailscale " + Version.string());
-                case "update" -> {
-                    // In this process rather than through the daemon: a node that is down is exactly
-                    // when someone asks, and the check needs nothing the daemon holds.
-                    Updates.Result r = Updates.check(Version.string());
-                    if (r.error() != null) {
-                        throw new IOException(r.line()); // like every other command: stderr, exit 1
-                    }
-                    System.out.println(r.line());
-                }
+                case "update" -> update(a);
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
@@ -134,6 +127,38 @@ public final class Main {
             System.err.println("error: " + e.getMessage());
             System.exit(1);
         }
+    }
+
+    /**
+     * {@code update [--download]}. In this process rather than through the daemon: a node that is
+     * down is exactly when someone asks, and the check needs nothing the daemon holds.
+     *
+     * <p>{@code --download} stops at a verified file on disk and the command that installs it
+     * (ARCHITECTURE.md §9.4). What it removes is the part of installing by hand that goes wrong
+     * quietly -- picking the right target, and checking a checksum in a way that can report success
+     * for having checked nothing. What it deliberately leaves is the step that needs a privilege
+     * this process does not have.
+     */
+    private static void update(Args a) throws Exception {
+        Updates.Result r = Updates.check(Version.string());
+        if (r.error() != null) {
+            throw new IOException(r.line()); // like every other command: stderr, exit 1
+        }
+        System.out.println(r.line());
+        if (!a.flag("download") || !r.newer()) {
+            return; // nothing to fetch: there is no newer release, or nobody asked for it
+        }
+        Path dir = a.has("dir") ? Path.of(a.get("dir")) : Files.createTempDirectory("jailscale-update");
+        Updates.Downloaded d = Updates.fetch(r, dir);
+        System.out.printf("downloaded  %s  %.1f MiB%n", d.asset(), d.bytes() / (1024.0 * 1024.0));
+        System.out.println("verified    sha256 " + d.sha256());
+        System.out.println("            against a " + Updates.MANIFEST + " for " + r.tag()
+            + " signed by release key " + d.key());
+        System.out.println();
+        System.out.println("install it with:");
+        System.out.println("  " + Updates.installCommand(d.file(), Updates.self(), Updates.windows()));
+        System.out.println();
+        System.out.println("a daemon that is already running keeps the binary it started with until it restarts.");
     }
 
     private static void runDaemon(NodeConfig cfg) throws Exception {

@@ -999,17 +999,112 @@ are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `n
 what the OS already has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with
 no service wrapper.
 
-**`update` reports; it does not install.** It reads the published release index and prints the
-version and where to get it, and the daemon does the same once a day so `status` carries the answer
-without anyone asking. Replacing the running binary is not implemented and is not a small thing:
-`/usr/local/bin` is root-owned while the daemon deliberately runs without root, Windows cannot
-replace a running `.exe` in place, a package manager or a container image must not find a second
-owner of its file, and a downloaded binary is only worth as much as the signature checked over it —
-a checksum published beside it by the same account proves corruption did not happen, not that the
-publisher was not compromised. Until that is answered, saying "0.2.0 is out" is the honest amount to
-do. The check runs in the CLI process, so it answers while the daemon is down, and a check that could
-not be made is an error like any other command's: the reason goes to stderr and the exit status is 1,
-so a script can tell "up to date" from "could not tell".
+**`update` reports; `update --download` fetches; neither installs.** The plain form reads the
+published release index and prints the version and where to get it, and the daemon does the same
+once a day so `status` carries the answer without anyone asking. The check runs in the CLI process,
+so it answers while the daemon is down, and a check that could not be made is an error like any
+other command's: the reason goes to stderr and the exit status is 1, so a script can tell "up to
+date" from "could not tell".
+
+**What `--download` adds is the checking, not the installing.** It works out which asset this build
+should run — target from `os.name` and `os.arch`, or `jailscale.jar` when this is not a native image
+— and then walks a chain of three links, in this order, every one of them fatal:
+
+1. an Ed25519 signature over **`RELEASE.txt`**, against a compiled-in key;
+2. the `sha256sums:` digest in that file against the `SHA256SUMS.txt` actually fetched;
+3. that list's hash for exactly the asset, streamed to disk and hashed as it arrives.
+
+A hash that does not match deletes the file before it reports why, so there is never a half-checked
+binary next to instructions for installing it. The parts of doing this by hand that go wrong quietly
+are exactly the parts it removes: picking the right target, and `sha256sum --ignore-missing -c`,
+which exits 0 for having verified nothing when the file has been renamed — so a name absent from the
+list is an error here rather than a download nobody compared with anything.
+
+**`RELEASE.txt` exists because a checksum file does not say which release it is.** It carries a
+format line, the `tag:`, and the digest of `SHA256SUMS.txt`, and it is the only thing signed. Sign
+the checksum list on its own and the signature is valid for every release, past and future, because
+nothing in those bytes distinguishes one from another — so whoever can publish a release could
+republish an old, genuinely signed, vulnerable one under a higher version number, and `--download`
+would call it verified. The tag inside the signed bytes is what closes that, and it is also what
+makes the comparison in `check()` mean anything: until it is verified, the version this announced
+came from an unauthenticated `tag_name`. `SHA256SUMS.txt` is left byte for byte as the workflow
+wrote it, so `sha256sum -c` still works on it; a `tag:` line inside it would have broken every
+reader of the format. Unknown fields in `RELEASE.txt` are ignored and an unknown format line is
+refused, which is §5.4's additive rule applied to a file instead of the wire.
+
+**What the maintainer checks before signing, and why it is not the release itself.** The signing
+step downloads the draft, and everything in it — the binaries, `SHA256SUMS.txt`, `BUILDINFO.txt` —
+is an asset that whoever can write to that release can write. Checking those against each other
+proves only that they agree, so an attacker who swaps a binary and the checksum line beside it
+passes every such check and the signature goes on their bytes: the guarantee would degrade from
+"the pipeline cannot make this signature" to "the maintainer has to be tricked once, during a
+window only write-holders can see". The anchor outside the release is the maintainer's own clone.
+`git fetch --tags` will not move a tag that is already present without `--force`, so the commit a
+tag names locally is not something release-write can rewrite, and `tools/sign-release.sh` requires
+every asset to carry build provenance for *that* commit and that workflow (`gh attestation verify
+--source-digest --source-ref`) before it will sign. This is the same Sigstore attestation the
+paragraph below says the client must not trust, used where it does work: the client has no anchor
+to compare an attested commit against, and the maintainer does. What it leaves is source review —
+the attack becomes "get malicious code into the commit the maintainer tagged", which is in the
+history rather than invisible in a draft.
+
+**A signature the release pipeline cannot make.** A checksum file published by the account that
+published the binaries proves that the download was not corrupted on the way and nothing about who
+produced it: whoever could replace the binary could replace the list beside it. So the release
+workflow leaves a draft, and `tools/sign-release.sh` — run on a machine that is not the pipeline,
+with a key the pipeline cannot reach — downloads every asset, re-hashes it against `SHA256SUMS.txt`,
+checks that the key it is about to sign with is the one the tag compiled in, signs that file and
+publishes. The public half is compiled into the binary, like `LATEST` and for the same reason
+(§11.2). A build that carries no key refuses to download rather than falling back to the checksum
+alone; the check that cannot be made is not quietly skipped.
+
+**The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
+key that has to move: every binary in the field accepts that one and nothing else, so publishing
+under a new key strands all of them and publishing under a key believed compromised is the only
+alternative. Rotation is therefore a two-release move, and it only works if the clients were taught
+the next key before it was used — release N ships accepting `{old, new}` and is still signed with
+old; release N+1 is signed with new, and the binaries already out there accept it. Any key on the
+list can sign, so the list is also the blast radius: a key stays on it only while it is meant to be
+able to sign, and `ReleaseKeyTest` pins the fingerprints so that adding or removing one is a line
+someone wrote on purpose.
+
+**Where the private half lives, and why not in a secret.** In Cloud KMS, called from the
+maintainer's machine. Not as a file there: a file is readable by everything that runs as that user
+between releases, and losing it strands every binary that carries the public half. KMS gives three
+things a file does not — the bytes are never on the machine, every use is in an audit log, so a
+signature nobody asked for is *detectable*, and a key believed compromised can be disabled instead
+of lived with. **Not in a repository secret, and not federated to the workflow.** The tempting
+version of this is a credential in GitHub Actions and a rule that only the maintainer may release;
+it does not hold, because whoever has repository write can edit the workflow, add another one, or
+be a compromised third-party action already running in that job, and the rule about who may release
+is administered by the account being assumed compromised. Signing in CI would also duplicate the
+provenance attestation below while answering none of the question it leaves open. What KMS does not
+fix is a compromised machine at signing time: whoever holds the credentials can ask for a
+signature. That is why signing is one command a person runs and reads the output of, rather than a
+step in a pipeline, and why the script prints the key and the build it is about to vouch for before
+it asks.
+
+**Provenance is a different claim, and it is published too.** The release workflow attests every
+file in `SHA256SUMS.txt` with `actions/attest-build-provenance`, so `gh attestation verify
+jailscale-linux-amd64 --repo eth219/jailscale` answers which workflow of which repository built it
+from which commit. That is Sigstore keyless signing -- the modern default for a CLI release -- and
+it is deliberately *not* what `--download` checks, for the reason that makes it cheap: the identity
+it binds is the workflow's, so an account that has been taken over can push a tag, run the workflow
+and obtain a perfectly valid attestation for a binary of its choosing. It answers "what built
+this"; the release key answers "who approved this", and only the second is a reason to install
+something. Verifying Sigstore in the binary would also mean a Fulcio certificate chain, an identity
+policy over its extensions, a Rekor inclusion proof and a trust root that ages -- a thousand lines
+of security-sensitive code, in a binary with no third-party runtime dependency at all (§1), in
+place of ninety.
+
+**Replacing the running binary is still not implemented**, and the reasons that survive the above
+are the ones about privilege and ownership rather than trust: `/usr/local/bin` is root-owned while
+the daemon deliberately runs without root, Windows cannot overwrite a running `.exe` in place
+(though it can rename it, which is what the printed instructions do), and a package manager or a
+container image must not find a second owner of its file. Those are answerable — the writability of
+the path is most of the test, since a package-managed binary is one this process cannot write — and
+answering them is the next step rather than this one. A daemon already running keeps the binary it
+started with until it restarts, which the output says.
 
 **The URL is compiled in and the hub cannot name it.** The hub already sends its own version in
 `HelloResponse`, and it would be a short step to let it say where the update is; that step hands a
@@ -1818,8 +1913,22 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   and a delay distribution they cannot.
 - **User domains require port 80 on the hub.** The http-01 relay is the only verification path
   implemented; tls-alpn-01 would remove that requirement.
-- **Upgrading is manual.** `jailscale update`, and the daemon's daily check behind `status`, say that
-  a newer release exists and where it is; nothing installs it, for the reasons in §9.4.
+- **Upgrading stops one step short of automatic.** `jailscale update`, and the daemon's daily check
+  behind `status`, say that a newer release exists; `update --download` fetches it and checks it
+  against a signed `RELEASE.txt` (§9.4); the command that puts it in place is printed for the
+  operator to run. A binary released before the signing key existed carries no key and refuses to
+  download at all, so the first release able to verify another is the one after the key was
+  compiled in.
+- **Nothing signed says which release is current.** `update` learns that from `releases/latest`,
+  which is not signed, and `RELEASE.txt` says which release it *is* rather than whether it is the
+  newest. Whoever can publish can therefore keep a node that is behind on an older release -- one
+  genuinely signed, so the whole chain verifies -- for as long as the index keeps naming it. What
+  bounds the damage is that a node is never moved below what it runs (`newer` is strictly above the
+  running version) and the binary installed is always the version announced, so this withholds an
+  upgrade rather than forcing a downgrade, and the same party could equally delete the newer
+  release. Closing it needs signed freshness: a sequence number the client refuses to go backwards
+  on, or an expiring signed pointer to the current release. That is the piece of an update
+  framework this design does not have.
 - **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
   sides at a third of the lifetime remaining. When it does not happen the node logs the name and
   the time left once a day inside the last fortnight, the hub says how long the installed wildcard
