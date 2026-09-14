@@ -83,6 +83,7 @@ git -C "$root" rev-parse -q --verify "$tag^{commit}" >/dev/null \
     || { echo "$root has no $tag; git fetch --tags and try again." >&2; exit 1; }
 previous=$(git -C "$root" describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
 accepted=""
+accepted_from=$previous
 [ -n "$previous" ] && accepted=$(keys_at "$previous")
 if [ -z "$accepted" ]; then
     # Either the first release ever, or the first one after the key existed: the release before this
@@ -90,11 +91,12 @@ if [ -z "$accepted" ]; then
     # compatible with. Fall back to this tag's own list, which at least catches signing with a key
     # no build has ever heard of.
     echo "nothing before $tag carries a key list; checking against $tag's own instead."
+    accepted_from=$tag
     accepted=$(keys_at "$tag")
     [ -n "$accepted" ] || { echo "cannot read a key list from $src at $tag." >&2; exit 1; }
 fi
 if ! printf '%s\n' "$accepted" | grep -qxF "$spki"; then
-    echo "the key you are signing with is not one that ${previous:-$tag} accepts." >&2
+    echo "the key you are signing with is not one that $accepted_from accepts." >&2
     echo "  this key:  $spki" >&2
     echo "  accepted:  $(printf '%s\n' "$accepted" | tr '\n' ' ')" >&2
     echo "Signing anyway would publish a release that every binary in the field refuses to update to." >&2
@@ -141,7 +143,7 @@ echo
 echo "$(grep -c . SHA256SUMS.txt) files, all hashing to what SHA256SUMS.txt says,"
 echo "all attested as built from $want_commit."
 echo "signing with $KMS_KEY version $KMS_VERSION in $KMS_PROJECT, fingerprint $fingerprint"
-echo "which ${previous:-$tag} accepts, so the binaries in the field will too."
+echo "which $accepted_from accepts, so the binaries in the field will too."
 printf 'sign and upload? [y/N] '
 read -r answer
 case "$answer" in
