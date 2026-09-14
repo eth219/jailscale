@@ -107,7 +107,7 @@ final class Visitors {
      * Nothing on the node is idle in that sense: a visitor's TLS state is live for as long as the
      * visitor is, so reclaiming here means choosing a victim among connections that are all making
      * progress. FlowBudget's argument against refusing still stands and is the cost of this: an
-     * attacker who holds {@code MAX_IN_FLIGHT} connections open keeps everyone else out. What that
+     * attacker who holds the bound's worth of connections open keeps everyone else out. What that
      * is measured against is not a healthy node, it is the node as it behaves today -- at a
      * thousand stalled readers it exhausts its heap, and the OutOfMemoryError lands on whichever
      * thread allocates next, which in the measured runs took `mux-reader` and `mux-writer` with it
@@ -115,10 +115,17 @@ final class Visitors {
      * costs that visitor; not refusing it costs all of them, and the hub caps a name at
      * {@code SniRouter.MAX_PER_NAME} = 1,024 by the same kind of reasoning.
      */
-    static final int MAX_IN_FLIGHT = ceilingFor(Runtime.getRuntime().maxMemory());
+    static int defaultCeiling() {
+        return ceilingFor(Runtime.getRuntime().maxMemory());
+    }
 
     /**
-     * This instance's bound. Normally {@link #MAX_IN_FLIGHT}; settable so a test can reach the
+     * This instance's bound, and the ONLY bound anything inside this class may read. It was a
+     * static field as well, holding the derived default, and the refusal log picked that one up
+     * while the check used this one: a node running to a bound of 3 told its operator it was "at
+     * the visitor ceiling (64800)". Nothing caught it because nothing reads the log, and a
+     * measurement of something else found it by accident. There is no second number in scope now.
+     * Settable so a test can reach the
      * ceiling without a heap that large, and so a host can say the number itself -- the same escape
      * {@link io.jailscale.proto.mux.FlowBudget#of} offers for the hub's byte budget, which the two
      * bounds should have in common since they are derived from the same place for the same reason.
@@ -140,7 +147,7 @@ final class Visitors {
     }
 
     Visitors(NodeState state) {
-        this(state, MAX_IN_FLIGHT);
+        this(state, defaultCeiling());
     }
 
     Visitors(NodeState state, int maxInFlight) {
@@ -227,7 +234,7 @@ final class Visitors {
     }
 
     /**
-     * Turns away one visitor over {@link #MAX_IN_FLIGHT}. Here rather than after the handshake:
+     * Turns away one visitor over {@link #maxInFlight}. Here rather than after the handshake:
      * what is being conserved is the TLS state, so the visitor has to be refused before there is
      * any. Nothing is sent back but the reset, because saying anything politer would mean
      * completing the handshake that this exists to avoid.
@@ -242,7 +249,7 @@ final class Visitors {
             lastRefusalLog = now;
             LOG.warn("at the visitor ceiling ({}), refusing new visitors; {} refused so far. "
                 + "Raise it with -XX:MaxHeapSize= in JAILSCALE_DAEMON_OPTS (ARCHITECTURE.md §9.3)",
-                MAX_IN_FLIGHT, n);
+                maxInFlight, n);
         }
     }
 
@@ -253,7 +260,7 @@ final class Visitors {
         return inFlight.get();
     }
 
-    /** Visitors turned away at {@link #MAX_IN_FLIGHT} since this daemon started. */
+    /** Visitors turned away at {@link #maxInFlight} since this daemon started. */
     long refused() {
         return refused.get();
     }

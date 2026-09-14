@@ -1843,14 +1843,31 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   feature is worth. A Linux node is usually headless and has no `xclip` at all, so there the
   feature is normally inactive whatever `isTerminal()` answers.
 
-- **A node's visitors are first come, first served, so one name can starve the others on it.** The
+- **A node's visitors are first come, first served, so one name can starve the others on it, and
+  whether that is a delay or a blackout is decided by the neighbour's connection lifetime.** The
   bound of §9.3 is per node, and a node may serve up to `MAX_LINKS_PER_NODE` = 20 links; nothing
-  shares the 450 between them. One name that fills the node takes every slot and the other nineteen
-  go dark, refused at the hub with the reason nobody sees. This is not new with the hub-side
-  admission — it is how the node's own bound behaved from the day it existed, and before that the
-  same load took the whole node down with an `OutOfMemoryError` — but it is now a deliberate
-  first-come rule rather than an accident of where the allocation failed. What would fix it is a
-  share per link, which is a scheduler, and nothing has measured starvation to size one against.
+  shares the 450 between them. Measured in `docs/name-starvation`, one node bounded at 20 with two
+  names on it, the quiet name trying 40 times:
+
+  | the busy name | the quiet name gets |
+  |---|---|
+  | holds its connections (SSE, websockets, a large download) | **0 of 40, three runs of three** |
+  | answers and releases (~1,500 requests in 5 s) | 34, 39, 35 of 40, at 4–27 ms |
+
+  So a busy neighbour is survivable and a neighbour that *holds* connections is not: every other
+  name on that node is dark for as long as it stays saturated, by ordinary product behaviour rather
+  than by abuse. This is not new with the hub-side admission — it is how the node's own bound
+  behaved from the day it existed, and before that the same load took the whole node down with an
+  `OutOfMemoryError` — but it is now a deliberate first-come rule rather than an accident of where
+  the allocation failed.
+
+  **Nothing is built, and two of the three ways to fix it are wrong.** Static partitioning
+  (`bound / links`) idles capacity in the common case, where one name is busy and the rest are not:
+  450 split three ways stops the busy name at 150 with 300 free. Eviction has no defensible victim —
+  §5.3's budget can point at a stream that has consumed nothing for two seconds, where every visitor
+  on a node is making progress. What is left is holding back a few slots per name, paid for only
+  while a node is saturated, which is already a degraded state. The measurement above does not size
+  it: the fraction reserved is what matters, and 2 of 20 is not 2 of 450.
 
 - **At its bound a node refuses well-behaved visitors and abusive ones alike**, because the hub
   cannot tell them apart before admitting them. That is the cost `FlowBudget` names in its argument
