@@ -56,7 +56,10 @@ RUNS=${RUNS:-3}; SETTLE=${SETTLE:-8}
 # State A's whole definition is that no SSLContext is ever built, and the daemon's first update check
 # fires 60 to 300 s after start (Daemon.updateLoop), reaching api.github.com over the default trust
 # manager. A settle long enough to contain it would make A a measurement of something else.
-[ "$SETTLE" -lt 55 ] || { echo "SETTLE must stay under 55s: see the note above" >&2; exit 1; }
+# Checked against elapsed time at each sample rather than against SETTLE alone: sampling happens at
+# await + SETTLE, so a SETTLE inside the limit can still be sampled outside it. Also SETTLE may be
+# fractional, which an integer test would reject with a confusing message.
+UPDATE_CHECK_FLOOR=55
 W=/tmp/jsse-decompose.$$
 [ -x "$HUB" ] && [ -x "$NODE" ] || { echo "build first: ./native.sh -DskipTests" >&2; exit 1; }
 command -v vmmap > /dev/null || { echo "needs vmmap (macOS)" >&2; exit 1; }
@@ -92,11 +95,21 @@ await() {
   die "waited ${3}s for '$2' in $(basename "$1") and it never came"
 }
 
-sample() { # sample <label> <pid>
+sample() { # sample <label> <pid> <epoch the daemon started>
+  up=$(( $(date +%s) - $3 ))
+  [ "$up" -lt "$UPDATE_CHECK_FLOOR" ] \
+    || die "$1 sampled ${up}s after start; the update check can fire from ${UPDATE_CHECK_FLOOR}s (lower SETTLE)"
   rss=$(ps -o rss= -p "$2" | tr -d ' ') || die "$1: the daemon is gone"
   [ -n "$rss" ] || die "$1: the daemon is gone"
   vmmap "$2" > "$W/$1.vmmap" 2>&1 || true
-  wr=$(awk -F'written=' '/^Writable regions:/{split($2,a,"K"); print a[1]; exit}' "$W/$1.vmmap")
+  # Unit-aware for the same reason the code column below is: vmmap switches these to M past
+  # 10240K, and splitting on "K" would take "written=10.5M(8%) resident=6064" as the figure, pass
+  # the -n guard and print 10 KB for 10,752.
+  wr=$(awk '/^Writable regions:/ {
+        if (match($0, /written=[0-9.]+[KMG]?/)) {
+          v = substr($0, RSTART + 8, RLENGTH - 8); u = substr(v, length(v), 1); n = v + 0
+          if (u == "M") n *= 1024; else if (u == "G") n *= 1048576
+          printf "%d", n; exit } }' "$W/$1.vmmap")
   tx=$(awk '/^__TEXT .*target\/jailscale$/{ v = $5; u = substr(v, length(v), 1); n = v + 0
         if (u == "M") n *= 1024; else if (u == "G") n *= 1048576
         printf "%d", n; exit }' "$W/$1.vmmap")
@@ -107,10 +120,11 @@ sample() { # sample <label> <pid>
 # measure <label> <home> <pattern|-> -- daemon in the foreground, so this owns the pid
 measure() {
   rm -f "$W/$1.out"
+  t0=$(date +%s)
   "$NODE" daemon --home "$2" > "$W/$1.out" 2>&1 & p=$!
   [ "$3" = "-" ] || await "$W/$1.out" "$3" 20
   naps "$SETTLE"
-  sample "$1" "$p"
+  sample "$1" "$p" "$t0"
   kill -TERM "$p" 2>/dev/null || true
   naps 1
 }
@@ -137,29 +151,34 @@ while [ $n -lt "$RUNS" ]; do
 
   # E: the restarted daemon, with a link. Asserted through `ls`, not through open's exit code.
   rm -f "$W/E.out"
+  eT0=$(date +%s)
   "$NODE" daemon --home "$W/a" > "$W/E.out" 2>&1 & e=$!
   await "$W/E.out" "connected to hub" 20
   "$NODE" open "$APP_PORT" --name demo --home "$W/a" > /dev/null 2>&1 || true
   "$NODE" ls --home "$W/a" 2>/dev/null | grep -q "demo.*open" || die "E: the link did not open"
-  naps "$SETTLE"; sample E "$e"
+  naps "$SETTLE"; sample E "$e" "$eT0"
   # The invite for J comes out of this daemon while it is still up -- `invite` talks to a running
   # one -- and after E is sampled, so that issuing it cannot move E's own figures.
   INVJ=$("$NODE" invite --user "j$n" --home "$W/a" 2>/dev/null | grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" | head -1)
   # Asserted, not hoped for: a link survives in node.json and Daemon.onConnected reopens it, so a
   # close that quietly failed would make the next run's C state an E and the C -> E delta vanish.
   "$NODE" close demo --home "$W/a" > /dev/null 2>&1 || true
-  "$NODE" ls --home "$W/a" 2>/dev/null | grep -q "demo" && die "the link did not close; C would be an E next run"
+  # Fail-closed: `ls` must succeed AND not name the link. A dead daemon prints nothing to stdout, so
+  # testing only for the absence of "demo" would pass in the one case this is here to catch.
+  left=$("$NODE" ls --home "$W/a" 2>/dev/null) || die "ls failed after close; cannot tell whether the link went"
+  case $left in *demo*) die "the link did not close; C would be an E next run" ;; esac
   kill -TERM "$e" 2>/dev/null || true; naps 1
 
   # J: a node that joins and opens within one daemon's life -- measure.sh's shape. A new home and a
   # new invite each run, because a join is not repeatable.
   [ -n "$INVJ" ] || die "J: no invite"
+  jT0=$(date +%s)
   "$NODE" up --invite "$INVJ" --hub-addr 127.0.0.1 --user "j$n" --ca-file "$CERT" --home "$W/j$n" > /dev/null
   "$NODE" open "$APP_PORT" --name "demo$n" --home "$W/j$n" > /dev/null 2>&1 || true
   "$NODE" ls --home "$W/j$n" 2>/dev/null | grep -q "demo$n.*open" || die "J: the link did not open"
   j=$(pgrep -f "daemon --home $W/j$n" | head -1)
   [ -n "$j" ] || die "J: no daemon"
-  naps "$SETTLE"; sample J "$j"; kill -TERM "$j" 2>/dev/null || true; naps 1
+  naps "$SETTLE"; sample J "$j" "$jT0"; kill -TERM "$j" 2>/dev/null || true; naps 1
 
   stop_hub
   measure Bpin "$W/a"     "Connection refused"

@@ -38,7 +38,10 @@ PORT=${PORT:-19943}; METRICS_PORT=$((PORT + 139)); RUNS=${RUNS:-5}; SETTLE=${SET
 # The daemon's first update check fires 60 to 300 s after start (Daemon.updateLoop) and goes to
 # api.github.com over the default trust manager -- which is the very thing being priced here, built
 # by something other than the hub connection. A long settle would put it inside the measurement.
-[ "$SETTLE" -lt 55 ] || { echo "SETTLE must stay under 55s: see the note above" >&2; exit 1; }
+# Checked against elapsed time at the sample rather than against SETTLE alone: sampling happens at
+# await + SETTLE, so a SETTLE inside the limit can still be sampled outside it. Also SETTLE may be
+# fractional, which an integer test would reject with a confusing message.
+UPDATE_CHECK_FLOOR=55
 W=/tmp/jsse-truststore.$$
 [ -x "$HUB" ] || { echo "build first: ./native.sh -DskipTests" >&2; exit 1; }
 mkdir -p "$W/hub"
@@ -88,17 +91,28 @@ start_hub() { "$HUB" serve --base-url "https://hub.test:$PORT" --listen "127.0.0
 # measurement of nothing.
 measure() {
   rm -f "$W/$1.out"
+  t0=$(date +%s)
   "$NODE" daemon --home "$2" > "$W/$1.out" 2>&1 & p=$!
   i=0; ok=no
   while [ $i -lt 250 ]; do grep -q "connected to hub" "$W/$1.out" 2>/dev/null && { ok=yes; break; }; i=$((i + 1)); naps 0.1; done
   [ "$ok" = yes ] || { tail -3 "$W/$1.out" >&2; die "$1: never connected"; }
   naps "$SETTLE"
+  up=$(( $(date +%s) - t0 ))
+  [ "$up" -lt "$UPDATE_CHECK_FLOOR" ] \
+    || die "$1 sampled ${up}s after start; the update check can fire from ${UPDATE_CHECK_FLOOR}s (lower SETTLE)"
   # `ps | tr` reports tr's status, so this is tested for emptiness rather than for exit code -- a
   # daemon that died during SETTLE would otherwise be recorded as a blank field and averaged as 0 MB.
   rss=$(ps -o rss= -p "$p" | tr -d ' ')
   [ -n "$rss" ] || die "$1: the daemon is gone"
   vmmap "$p" > "$W/$1.vmmap" 2>&1 || true
-  wr=$(awk -F'written=' '/^Writable regions:/{split($2,a,"K"); print a[1]; exit}' "$W/$1.vmmap")
+  # Unit-aware: vmmap switches this to M past 10240K, and splitting on "K" would take
+  # "written=10.5M(8%) resident=6064" as the figure, pass the -n guard beneath and print 10 KB for
+  # 10,752 -- into the one column this script's conclusion rests on.
+  wr=$(awk '/^Writable regions:/ {
+        if (match($0, /written=[0-9.]+[KMG]?/)) {
+          v = substr($0, RSTART + 8, RLENGTH - 8); u = substr(v, length(v), 1); n = v + 0
+          if (u == "M") n *= 1024; else if (u == "G") n *= 1048576
+          printf "%d", n; exit } }' "$W/$1.vmmap")
   # Not defaulted to 0: "written 0 KB" is this script's own headline conclusion, so a vmmap that
   # failed to parse would be indistinguishable from the result it is here to establish.
   [ -n "$wr" ] || die "$1: vmmap gave no writable-regions figure"
