@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jailscale demo — what does this link cost?</title>
+<style>
+  :root { color-scheme: light; }
+  .viz-root {
+    --surface-1:      #fcfcfb;
+    --plane:          #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --muted:          #898781;
+    --grid:           #e1e0d9;
+    --axis:           #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --series-3:       #1baf7a;
+    --series-4:       #eda100;
+    --series-5:       #e87ba4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --plane:          #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted:          #898781;
+      --grid:           #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --series-3:       #199e70;
+      --series-4:       #c98500;
+      --series-5:       #d55181;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --plane:          #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted:          #898781;
+    --grid:           #2c2c2a;
+    --axis:           #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --series-3:       #199e70;
+    --series-4:       #c98500;
+    --series-5:       #d55181;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--plane);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 72px; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 28px; max-width: 62ch; line-height: 1.55; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; color: var(--text-primary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 13px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--axis); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+  .card .note { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 18px; line-height: 1.5; max-width: 68ch; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+
+  .hero { display: flex; gap: 36px; flex-wrap: wrap; align-items: flex-end; }
+  .hero .figure { font-size: 54px; line-height: 1; font-weight: 600; letter-spacing: -0.03em; }
+  .hero .figure .unit { font-size: 20px; font-weight: 500; color: var(--text-secondary); margin-left: 4px; letter-spacing: 0; }
+  .hero .label { font-size: 12.5px; color: var(--text-secondary); margin-top: 8px; max-width: 34ch; line-height: 1.45; }
+  .tiles { display: flex; gap: 28px; flex-wrap: wrap; }
+  .tile .v { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .tile .v .unit { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-left: 3px; letter-spacing: 0; }
+  .tile .k { font-size: 11.5px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
+  .legend .item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-secondary); }
+  .legend .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .legend .n { color: var(--text-primary); font-weight: 500; }
+
+  .plot { position: relative; }
+  svg { display: block; width: 100%; height: auto; }
+  .tip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity 90ms;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 10px; font-size: 12px; color: var(--text-primary);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap; z-index: 4;
+  }
+  .tip .t { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+  .tip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  details { margin-top: 16px; }
+  summary { font-size: 12.5px; color: var(--text-secondary); cursor: pointer; }
+  table { border-collapse: collapse; font-size: 12.5px; margin-top: 10px; }
+  th, td { text-align: right; padding: 4px 14px 4px 0; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--grid); }
+
+  .hint { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
+  .facts { font-size: 13px; line-height: 1.65; color: var(--text-secondary); max-width: 72ch; }
+  .facts li { margin-bottom: 9px; }
+  .facts strong { color: var(--text-primary); font-weight: 600; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+  a { color: var(--series-1); }
+</style>
+</head>
+<body class="viz-root">
+<div class="wrap">
+
+  <header>
+    <h1>jailscale demo</h1>
+    <span class="spacer"></span>
+    <button id="theme">Dark / light</button>
+  </header>
+  <p class="sub">
+    This page is served from a local port on someone's machine, through a hub that
+    never sees the plaintext. It times its own traffic and shows where the
+    milliseconds went. Your own network is inside every number here — that is what
+    a visitor actually pays, and it is not what
+    <code>measure.sh</code> measures.
+  </p>
+
+  <div class="card">
+    <div class="hero">
+      <div>
+        <div class="figure"><span id="heroV">—</span><span class="unit">ms</span></div>
+        <div class="label">Median round trip on a connection that is already open: hub → node → app and back.</div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="v"><span id="tP95">—</span><span class="unit">ms</span></div><div class="k">p95 round trip</div></div>
+        <div class="tile"><div class="v"><span id="tTls">—</span><span class="unit">ms</span></div><div class="k">keyless handshake</div></div>
+        <div class="tile"><div class="v"><span id="tTcp">—</span><span class="unit">ms</span></div><div class="k">network floor</div></div>
+        <div class="tile" id="thrTile"><div class="v"><span id="tThr">—</span><span class="unit">MB/s</span></div><div class="k">download</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>What the first byte of this page cost</h2>
+    <p class="note">
+      One visitor arriving, from the browser's own navigation timing. <b>TLS</b> is the
+      part that is mostly jailscale: the hub routes on the SNI alone, opens a stream to
+      the node, signs one handshake digest bound to that stream, and the node — not the
+      hub — finishes the session. <b>TCP</b> is your round trip to the hub and nothing
+      else: the floor under everything above it.
+    </p>
+    <div class="plot" id="setupPlot">
+      <svg id="setupSvg" viewBox="0 0 720 76" role="img" aria-label="Connection setup breakdown"></svg>
+      <div class="tip" id="setupTip"></div>
+    </div>
+    <div class="legend" id="setupLegend"></div>
+    <div class="hint" id="setupHint" style="margin-top:14px"></div>
+    <details><summary>Table view</summary><div id="setupTable"></div></details>
+  </div>
+
+  <div class="card">
+    <h2>Round trip, request by request</h2>
+    <p class="note">
+      Sequential <code>GET /ping</code> on one open connection, so no handshake and no
+      signature — just the relay copying bytes, twice across your network. The app's own
+      time is stamped in a <code>Server-Timing</code> header and subtracted, so what is
+      plotted is the path, not the app.
+    </p>
+    <div class="row" style="margin-bottom:18px">
+      <button id="runWarm">Run 60 probes</button>
+      <span class="hint" id="warmStatus"></span>
+    </div>
+    <div class="plot" id="warmPlot">
+      <svg id="warmSvg" viewBox="0 0 720 256" role="img" aria-label="Round trip per probe"></svg>
+      <div class="tip" id="warmTip"></div>
+    </div>
+    <details><summary>Table view</summary><div id="warmTable"></div></details>
+  </div>
+
+  <div class="card" id="bulkCard">
+    <h2>Bulk and burst</h2>
+    <p class="note">
+      Two numbers the page can get and should not be trusted far. Download speed is
+      capped by the smallest of your downlink, the hub's uplink and the node's uplink.
+      Requests per second from a browser is capped near six, because HTTP/1.1 gets about
+      six connections per origin — the real rate is in <code>tools/throughput.py</code>.
+    </p>
+    <div class="row">
+      <button id="runThr">Download 8 MB</button>
+      <button id="runBurst">Burst for 3 s</button>
+      <span class="hint" id="bulkStatus"></span>
+    </div>
+    <div class="tiles" style="margin-top:20px">
+      <div class="tile"><div class="v"><span id="bThr">—</span><span class="unit">MB/s</span></div><div class="k">download rate</div></div>
+      <div class="tile"><div class="v"><span id="bSize">—</span></div><div class="k">bytes transferred</div></div>
+      <div class="tile"><div class="v"><span id="bRps">—</span><span class="unit">req/s</span></div><div class="k">burst rate</div></div>
+      <div class="tile"><div class="v"><span id="bConc">—</span></div><div class="k">parallel requests</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>What this measures, and what it does not</h2>
+    <ul class="facts">
+      <li><strong>The network floor is not jailscale's to beat.</strong> The TCP connect
+        time above is your round trip to the hub. Every other number on this page
+        contains it at least once.</li>
+      <li><strong>The handshake is the expensive path, and it is the interesting one.</strong>
+        It is the only part where the hub does cryptographic work per visitor, and the hub
+        signs at most 1,000 handshakes a second for any one node, 2,000 in a burst.</li>
+      <li><strong>A warm round trip is the relay, and the relay is cheap.</strong> On
+        loopback, with the network removed, the pair moves about 38,000 requests a second
+        on connections already open. What you see here is mostly distance.</li>
+      <li><strong>The hub in the path may be very small.</strong> The reference hub runs on
+        a GCP e2-micro — 2 shared vCPU, 1 GB — and that is not the constraint.</li>
+      <li><strong>None of this is a budget number.</strong> <code>measure.sh</code> runs both
+        native binaries on loopback and gates binary size, idle RSS, peak RSS under 1,000
+        held visitors and CLI cold start. A page measured over the internet can only tell
+        you what a visitor felt.</li>
+    </ul>
+  </div>
+
+  <p class="sub" style="margin:0">
+    <a href="https://github.com/eth219/jailscale">github.com/eth219/jailscale</a>
+  </p>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var css = function (n) { return getComputedStyle(document.body).getPropertyValue(n).trim(); };
+  var SVG = "http://www.w3.org/2000/svg";
+
+  function el(name, attrs, text) {
+    var n = document.createElementNS(SVG, name);
+    for (var k in attrs) { if (attrs[k] !== null && attrs[k] !== undefined) n.setAttribute(k, attrs[k]); }
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function clear(n) { while (n.firstChild) { n.removeChild(n.firstChild); } }
+  function ms(v) { return v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2); }
+  function bytes(n) {
+    if (n >= 1048576) { return (n / 1048576).toFixed(1) + " MB"; }
+    if (n >= 1024) { return (n / 1024).toFixed(0) + " KB"; }
+    return n + " B";
+  }
+  function pct(sorted, p) {
+    if (!sorted.length) { return 0; }
+    var i = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+    return sorted[i];
+  }
+  // A rounded rectangle with the rounding chosen per end, so a stacked bar rounds
+  // only where the data actually ends and stays square where it meets a neighbour.
+  function barPath(x, y, w, h, rl, rr) {
+    w = Math.max(w, 0.5);
+    rl = Math.min(rl, w / 2, h / 2); rr = Math.min(rr, w / 2, h / 2);
+    return "M" + (x + rl) + " " + y +
+      "H" + (x + w - rr) + (rr ? "a" + rr + " " + rr + " 0 0 1 " + rr + " " + rr : "") +
+      "V" + (y + h - rr) + (rr ? "a" + rr + " " + rr + " 0 0 1 " + (-rr) + " " + rr : "") +
+      "H" + (x + rl) + (rl ? "a" + rl + " " + rl + " 0 0 1 " + (-rl) + " " + (-rl) : "") +
+      "V" + (y + rl) + (rl ? "a" + rl + " " + rl + " 0 0 1 " + rl + " " + (-rl) : "") + "Z";
+  }
+  function showTip(plot, tip, evt, html) {
+    tip.innerHTML = html;
+    var r = plot.getBoundingClientRect();
+    var x = evt.clientX - r.left, y = evt.clientY - r.top;
+    tip.style.opacity = "1";
+    tip.style.left = Math.min(Math.max(6, x + 12), r.width - tip.offsetWidth - 6) + "px";
+    tip.style.top = Math.max(4, y - tip.offsetHeight - 10) + "px";
+  }
+
+  // ---- measurement -------------------------------------------------------
+  // Resource Timing is the instrument, not the wall clock: it separates the
+  // request from the response, and on a reused connection responseStart minus
+  // requestStart is exactly one trip through the tunnel. The wall clock around
+  // fetch() also counts the browser's own scheduling, which on a busy tab is
+  // larger than the thing being measured.
+  var seq = 0;
+  // The buffer holds 250 entries by default and this page makes more than that in
+  // one burst. Past the limit getEntriesByName returns nothing and every probe
+  // falls back to the wall clock without saying so, which is the failure that
+  // keeps producing numbers. Raised, and emptied after each read.
+  if (performance.setResourceTimingBufferSize) { performance.setResourceTimingBufferSize(600); }
+  function entryFor(url) {
+    var list = performance.getEntriesByName(new URL(url, location.href).href);
+    return list.length ? list[list.length - 1] : null;
+  }
+  function serverDur(e) {
+    var st = e && e.serverTiming;
+    if (!st) { return 0; }
+    for (var i = 0; i < st.length; i++) { if (st[i].name === "app") { return st[i].duration; } }
+    return 0;
+  }
+  function probe() {
+    var url = "/ping?i=" + (++seq);
+    var t0 = performance.now();
+    return fetch(url, { cache: "no-store" }).then(function (r) {
+      return r.arrayBuffer();
+    }).then(function () {
+      var wall = performance.now() - t0;
+      var e = entryFor(url);
+      var app = serverDur(e);
+      var ttfb = (e && e.responseStart > 0) ? (e.responseStart - e.requestStart) : wall;
+      if (performance.clearResourceTimings) { performance.clearResourceTimings(); }
+      return { ttfb: Math.max(0, ttfb - app), wall: wall, app: app };
+    });
+  }
+
+  // ---- the setup breakdown ----------------------------------------------
+  var SETUP_KEYS = [
+    { k: "DNS", c: "--series-1" },
+    { k: "TCP", c: "--series-2" },
+    { k: "TLS", c: "--series-3" },
+    { k: "Server wait", c: "--series-4" },
+    { k: "Download", c: "--series-5" }
+  ];
+  function setupData() {
+    var n = performance.getEntriesByType("navigation")[0];
+    if (!n) { return null; }
+    var tls = n.secureConnectionStart > 0 ? (n.connectEnd - n.secureConnectionStart) : 0;
+    var tcp = n.secureConnectionStart > 0 ? (n.secureConnectionStart - n.connectStart)
+                                          : (n.connectEnd - n.connectStart);
+    return {
+      proto: n.nextHopProtocol || "unknown",
+      reused: (n.connectEnd - n.connectStart) <= 0,
+      v: [
+        Math.max(0, n.domainLookupEnd - n.domainLookupStart),
+        Math.max(0, tcp),
+        Math.max(0, tls),
+        Math.max(0, n.responseStart - n.requestStart),
+        Math.max(0, n.responseEnd - n.responseStart)
+      ]
+    };
+  }
+  function drawSetup(d) {
+    var svg = $("setupSvg"), legend = $("setupLegend"), plot = $("setupPlot"), tip = $("setupTip");
+    clear(svg); legend.innerHTML = "";
+    var W = 720, X0 = 0, X1 = 720, y = 14, h = 30;
+    var total = d.v.reduce(function (a, b) { return a + b; }, 0);
+    if (total <= 0) { total = 1; }
+    var x = X0;
+    var drawn = [];
+    for (var i = 0; i < SETUP_KEYS.length; i++) { if (d.v[i] > 0) { drawn.push(i); } }
+    for (var j = 0; j < drawn.length; j++) {
+      var idx = drawn[j];
+      var w = (d.v[idx] / total) * (X1 - X0);
+      // A 2px gap of surface between segments instead of a stroke around them.
+      var vis = j === drawn.length - 1 ? w : w - 2;
+      var p = el("path", {
+        d: barPath(x, y, vis, h, j === 0 ? 4 : 0, j === drawn.length - 1 ? 4 : 0),
+        fill: css(SETUP_KEYS[idx].c)
+      });
+      (function (idx, v) {
+        p.addEventListener("mousemove", function (ev) {
+          showTip(plot, tip, ev, '<div class="t">' + SETUP_KEYS[idx].k + "</div><b>" + ms(v) +
+            " ms</b> &middot; " + (v / total * 100).toFixed(0) + "%");
+        });
+        p.addEventListener("mouseleave", function () { tip.style.opacity = "0"; });
+      })(idx, d.v[idx]);
+      svg.appendChild(p);
+      // A label only goes inside a segment that can hold it with padding; the
+      // legend below carries every value either way, which is also the relief
+      // the light palette owes for three sub-3:1 fills.
+      if (vis > 62) {
+        svg.appendChild(el("text", {
+          x: x + 8, y: y + h / 2 + 4, fill: "#fcfcfb", "font-size": 11.5, "font-weight": 600
+        }, ms(d.v[idx]) + " ms"));
+      }
+      x += w;
+    }
+    svg.appendChild(el("text", { x: 0, y: 68, fill: css("--muted"), "font-size": 11.5 },
+      "0 ms"));
+    svg.appendChild(el("text", { x: 720, y: 68, fill: css("--muted"), "font-size": 11.5,
+      "text-anchor": "end" }, ms(total) + " ms to the first byte"));
+
+    for (var m = 0; m < SETUP_KEYS.length; m++) {
+      var item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML = '<span class="sw" style="background:' + css(SETUP_KEYS[m].c) + '"></span>' +
+        '<span class="n">' + SETUP_KEYS[m].k + "</span> " + ms(d.v[m]) + " ms";
+      legend.appendChild(item);
+    }
+
+    var rows = '<table><tr><th>Phase</th><th>ms</th><th>share</th></tr>';
+    for (var q = 0; q < SETUP_KEYS.length; q++) {
+      rows += "<tr><td>" + SETUP_KEYS[q].k + "</td><td>" + ms(d.v[q]) + "</td><td>" +
+        (d.v[q] / total * 100).toFixed(1) + "%</td></tr>";
+    }
+    $("setupTable").innerHTML = rows + "<tr><td>Total</td><td>" + ms(total) + "</td><td>100%</td></tr></table>";
+
+    $("tTls").textContent = d.v[2] > 0 ? ms(d.v[2]) : "—";
+    $("tTcp").textContent = d.v[1] > 0 ? ms(d.v[1]) : "—";
+    $("setupHint").innerHTML = d.reused
+      ? "DNS, TCP and TLS measure zero here: either the browser reused a connection it " +
+        "opened earlier, or there is no network to measure — a hub and node on the same " +
+        "machine connect in under the clock's resolution. Over a real link, open the page " +
+        "in a private window to see the setup paid in full."
+      : "Protocol on the wire: <code>" + d.proto + "</code>. The hub never parses the HTTP " +
+        "inside this, and never holds a session key for it.";
+  }
+
+  // ---- the warm series ---------------------------------------------------
+  var warm = [];
+  function drawWarm() {
+    var svg = $("warmSvg"), plot = $("warmPlot"), tip = $("warmTip");
+    clear(svg);
+    var W = 720, H = 256, L = 46, R = 58, T = 26, B = 30;
+    var pw = W - L - R, ph = H - T - B;
+    if (warm.length < 2) {
+      svg.appendChild(el("text", { x: L, y: T + ph / 2, fill: css("--muted"), "font-size": 12.5 },
+        "Run the probes to draw this."));
+      return;
+    }
+    var sorted = warm.slice().sort(function (a, b) { return a - b; });
+    var p50 = pct(sorted, 0.5), p95 = pct(sorted, 0.95);
+    var top = Math.max(pct(sorted, 0.98), p95) * 1.2 || 1;
+    var xOf = function (i) { return L + (warm.length === 1 ? 0 : i / (warm.length - 1) * pw); };
+    var yOf = function (v) { return T + ph - Math.min(v, top) / top * ph; };
+
+    for (var g = 0; g <= 4; g++) {
+      var v = top * g / 4, yy = yOf(v);
+      svg.appendChild(el("line", { x1: L, y1: yy, x2: L + pw, y2: yy,
+        stroke: g === 0 ? css("--axis") : css("--grid"), "stroke-width": 1 }));
+      svg.appendChild(el("text", { x: L - 8, y: yy + 4, fill: css("--muted"), "font-size": 11,
+        "text-anchor": "end" }, ms(v)));
+    }
+    svg.appendChild(el("text", { x: 0, y: T - 10, fill: css("--muted"), "font-size": 11 }, "ms"));
+
+    [[p50, "p50"], [p95, "p95"]].forEach(function (ref) {
+      var yy = yOf(ref[0]);
+      svg.appendChild(el("line", { x1: L, y1: yy, x2: L + pw, y2: yy, stroke: css("--axis"),
+        "stroke-width": 1 }));
+      svg.appendChild(el("text", { x: L + pw + 8, y: yy + 4, fill: css("--text-secondary"),
+        "font-size": 11.5, "font-weight": 600 }, ref[1] + " " + ms(ref[0])));
+    });
+
+    var d = "";
+    for (var i = 0; i < warm.length; i++) { d += (i ? "L" : "M") + xOf(i) + " " + yOf(warm[i]); }
+    svg.appendChild(el("path", { d: d, fill: "none", stroke: css("--series-1"), "stroke-width": 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    var last = warm.length - 1;
+    svg.appendChild(el("circle", { cx: xOf(last), cy: yOf(warm[last]), r: 4,
+      fill: css("--series-1"), stroke: css("--surface-1"), "stroke-width": 2 }));
+
+    svg.appendChild(el("text", { x: L, y: H - 8, fill: css("--muted"), "font-size": 11 }, "probe 1"));
+    svg.appendChild(el("text", { x: L + pw, y: H - 8, fill: css("--muted"), "font-size": 11,
+      "text-anchor": "end" }, "probe " + warm.length));
+
+    var cross = el("line", { x1: 0, y1: T, x2: 0, y2: T + ph, stroke: css("--axis"),
+      "stroke-width": 1, opacity: 0 });
+    svg.appendChild(cross);
+    var dot = el("circle", { r: 4, fill: css("--series-1"), stroke: css("--surface-1"),
+      "stroke-width": 2, opacity: 0 });
+    svg.appendChild(dot);
+    var hit = el("rect", { x: L, y: T, width: pw, height: ph, fill: "transparent" });
+    hit.addEventListener("mousemove", function (ev) {
+      var r = svg.getBoundingClientRect();
+      var px = (ev.clientX - r.left) / r.width * W;
+      var i = Math.round((px - L) / pw * (warm.length - 1));
+      i = Math.min(warm.length - 1, Math.max(0, i));
+      cross.setAttribute("x1", xOf(i)); cross.setAttribute("x2", xOf(i));
+      cross.setAttribute("opacity", 1);
+      dot.setAttribute("cx", xOf(i)); dot.setAttribute("cy", yOf(warm[i]));
+      dot.setAttribute("opacity", 1);
+      showTip(plot, tip, ev, '<div class="t">probe ' + (i + 1) + "</div><b>" + ms(warm[i]) + " ms</b>");
+    });
+    hit.addEventListener("mouseleave", function () {
+      tip.style.opacity = "0"; cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0);
+    });
+    svg.appendChild(hit);
+
+    $("heroV").textContent = ms(p50);
+    $("tP95").textContent = ms(p95);
+    var rows = '<table><tr><th>Probe</th><th>ms</th></tr>';
+    for (var t = 0; t < warm.length; t++) { rows += "<tr><td>" + (t + 1) + "</td><td>" + ms(warm[t]) + "</td></tr>"; }
+    $("warmTable").innerHTML = rows + "</table>";
+  }
+
+  function runWarm(n) {
+    var btn = $("runWarm"), status = $("warmStatus");
+    btn.disabled = true;
+    warm = [];
+    var i = 0;
+    // Strictly one at a time. In parallel this would measure the browser's
+    // six-connection limit and call the queueing latency.
+    function step() {
+      if (i >= n) {
+        btn.disabled = false;
+        status.textContent = n + " probes, one at a time, on one connection.";
+        return;
+      }
+      probe().then(function (r) {
+        warm.push(r.ttfb);
+        i++;
+        status.textContent = "probe " + i + " of " + n + "…";
+        if (i % 5 === 0 || i === n) { drawWarm(); }
+        step();
+      }).catch(function (e) {
+        btn.disabled = false;
+        status.textContent = "stopped: " + e;
+      });
+    }
+    step();
+  }
+
+  // ---- bulk and burst ----------------------------------------------------
+  function runThroughput() {
+    var btn = $("runThr"); btn.disabled = true;
+    $("bulkStatus").textContent = "downloading…";
+    var n = 8 * 1024 * 1024;
+    var url = "/bytes?n=" + n + "&i=" + (++seq);
+    var t0 = performance.now();
+    fetch(url, { cache: "no-store" }).then(function (r) { return r.arrayBuffer(); })
+      .then(function (buf) {
+        var wall = performance.now() - t0;
+        var e = entryFor(url);
+        // The response phase only. Counting the request round trip in a rate
+        // would charge the transfer for one trip it did not spend transferring.
+        var span = (e && e.responseEnd > e.responseStart) ? (e.responseEnd - e.responseStart) : wall;
+        var got = (e && e.encodedBodySize) || buf.byteLength;
+        var rate = got / 1048576 / (span / 1000);
+        $("bThr").textContent = rate.toFixed(1);
+        $("tThr").textContent = rate.toFixed(1);
+        $("bSize").textContent = bytes(got);
+        $("bulkStatus").textContent = "8 MB in " + ms(span) + " ms of transfer (" + ms(wall) + " ms wall).";
+        btn.disabled = false;
+      }).catch(function (err) {
+        $("bulkStatus").textContent = "stopped: " + err; btn.disabled = false;
+      });
+  }
+
+  function runBurst() {
+    var btn = $("runBurst"); btn.disabled = true;
+    $("bulkStatus").textContent = "bursting…";
+    var CONC = 6, done = 0, stop = performance.now() + 3000, running = CONC;
+    function worker() {
+      if (performance.now() >= stop) {
+        if (--running === 0) { finish(); }
+        return;
+      }
+      probe().then(function () { done++; worker(); }).catch(function () {
+        if (--running === 0) { finish(); }
+      });
+    }
+    function finish() {
+      $("bRps").textContent = (done / 3).toFixed(0);
+      $("bConc").textContent = CONC;
+      $("bulkStatus").textContent = done + " requests in 3 s at " + CONC +
+        " in flight — a browser limit, not the hub's.";
+      btn.disabled = false;
+    }
+    for (var i = 0; i < CONC; i++) { worker(); }
+  }
+
+  // ---- wiring ------------------------------------------------------------
+  $("theme").addEventListener("click", function () {
+    var dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    var cur = document.documentElement.getAttribute("data-theme") || (dark ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+    var d = setupData(); if (d) { drawSetup(d); }
+    drawWarm();
+  });
+  $("runWarm").addEventListener("click", function () { runWarm(60); });
+  $("runThr").addEventListener("click", runThroughput);
+  $("runBurst").addEventListener("click", runBurst);
+  addEventListener("resize", function () { drawWarm(); });
+
+  // A deployment that serves no bodies says so, and the page drops the card
+  // rather than showing a rate of zero. Asked once, before anything is drawn.
+  function askCapability() {
+    return fetch("/stats", { cache: "no-store" }).then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s.maxBytes === 0) {
+          $("bulkCard").style.display = "none";
+          $("thrTile").style.display = "none";
+        }
+      }).catch(function () { /* an older app has no /stats; leave the card up */ });
+  }
+
+  addEventListener("load", function () {
+    // After load, or responseEnd is still being written while this reads it.
+    setTimeout(function () {
+      askCapability();
+      var d = setupData();
+      if (d) { drawSetup(d); }
+      drawWarm();
+      runWarm(60);
+    }, 0);
+  });
+})();
+</script>
+</body>
+</html>
