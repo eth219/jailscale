@@ -122,6 +122,25 @@ the class this project's threading makes easy to write. Its exclusions are in
 `spotbugs-exclude.xml` and each one states its reason, because an exclusion with no reason and a
 finding nobody answered look identical six months later.
 
+**Coverage is a profile too, and nothing is gated on the number.** `./mvnw -Pcoverage verify`
+writes a report to `coverage/target/site/jacoco-aggregate`. JaCoCo is a third party with a
+dependency tree, so it lives behind a profile for the same supply-chain reason SpotBugs does; what
+it is *not* is a threshold. `node.Main` reads 3.9% of its lines covered while being one of the
+better tested classes here, because `CliTest` runs the CLI as a process and an agent attached to the
+test JVM cannot see into a child. A threshold would have punished that test for having the right
+shape and pushed its assertions back in-process, giving up the argument parsing, the exit codes and
+the daemon spawn that are the point of it. Coverage here is a way to find code nothing runs, not a
+number to defend.
+
+**The number is only right when it is aggregated, and getting that wrong is silent.** Per-module
+figures mislead badly in this build: hub's end-to-end tests exercise most of `node`, which alone
+reports 23.2% against 68.1% merged. The aggregation lives in `coverage/`, a module that exists only
+inside the profile, because jacoco's `report-aggregate` reads the *direct compile* dependencies of
+wherever it runs — run from `hub` it covered hub and proto and dropped `node` (a test-scope
+dependency) and `crypto` (reached through proto), printing a plausible number for two thirds of the
+code. `CoverageModuleTest` holds the root pom's module list against that module's dependency list,
+because the next module added is the next one silently left out.
+
 **Three workflows.** `ci` is the gate: the tests on ubuntu, macos and
 Windows for every push and pull request, and on main and nightly two more jobs that are too heavy
 for a pull request -- the §14 budget, which needs a native build, and the `load`-tagged tests, which

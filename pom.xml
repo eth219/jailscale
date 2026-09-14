@@ -37,6 +37,7 @@
     <native-maven-plugin.version>1.1.12</native-maven-plugin.version>
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
+    <jacoco-maven-plugin.version>0.8.13</jacoco-maven-plugin.version>
     <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
     <maven-shade-plugin.version>3.6.2</maven-shade-plugin.version>
     <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
@@ -292,6 +293,47 @@
                 <id>spotbugs-check</id>
                 <phase>verify</phase>
                 <goals><goal>check</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!--
+      ./mvnw -Pcoverage verify
+      Line and branch coverage, reported at hub/target/site/jacoco-aggregate. Behind a profile for
+      the reason SpotBugs is (ARCHITECTURE.md §3.2): JaCoCo is a third party with a dependency tree
+      of its own, and building from source has to keep needing nothing but a JDK.
+
+      NOTHING IS GATED ON THE NUMBER, and that is not timidity. `node.Main` reads 3.9% of its lines
+      covered while being one of the better tested classes here, because CliTest runs the CLI as a
+      process and an agent attached to the test JVM cannot see into a child. A threshold would have
+      punished that test for being the right shape and pushed its assertions back in-process, giving
+      up the argument parsing, the exit codes and the daemon spawn that are the point of it.
+
+      It aggregates in a module of its own, `coverage/`, and that module's pom says why: run from
+      `hub` the report silently dropped `node` and `crypto`. Per-module reports are wrong here in a
+      way that reads as a finding — hub's end-to-end tests exercise most of `node`, so node alone
+      reports 23.2% where the merged figure is 68.1%. Whoever reads one module's report will
+      conclude the node is untested, and be wrong by a factor of three.
+    -->
+    <profile>
+      <id>coverage</id>
+      <!-- Only under this profile, so an ordinary build neither builds it nor knows it is here. -->
+      <modules>
+        <module>coverage</module>
+      </modules>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>${jacoco-maven-plugin.version}</version>
+            <executions>
+              <execution>
+                <id>coverage-agent</id>
+                <goals><goal>prepare-agent</goal></goals>
               </execution>
             </executions>
           </plugin>
