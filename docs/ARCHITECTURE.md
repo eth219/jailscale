@@ -1327,9 +1327,20 @@ what 1,000 visitors held open were measured to fit in; the budget is what makes 
 hold when those visitors are not reading. A host that needs
 more passes `-XX:MaxHeapSize=` at run time, which the native runtime consumes before `main`. Two consequences: Serial GC does not
 return the heap to the OS, so RSS stays at its high-water mark after a load burst, which is headroom
-and not a leak; and idle RSS is unrelated to heap size, since the node daemon alone is about 16.7 MB
-and reaches about 24.3 MB the moment it connects, so roughly 7.6 MB is JSSE initialisation for one
-TLS client and lowering the heap cap does not move it.
+and not a leak; and idle RSS is unrelated to heap size, because at idle there is no heap to speak of:
+across a node daemon's whole start, connect and first link the collector runs **zero times** and the
+heap grows from 0.5 MB of chunks to 1.0, against 0.78 MB of objects ever allocated. Lowering the cap
+cannot move a number the heap is not in.
+
+That measurement replaced what this paragraph used to claim. It read "the node daemon alone is about
+16.7 MB and reaches about 24.3 MB the moment it connects, so roughly 7.6 MB is JSSE initialisation
+for one TLS client" -- one delta between two processes, attributed whole to JSSE. Held in eight
+states and measured three ways (`docs/jsse-idle-cost`), the same transition is 8.0 MB on
+darwin-arm64, and **1.5 MB of it is memory the process owns**: the rest is the binary's own code and
+image heap becoming resident, clean, file-backed and evictable. JSSE's share is between 2.6 and
+5.8 MB of that RSS, because the second half of it is the Noise handshake, the multiplexer and the
+registration as well; 2.0 MB is the join, which a restarted node never repeats; and standing the TLS
+client up writes 139 KB.
 
 ---
 
@@ -1925,13 +1936,48 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   Nothing gates on either. It was also intermittent at the occupancy that produced it, two of four
   runs on the same binaries, so one clean run says nothing about the next.
 - **Node idle RSS is about 25.0 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
-  Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). Roughly 7.6 MB is JSSE
-  initialisation for a single TLS client (§12), and both levers against it are smaller than they
-  look. There is no build-time initialisation whitelist to widen, because the build configures none
-  (§3.1), so that work is introducing one — and the classes worth moving are JSSE's, which is the
-  neighbourhood JCE has to stay out of. Restricting suites and protocols is already done, but
-  through `SSLParameters` on each engine, which narrows what is negotiated and not what is
-  initialised.
+  Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). This entry used to say that
+  roughly 7.6 MB of it was JSSE standing up one TLS client, and to price two levers against that
+  figure. `docs/jsse-idle-cost` took the figure apart, and it is the wrong thing to aim at.
+
+  **Almost none of it is memory the process owns.** From a daemon that has never built an
+  `SSLContext` to one connected with a link open is 8.0 MB of RSS and **1.5 MB of written pages**;
+  +3.7 MB is the binary's own `__TEXT` becoming resident with zero dirty pages in it, and +2.0 MB
+  its image-heap mapping, 288 KB of that dirty. Standing JSSE up at all is 2.6 MB of RSS for
+  **139 KB written**. The cost is code executing for the first time out of a 26 MiB binary, page by
+  page, and those pages are clean, file-backed and evictable. There is no megabyte of dirty memory
+  here for any TLS work to recover.
+
+  **And it is not all TLS.** 2.0 MB of the 8.0 is the join — `/v1/key`, the join request, the first
+  certificate — which `measure.sh` samples because it measures idle in the daemon that just
+  performed it; the same node restarted idles at 23.1 MB. Another 3.2 MB covers the TLS handshake
+  together with the Noise handshake, the multiplexer, the HTTP upgrade and the registration, and
+  nothing separates them.
+
+  So the levers this entry used to name are both mispriced. There is still no build-time
+  initialisation whitelist to widen, because the build configures none (§3.1), and the classes worth
+  moving would still be JSSE's, which is the neighbourhood JCE has to stay out of — but what a
+  whitelist would move is initialisation work, and the measurement says the cost is layout. §14
+  already measured the lever that does address that, from the other side: profile-guided builds
+  carry idle RSS down about a fifth, which is the same code laid out so that less of it has to be
+  resident. That gain was measured against the 25.0-line builds and is smaller against what ships
+  now, and §14 gives the reasons PGO is not what releases use; the point here is only that the
+  lever which moves this number is layout, not initialisation.
+- **The idle budget measures a trust configuration nobody ships, and it is 2.5 MB cheap.**
+  `measure.sh` always joins with `--ca-file`, so every published idle figure describes a node whose
+  trust manager holds two certificates. A node joined to a hub with an ordinary web-PKI certificate
+  — every real deployment, the live hub included — leaves `caFile` null, and JSSE builds its default
+  trust manager over the platform root store instead. Isolating that and nothing else costs
+  **+2.5 MB of RSS, 272 KB of it written** (`docs/jsse-idle-cost`: two handshakes, both rejected by
+  PKIX, differing only in their anchors). It nearly cancels against the join: a node that has
+  restarted and is not carrying the join's 2.0 MB idles at 23.1 MB pinned, so **about 25.6 MB with
+  the platform store** against the 25.0 published — by addition, since nothing local has a publicly
+  trusted certificate to measure the whole of it in one process. Two corrections in opposite
+  directions is a poor reason to leave either one unwritten. What makes this worth more than the
+  arithmetic is that
+  the node already pins the hub's Noise static key (§5.2) and authenticates the control channel with
+  it, so what the platform store is buying on that connection is a second opinion about a peer the
+  next message will prove anyway.
 - **Per-visitor memory on the node is about 99 KB.** Live bytes after a full GC, from a heap
   histogram taken with a known number of visitors in flight. It is the only figure here that counts
   what JSSE keeps behind the `SSLEngine` as well as what this project allocates itself.

@@ -54,6 +54,15 @@
 #   plateaus whatever the live set does. That is why the receive budget is gated on
 #   jailhub_receive_queued_peak_bytes, which is exact, and RSS is only reported here.
 #
+#   The configuration this harness chooses is part of what it measures, and two of its choices make
+#   the idle row describe a node nobody runs. It joins with --ca-file, so the node's trust manager
+#   holds two certificates; a node joined to a public-CA hub leaves caFile null, JSSE builds its
+#   default trust manager over the platform root store, and idle RSS is 2.5 MB higher. And it samples
+#   idle in the daemon that just performed the join, which is 2.0 MB that a node pays once -- the
+#   same node restarted idles about 2 MB lower. Neither is a bug in the budget, which is a gate on
+#   this tree against itself, but neither number is what an operator's node does, and the README
+#   said it was. docs/jsse-idle-cost has both measurements.
+#
 #   The kernel is shared state too, and it was the one nobody sampled. SLOW= visitors asked for
 #   8 MB on loopback and the kernel autotuned every socket in the chain to megabytes, so 400 of
 #   them put 660 to 680 MB in socket buffers with the machine's cluster pools at their caps, and
@@ -273,6 +282,8 @@ net_denied() {
 HUBPID=$!
 sleep 1.5
 INV=$(grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" "$W/hub.log" | head -1)
+# --ca-file pins the test certificate, which is what a loopback hub needs and is also, deliberately,
+# not what a real node does (see the header: it is worth 2.5 MB of the idle figure below).
 "$NODE" up --invite "$INV" --hub-addr 127.0.0.1 --user alice --ca-file "$CERT" --home "$W/a" > /dev/null
 INV2=$("$NODE" invite --user bob --home "$W/a" | grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" | head -1)
 "$NODE" up --invite "$INV2" --hub-addr 127.0.0.1 --ca-file "$CERT" --home "$W/b" > /dev/null

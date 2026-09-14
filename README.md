@@ -242,7 +242,21 @@ drop Linux shows.
 
 On Linux most of that idle RSS is the binary mapped into the process, clean pages
 the kernel takes back when it needs them. The anonymous memory, the part that is
-really the process's, is 3 MB for the hub and 2 MB for the node.
+really the process's, is 3 MB for the hub and 2 MB for the node. That is not a
+Linux accounting quirk: taking the node's idle figure apart on macOS
+([docs/jsse-idle-cost](docs/jsse-idle-cost)) finds the same thing, 8.0 MB of RSS
+between a daemon that has never opened a TLS connection and one connected with a
+link open, and 1.5 MB of it pages the process has written.
+
+Two things about the idle row are worth knowing before it is compared with
+anything. It is sampled in the daemon that has just joined, and joining is 2.0 MB
+that a node pays once — restarted, the same node idles about 2 MB lower. And
+`measure.sh` joins with `--ca-file`, so it describes a node whose trust manager
+holds two certificates; a node joined to a hub with an ordinary web-PKI
+certificate leaves that null and idles about 2.5 MB higher, which no budget here
+measures. The two nearly cancel — such a node settles around 25.6 MB against the
+25.0 in the table — but they are different numbers about different nodes, and
+only one of them is gated. Both figures are darwin-arm64.
 
 Idle is a fresh start, not a steady state. The heap has a ceiling, 96 MB for the
 hub and 64 MB for the node, and a long-running process drifts up towards it: the
@@ -315,8 +329,12 @@ What a compromised hub can and cannot do is written out in
 - `service install` is verified on macOS only. Linux and Windows are untested
   outside CI.
 - Idle memory is 25 MB against the 20 MB originally aimed at (34.4 MB as Linux
-  counts it, 2 MB of it anonymous). Most of the gap is JSSE standing up a single
-  TLS client.
+  counts it, 2 MB of it anonymous). This used to say that most of the gap was
+  JSSE standing up a single TLS client; measuring it
+  ([docs/jsse-idle-cost](docs/jsse-idle-cost)) says otherwise. Almost all of the
+  gap is the binary's own code becoming resident as it runs for the first time —
+  clean pages, evictable — and standing up the TLS client writes 139 KB. The
+  number is real and the explanation for it was not.
 - Upgrades have been exercised once each way they have been tried, on one hub
   and one node. v0.1.2 is the third tagged release, and each step added one
   optional `Hello` field — `host` before v0.1.1, `visitors` before v0.1.2 —
