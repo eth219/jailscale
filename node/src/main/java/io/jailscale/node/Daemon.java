@@ -49,10 +49,22 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
+        this(config, Visitors.MAX_IN_FLIGHT);
+    }
+
+    /**
+     * As above with the visitor bound of §9.3 given rather than derived from the heap. The same
+     * escape {@link io.jailscale.proto.mux.FlowBudget#of} offers for the hub's byte budget and for
+     * the same reasons: a test needs to reach the bound without a heap that large, and a host may
+     * want to say the number itself. Nothing on the command line reaches it -- the derived number is
+     * the only one anything has measured, and the way to move it is the heap ceiling it comes from.
+     */
+    public Daemon(NodeConfig config, int visitorCeiling) throws IOException {
         this.config = config;
         this.state = NodeState.load(config.stateFile());
-        this.link = new HubLink(state, Version.string(), this);
-        this.visitors = new Visitors(state);
+        // visitors first: its bound goes into every Hello this link sends (ARCHITECTURE.md §9.3).
+        this.visitors = new Visitors(state, visitorCeiling);
+        this.link = new HubLink(state, Version.string(), this, visitors.maxInFlight());
         this.domainCerts = new DomainCerts(config.configDir());
     }
 
@@ -313,7 +325,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("visitorsInFlight", visitors.inFlight())
             // The ceiling next to the count, and how many it has turned away: in flight on its own
             // cannot say whether a node is busy or full, and those are different problems.
-            .put("visitorCeiling", Visitors.MAX_IN_FLIGHT)
+            .put("visitorCeiling", visitors.maxInFlight())
             .put("visitorsRefused", visitors.refused())
             // The multiplexer's own three waits, which `proto` records on both sides and only the
             // hub publishes (ARCHITECTURE.md §14). The node is the busy writer in the saturation

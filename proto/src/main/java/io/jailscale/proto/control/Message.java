@@ -28,8 +28,25 @@ public sealed interface Message {
      * the public address records only when the node is somewhere those are all it could have used,
      * which is the hub's call to make from the address it sees.
      */
-    record Hello(int proto, String version, String os, int conn, String host) implements Message {
+    record Hello(int proto, String version, String os, int conn, String host, int visitors) implements Message {
         @Override public String type() { return "Hello"; }
+
+        /**
+         * How many visitor streams this node will serve at once (ARCHITECTURE.md §9.3), or 0 from a
+         * node that does not say. 0 is what a build older than this field sends -- it is absent from
+         * the wire and {@code optInt} supplies the default -- and the hub reads it as "no bound I
+         * know of" and falls back to its own caps, which is what it did before this field existed.
+         *
+         * <p>This is the first field added to an existing message since the protocol shipped, so it
+         * is the first test of the compatibility §5.4 claims: the decoder reads by name and ignores
+         * what it does not recognise, so a new node's Hello is read by an old hub exactly as it
+         * always was. That is also why it is a field on Hello rather than a message of its own -- an
+         * old hub answers an unknown type with {@code Error{unknown-type}}, which is a reply saying
+         * something went wrong, where ignoring a field it has no use for is silence.
+         */
+        public boolean advertisesCapacity() {
+            return visitors > 0;
+        }
     }
 
     record HelloResponse(int proto, int minProto, String version, String dnsSuffix) implements Message {

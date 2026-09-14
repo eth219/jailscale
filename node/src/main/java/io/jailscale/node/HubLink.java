@@ -121,11 +121,19 @@ final class HubLink implements AutoCloseable {
     private volatile Message.RegisterResponse lastRegister;
     private final Map<String, CompletableFuture<Message>> waiting = new ConcurrentHashMap<>();
     private Thread thread;
+    /**
+     * What this node tells the hub it will hold (ARCHITECTURE.md §9.3), sent on every Hello. Fixed
+     * for the life of the process, which is why it rides on Hello rather than having a message of
+     * its own: it is derived from the heap ceiling at startup and nothing moves it afterwards. A
+     * hand-off or a reconnect re-sends the same number, so the hub needs no notion of it expiring.
+     */
+    private final int visitorCeiling;
 
-    HubLink(NodeState state, String version, Events events) {
+    HubLink(NodeState state, String version, Events events, int visitorCeiling) {
         this.state = state;
         this.version = version;
         this.events = events;
+        this.visitorCeiling = visitorCeiling;
     }
 
     synchronized void start(Credentials creds) {
@@ -276,7 +284,7 @@ final class HubLink implements AutoCloseable {
         // Only when DNS was actually asked: with --hub-addr the name never resolved, and a hub
         // reading this as proof that its A record works would be reading our configuration file.
         String resolved = state.hubAddr == null ? state.hubHost : null;
-        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn, resolved);
+        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn, resolved, visitorCeiling);
         HubClient.Connected c = HubClient.connect(state.hubHost, state.hubAddr, state.hubPort, ctx, verify, state.machineKey, keys, hello);
         if (c.hello().proto() < MIN_HUB_PROTO) {
             // There is no older encoding to fall back to: the first SignRequest, domain claim or

@@ -84,7 +84,7 @@ class ProtoSkewTest {
                 KeyText.parse(KeyText.HUB, hub.keys().publicText()));
             byte[][] answer = new byte[1][];
             NoiseChannel ch = NoiseChannel.initiate(s.getInputStream(), s.getOutputStream(), hs,
-                Codec.encode(new Message.Hello(proto, "9.9.9", "linux", conn, null)), answer);
+                Codec.encode(new Message.Hello(proto, "9.9.9", "linux", conn, null, 0)), answer);
             ch.close();
             return Codec.decode(answer[0]);
         }

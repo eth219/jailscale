@@ -345,7 +345,10 @@ an older peer would be unsafe or impossible. A peer below the floor gets
 explains itself.
 
 **What is compatible.** Adding a field to an existing message: the decoder reads by name and
-ignores what it does not recognise, so an older build reads the message as it always did. Adding a
+ignores what it does not recognise, so an older build reads the message as it always did. `Hello`
+gained `visitors` that way (§9.3) and is the worked example: a node that does not send it decodes to
+0, which the hub reads as "no bound I know of", and re-encoding that Hello produces the same bytes
+rather than inventing a field the peer never sent. Both halves are pinned in `WireFormatTest`. Adding a
 message type: an unrecognised `"t"` decodes to `Message.Unknown`, which the receiver logs and
 answers with `Error{unknown-type}` instead of dropping the channel. Adding a mux frame type: a
 frame carries its own length, so one with an unknown type is skipped and the stream stays in sync.
@@ -887,8 +890,16 @@ is idle in that sense: a visitor's TLS state is live for as long as the visitor 
 here means choosing a victim among connections that are all making progress. Refusing the
 thousand-and-first visitor costs that visitor; not refusing it costs all of them and the hub link
 besides, which is what the measurements above are of. The hub already caps a name at
-`SniRouter.MAX_PER_NAME` = 1,024 on the same reasoning, and nothing yet tells the hub what a node's
-bound is, so the hub keeps sending visitors a full node will reset.
+`SniRouter.MAX_PER_NAME` = 1,024 on the same reasoning.
+
+**The node tells the hub this number, and the hub admits against it.** It rides on `Hello`
+(§5.4), and `SniRouter` checks it beside its own two caps, so a visitor a full node cannot take is
+turned away before a stream is opened rather than after the node resets it -- 567 such resets in the
+measured thousand-visitor run became none. The node's own bound stays exactly where it is and always
+will: an old hub does not send the number, a hub and a node are upgraded separately, and there is a
+race between the hub's check and the open. The way to tell the hub is really doing the refusing is
+that the node's `visitorsRefused` stays at zero, which is what `measure.sh` prints and what
+`NodeCapacityTest` asserts.
 
 **The socket to the local app is given the stream window, 256 KB each way, before it connects.**
 Left to the kernel both buffers autotune to megabytes -- measured at up to 8 MB on macOS, whose
@@ -1385,6 +1396,46 @@ people which file to download.
 | RSS with 1,000 visitor sessions held open | node 69 MB, hub 53 MB | node 67 MB, hub 65 MB | node 88 MB, hub 88 MB |
 | CLI cold start | about 6.3 ms (`jailscale status`, median of 10, IPC round trip included) | about 2.4 ms | 50 ms |
 
+### How many visitors this serves, and what stops it
+
+The numbers for this were spread across §5.3, §9.3, §15 and the table above, so answering "what
+happens when a thousand visitors arrive" meant reading four places and doing the arithmetic. It is
+one place now.
+
+| | hub | node |
+|---|---|---|
+| What one visitor costs | the bytes it has not read yet — **0 if it reads**, up to 272 KiB if it stalls | **about 99 KB** of TLS state, the same whether it reads or stalls |
+| The bound | `FlowBudget`, **24 MB** of receive queues (§5.3) | `Visitors.MAX_IN_FLIGHT`, **450** visitor streams (§9.3) |
+| In what unit | bytes | a count |
+| Where it comes from | a quarter of the 96 MiB heap ceiling | measured against the 64 MiB heap ceiling |
+| Over it | resets the stalled stream holding the most | refuses the new visitor before its handshake |
+| Reported as | `jailhub_receive_budget_bytes`, `_queued_bytes`, `_queued_peak_bytes`, `jailhub_streams_reclaimed_total` | `jailhub_node_visitor_capacity` on the hub, `visitorCeiling` / `visitorsInFlight` / `visitorsRefused` in `jailscale status` |
+| Moved by | `-XX:MaxHeapSize=` on the hub | `-XX:MaxHeapSize=` in `JAILSCALE_DAEMON_OPTS` |
+
+**Which one binds first is a question about the visitors, not about the deployment.** The two bounds
+are in different units on purpose, and that is the whole answer: the hub's is reached by *behaviour*
+and the node's by *count*. A thousand visitors who read what they asked for cost the hub almost
+nothing and the node 99 MB, so the node's count binds and the hub's queues stay near empty — which is
+what the budget gate sees on the CI runner, 2.0 to 11.9 MB of 24. A few hundred who stall cost the
+node the same 99 KB each but can fill the hub's 24 MB, which is what a developer's machine sees at
+`SLOW=400`: the queue pinned at 24.0 of 24.0 with streams shed. Both bounds have been reached in
+measurement; neither is the one that always goes first.
+
+**The hub admits on three caps now, and only the third is about capacity.** Per address
+(`MAX_PER_IP` = 64) and per name (`MAX_PER_NAME` = 1,024) are abuse limits and were never
+capacities — the per-name number sat on the hub's own page as though it were one, against a node
+holding a few hundred. The third is what the node said it will hold, sent on `Hello` (§5.4's
+additive case, and the first field added to an existing message since the protocol shipped). A node
+that does not send it — every build older than the field — is admitted exactly as before, and its
+own bound resets what the hub oversends.
+
+**What the operator can do about it.** A node at its bound shows up as
+`jailhub_visitors_refused_capacity_total` rising and as "N of 450" in the admin node table; the
+answers are to give that node more heap, which raises its bound proportionally, or to move a name to
+another node. A hub at its receive budget shows up as `jailhub_streams_reclaimed_total` rising with
+`jailhub_receive_queued_peak_bytes` at the limit, and the answer is more heap on the hub. The two are
+told apart by which counter moves, which is why they are separate counters.
+
 **`measure.sh SLOW=` measures a third axis, and the node does not meet its budget on it.** `LOAD=`
 holds visitor sessions open with no bytes in flight; `SLOW=` has each visitor ask for 8 MB and read
 only the status line, which is the only shape that reaches the receive budget of §5.3. On that axis
@@ -1750,6 +1801,33 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
+- **A node's visitors are first come, first served, so one name can starve the others on it.** The
+  bound of §9.3 is per node, and a node may serve up to `MAX_LINKS_PER_NODE` = 20 links; nothing
+  shares the 450 between them. One name that fills the node takes every slot and the other nineteen
+  go dark, refused at the hub with the reason nobody sees. This is not new with the hub-side
+  admission — it is how the node's own bound behaved from the day it existed, and before that the
+  same load took the whole node down with an `OutOfMemoryError` — but it is now a deliberate
+  first-come rule rather than an accident of where the allocation failed. What would fix it is a
+  share per link, which is a scheduler, and nothing has measured starvation to size one against.
+
+- **At its bound a node refuses well-behaved visitors and abusive ones alike**, because the hub
+  cannot tell them apart before admitting them. That is the cost `FlowBudget` names in its argument
+  for reclaiming rather than refusing (§5.3), and the node cannot take that way out: a visitor's TLS
+  state is live for as long as the visitor is, so there is no stalled connection to pick. **The
+  denial is also quieter than what it replaced.** Filling a node used to end in an
+  `OutOfMemoryError`, a dropped hub connection and a reconnect — an outage, but a loud one. Now the
+  node sits full, logs one line a minute, and turns everyone away. What it costs an attacker is
+  bounded by `MAX_PER_IP` = 64, so filling a 450-visitor node takes eight addresses; that per-address
+  cap is the only thing making it cost anything at all, and it was not written for this.
+
+- **The hub believes what a node says about its capacity, and that is safe only because a lie is
+  self-punishing.** A node that names a number larger than it can hold gets the behaviour of a node
+  that names nothing: the hub stops refusing on its behalf and the node's own bound resets what it
+  cannot take. A node that names a smaller one gets less traffic. Neither reaches another node's
+  visitors, so nothing validates the figure — with one exception, which is that the hub sums it
+  across nodes for a gauge, and that sum is a `long` so two hostile advertisements cannot wrap it
+  negative onto the hub's own page.
+
 - **What the node holds per visitor has a number now.** `jailscale status` reports
   `visitorsInFlight`, the visitor streams the node is serving at this instant, TLS and raw alike.
   It is the node's half of the hub's `jailhub_visitors_in_flight` (§6.3) and it exists because the

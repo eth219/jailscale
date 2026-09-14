@@ -147,8 +147,11 @@ final class AdminWeb {
         Store store = hub.store();
         String backField = "<input type=hidden name=back value=\"" + HttpFront.escape(back) + "\">";
 
+        // Visitors held against what the node said it will hold (ARCHITECTURE.md §9.3). Here and
+        // not on the public page: how close a particular node is to its bound says when a name will
+        // start refusing visitors, which is the operator's business and nobody else's.
         b.append("<h2>Nodes</h2><table><tr><th>#</th><th>User</th><th>Host</th><th>Key</th><th>Address</th>")
-            .append("<th>Status</th><th></th></tr>");
+            .append("<th>Status</th><th>Visitors</th><th></th></tr>");
         for (Store.NodeRec n : store.nodes()) {
             NodeGroup g = hub.registry().get(n.mkey());
             String ip = g == null ? null : g.remoteIp();
@@ -157,6 +160,7 @@ final class AdminWeb {
                 .append(HttpFront.escape(n.mkey().substring(0, 17))).append("…</code></td><td>")
                 .append(ip == null ? "—" : "<code>" + HttpFront.escape(ip) + "</code>").append("</td><td>")
                 .append(g == null ? "offline" : "online (" + g.connections() + ")").append("</td><td>")
+                .append(visitors(g)).append("</td><td>")
                 .append("<form method=post action=/admin/node/remove style=\"display:inline\">").append(csrf).append(backField)
                 .append("<input type=hidden name=mkey value=\"").append(HttpFront.escape(n.mkey()))
                 .append("\"><button>Remove</button></form>");
@@ -421,5 +425,22 @@ final class AdminWeb {
 
     private static String blankToNull(String v) {
         return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    /**
+     * One node's visitor load: what it is holding, and the bound it advertised. A node from a build
+     * older than that field advertises nothing, and saying "—" is the honest answer there: the hub
+     * does not know the bound, so it admits visitors as it always did and the node resets what it
+     * cannot take.
+     */
+    private static String visitors(NodeGroup g) {
+        if (g == null) {
+            return "—";
+        }
+        int ceiling = g.visitorCeiling();
+        if (ceiling <= 0) {
+            return g.visitorsInFlight() + " (bound not advertised)";
+        }
+        return g.visitorsInFlight() + " of " + ceiling;
     }
 }
