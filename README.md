@@ -261,6 +261,22 @@ than when they stay. A hub also accepts 1,024 concurrent visitors per name and
 The hub above runs on a GCP e2-micro: 2 shared vCPU, 1 GB of memory, Debian 12.
 That is the smallest instance Google sells, and it is not the constraint.
 
+Those are the code's numbers, measured with no network in the way. For a
+visitor's numbers — what the handshake and the round trip cost from wherever
+they are — [docs/demo/](docs/demo/) is an app to publish and a page that times the link it
+arrived on. It is a demonstration, not a gate: a browser on the internet
+measures its own distance to the hub at least as much as it measures either
+binary.
+
+What it says with a network in the path, through the hub above on 2026-09-14,
+with the visitor and the node each about 7 ms from it: a TCP round trip of 6.6
+to 6.7 ms, a TLS handshake of 29 to 33 ms on top of that, and a warm round trip
+of 14 ms at p50, about twice the floor for the extra hop. **The keyless
+handshake costs round trips, not CPU** — the same handshake measures 2.4 ms on
+loopback, where the round trips are free, and the hub's own work in it is one
+signature. That is the shape to plan for: a visitor pays it once on arrival, and
+nothing after that.
+
 What each side needs:
 
 | | Hub | Node |
