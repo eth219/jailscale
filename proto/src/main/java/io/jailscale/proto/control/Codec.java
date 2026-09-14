@@ -21,7 +21,10 @@ public final class Codec {
         JsonObject.Builder b = JsonObject.builder().put("t", m.type());
         switch (m) {
             case Message.Hello x -> b.put("proto", x.proto()).put("version", x.version()).put("os", x.os())
-                .put("conn", x.conn()).put("host", x.host());
+                .put("conn", x.conn()).put("host", x.host())
+                // Omitted when the node does not advertise one, so a node with no bound to declare
+                // puts the same bytes on the wire as a build from before the field existed.
+                .put("visitors", x.visitors() > 0 ? Integer.valueOf(x.visitors()) : null);
             case Message.HelloResponse x -> b.put("proto", x.proto()).put("minProto", x.minProto())
                 .put("version", x.version()).put("dnsSuffix", x.dnsSuffix());
             case Message.Goodbye x -> b.put("reason", x.reason()).put("detail", x.detail());
@@ -70,7 +73,7 @@ public final class Codec {
             String t = o.string("t");
             return switch (t) {
                 case "Hello" -> new Message.Hello(o.integer("proto"), o.string("version"), o.optString("os", ""),
-                    o.optInt("conn", 0), o.optString("host", null));
+                    o.optInt("conn", 0), o.optString("host", null), o.optInt("visitors", 0));
                 case "HelloResponse" -> new Message.HelloResponse(o.integer("proto"), o.integer("minProto"),
                     o.string("version"), o.optString("dnsSuffix", null));
                 case "Goodbye" -> new Message.Goodbye(o.string("reason"), o.optString("detail", null));

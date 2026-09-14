@@ -184,7 +184,7 @@ class FuzzTest {
         fuzz("codec", docs, in -> unchecked(b -> Codec.decode(b), in), CodecException.class, JsonException.class);
         // Encode/decode round trip must hold for every message the codec produces.
         try {
-            Message m = Codec.decode(Codec.encode(new Message.Hello(1, "v", "os", 2, "hub.example.com")));
+            Message m = Codec.decode(Codec.encode(new Message.Hello(1, "v", "os", 2, "hub.example.com", 450)));
             if (!(m instanceof Message.Hello h) || h.conn() != 2) {
                 fail("round trip");
             }

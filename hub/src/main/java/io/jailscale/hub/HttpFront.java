@@ -253,8 +253,17 @@ final class HttpFront {
         }
 
         b.append("<h2>Limits</h2><table>");
-        row(b, "Visitors per name", SniRouter.MAX_PER_NAME + " at once, "
-            + hub.router().visitorsInFlight() + " right now");
+        // Two numbers, because the first one alone was a limit pretending to be a capacity: this
+        // row said 1024 while the node serving the name held a few hundred (ARCHITECTURE.md §9.3),
+        // so the figure a reader took for "how many this can serve" was one nothing had measured
+        // and the binding constraint was somewhere else entirely. What the nodes say they hold is
+        // the answer, and it is a sum over the ones online -- which is why it moves when a node
+        // goes away, and why it reads 0 on a hub whose nodes are older than that field.
+        row(b, "Visitors per name", SniRouter.MAX_PER_NAME + " at once, and no more than the node"
+            + " serving it will hold");
+        int capacity = hub.registry().visitorCapacity();
+        row(b, "Visitors the nodes will hold", (capacity > 0 ? capacity + " together" : "not advertised")
+            + ", " + hub.router().visitorsInFlight() + " being served right now");
         // Both numbers, because either one alone misleads. The count is what admission checks; the
         // budget is what the hub can actually hold, and it is the one that binds first.
         row(b, "Buffered per visitor", MuxStream.WINDOW / 1024 + " KiB at most");

@@ -408,9 +408,17 @@ if [ -n "${SLOW:-}" ]; then
       # Fired and forgotten, one a second. A serial prober makes its own gaps: while one probe is
       # slow no new connection arrives, so the hub's accept loop looks stalled for exactly as long as
       # the probe took, which reads as a cause and is an effect.
-      ( curl -sk -o /dev/null -w '%{time_total}\n' --max-time 30 \
-          --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null \
-          | awk '{printf "%.0f\n", $1 * 1000}' >> "$W/probes.txt" ) &
+      # curl's exit status, not just its timing. Once the node is at its bound (ARCHITECTURE.md
+      # 9.3) the hub refuses this probe too, and a refused connection comes back in about no time
+      # at all -- so without this the line filled with "0" and read as the fastest service anyone
+      # had ever measured. A visitor that was turned away is an "x" and is counted separately.
+      ( t=$(curl -sk -o /dev/null -w '%{time_total}' --max-time 30 \
+              --resolve "demo.hub.test:$PORT:127.0.0.1" "https://demo.hub.test:$PORT/" 2>/dev/null); rc=$?
+        if [ "$rc" = 0 ]; then
+          echo "$t" | awk '{printf "%.0f\n", $1 * 1000}' >> "$W/probes.txt"
+        else
+          echo x >> "$W/probes.txt"
+        fi ) &
     fi
     sleep 1
   done
@@ -433,7 +441,12 @@ if [ -n "${SLOW:-}" ]; then
   else
     printf '             not gated: the node budget is measured at SLOW=%s, this run is %s\n' "$B_NODE_SLOW_AT" "$SLOW"
   fi
-  printf '  ordinary visitor while held (ms): %s\n' "$(tr '\n' ' ' < "$W/probes.txt" 2>/dev/null)"
+  # grep -c prints its 0 and then exits 1, so a `|| echo 0` here appends a second zero and the
+  # line reads "0\n0". The count is whatever it printed; only a missing file needs a default.
+  served=$(grep -cv x "$W/probes.txt" 2>/dev/null) || true
+  turned=$(grep -c x "$W/probes.txt" 2>/dev/null) || true
+  printf '  ordinary visitor while held (ms, x = turned away): %s\n' "$(tr '\n' ' ' < "$W/probes.txt" 2>/dev/null)"
+  printf '             %s served, %s turned away\n' "${served:-0}" "${turned:-0}"
   # The node's side of the multiplexer, which the hub's line below cannot see: the bulk travels
   # node to hub, so the writer that blocks under saturation is this one ("count mean/max" ms).
   "$NODE" status --home "$W/a" 2>/dev/null | sed -n 's/.*"muxQueueWaitMs":"\([^"]*\)".*"muxSocketWriteMs":"\([^"]*\)".*/  node mux, count mean\/worst ms: queue_wait=\1 socket_write=\2/p'

@@ -110,6 +110,45 @@ final class NodeGroup {
         return p == null ? null : p.node();
     }
 
+    /**
+     * Thrown when the node has as many visitors as it said it will hold (ARCHITECTURE.md §9.3). Its
+     * own type because the caller's answer differs from every other failure here: there is nothing
+     * wrong with the node, nothing to retry, and the visitor is turned away rather than told the
+     * name is down.
+     */
+    static final class AtCapacity extends IOException {
+        private static final long serialVersionUID = 1L;
+        private final int ceiling;
+
+        AtCapacity(String mkey, int ceiling) {
+            super("node " + mkey + " is holding the " + ceiling + " visitors it said it would");
+            this.ceiling = ceiling;
+        }
+
+        int ceiling() {
+            return ceiling;
+        }
+    }
+
+    /**
+     * What this node said it will hold, or 0 if it did not say. The maximum across its sessions
+     * rather than one of them: a hand-off has the old and the new connection alive at once (§13)
+     * and they carry the same number, but during an upgrade they need not, and the larger is the
+     * one that came from whichever build is willing to hold more.
+     */
+    int visitorCeiling() {
+        int max = 0;
+        for (NodeSession s : sessions.values()) {
+            max = Math.max(max, s.visitorCeiling());
+        }
+        return max;
+    }
+
+    /** Visitor streams open on this node right now, across every one of its connections. */
+    int visitorsInFlight() {
+        return visitors.size();
+    }
+
     /** Opens a visitor stream on the least loaded connection. */
     MuxStream openVisitor(Links.Link link, String sni, String visitorAddr, int visitorPort, String keyId, boolean dgram) throws IOException {
         NodeSession best = null;
@@ -127,6 +166,17 @@ final class NodeGroup {
         }
         if (best == null) {
             throw new IOException("node has no usable connection");
+        }
+        // Checked here because this is the one place a visitor stream is opened -- TLS through the
+        // SNI router and raw TCP and UDP through RawPorts all arrive at this method -- and because
+        // the map below is already the exact count: it is filled on open, emptied on close, and
+        // purged when a session detaches. A node that does not advertise a bound gets the behaviour
+        // it had before the field existed, which is the hub sending and the node resetting.
+        int ceiling = visitorCeiling();
+        if (ceiling > 0 && visitors.size() >= ceiling) {
+            Metrics.VISITORS_REFUSED.increment();
+            Metrics.VISITORS_REFUSED_CAPACITY.increment();
+            throw new AtCapacity(mkey, ceiling);
         }
         JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("kind", link.kind()).put("sni", sni)
             .put("visitorAddr", visitorAddr).put("visitorPort", visitorPort).put("keyId", keyId).build();

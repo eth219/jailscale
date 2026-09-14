@@ -24,6 +24,14 @@ final class Metrics {
     static final LongAdder VISITORS = new LongAdder();
     /** Visitor connections dropped before that: no SNI, an unknown name, or a cap reached. */
     static final LongAdder VISITORS_REFUSED = new LongAdder();
+
+    /**
+     * The subset of the above turned away because the node serving the name was already holding
+     * what it said it would (ARCHITECTURE.md §9.3). Its own counter because it is the one refusal
+     * an operator can do something about -- it says to give that node more heap, or to move a name
+     * -- where the others say a visitor was malformed, early, or abusive.
+     */
+    static final LongAdder VISITORS_REFUSED_CAPACITY = new LongAdder();
     /** Signatures issued over the wildcard key, and requests refused by the four conditions (§9.2). */
     static final LongAdder SIGNATURES = new LongAdder();
     static final LongAdder SIGNATURES_REFUSED = new LongAdder();
@@ -46,6 +54,9 @@ final class Metrics {
         counter(b, "jailhub_visitors_total", "Visitor connections routed to a node.", VISITORS.sum());
         counter(b, "jailhub_visitors_refused_total",
             "Visitor connections dropped before routing: no SNI, unknown name, or a cap reached.", VISITORS_REFUSED.sum());
+        counter(b, "jailhub_visitors_refused_capacity_total",
+            "Visitors dropped because the node serving the name was at the bound it advertised.",
+            VISITORS_REFUSED_CAPACITY.sum());
         counter(b, "jailhub_signatures_total", "Handshake signatures issued over the wildcard key.", SIGNATURES.sum());
         counter(b, "jailhub_signatures_refused_total", "Signature requests refused.", SIGNATURES_REFUSED.sum());
         counter(b, "jailhub_node_sessions_total", "Control connections that completed the handshake.", NODE_SESSIONS.sum());
@@ -55,6 +66,11 @@ final class Metrics {
         gauge(b, "jailhub_links_open", "Links open right now.", hub.links().all().size());
         gauge(b, "jailhub_visitors_in_flight", "Visitors being relayed to a node right now.",
             hub.router().visitorsInFlight());
+        // What the nodes online right now say they will hold, and what they are holding. Nodes from
+        // a build older than the field (§9.3) advertise nothing and count 0 toward the capacity,
+        // so capacity below in_flight is not a contradiction -- it means some node is not saying.
+        gauge(b, "jailhub_node_visitor_capacity", "Visitors the online nodes together said they will hold.",
+            hub.registry().visitorCapacity());
         gauge(b, "jailhub_uptime_seconds", "Seconds since this process started.", Resources.uptimeMillis() / 1000);
         // Where the time goes admitting a visitor (§6.3). The point of having all five is the
         // comparison: first_byte running ahead of peek+resolve+open+reply is time spent in no stage

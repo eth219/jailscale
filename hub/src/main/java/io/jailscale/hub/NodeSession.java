@@ -50,6 +50,12 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private MuxSession mux;
     private String mkey;
     private int conn;
+    /**
+     * What the node said it will hold (ARCHITECTURE.md §9.3), or 0 from a node that does not say --
+     * every build before the field existed, and any build that chose not to. 0 means "no bound the
+     * hub knows of" and puts admission back where it was: the hub's own caps and the node's reset.
+     */
+    private volatile int visitorCeiling;
     private NodeGroup group;
     private volatile Store.NodeRec node;
     private volatile boolean closed;
@@ -67,6 +73,10 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     String machineKey() {
         return mkey;
+    }
+
+    int visitorCeiling() {
+        return visitorCeiling;
     }
 
     int conn() {
@@ -135,6 +145,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                             + ". Update jailscale and run `jailscale up` again."));
                 }
                 conn = hello.conn();
+                visitorCeiling = hello.visitors();
                 if (conn < 0 || conn >= MAX_CONNECTIONS || (conn > 0 && hub.store().node(mkey) == null)) {
                     rejected[0] = true;
                     return Codec.encode(new Message.Goodbye("bad-connection-index"));

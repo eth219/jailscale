@@ -44,6 +44,19 @@ final class Registry {
         return byKey.size();
     }
 
+    /**
+     * What the nodes online right now together said they will hold (ARCHITECTURE.md §9.3). A node
+     * that advertises nothing -- any build older than the field -- contributes 0, so this is a
+     * lower bound on what the deployment can serve and not a total to divide by.
+     */
+    int visitorCapacity() {
+        int n = 0;
+        for (NodeGroup g : byKey.values()) {
+            n += g.visitorCeiling();
+        }
+        return n;
+    }
+
     void closeAll(String reason) {
         for (NodeGroup g : all()) {
             g.goodbyeAll(reason);

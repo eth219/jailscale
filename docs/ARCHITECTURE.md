@@ -345,7 +345,10 @@ an older peer would be unsafe or impossible. A peer below the floor gets
 explains itself.
 
 **What is compatible.** Adding a field to an existing message: the decoder reads by name and
-ignores what it does not recognise, so an older build reads the message as it always did. Adding a
+ignores what it does not recognise, so an older build reads the message as it always did. `Hello`
+gained `visitors` that way (§9.3) and is the worked example: a node that does not send it decodes to
+0, which the hub reads as "no bound I know of", and re-encoding that Hello produces the same bytes
+rather than inventing a field the peer never sent. Both halves are pinned in `WireFormatTest`. Adding a
 message type: an unrecognised `"t"` decodes to `Message.Unknown`, which the receiver logs and
 answers with `Error{unknown-type}` instead of dropping the channel. Adding a mux frame type: a
 frame carries its own length, so one with an unknown type is skipped and the stream stays in sync.
@@ -1384,6 +1387,46 @@ people which file to download.
 | Hub idle RSS | about 25.3 MB | about 35.1 MB (3.3 anonymous) | 28 / 38 MB |
 | RSS with 1,000 visitor sessions held open | node 69 MB, hub 53 MB | node 67 MB, hub 65 MB | node 88 MB, hub 88 MB |
 | CLI cold start | about 6.3 ms (`jailscale status`, median of 10, IPC round trip included) | about 2.4 ms | 50 ms |
+
+### How many visitors this serves, and what stops it
+
+The numbers for this were spread across §5.3, §9.3, §15 and the table above, so answering "what
+happens when a thousand visitors arrive" meant reading four places and doing the arithmetic. It is
+one place now.
+
+| | hub | node |
+|---|---|---|
+| What one visitor costs | the bytes it has not read yet — **0 if it reads**, up to 272 KiB if it stalls | **about 99 KB** of TLS state, the same whether it reads or stalls |
+| The bound | `FlowBudget`, **24 MB** of receive queues (§5.3) | `Visitors.MAX_IN_FLIGHT`, **450** visitor streams (§9.3) |
+| In what unit | bytes | a count |
+| Where it comes from | a quarter of the 96 MiB heap ceiling | measured against the 64 MiB heap ceiling |
+| Over it | resets the stalled stream holding the most | refuses the new visitor before its handshake |
+| Reported as | `jailhub_receive_budget_bytes`, `_queued_bytes`, `_queued_peak_bytes`, `jailhub_streams_reclaimed_total` | `jailhub_node_visitor_capacity` on the hub, `visitorCeiling` / `visitorsInFlight` / `visitorsRefused` in `jailscale status` |
+| Moved by | `-XX:MaxHeapSize=` on the hub | `-XX:MaxHeapSize=` in `JAILSCALE_DAEMON_OPTS` |
+
+**Which one binds first is a question about the visitors, not about the deployment.** The two bounds
+are in different units on purpose, and that is the whole answer: the hub's is reached by *behaviour*
+and the node's by *count*. A thousand visitors who read what they asked for cost the hub almost
+nothing and the node 99 MB, so the node's count binds and the hub's queues stay near empty — which is
+what the budget gate sees on the CI runner, 2.0 to 11.9 MB of 24. A few hundred who stall cost the
+node the same 99 KB each but can fill the hub's 24 MB, which is what a developer's machine sees at
+`SLOW=400`: the queue pinned at 24.0 of 24.0 with streams shed. Both bounds have been reached in
+measurement; neither is the one that always goes first.
+
+**The hub admits on three caps now, and only the third is about capacity.** Per address
+(`MAX_PER_IP` = 64) and per name (`MAX_PER_NAME` = 1,024) are abuse limits and were never
+capacities — the per-name number sat on the hub's own page as though it were one, against a node
+holding a few hundred. The third is what the node said it will hold, sent on `Hello` (§5.4's
+additive case, and the first field added to an existing message since the protocol shipped). A node
+that does not send it — every build older than the field — is admitted exactly as before, and its
+own bound resets what the hub oversends.
+
+**What the operator can do about it.** A node at its bound shows up as
+`jailhub_visitors_refused_capacity_total` rising and as "N of 450" in the admin node table; the
+answers are to give that node more heap, which raises its bound proportionally, or to move a name to
+another node. A hub at its receive budget shows up as `jailhub_streams_reclaimed_total` rising with
+`jailhub_receive_queued_peak_bytes` at the limit, and the answer is more heap on the hub. The two are
+told apart by which counter moves, which is why they are separate counters.
 
 **`measure.sh SLOW=` measures a third axis, and the node does not meet its budget on it.** `LOAD=`
 holds visitor sessions open with no bytes in flight; `SLOW=` has each visitor ask for 8 MB and read

@@ -13,7 +13,7 @@ class CodecTest {
     @Test
     void everyMessageRoundTrips() throws Exception {
         Message[] all = {
-            new Message.Hello(1, "0.1.0", "macos", 2, "hub.example.com"),
+            new Message.Hello(1, "0.1.0", "macos", 2, "hub.example.com", 450),
             new Message.HelloResponse(1, 1, "0.1.0", "hub.example.com"),
             new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED),
             new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED, "this hub speaks protocol 2 and newer"),
@@ -73,7 +73,7 @@ class CodecTest {
     @Test
     void wireFormIsCompact() {
         assertEquals("{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.0\",\"os\":\"linux\",\"conn\":0}",
-            Codec.encodeToString(new Message.Hello(1, "0.1.0", "linux", 0, null)));
+            Codec.encodeToString(new Message.Hello(1, "0.1.0", "linux", 0, null, 0)));
         assertEquals("{\"t\":\"RegisterResponse\",\"status\":\"pending\"}",
             Codec.encodeToString(Message.RegisterResponse.pending()));
     }

@@ -118,6 +118,16 @@ final class Visitors {
     static final int MAX_IN_FLIGHT = ceilingFor(Runtime.getRuntime().maxMemory());
 
     /**
+     * This instance's bound. Normally {@link #MAX_IN_FLIGHT}; settable so a test can reach the
+     * ceiling without a heap that large, and so a host can say the number itself -- the same escape
+     * {@link io.jailscale.proto.mux.FlowBudget#of} offers for the hub's byte budget, which the two
+     * bounds should have in common since they are derived from the same place for the same reason.
+     * Neither is wired to a flag: nothing measured so far asks for a number other than the derived
+     * one, and a knob with no use is a surface to support.
+     */
+    private final int maxInFlight;
+
+    /**
      * The arithmetic on its own, so the numbers above can be held against something. A heap of
      * {@link Long#MAX_VALUE} means no ceiling was set, which is a JVM run and not a shipped binary:
      * the native images are built with {@code -R:MaxHeapSize} (native.maxHeap in the poms) and
@@ -130,8 +140,21 @@ final class Visitors {
     }
 
     Visitors(NodeState state) {
+        this(state, MAX_IN_FLIGHT);
+    }
+
+    Visitors(NodeState state, int maxInFlight) {
+        if (maxInFlight <= 0) {
+            throw new IllegalArgumentException("the visitor bound must be positive: " + maxInFlight);
+        }
         this.state = state;
+        this.maxInFlight = maxInFlight;
         RemoteSigning.install();
+    }
+
+    /** How many visitor streams this node will serve at once (ARCHITECTURE.md §9.3). */
+    int maxInFlight() {
+        return maxInFlight;
     }
 
     /** Builds the SSLContext for a certificate the hub sent. */
@@ -191,7 +214,7 @@ final class Visitors {
         // Around the whole of it, not around the TlsEndpoint: several paths abandon a visitor
         // before the endpoint is closed, and a count that leaks on those would invent visitors that
         // are not there.
-        if (inFlight.incrementAndGet() > MAX_IN_FLIGHT) {
+        if (inFlight.incrementAndGet() > maxInFlight) {
             inFlight.decrementAndGet();
             refuse(stream);
             return;

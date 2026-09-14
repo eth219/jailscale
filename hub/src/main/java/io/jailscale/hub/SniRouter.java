@@ -161,6 +161,25 @@ final class SniRouter {
                 Relay.closeQuietly(socket);
                 return;
             }
+            // The third cap, and the only one whose number comes from somewhere else: what the node
+            // said it will hold (ARCHITECTURE.md §9.3). Here with the other two rather than left to
+            // NodeGroup.openVisitor, so that all three admission decisions are made in one place and
+            // a visitor the hub cannot deliver is turned away before a stream is opened for it. The
+            // check in openVisitor stays as the backstop for the race between this and the open, and
+            // for the raw ports, which do not come through here.
+            int ceiling = link.group().visitorCeiling();
+            if (ceiling > 0 && link.group().visitorsInFlight() >= ceiling) {
+                release(perName, name);
+                Metrics.VISITORS_REFUSED.increment();
+                Metrics.VISITORS_REFUSED_CAPACITY.increment();
+                // Closed rather than answered. The hub has the key and could serve a page the way
+                // fallback() does for an offline node, but that is a full TLS handshake per refused
+                // visitor -- about 2.8 ms of hub CPU on the gate's runner -- and a node at its bound
+                // is exactly when the hub has least to spare. The operator sees this in
+                // jailhub_visitors_refused_capacity_total and on the admin page instead.
+                Relay.closeQuietly(socket);
+                return;
+            }
             try {
                 Metrics.VISITORS.increment();
                 current.incrementAndGet();
