@@ -165,10 +165,6 @@ final class TlsEndpoint implements AutoCloseable {
         }
     }
 
-    String applicationProtocol() {
-        return engine.getApplicationProtocol();
-    }
-
     /**
      * Writes whatever plaintext has been decrypted straight to {@code sink}, and returns how many
      * bytes went or -1 at end of stream. The relay's other shape -- {@code plainIn().read(buf)} --

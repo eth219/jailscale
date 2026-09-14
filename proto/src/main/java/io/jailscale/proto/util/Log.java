@@ -34,10 +34,6 @@ public final class Log {
         out = stream;
     }
 
-    public boolean debugEnabled() {
-        return level == Level.DEBUG;
-    }
-
     public void debug(String msg, Object... args) {
         log(Level.DEBUG, msg, args, null);
     }

@@ -13,7 +13,6 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SNIHostName;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
-import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
@@ -47,15 +46,6 @@ public final class Tls {
         } catch (IOException e) {
             throw new GeneralSecurityException("keystore", e);
         }
-    }
-
-    /** Applies protocol, ALPN and (for servers) no client auth. */
-    public static void configureServer(SSLServerSocket ss) {
-        SSLParameters p = ss.getSSLParameters();
-        p.setProtocols(PROTOCOLS);
-        p.setApplicationProtocols(ALPN_HTTP11);
-        p.setUseCipherSuitesOrder(true);
-        ss.setSSLParameters(p);
     }
 
     /**

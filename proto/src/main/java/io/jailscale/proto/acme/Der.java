@@ -53,10 +53,6 @@ public final class Der {
         return tlv(0x02, v.toByteArray()); // two's complement, minimal, as DER wants
     }
 
-    public static byte[] nul() {
-        return new byte[] {0x05, 0x00};
-    }
-
     public static byte[] bool(boolean b) {
         return new byte[] {0x01, 0x01, (byte) (b ? 0xff : 0x00)};
     }
@@ -72,14 +68,6 @@ public final class Der {
 
     public static byte[] utf8(String s) {
         return tlv(0x0c, s.getBytes(StandardCharsets.UTF_8));
-    }
-
-    public static byte[] ia5(String s) {
-        return tlv(0x16, s.getBytes(StandardCharsets.US_ASCII));
-    }
-
-    public static byte[] printable(String s) {
-        return tlv(0x13, s.getBytes(StandardCharsets.US_ASCII));
     }
 
     /** Context-specific tag: constructed [n] or implicit primitive [n]. */
