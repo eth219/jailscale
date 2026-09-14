@@ -47,7 +47,7 @@ class VisitorCeilingTest {
 
     @Test
     void theBoundTheProcessActuallyRunsWithIsTheOneDerived() {
-        assertEquals(Visitors.ceilingFor(Runtime.getRuntime().maxMemory()), Visitors.MAX_IN_FLIGHT);
-        assertTrue(Visitors.MAX_IN_FLIGHT >= 64, "the floor is a floor: " + Visitors.MAX_IN_FLIGHT);
+        assertEquals(Visitors.ceilingFor(Runtime.getRuntime().maxMemory()), Visitors.defaultCeiling());
+        assertTrue(Visitors.defaultCeiling() >= 64, "the floor is a floor: " + Visitors.defaultCeiling());
     }
 }

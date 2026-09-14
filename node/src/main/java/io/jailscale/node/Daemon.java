@@ -49,7 +49,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
-        this(config, Visitors.MAX_IN_FLIGHT);
+        this(config, Visitors.defaultCeiling());
     }
 
     /**
