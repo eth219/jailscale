@@ -1,7 +1,6 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
@@ -179,6 +178,13 @@ class NodeCapacityTest {
         }
         assertTrue(sent.await(30, TimeUnit.SECONDS), "the first " + CEILING + " visitors never got through");
         assertEquals(List.of(), failures, "a visitor inside the bound should be served");
+        // Waited for, not asserted: the latch above says the visitor wrote its request, and the
+        // request still has to cross the hub, the node and the local socket. Asserting appHits
+        // straight after the latch passed on a developer's machine and failed on both CI runners at
+        // 0 of 3 -- the bound was full but the app had not been reached yet. Waiting for the app is
+        // also the strongest statement of the precondition: all three visitors are established the
+        // whole way through, so the node is genuinely holding its bound when the next one arrives.
+        waitFor(() -> appHits.get() == CEILING);
         waitFor(() -> hub.registry().get(node.machineKey()).visitorsInFlight() == CEILING);
 
         // Taken here, with the bound already full, so it counts only the visitor below. VISITORS
@@ -217,7 +223,7 @@ class NodeCapacityTest {
         for (Thread t : held) {
             t.join(30_000);
         }
-        assertFalse(appHits.get() > CEILING, "the local app saw more visitors than the node's bound");
+        assertEquals(CEILING, appHits.get(), "the refused visitor reached the local app anyway");
     }
 
     /**
