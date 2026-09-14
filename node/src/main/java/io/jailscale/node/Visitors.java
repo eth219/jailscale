@@ -359,7 +359,7 @@ final class Visitors {
             }
             return;
         }
-        relay(tls, plain, local, stream, concat(proxyLine, replay));
+        relay(sni, tls, plain, local, stream, concat(proxyLine, replay));
     }
 
     /** ARCHITECTURE.md §9.3: {@code --proxy-protocol} tells the local app who the visitor is, HAProxy style. */
@@ -533,7 +533,8 @@ final class Visitors {
      * (§9.3) already read the request head from a buffered view of it -- in which case it is that
      * view, holding whatever the gate read past the head.
      */
-    private static void relay(TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream, byte[] replay) {
+    private static void relay(String sni, TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream,
+        byte[] replay) {
         Thread toLocal = DuplexThread.start("visitor-in", () -> {
             try {
                 if (replay != null) {
@@ -551,6 +552,11 @@ final class Visitors {
                 }
                 local.shutdownOutput();
             } catch (IOException e) {
+                // Deliberately silent, unlike its opposite number below. An ordinary visit ends with
+                // the relay thread closing `local` in its finally while this one is still in drain,
+                // so this catch sees "Socket is closed" on the happy path -- one exception line per
+                // successful visit, in the log somebody turned to debug to chase a real one. It has
+                // no state to tell that apart from a genuine failure of this direction.
                 closeQuietly(local);
             }
         });
@@ -559,6 +565,13 @@ final class Visitors {
             tls.close();
             stream.close();
         } catch (IOException e) {
+            // Debug rather than warn, because the ordinary end of a visitor is a close somewhere and
+            // this catch sees those too. It is here at all because it was silent: a local app that
+            // closes with the request still unread resets this socket, which can discard a response
+            // already sitting in the buffer, and the visitor then sees a stream that closed with
+            // nothing on it. That cost a reproduction to find with nothing in any log to start from
+            // (SignatureCapTest's javadoc has the whole of it).
+            LOG.debug("local -> visitor for {} ended: {}", sni, e.toString());
             stream.reset(1);
         } finally {
             closeQuietly(local);

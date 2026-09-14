@@ -189,25 +189,36 @@ class SignatureCapTest {
     /**
      * One connected node still completes a real visitor handshake on one signature.
      *
-     * <p>The local app answers every connection rather than exactly one, which is what every other
-     * end-to-end test here does and what this one did not. It failed twice on macos-15 with
-     * {@code EOFException: no response} — the visitor's stream closing with nothing on it, about
-     * 3 ms after the link opened, with neither the hub nor the node logging a complaint at any
-     * level. Twenty runs here, including six under deliberate CPU contention, did not reproduce it.
+     * <p><b>The local app reads the request before it answers, and that is load-bearing.</b> This
+     * test failed three times on macos-15 with {@code EOFException: no response} — the visitor's
+     * stream closing with nothing on it, and neither the hub nor the node complaining. The count
+     * added when the one-shot accept was replaced with a loop retired that explanation on the third
+     * failure, which reported one connection seen.
      *
-     * <p><b>So this is a robustness change on circumstantial evidence and not a diagnosis.</b> What
-     * is circumstantial: a one-shot accept has nothing to answer a second local connection with, and
-     * the node opens one per visitor and retries a refused or reset one five times (§9.3), so any
-     * second arrival left the real visitor waiting on a socket nobody would ever write to — which is
-     * the symptom. The stable siblings serve in a loop and do not flake.
+     * <p>The cause is TCP, and it was this app. It wrote its response and closed without ever
+     * reading the request the node had already written into it. <b>Closing a socket that still holds
+     * unread bytes sends RST rather than FIN</b>, and an RST can flush the peer's receive buffer: if
+     * it reaches the node before the node has read the response, the response is gone.
+     * {@code Visitors.relay} then sees {@code SocketException: Connection reset} on its copy from
+     * the local app, resets the visitor's stream, and the visitor gets exactly what was reported —
+     * a stream that closes with no response. The node is right to reset; the bytes really were lost.
      *
-     * <p>The count is kept and reported so the next failure is evidence rather than another guess:
-     * if it fails again with one connection seen, the single accept was never the cause.
+     * <p>It needs CPU contention because it is a race between the node's read and the RST: with
+     * cores to spare the reading virtual thread is scheduled first and the reset arrives harmlessly
+     * afterwards, which is why twenty unloaded runs never reproduced it. On this machine with every
+     * core but one spinning, 150 repetitions failed 21 times and then 13, with
+     * {@code Connection reset} logged on every failure; reading the request first took the same 150
+     * repetitions under the same load to <b>0 failures and no resets at all</b>.
+     *
+     * <p>Every other local app in these tests already read before answering — {@code LinkEndToEndTest}
+     * and {@code ProxyProtocolEndToEndTest} parse the request head, {@code RawPortTest} echoes — which
+     * is why this was the only test that flaked.
      */
     @Test
     void anOrdinaryVisitorSpendsOneSignature() throws Exception {
         NodeGroup group = connectedGroup();
-        java.util.concurrent.atomic.AtomicInteger localConnections = new java.util.concurrent.atomic.AtomicInteger();
+        AtomicInteger localConnections = new AtomicInteger();
+        AtomicInteger answered = new AtomicInteger();
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {
@@ -215,9 +226,13 @@ class SignatureCapTest {
                     localConnections.incrementAndGet();
                     Thread.ofVirtual().start(() -> {
                         try (c) {
+                            // Before answering, and not for tidiness: closing with the node's
+                            // request still unread sends RST, which can take this response with it.
+                            io.jailscale.proto.http.Http.readRequest(c.getInputStream(), 4096);
                             c.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".getBytes());
                             c.getOutputStream().flush();
-                        } catch (IOException e) {
+                            answered.incrementAndGet();
+                        } catch (IOException | io.jailscale.proto.http.HttpException e) {
                             // the assertion below reports it
                         }
                     });
@@ -234,9 +249,11 @@ class SignatureCapTest {
             try {
                 assertEquals(200, io.jailscale.proto.http.Http.readResponse(s.getInputStream(), 4096).status());
             } catch (java.io.EOFException e) {
-                throw new AssertionError("the visitor's stream closed with no response; the local app saw "
-                    + localConnections.get() + " connection(s). One means the single accept this test "
-                    + "used to do was not what was starving it, and the cause is still open.", e);
+                throw new AssertionError("the visitor's stream closed with no response; the local app accepted "
+                    + localConnections.get() + " connection(s) and answered " + answered.get()
+                    + ". The cause this shape had was the app closing on an unread request, which resets the "
+                    + "node's socket and can take the response with it; it reads first now, so this is "
+                    + "something else. The node logs the reset it saw at debug level.", e);
             }
         }
         assertTrue(group.peakConcurrentSignatures() >= 1, "the handshake should have needed a signature");
