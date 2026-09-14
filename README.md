@@ -71,16 +71,16 @@ own. Neither has a runtime dependency and neither needs root to run.
 
 ### A binary
 
-v0.1.1 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
+v0.1.2 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
 `darwin-arm64` and `windows-amd64.exe`. There is no `darwin-amd64`, because
 GraalVM CE 25.3 does not build one ([ARCHITECTURE.md
 §3.2](docs/ARCHITECTURE.md)); Intel Macs get [the JAR](#anything-else-with-a-jvm-25).
-The two targets the budget measures are 25.3 to 26.2 MiB
+The two targets the budget measures are 25.3 to 26.4 MiB
 ([Resource usage](#resource-usage)), which is what the rest of this file
 describes; the other two carry no measured figure.
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.1.1
+base=https://github.com/eth219/jailscale/releases/download/v0.1.2
 target=darwin-arm64   # pick yours
 
 curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
@@ -102,7 +102,7 @@ jailscale` — and Windows SmartScreen warns for the same reason.
 
 For linux/amd64 and linux/arm64, built by the same workflow, toolchain and
 options as the binaries above, so [Resource usage](#resource-usage) describes
-them too. `:v0.1.1` pins that tag, `:latest` follows releases, `:edge` follows
+them too. `:v0.1.2` pins that tag, `:latest` follows releases, `:edge` follows
 main.
 
 The images tagged `:v0.1.0` are not worth pulling: they were built before the
@@ -111,8 +111,8 @@ directory` instead of starting, and `:latest` pointed at one of them until this
 release.
 
 ```
-docker pull ghcr.io/eth219/jailhub:v0.1.1
-docker pull ghcr.io/eth219/jailscale:v0.1.1
+docker pull ghcr.io/eth219/jailhub:v0.1.2
+docker pull ghcr.io/eth219/jailscale:v0.1.2
 ```
 
 Both images are distroless and run as a non-root user: the binary, glibc and
@@ -127,7 +127,7 @@ The container runs the daemon, and the CLI is `exec`ed into it:
 ```sh
 docker network create demo   # the app joins this too, see below
 docker run -d --name jailscale --network demo \
-    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.1
+    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.2
 docker exec jailscale /jailscale up --hub jailscale.sinabro.io
 docker exec jailscale /jailscale open 3000 --host myapp --name myapp
 ```
@@ -219,7 +219,7 @@ budget on every push there. Two platforms, because an amd64 binary is bigger
 than an arm64 one and Linux counts the binary's own mapped pages in RSS where
 macOS largely does not.
 
-This describes v0.1.1, the release [Install](#a-binary) downloads: the budget
+This describes v0.1.2, the release [Install](#a-binary) downloads: the budget
 builds with the toolchain and options the release workflow uses, so the gate
 measures what ships. v0.1.0 did not — it was tagged a day before that pin landed
 and was built with Liberica NIK 25.0.4, which cost it about 5 MiB per binary,
@@ -229,15 +229,20 @@ side.
 
 | | jailhub | jailscale |
 |---|---|---|
-| Binary size | 25.3 / 26.1 MiB | 25.4 / 26.2 MiB |
-| Idle RSS | 25.3 / 35.1 MB | 24.8 / 34.4 MB |
-| Peak RSS, 1,000 visitors held open at once | 53 / 65 MB | 69 / 67 MB |
-| CLI cold start | — | 6.3 / 2.4 ms |
+| Binary size | 25.3 / 26.1 MiB | 25.4 / 26.4 MiB |
+| Idle RSS | 25.3 / 35.6 MB | 24.8 / 34.4 MB |
+| Peak RSS, 1,000 visitors held open at once | 53 / 62 MB | 69 / 55 MB |
+| CLI cold start | — | 6.3 / 2.6 ms |
 
-*arm64 macOS / linux-amd64.* On Linux most of that idle RSS is the binary mapped
-into the process, clean pages the kernel takes back when it needs them. The
-anonymous memory, the part that is really the process's, is 3 MB for the hub and
-2 MB for the node.
+*arm64 macOS / linux-amd64.* The linux-amd64 column is the gate's own numbers
+from the commit this release was cut at. The macOS column is a local run and
+predates the node's visitor bound ([ARCHITECTURE.md §9.3](docs/ARCHITECTURE.md)),
+which took 12 MB off the node's peak where it has been re-measured, so read its
+peak as an upper bound rather than a current figure.
+
+On Linux most of that idle RSS is the binary mapped into the process, clean pages
+the kernel takes back when it needs them. The anonymous memory, the part that is
+really the process's, is 3 MB for the hub and 2 MB for the node.
 
 Idle is a fresh start, not a steady state. The heap has a ceiling, 96 MB for the
 hub and 64 MB for the node, and a long-running process drifts up towards it: the
@@ -296,12 +301,12 @@ What a compromised hub can and cannot do is written out in
 - Idle memory is 25 MB against the 20 MB originally aimed at (34.4 MB as Linux
   counts it, 2 MB of it anonymous). Most of the gap is JSSE standing up a single
   TLS client.
-- v0.1.1 is the second tagged release and the first upgrade, and nobody has
-  performed one yet. The wire between the two tags is compatible — the only
-  control-message change is one added optional field, which is the additive case
-  [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md) permits, and `WireFormatTest`
-  pins v0.1.0's own `Hello` line as still decoding — so a hub and its nodes can
-  be replaced separately rather than together.
+- v0.1.2 is the third tagged release, and nobody has performed an upgrade yet.
+  The wire across all three is compatible: each step added one optional `Hello`
+  field — `host` before v0.1.1, `visitors` before v0.1.2 — which is the additive
+  case [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md) permits, and `WireFormatTest`
+  pins v0.1.0's own `Hello` line as still decoding and re-encoding unchanged. A
+  hub and its nodes can be replaced separately rather than together.
 
 [ARCHITECTURE.md §15](docs/ARCHITECTURE.md) has the rest, in more detail.
 
