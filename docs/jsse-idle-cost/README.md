@@ -6,7 +6,7 @@
 20 MB aimed at. It was one delta between two processes, attributed whole to JSSE. This file is why
 all three now say something else.
 
-`decompose.sh` beside this file holds one daemon in eight states and measures each three ways: RSS,
+`decompose.sh` beside this file holds one daemon in five states and measures each three ways: RSS,
 the pages the process has actually written, and the resident pages of the binary's own code. Three
 runs, `darwin-arm64`, GraalVM CE 25.3.4.1, `-O2`, the release toolchain. The spread between runs is
 0.1 MB, so the differences below are real at one decimal place.

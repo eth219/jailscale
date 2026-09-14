@@ -1334,7 +1334,7 @@ cannot move a number the heap is not in.
 
 That measurement replaced what this paragraph used to claim. It read "the node daemon alone is about
 16.7 MB and reaches about 24.3 MB the moment it connects, so roughly 7.6 MB is JSSE initialisation
-for one TLS client" -- one delta between two processes, attributed whole to JSSE. Held in eight
+for one TLS client" -- one delta between two processes, attributed whole to JSSE. Held in five
 states and measured three ways (`docs/jsse-idle-cost`), the same transition is 8.0 MB on
 darwin-arm64, and **1.5 MB of it is memory the process owns**: the rest is the binary's own code and
 image heap becoming resident, clean, file-backed and evictable. JSSE's share is between 2.6 and
