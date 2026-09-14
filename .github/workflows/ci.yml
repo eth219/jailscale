@@ -35,7 +35,7 @@ jobs:
       # JDK 25.0.3 or newer, for the virtual-thread timer fixes named in ARCHITECTURE.md §3.2.
       # The tests run on the newest 25.0.x, a different line from the release's (§3.2); what they
       # need from a JDK is that it is not 25.0.0-25.0.2, and both lines satisfy that.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           java-version: '25'
           distribution: 'liberica'
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           java-version: '25'
           distribution: 'liberica'
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           java-version: '25'
           distribution: 'liberica'
