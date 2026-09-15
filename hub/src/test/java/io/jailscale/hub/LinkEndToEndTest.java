@@ -228,13 +228,11 @@ class LinkEndToEndTest {
 
     /**
      * The directory at {@code /links}, fetched the way a stranger fetches it. It has to name what
-     * the hub is serving and say how busy each one is, and it has to give away no more than the
-     * front page did: the owner and the local target are still the admin's business. The visitor
-     * count is held open deliberately -- a visitor that finishes its handshake and then says
-     * nothing sits in the node's serve(), which is what makes the number deterministic here.
+     * the hub is serving and give away no more than that: not the owner, not the local target, and
+     * not how busy a link is at this moment.
      */
     @Test
-    void theDirectorySaysWhatIsServedAndHowManyAreOnItWithoutSayingWhose() throws Exception {
+    void theDirectorySaysWhatIsServedWithoutSayingWhoseOrHowBusy() throws Exception {
         Daemon alice = node("alice");
         ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
             .put("user", "alice").put("caFile", CERT.toString())));
@@ -249,21 +247,26 @@ class LinkEndToEndTest {
         String idle = visit("hub.test", "/links").bodyText();
         assertTrue(idle.contains("<a href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), idle);
         assertTrue(idle.contains("&middot; open "), "how long it has been open: " + idle);
-        assertFalse(idle.contains("&middot; 1 visitor"), "nothing is connected, so no count is claimed: " + idle);
         assertFalse(idle.contains("alice"), "the owner must not be on the public page: " + idle);
         assertFalse(idle.contains("127.0.0.1:" + localApp.getLocalPort()),
             "the local target must not be on the public page: " + idle);
         assertFalse(idle.contains("mkey:"), idle);
 
+        // That a name is open is public; that somebody is on it right now is not. The page carried
+        // a per-link count for a while, and a page anyone can poll turns that into a live activity
+        // feed for a machine belonging to somebody else. A visitor is held open across the fetch --
+        // one that finishes its handshake and then says nothing sits in the node's serve() -- so
+        // this is the moment a count would appear if the page still took one.
         try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), "myapp.hub.test", "127.0.0.1", port, true, 10_000)) {
-            s.startHandshake(); // and then nothing, so the visitor is still there when the page is built
-            waitFor(() -> hub.router().visitorsFor("myapp") == 1);
+            s.startHandshake();
+            waitFor(() -> hub.router().visitorsInFlight() == 1);
             String busy = visit("hub.test", "/links").bodyText();
-            assertTrue(busy.contains("&middot; 1 visitor &middot;"), busy);
+            assertEquals(1, hub.router().visitorsInFlight(), "the visitor should still be held: " + busy);
+            assertFalse(busy.contains("visitor"), "how busy a link is is the operator's, not the page's: " + busy);
+            assertFalse(busy.matches("(?s).*&middot; [0-9]+ .*"), "no per-link figure at all: " + busy);
+            // The row itself is still there, so this is not passing because the page went blank.
+            assertTrue(busy.contains("<a href=\"https://myapp.hub.test:" + port + "\">"), busy);
         }
-        waitFor(() -> hub.router().visitorsFor("myapp") == 0);
-        assertFalse(visit("hub.test", "/links").bodyText().contains("&middot; 1 visitor"),
-            "the count is what is open now, not a total");
     }
 
     /**

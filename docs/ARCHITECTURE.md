@@ -504,14 +504,19 @@ are two real URLs with a nav between them rather than one page with scripted tab
 can be sent to someone and neither needs a script to arrive at. The status went nowhere: the
 availability record is what tells a first visitor this hub is real, and it belongs where they land.
 
-Each row carries the address, the kind, how many visitors are being relayed to it at that instant,
-and how long the link has been open -- every one of them something the hub already holds for its own
-routing, read from the same per-name map the admission cap is enforced in (§9.3). **Nothing on the
-page is fetched from the link.** A thumbnail or a favicon would mean the hub connecting to a node's
+Each row carries the address, the kind and how long the link has been open -- every one of them
+something the hub already holds for its own routing. **Nothing on the page is fetched from the
+link.** A thumbnail or a favicon would mean the hub connecting to a node's
 app as a visitor and republishing what came back on its own front page, which is the one thing that
 page tells people it does not do, and it would put whatever anyone who can join chooses to serve on
-the operator's name. A raw port prints no visitor count rather than a zero, because raw ports do not
-pass through the SNI router and the number was never measured. "Open" is since the *link* opened, so
+the operator's name. **Nor how many visitors a link is serving**, though the hub has that number and
+this page carried it briefly: that a name is open was already public, that somebody is on it right
+now was not, and a page anyone can poll turns the second into a live activity feed for a machine
+belonging to somebody else. It is also the figure `AdminWeb` keeps for the operator in as many words
+-- "how close a particular node is to its bound ... is the operator's business and nobody else's" --
+and the one this section refuses on `/metrics`, which listens on loopback and so has a narrower
+audience than a page on 443. The reader loses little: someone deciding whether to click a link
+learns more by clicking it. "Open" is since the *link* opened, so
 a node that restarts or hands its name on starts the clock again -- it counts the current link, not
 the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
 list does. The directory renders at most 200 rows at a time, like every other unauthenticated

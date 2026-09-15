@@ -494,10 +494,18 @@ final class HttpFront {
      * tabs keeps both halves linkable and keeps the no-script bargain the rest of this front end
      * makes.
      *
-     * <p>Four facts per link, and every one of them is something the hub already holds for its
-     * own routing: the address, which is public by construction because a visitor reaches it by
-     * typing it; its kind; how many visitors are being relayed to it at this instant; and how long
-     * it has been open. Nothing here is fetched from the link itself. A thumbnail or a favicon would mean
+     * <p>Three facts per link: the address, which is public by construction because a visitor
+     * reaches it by typing it; its kind; and how long it has been open. Nothing here is fetched
+     * from the link itself.
+     *
+     * <p><b>Not how many visitors a link is serving</b>, although the hub has that number and this
+     * page carried it for a while. That the name exists was already public; that somebody is using
+     * it right now was not, and a page anyone can poll turns it into a live activity feed for a
+     * machine that belongs to somebody else. It is also the one figure {@link AdminWeb} keeps for
+     * the operator in as many words -- "how close a particular node is to its bound ... is the
+     * operator's business and nobody else's" -- and §6.3 refuses the same shape on {@code
+     * /metrics}, which listens on loopback and so has a narrower audience than this. The reader
+     * here loses little: a visitor deciding whether to click a link learns more by clicking it. A thumbnail or a favicon would mean
      * the hub connecting to a node's app as a visitor and republishing what came back on its own
      * front page -- which is the one thing the front page tells people it does not do -- and would
      * put whatever anyone who can join chooses to serve on the operator's page. Who owns a name and
@@ -552,10 +560,10 @@ final class HttpFront {
                     .append("</a></p>");
             }
         }
-        b.append("<p><small>A visitor count is the connections open at the moment this page was")
-            .append(" built, not a total, and a link with none says nothing rather than zero. \"Open\"")
-            .append(" is since the link was opened: a node that restarts or hands its name to another")
-            .append(" machine opens a new one, so this counts the current one, not the name.</small></p>");
+        b.append("<p><small>How busy a link is is not on this page: that a name is open is public,")
+            .append(" and who is using it at this moment is not. \"Open\" is since the link was opened:")
+            .append(" a node that restarts or hands its name to another machine opens a new one, so")
+            .append(" this counts the current one, not the name.</small></p>");
         return b.toString();
     }
 
@@ -583,17 +591,7 @@ final class HttpFront {
         b.append("<table class=\"links\">");
         for (Keyed k : links) {
             Links.Link l = k.link();
-            StringBuilder facts = new StringBuilder(escape(l.kind()));
-            // Only names and domains are counted per name, so a raw port says nothing here rather
-            // than a zero that would read as "nobody is connected" when it means "not measured".
-            if (!l.raw()) {
-                int v = hub.router().visitorsFor(l.name());
-                if (v > 0) {
-                    facts.append(" &middot; ").append(v).append(v == 1 ? " visitor" : " visitors");
-                }
-            }
-            facts.append(" &middot; open ").append(Resources.humanDuration(now - l.openedAt()));
-            row(b, address(l), facts.toString());
+            row(b, address(l), escape(l.kind()) + " &middot; open " + Resources.humanDuration(now - l.openedAt()));
         }
         b.append("</table>");
     }
