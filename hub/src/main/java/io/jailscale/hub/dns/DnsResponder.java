@@ -100,7 +100,7 @@ public final class DnsResponder implements AutoCloseable {
 
     /** Per-network answer rate on UDP (§11.5); TCP is not metered, having proved its address. */
     private final ResponseRate rate = new ResponseRate();
-    private long lastRateLog;
+    private long lastRateLog = Clock.millis();
 
     private final String zone;      // _acme-challenge.hub.example.com (lower case, no trailing dot)
     private final String hubName;   // hub.example.com, the zone apex

@@ -54,7 +54,8 @@ final class RateLimiter {
     private final double perSecond;
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
     private final AtomicLong prunes = new AtomicLong();
-    private volatile long lastPrune;
+    /** Seeded, not left at zero: {@link Clock} has no defined origin and may start below it. */
+    private volatile long lastPrune = Clock.millis();
 
     RateLimiter(int burst, double perSecond) {
         this.burst = burst;

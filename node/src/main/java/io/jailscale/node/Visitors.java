@@ -57,7 +57,7 @@ final class Visitors {
     private volatile long lastRefusalLog;
     /** Visitors dropped at {@link #FIRST_BYTE_MS} since this daemon started, and when that was last said. */
     private final java.util.concurrent.atomic.AtomicLong stalledOut = new java.util.concurrent.atomic.AtomicLong();
-    private volatile long lastStallLog;
+    private volatile long lastStallLog = Clock.millis();
     /** A visitor handshake slower than this is worth a line; healthy is single-digit milliseconds. */
     private static final long SLOW_HANDSHAKE_MS = 1_000;
 
@@ -326,7 +326,7 @@ final class Visitors {
      */
     private void stalled(String sni) {
         long n = stalledOut.incrementAndGet();
-        long now = System.currentTimeMillis();
+        long now = Clock.millis();
         if (now - lastStallLog >= REFUSAL_LOG_MS) {
             lastStallLog = now;
             LOG.info("visitor for {} never finished its handshake; dropped after {} ms and the slot released "
@@ -376,7 +376,13 @@ final class Visitors {
         // The slot this visitor took in serve() is held from here; §9.3's deadline is what stops a
         // visitor that never speaks from holding it for the life of the process. Armed before the
         // endpoint exists, because the handshake is the first thing that can wait.
-        boolean gated = target.gateHash != null;
+        // The gate this visitor is held to, filled in below once the handshake is over. `gateHash`
+        // is volatile and an operator arms or clears a gate while handshakes are in flight, so a
+        // value sampled here and tested after the handshake is a gate armed in between that this
+        // visitor never meets -- and the window is the whole of firstByteMs. Read once, used for
+        // the branch, for Gate.decide and by the callback, which cannot run before it is set: it
+        // fires on the first application bytes, and those are read after the handshake returns.
+        String[] gate = new String[1];
         stream.readDeadlineIn(firstByteMs);
         TlsEndpoint tls = new TlsEndpoint(ctx, stream.in(), stream.out());
         try {
@@ -391,7 +397,7 @@ final class Visitors {
                 // is idle by design must not meet it again. A gated link keeps it a moment longer:
                 // this fires on the first byte of the request head, and the gate has the rest of
                 // that head to read before anything is relayed.
-                if (!gated) {
+                if (gate[0] == null) {
                     stream.noReadDeadline();
                 }
             });
@@ -420,7 +426,8 @@ final class Visitors {
         }
         byte[] replay = null;
         InputStream plain = tls.plainIn();
-        if (gated) {
+        gate[0] = target.gateHash;
+        if (gate[0] != null) {
             // The gate reads the request head a byte at a time looking for the blank line, and
             // every one of those single-byte reads allocates and takes the engine's lock. Buffer
             // it -- but the buffer has to be the same object the relay then reads from, because a
@@ -429,7 +436,7 @@ final class Visitors {
             plain = new BufferedInputStream(plain, GATE_BUFFER);
             try {
                 boolean expired = target.gateExpiresAt > 0 && System.currentTimeMillis() > target.gateExpiresAt;
-                Gate.Decision d = Gate.decide(plain, target.gateHash, expired);
+                Gate.Decision d = Gate.decide(plain, gate[0], expired);
                 switch (d) {
                     case Gate.Decision.Pass p -> {
                         replay = p.head();
@@ -451,6 +458,10 @@ final class Visitors {
                         return;
                     }
                 }
+            } catch (MuxTimeoutException e) {
+                stalled(sni);
+                stream.reset(6);
+                return;
             } catch (IOException e) {
                 stream.reset(6);
                 return;

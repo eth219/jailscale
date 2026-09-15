@@ -631,7 +631,7 @@ final class Store implements AutoCloseable {
      * written first, so a hub that dies during the replacement has still kept what it was about to
      * drop; when nothing would be dropped, nothing is written and no file is left to mislead.
      */
-    private Superseded supersededBy(JsonObject incoming) throws IOException {
+    private Superseded supersededBy(JsonObject incoming) {
         Store theirs = new Store();
         theirs.loadSnapshot(incoming);
         List<String> lostNodes = new ArrayList<>();
@@ -656,7 +656,14 @@ final class Store implements AutoCloseable {
         Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials,
             dir.resolve("state.superseded.snapshot"));
         if (lost.any()) {
-            Files.writeString(lost.kept(), snapshotJson(), StandardCharsets.UTF_8);
+            try {
+                Files.writeString(lost.kept(), snapshotJson(), StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                // Best effort, for the reason syncDir() gives: this file exists to be read by a
+                // person, and a state directory that is full or read-only must not be able to stop
+                // a standby following its primary. The line below still names what went.
+                LOG.warn("could not keep the superseded state at {}: {}", lost.kept(), e.toString());
+            }
         }
         return lost;
     }

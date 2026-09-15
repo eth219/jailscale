@@ -45,14 +45,23 @@ class RateLimiterTest {
 
     @Test
     void prunesRefilledBucketsSoRotatingAddressesCannotGrowIt() throws Exception {
-        RateLimiter r = new RateLimiter(1, 1000); // refills in 1 ms
-        for (int i = 0; i < RateLimiter.MAX_KEYS + 200; i++) {
-            r.allow("10.1." + (i / 256) + "." + (i % 256));
+        // What the scan drops, with its interval out of the way -- that it is throttled at all is
+        // the two tests below. Without this the whole fill lands inside one interval and nothing
+        // has been asked to scan yet, which says nothing about what a scan does.
+        long was = RateLimiter.pruneIntervalMs;
+        RateLimiter.pruneIntervalMs = 0;
+        try {
+            RateLimiter r = new RateLimiter(1, 1000); // refills in 1 ms
+            for (int i = 0; i < RateLimiter.MAX_KEYS + 200; i++) {
+                r.allow("10.1." + (i / 256) + "." + (i % 256));
+            }
+            Thread.sleep(50); // every bucket is now back at full strength
+            r.allow("10.9.9.9");
+            assertTrue(r.size() <= RateLimiter.MAX_KEYS,
+                "expected pruning below " + RateLimiter.MAX_KEYS + ", got " + r.size());
+        } finally {
+            RateLimiter.pruneIntervalMs = was;
         }
-        Thread.sleep(50); // every bucket is now back at full strength
-        r.allow("10.9.9.9");
-        assertTrue(r.size() <= RateLimiter.MAX_KEYS,
-            "expected pruning below " + RateLimiter.MAX_KEYS + ", got " + r.size());
     }
 
     @Test
