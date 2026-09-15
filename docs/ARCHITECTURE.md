@@ -1346,14 +1346,17 @@ is watching until the pass ended. Raw ports are never candidates at all, since t
 ours to compare, and a name with no verdict yet goes ahead of the rest -- until its first probe what
 `status` shows for it is an empty field rather than an answer.
 
-**A link that has gone is never probed, however it went.** The hub answers a name it no longer
-routes here with its own page under the wildcard certificate, and a name handed to another node is
-terminated by that node, so probing either would report `TERMINATED ELSEWHERE` for a name nobody
-took by stealth. That matters most exactly where the sweep runs: the connection that comes back is
-the one carrying the `LinkRevoked` the hub stored while this node was away (§11.4), so the list a
-sweep started from can lose a name while the sweep is still working through it. Each probe therefore
-checks that the link is still open first. A false report of a compromised hub is the worst thing
-this feature can do.
+**A link the hub is not routing here gets the verdict `link not open`, not one about who terminated
+the TLS.** The hub answers a name it does not route here with its own page under the wildcard
+certificate, and a name handed to another node is terminated by that node, so probing either would
+report `TERMINATED ELSEWHERE` for a name nobody took by stealth. Three ordinary things reach that:
+a link closed or revoked (§11.4) while a sweep is still working through the list it started from —
+and the connection a sweep runs on is the one that carries the stored notice; a reopen that timed
+out while the hub was restarting, which leaves the name in this node's list with nothing serving it;
+and `jailscale down` followed by `jailscale verify`, where nothing is open at all. The check
+therefore sits in the probe itself rather than in the loop, so the command this section sends
+operators to is covered by it as well. A false report of a compromised hub is the worst thing this
+feature can do, and `link not open` is what all three of those are.
 
 **A link coming up is a reason to look now, not at the end of a tick.** A tick spent disconnected
 does nothing -- the traffic has nowhere to go -- and the stretch a node spends offline is exactly

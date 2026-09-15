@@ -411,6 +411,32 @@ class LinkEndToEndTest {
         waitFor(() -> "terminated by this node".equals(probeVerdict("alice", "backagain")));
     }
 
+    /**
+     * ARCHITECTURE.md §11.3: a link the hub is not routing here is not an interception, and the
+     * command this section sends operators to has to say so. `down` leaves the names in the node's
+     * list with nothing serving them, and the hub answers each with its own page under the wildcard
+     * certificate -- which is a session this node did not terminate, and would read as a compromised
+     * hub to anything comparing keying material without looking first.
+     */
+    @Test
+    void verifyCallsAClosedLinkNotOpenRatherThanAnInterception() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "goingdown")));
+        ok(cli("alice", JsonObject.builder().put("cmd", "down")));
+        waitFor(() -> hub.links().byName("goingdown") == null);
+
+        JsonObject verified = cli("alice", JsonObject.builder().put("cmd", "verify"));
+        assertEquals(1, verified.integer("checked"), verified.toString());
+        for (Object o : verified.array("results")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            assertEquals("link not open", row.get("verdict"), row.toString());
+        }
+    }
+
     /** What `status` says the last self-probe of one name concluded, or null when none has run. */
     private String probeVerdict(String node, String name) throws IOException {
         for (Object o : cli(node, JsonObject.builder().put("cmd", "status")).array("links")) {

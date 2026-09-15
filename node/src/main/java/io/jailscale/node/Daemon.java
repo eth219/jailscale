@@ -792,10 +792,26 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * <p>Nothing in here throws. The URL is the hub's word (§11.2), so parsing it is inside the
      * same net as connecting to it: a hub that sends a name Java's {@code URI} will not parse must
      * get a verdict saying so, not end the loop that exists to catch a dishonest hub.
+     *
+     * <p>A link the hub is not routing here is answered before any of that, because every verdict
+     * below is about who terminated the TLS and none of them would be true of it. The hub answers a
+     * name it does not route here with its own page under the wildcard certificate, and a node that
+     * took the name terminates its own TLS, so probing either would read as an interception. That
+     * is reachable without anything going wrong: `jailscale down` and then `jailscale verify`, or a
+     * reopen that timed out while the hub was restarting. The check sits here rather than in the
+     * loop so that the command §11.3 sends operators to is covered by it too -- a false report of
+     * a compromised hub is the worst thing this feature can do.
      */
     private ProbeResult probe(NodeState.LinkRec rec) {
         if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
             return null;
+        }
+        if (!state.links.contains(rec) || rec.linkId == null || !link.isConnected()) {
+            // Closed, revoked (§11.4), never reopened on this hub session, or the session itself is
+            // down -- the same three things `status` weighs to call a link open. The verdict does
+            // not go on the record: `status` keeps the last real one beside `open: false` rather
+            // than losing it, and the name still counts as never probed if it never was.
+            return new ProbeResult(rec.name, false, "link not open", System.currentTimeMillis());
         }
         String host = rec.url;
         String verdict;
@@ -939,17 +955,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private void probeSafely(NodeState.LinkRec rec) {
-        if (!state.links.contains(rec) || rec.linkId == null) {
-            // Gone, or not open on this hub session. Closed or revoked since the list this came
-            // from was taken -- which is seconds to minutes ago for a sweep, and a sweep runs on
-            // the connection that delivers the stored LinkRevoked (§11.4) -- or reopened and
-            // refused. The hub answers a name it does not route here with its own page under the
-            // wildcard certificate, and a node that took the name terminates its own TLS, so
-            // probing either says TERMINATED ELSEWHERE and calls a name nobody took by stealth a
-            // compromise. A false report of that is the worst thing this feature can do
-            // (SelfProbe).
-            return;
-        }
         try {
             probe(rec);
         } catch (RuntimeException e) {
