@@ -6,15 +6,16 @@ this design does not have". It changes what `jailscale update` believes, not wha
 three-link chain over a download ([§9.4](../ARCHITECTURE.md), and
 [docs/release-verification.md](../release-verification.md) for the same chain by hand) is untouched.
 
-**Steps 1 to 4 of the five below are built**: the release tooling signs, publishes and re-issues the
-pointer; `update` takes the announcement from it instead of from an unsigned release index; and a
-node refuses a pointer whose sequence is below the highest it has recorded. What is not built is the
-warnings (step 5).
+**All five steps below are built**, and the first pointer went up on 2026-09-15 (seq 1, naming
+v0.1.10). The release tooling signs, publishes and re-issues the pointer; `update` takes the
+announcement from it instead of from an unsigned release index; a node refuses a pointer whose
+sequence is below the highest it has recorded; and both the node and the nightly CI run say so
+before it expires. What the design does not close is **first contact** -- see the last section.
 
-**Ordering, which matters once step 2 is in a binary.** A build that reads the pointer needs one to
-read: until `tools/refresh-index.sh --first` has been run against the repository, `jailscale update`
-in such a build reports that it could not check. So the first pointer has to be published *before* a
-release carrying this code goes out, not after.
+**Ordering, which mattered once step 2 was in a binary, and is now settled.** A build that reads the
+pointer needs one to read, so the first pointer had to be published before any release carrying the
+client half. It was: `tools/refresh-index.sh --first v0.1.10` on 2026-09-15, before the client half
+reached `main`.
 
 It is written first because the two ergonomic steps queued behind it -- `update --install` doing the
 replacement where the privilege is already there, and restarting the service after it -- each make
@@ -224,11 +225,27 @@ constant with a reason behind it.
    pointer is what `check` reads, leaving the unsigned call in place would be dead code that a
    later edit could make load-bearing again -- and the design's own rule is that there is no
    falling back to it.)*
-5. **Warnings**: fourteen days out in `update`, once a day in the daemon's log, and the stale line in
-   `status`.
+5. **Warnings**: *(built)* fourteen days out in `update` (on stderr, leaving the answer and the exit
+   status alone) and once a day in the daemon's log, independent of what the check concluded --
+   a pointer can name an upgrade *and* be about to expire, and the second is the one nobody else
+   notices. `status` carries `expiresAt`, `stale` and the outcome, so the stale line is there for
+   anything reading the JSON. The nightly `index` job in ci.yml checks the published pointer from
+   outside and goes red at the same fourteen days, which is the reminder that does not depend on
+   anyone running a node.
 
 Steps 1 and 2 are what make the withholding attack visible; 3 is what makes it un-repeatable against
-a node that has already seen better. Neither 4 nor 5 is required for either property.
+a node that has already seen better. 4 removes the unsigned path that would otherwise be a fallback,
+and 5 is what keeps the whole thing from lapsing quietly.
+
+## What is left, and it is not a step
+
+**First contact.** The floor is built from what a node has been told, so a fresh install has nothing
+to compare with: it can be handed any genuinely signed, unexpired pointer and started on an older
+release, and kept there until that pointer expires. Nothing here closes that, and §15 says so rather
+than implying the gap is gone. Closing it needs a floor that ships *in* the binary -- a minimum
+sequence compiled in beside `ReleaseKey.PUBLIC_KEYS` and bumped by the same signing ritual -- which
+is a different change with its own cost: a release that is never installed leaves every node it
+would have raised the floor for exactly where it was.
 
 ## What building step 3 settled
 

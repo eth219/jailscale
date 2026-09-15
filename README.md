@@ -255,9 +255,9 @@ What a compromised hub can and cannot do is written out in
 - Upgrading stops one step short of automatic: `update --download` verifies,
   you run the `install` it prints. Which release is *current* comes from a signed
   pointer that expires, and a node refuses one older than the newest it has seen,
-  so being held back on an old release is visible and cannot be repeated -- but a
-  node installed fresh has nothing to compare with yet. It is never moved below
-  what it runs.
+  so being held back on an old release is visible and cannot be repeated. A node
+  installed fresh has nothing to compare with yet, which is the gap that remains.
+  It is never moved below what it runs.
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).

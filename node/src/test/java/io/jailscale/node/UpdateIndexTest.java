@@ -228,6 +228,44 @@ class UpdateIndexTest {
         }
     }
 
+    // --- the fortnight before it runs out -------------------------------------------------------
+
+    @Test
+    void aPointerRunningOutSaysSoWhileThereIsStillTimeToFixIt() throws Exception {
+        // Re-issuing is a person at a laptop calling KMS, so the warning has to arrive before the
+        // pointer stops answering, not after. Thirteen days out it does; fifteen days out there is
+        // nothing to say yet.
+        long soon = NOW + 13L * 24 * 60 * 60 * 1000;
+        Published p = publish(document(7, "v" + RUNNING, ISSUED, Instant.ofEpochMilli(soon).toString()));
+        try (ServerSocket ss = serve(p.files())) {
+            Updates.Result r = check(p, ss);
+            assertEquals(Updates.Outcome.CURRENT, r.outcome());
+            assertTrue(r.expiringSoon(NOW));
+            assertNotNull(r.warning(NOW));
+            assertTrue(r.warning(NOW).contains("no longer tell"), r.warning(NOW));
+        }
+        long later = NOW + 15L * 24 * 60 * 60 * 1000;
+        Published q = publish(document(7, "v" + RUNNING, ISSUED, Instant.ofEpochMilli(later).toString()));
+        try (ServerSocket ss = serve(q.files())) {
+            Updates.Result r = check(q, ss);
+            assertFalse(r.expiringSoon(NOW));
+            assertNull(r.warning(NOW));
+        }
+    }
+
+    @Test
+    void aPointerThatHasAlreadyExpiredDoesNotAlsoWarnAboutExpiring() throws Exception {
+        // It has stopped answering, which `line()` already says. Two sentences about the same fact,
+        // one of them in the future tense, would be worse than one.
+        Published p = publish(document(7, "v" + RUNNING, ISSUED, PAST));
+        try (ServerSocket ss = serve(p.files())) {
+            Updates.Result r = check(p, ss);
+            assertEquals(Updates.Outcome.STALE, r.outcome());
+            assertFalse(r.expiringSoon(NOW));
+            assertNull(r.warning(NOW));
+        }
+    }
+
     // --- the document itself ---------------------------------------------------------------------
 
     @Test

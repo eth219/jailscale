@@ -166,6 +166,13 @@ public final class Main {
         // binding and never-below-running all still hold over a stale pointer, so refusing would
         // forbid a genuine upgrade to avert a risk the refusal does not reduce (docs/update-freshness).
         (r.cannotTell() ? System.err : System.out).println(r.line());
+        // The answer is good and stays on stdout; this is about the answer running out, so it goes
+        // to stderr and changes no exit status. A node whose operator is also the maintainer is the
+        // reminder that the pointer needs re-issuing (docs/update-freshness, step 5).
+        String soon = r.warning(System.currentTimeMillis());
+        if (soon != null) {
+            System.err.println(soon);
+        }
         if (!a.flag("download") || !r.newer()) {
             if (r.cannotTell() && !r.newer()) {
                 System.exit(1);
