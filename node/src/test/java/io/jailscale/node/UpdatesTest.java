@@ -59,11 +59,15 @@ class UpdatesTest {
     @Test
     void everyOutcomeSaysSomethingUseful() {
         assertEquals("jailscale 0.1.0 is the latest release.",
-            new Updates.Result("0.1.0", "0.1.0", "v0.1.0", false, 0, null).line());
-        assertTrue(new Updates.Result("0.1.0", "0.2.0", "v0.2.0", true, 0, null).line().contains("0.2.0 is out"));
-        assertTrue(new Updates.Result("0.1.0", "0.2.0", "v0.2.0", true, 0, null).line().contains(Updates.PAGE));
+            new Updates.Result("0.1.0", "v0.1.0", false, 0, null).line());
+        assertTrue(new Updates.Result("0.1.0", "v0.2.0", true, 0, null).line().contains("0.2.0 is out"));
+        assertTrue(new Updates.Result("0.1.0", "v0.2.0", true, 0, null).line().contains(Updates.PAGE));
         assertEquals("could not check for updates: no route to host",
-            new Updates.Result("0.1.0", null, null, false, 0, "no route to host").line());
+            new Updates.Result("0.1.0", null, false, 0, "no route to host").line());
+        // The version is the tag's, derived rather than carried beside it, so the two cannot disagree.
+        assertEquals("0.2.0", new Updates.Result("0.1.0", "v0.2.0", true, 0, null).latest());
+        assertEquals("0.2.0", new Updates.Result("0.1.0", "0.2.0", true, 0, null).latest());
+        assertNull(new Updates.Result("0.1.0", null, false, 0, "x").latest());
     }
 
     @Test
@@ -128,11 +132,14 @@ class UpdatesTest {
         assertEquals("linux-arm64", Updates.target("Linux", "aarch64"));
         assertEquals("darwin-arm64", Updates.target("Mac OS X", "aarch64"));
         assertEquals("windows-amd64", Updates.target("Windows 11", "amd64"));
-        // The three the release does not build. An Intel Mac is the one that exists in the wild:
-        // GraalVM CE 25.3 produces no darwin-amd64, so there is nothing to point it at (§3.2).
-        assertNull(Updates.target("Mac OS X", "x86_64"));
-        assertNull(Updates.target("Windows 11", "aarch64"));
+        // Targets the release does not build today are still named: the signed SHA256SUMS.txt is the
+        // list of what was built, and hashFor refuses a name that is not in it. A second copy of
+        // release.yml's matrix here would be the one forgotten when it grows. An OS or a CPU this
+        // has no name for is null, because there is no name to look up.
+        assertEquals("darwin-amd64", Updates.target("Mac OS X", "x86_64"));
+        assertEquals("windows-arm64", Updates.target("Windows 11", "aarch64"));
         assertNull(Updates.target("FreeBSD", "amd64"));
+        assertNull(Updates.target("Linux", "riscv64"));
 
         assertEquals("jailscale-darwin-arm64", Updates.asset("darwin-arm64", true));
         assertEquals("jailscale-windows-amd64.exe", Updates.asset("windows-amd64", true));
@@ -146,16 +153,16 @@ class UpdatesTest {
     @Test
     void aTagFromTheNetworkDoesNotGetToSteerTheUrl() throws Exception {
         assertEquals("https://github.com/eth219/jailscale/releases/download/v0.2.0/SHA256SUMS.txt",
-            Updates.assetUrl("v0.2.0", Updates.SUMS).toString());
+            Updates.assetUrl(Updates.DOWNLOADS, "v0.2.0", Updates.SUMS).toString());
         // tag_name is whatever the release index says, and it is pasted into a URL. A relative step
         // or a second host in there would leave the releases path while looking like a version.
-        assertThrows(IOException.class, () -> Updates.assetUrl("../../../evil", "x"));
-        assertThrows(IOException.class, () -> Updates.assetUrl("v0.2.0/../..", "x"));
-        assertThrows(IOException.class, () -> Updates.assetUrl("v0.2.0/x", "x"));
-        assertThrows(IOException.class, () -> Updates.assetUrl("//evil.example.com/", "x"));
-        assertThrows(IOException.class, () -> Updates.assetUrl("", "x"));
-        assertThrows(IOException.class, () -> Updates.assetUrl(null, "x"));
-        assertThrows(IOException.class, () -> Updates.assetUrl("v".repeat(65), "x"));
+        assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "../../../evil", "x"));
+        assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "v0.2.0/../..", "x"));
+        assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "v0.2.0/x", "x"));
+        assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "//evil.example.com/", "x"));
+        assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "", "x"));
+        assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, null, "x"));
+        assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "v".repeat(65), "x"));
     }
 
     @Test
@@ -170,8 +177,8 @@ class UpdatesTest {
 
         // A path this user can write is not a path to type sudo at, and typing it anyway is how a
         // user-owned install ends up root-owned and unwritable by the next upgrade.
-        assertEquals("install -m 755 " + downloaded + " " + mine, Updates.installCommand(downloaded, mine, false));
-        assertEquals("sudo install -m 755 " + downloaded + " " + theirs,
+        assertEquals("install -m 755 " + q(downloaded) + " " + q(mine), Updates.installCommand(downloaded, mine, false));
+        assertEquals("sudo install -m 755 " + q(downloaded) + " " + q(theirs),
             Updates.installCommand(downloaded, theirs, false));
         // Nothing said where this binary is: fall back to the path the install instructions use.
         assertTrue(Updates.installCommand(downloaded, null, false).endsWith(" /usr/local/bin/jailscale"));
@@ -192,10 +199,43 @@ class UpdatesTest {
         Files.writeString(downloaded, "x");
         Path running = tmp.resolve("jailscale-0.1.3.jar");
         Files.writeString(running, "old");
-        assertEquals("cp " + downloaded + " " + running, Updates.installCommand(downloaded, running, false));
+        assertEquals("cp " + q(downloaded) + " " + q(running), Updates.installCommand(downloaded, running, false));
         // And with nowhere known to put it, a path with a blank in it rather than a confident wrong one.
-        assertEquals("sudo cp " + downloaded + " /path/to/jailscale.jar",
+        assertEquals("sudo cp " + q(downloaded) + " /path/to/jailscale.jar",
             Updates.installCommand(downloaded, null, false));
+    }
+
+    /** What the command prints for a path: a test cannot pick where @TempDir is, or what is in it. */
+    private static String q(Path p) {
+        return Updates.shellQuote(p.toString());
+    }
+
+    @Test
+    void thePrintedCommandSurvivesASpaceInEitherPath() {
+        // --dir "$HOME/My Downloads" and a jar under Application Support both put a space in a path
+        // the operator is told to paste; unquoted, `install` sees three sources and a directory.
+        assertEquals("/usr/local/bin/jailscale", Updates.shellQuote("/usr/local/bin/jailscale"));
+        assertEquals("'/Users/me/My Downloads/jailscale-darwin-arm64'",
+            Updates.shellQuote("/Users/me/My Downloads/jailscale-darwin-arm64"));
+        assertEquals("'/tmp/it'\\''s/x'", Updates.shellQuote("/tmp/it's/x"));
+        assertEquals("'$HOME/x'", Updates.shellQuote("$HOME/x")); // and a shell does not expand it
+        assertEquals("''", Updates.shellQuote(""));
+        // Through installCommand, with paths whose separators Path.of rewrites on Windows, so the
+        // assertion is on the quoting rather than on the slashes.
+        Path from = Path.of("/Users/me/My Downloads/jailscale-darwin-arm64");
+        Path to = Path.of("/no such dir/jailscale");
+        String cmd = Updates.installCommand(from, to, false);
+        assertEquals("sudo install -m 755 " + Updates.shellQuote(from.toString()) + " " + Updates.shellQuote(to.toString()), cmd);
+        assertTrue(cmd.startsWith("sudo install -m 755 '"), cmd);
+        assertTrue(cmd.endsWith("/jailscale'") || cmd.endsWith("\\jailscale'"), cmd);
+
+        // PowerShell: single quotes, in which only a quote means anything.
+        assertEquals("'C:\\Program Files\\jailscale.exe'", Updates.powershellQuote("C:\\Program Files\\jailscale.exe"));
+        assertEquals("'it''s.exe'", Updates.powershellQuote("it's.exe"));
+        String win = Updates.installCommand(Path.of("C:\\Users\\me\\My Downloads\\jailscale-windows-amd64.exe"),
+            Path.of("C:\\Program Files\\jailscale\\jailscale.exe"), true);
+        assertTrue(win.contains("'C:\\Program Files\\jailscale\\jailscale.exe' 'C:\\Program Files\\jailscale\\jailscale.exe.old'"), win);
+        assertTrue(win.contains("Move-Item 'C:\\Users\\me\\My Downloads\\jailscale-windows-amd64.exe'"), win);
     }
 
     @Test

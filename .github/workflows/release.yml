@@ -149,10 +149,17 @@ jobs:
       # is written by the person, not here: a release this job could sign on its own would be worth
       # what the checksums it also writes are worth. A release visible before its signature is up is
       # one that `jailscale update --download` refuses and that `update` has already announced.
+      # `prerelease` from the tag, the same hyphen rule images.yml uses: a v0.2.0-rc1 that is
+      # signed and published must not become `releases/latest`, which is what every node's daily
+      # check reads and what `update --download` fetches. Updates.compare sorts an rc above the
+      # release before it, so without this flag publishing a candidate announces it to the field.
+      # Re-running this job for a tag whose release exists keeps that release's draft state: the
+      # action only applies `draft` on creation (softprops v3, github.ts updateRelease).
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
       - name: Say what is left to do
         run: |

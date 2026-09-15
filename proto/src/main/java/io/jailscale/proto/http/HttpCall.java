@@ -20,7 +20,10 @@ import javax.net.ssl.SSLContext;
  */
 public final class HttpCall {
 
-    /** Enough for the hop GitHub makes from a release asset to the object store, and no chain. */
+    /**
+     * GitHub makes one hop from a release asset to the object store; a few more are allowed so a
+     * CDN in front of it does not break the download, and a loop is cut off soon after.
+     */
     public static final int MAX_REDIRECTS = 5;
 
     private static volatile SSLContext system;
@@ -56,8 +59,9 @@ public final class HttpCall {
      * {@link HttpException} carrying it; a redirect chain longer than {@link #MAX_REDIRECTS} is an
      * {@code IOException}.
      *
-     * <p>{@code out} is written to only for the 200: a redirect's own body is read past and
-     * dropped, so a caller that passes a file has nothing in it until the real response arrives.
+     * <p>{@code out} is written to only for the 200: a redirect's own body is never read -- the
+     * connection is closed under it, there being no keep-alive to preserve -- so a caller that
+     * passes a file has nothing in it until the real response arrives.
      */
     public static long get(URI url, Headers headers, OutputStream out, int timeoutMs, long maxBody)
         throws IOException, HttpException {

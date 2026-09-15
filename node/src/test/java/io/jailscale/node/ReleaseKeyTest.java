@@ -1,6 +1,7 @@
 package io.jailscale.node;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -26,15 +27,16 @@ class ReleaseKeyTest {
     private static final byte[] SUMS = ("6d0b1a4dce6e5e0d3e4b0ee0d0ab2a56b57e0dd8a2b1a06e0a49f24a2b5c93aa"
         + "  jailscale-linux-amd64\n").getBytes(StandardCharsets.UTF_8);
 
-    private static KeyPair keyPair() throws GeneralSecurityException {
+    /** A key pair, its public half as {@code PUBLIC_KEYS} carries one, and a signature: shared with {@link UpdateDownloadTest}. */
+    static KeyPair keyPair() throws GeneralSecurityException {
         return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     }
 
-    private static String spki(KeyPair kp) {
+    static String spki(KeyPair kp) {
         return Base64.getEncoder().encodeToString(kp.getPublic().getEncoded());
     }
 
-    private static byte[] sign(KeyPair kp, byte[] message) throws GeneralSecurityException {
+    static byte[] sign(KeyPair kp, byte[] message) throws GeneralSecurityException {
         Signature s = Signature.getInstance("Ed25519");
         s.initSign(kp.getPrivate());
         s.update(message);
@@ -62,8 +64,10 @@ class ReleaseKeyTest {
             () -> ReleaseKey.verify(both, SUMS, sign(keyPair(), SUMS)));
         assertTrue(e.getMessage().contains(ReleaseKey.fingerprint(spki(oldKey))), e.getMessage());
         assertTrue(e.getMessage().contains(ReleaseKey.fingerprint(spki(newKey))), e.getMessage());
-        // A list nobody filled in is a refusal, not an acceptance.
-        assertThrows(SignatureException.class, () -> ReleaseKey.verify(List.of(), SUMS, sign(oldKey, SUMS)));
+        // A list nobody filled in is a refusal, not an acceptance, and it says that no key was tried.
+        SignatureException none = assertThrows(SignatureException.class,
+            () -> ReleaseKey.verify(List.of(), SUMS, sign(oldKey, SUMS)));
+        assertTrue(none.getMessage().contains("(none)"), none.getMessage());
     }
 
     @Test
@@ -119,12 +123,12 @@ class ReleaseKeyTest {
         // A paste that lost a character, or a key nobody replaced after a rotation, would both be
         // caught here rather than by the first operator whose download refuses. The refusal when
         // there is no key at all is UpdateDownloadTest's, which does not depend on this constant.
-        assertTrue(ReleaseKey.configured(), "ReleaseKey.PUBLIC_KEYS is empty; tools/release-key.sh makes one");
+        assertFalse(ReleaseKey.PUBLIC_KEYS.isEmpty(), "ReleaseKey.PUBLIC_KEYS is empty; tools/release-key.sh makes one");
         assertEquals(List.of("fa85db4931653cbb"), ReleaseKey.PUBLIC_KEYS.stream().map(ReleaseKey::fingerprint).toList(),
             "the accepted release keys changed; adding one widens what this build will install, and"
                 + " removing one strands every binary that was signed with it");
         // And they are keys, not just 44 bytes of base64: a signature is what gets refused here, not
         // the key, which would throw a different exception before any signature was looked at.
-        assertThrows(SignatureException.class, () -> ReleaseKey.verify(SUMS, new byte[64]));
+        assertThrows(SignatureException.class, () -> ReleaseKey.verify(ReleaseKey.PUBLIC_KEYS, SUMS, new byte[64]));
     }
 }

@@ -92,25 +92,33 @@ public final class Tls {
     public static SSLSocket connect(SSLContext ctx, String host, String addr, int port, boolean verifyHostname, int timeoutMillis)
         throws IOException {
         SSLSocket s = (SSLSocket) ctx.getSocketFactory().createSocket();
-        java.net.InetAddress target;
-        if (addr == null) {
-            target = java.net.InetAddress.getByName(host);
-        } else {
-            target = java.net.InetAddress.getByAddress(host, java.net.InetAddress.getByName(addr).getAddress());
+        try {
+            java.net.InetAddress target;
+            if (addr == null) {
+                target = java.net.InetAddress.getByName(host);
+            } else {
+                target = java.net.InetAddress.getByAddress(host, java.net.InetAddress.getByName(addr).getAddress());
+            }
+            s.connect(new InetSocketAddress(target, port), timeoutMillis);
+            s.setSoTimeout(timeoutMillis);
+            s.setTcpNoDelay(true);
+            SSLParameters p = s.getSSLParameters();
+            p.setProtocols(PROTOCOLS);
+            p.setApplicationProtocols(ALPN_HTTP11);
+            p.setServerNames(List.of(new SNIHostName(host)));
+            if (verifyHostname) {
+                p.setEndpointIdentificationAlgorithm("HTTPS");
+            }
+            s.setSSLParameters(p);
+            s.startHandshake();
+            return s;
+        } catch (IOException | RuntimeException e) {
+            // The socket exists from the first line, and a connect that times out or is refused
+            // used to leave it to the GC's cleaner: one descriptor per failed attempt, from a
+            // daemon that retries the hub, ACME and the release index on schedules.
+            s.close();
+            throw e;
         }
-        s.connect(new InetSocketAddress(target, port), timeoutMillis);
-        s.setSoTimeout(timeoutMillis);
-        s.setTcpNoDelay(true);
-        SSLParameters p = s.getSSLParameters();
-        p.setProtocols(PROTOCOLS);
-        p.setApplicationProtocols(ALPN_HTTP11);
-        p.setServerNames(List.of(new SNIHostName(host)));
-        if (verifyHostname) {
-            p.setEndpointIdentificationAlgorithm("HTTPS");
-        }
-        s.setSSLParameters(p);
-        s.startHandshake();
-        return s;
     }
 
     private static final class TrustAll implements X509TrustManager {

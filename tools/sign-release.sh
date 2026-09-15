@@ -51,24 +51,33 @@ gh release download -R "$repo" "$tag" --dir "$dir" --pattern '*' --clobber
 cd "$dir"
 [ -f SHA256SUMS.txt ] || { echo "$tag has no SHA256SUMS.txt to sign." >&2; exit 1; }
 
+# The files the signature is about: everything in the release that is not the list itself, the
+# build info, a signature from an earlier run, or the key this fetched. One definition, walked by
+# both checks below, dotfiles included -- two copies of this list once disagreed about exactly that.
+assets() {
+    for f in * .[!.]*; do
+        [ -e "$f" ] || continue # an unmatched glob is the pattern itself
+        case "$f" in
+            SHA256SUMS.txt|BUILDINFO.txt|RELEASE.txt|RELEASE.txt.sig|pub.pem) continue ;;
+        esac
+        printf '%s\n' "$f"
+    done
+}
+
 # Both directions. Every name in the list has to hash to what the list says, and every asset that
 # is not the list, the build info or an old signature has to be in the list -- an unlisted binary
 # is one the signature would not cover while appearing to.
 sha256 -c SHA256SUMS.txt
-for f in * .[!.]*; do
-    [ -e "$f" ] || continue # an unmatched glob is the pattern itself
-    case "$f" in
-        SHA256SUMS.txt|BUILDINFO.txt|RELEASE.txt|RELEASE.txt.sig|pub.pem) continue ;;
-    esac
+assets | while IFS= read -r f; do
     # -F and a cut list rather than a regex: an asset named jailscale-linux-amd.4 would otherwise
     # match the line for jailscale-linux-amd64 and ride along uncovered.
     sed 's/^[0-9a-fA-F]*[ *]*//' SHA256SUMS.txt | grep -qxF "$f" \
         || { echo "$f is published but not in SHA256SUMS.txt" >&2; exit 1; }
-done
+done || exit 1 # the loop is a subshell, so its exit has to be carried out of the pipeline
 
 kms_public_key pub.pem
-spki=$("$OPENSSL" pkey -pubin -in pub.pem -outform DER | base64 | tr -d '\n')
-fingerprint=$("$OPENSSL" pkey -pubin -in pub.pem -outform DER | "$OPENSSL" dgst -sha256 -binary | od -An -tx1 | tr -d ' \n' | cut -c1-16)
+spki=$(spki_base64 pub.pem)
+fingerprint=$(spki_fingerprint pub.pem)
 
 # What accepts this signature is the binaries already in the field, so the key has to be on the
 # list the PREVIOUS release compiled in -- not this one's, which only governs the release after it.
@@ -79,9 +88,30 @@ src=node/src/main/java/io/jailscale/node/ReleaseKey.java
 keys_at() {
     git -C "$root" show "$1:$src" 2>/dev/null | sed -n 's/.*"\([A-Za-z0-9+/=]\{40,\}\)".*/\1/p'
 }
-git -C "$root" rev-parse -q --verify "$tag^{commit}" >/dev/null \
-    || { echo "$root has no $tag; git fetch --tags and try again." >&2; exit 1; }
-previous=$(git -C "$root" describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
+# The tag has to be in this clone already, and it has to be on this clone's main. Those two
+# together are what make the local checkout an anchor at all: a tag that is only on the remote is
+# one anybody with write access may have pushed, and the obvious fix -- fetch it and rerun -- would
+# import their commit and then verify the release against it, with every check below green. So the
+# message does not say "fetch"; it says "look". A tag made here and pushed from here is in both
+# places by construction.
+git -C "$root" rev-parse -q --verify "$tag^{commit}" >/dev/null || {
+    echo "$root has no $tag." >&2
+    echo "If you made this release, tag it here and push the tag from here. If the tag appeared on" >&2
+    echo "the remote without you, do not fetch it and sign it: read what it names first --" >&2
+    echo "  git -C $root fetch origin +refs/tags/$tag:refs/remotes/origin/tags/$tag --no-tags" >&2
+    echo "  git -C $root log --oneline main..origin/tags/$tag" >&2
+    exit 1
+}
+want_commit=$(git -C "$root" rev-parse "$tag^{commit}")
+git -C "$root" merge-base --is-ancestor "$want_commit" main 2>/dev/null || {
+    echo "$tag names $want_commit, which is not on this clone's main." >&2
+    echo "A release is a commit on main that has been reviewed there; this one has not been." >&2
+    exit 1
+}
+# --match, so a tag that is not a release (a benchmark baseline, a bisect marker) is never "the
+# previous release": if such a tag carried a key list, the rotation check below would be made
+# against a list no binary in the field was built with.
+previous=$(git -C "$root" describe --tags --match 'v*' --abbrev=0 "$tag^" 2>/dev/null || true)
 accepted=""
 accepted_from=$previous
 [ -n "$previous" ] && accepted=$(keys_at "$previous")
@@ -105,21 +135,17 @@ if ! printf '%s\n' "$accepted" | grep -qxF "$spki"; then
 fi
 # Everything above compares the release against itself: SHA256SUMS.txt is an asset like the others,
 # and so is BUILDINFO.txt, so anyone who can write to this release can make all of it agree. The one
-# anchor outside it is the maintainer's own clone -- `git fetch --tags` will not move a tag that is
-# already present without --force, so the commit this tag names here is not something release-write
-# can rewrite. Build provenance is what ties the published bytes back to that commit.
-want_commit=$(git -C "$root" rev-parse "$tag^{commit}")
+# anchor outside it is the maintainer's own clone: the tag was required to be here already and on
+# main, so the commit it names is one that was reviewed here rather than one release-write could
+# supply. Build provenance is what ties the published bytes back to that commit.
 echo "verifying build provenance against $want_commit ($tag in $root) ..."
-for f in *; do
-    case "$f" in
-        SHA256SUMS.txt|BUILDINFO.txt|RELEASE.txt|RELEASE.txt.sig|pub.pem) continue ;;
-    esac
+assets | while IFS= read -r f; do
     gh attestation verify "$f" -R "$repo" \
         --signer-workflow "$repo/.github/workflows/release.yml" \
         --source-digest "$want_commit" --source-ref "refs/tags/$tag" >/dev/null \
         || { echo "$f is not attested as built by $repo's release workflow from $want_commit." >&2; exit 1; }
     echo "  $f"
-done
+done || exit 1
 
 # BUILDINFO is the release's own account of itself, so it is compared rather than displayed. It
 # proves nothing on its own -- the check above is what makes it hard to forge -- but a mismatch
@@ -140,6 +166,13 @@ else
     echo "(no BUILDINFO.txt in this release)"
 fi
 echo
+# What is about to be vouched for, as commits rather than as a hash: the signature says the
+# maintainer looked, and this is the looking.
+if [ -n "$previous" ]; then
+    echo "$previous..$tag:"
+    git -C "$root" log --oneline "$previous..$tag" | sed 's/^/  /'
+    echo
+fi
 echo "$(grep -c . SHA256SUMS.txt) files, all hashing to what SHA256SUMS.txt says,"
 echo "all attested as built from $want_commit."
 echo "signing with $KMS_KEY version $KMS_VERSION in $KMS_PROJECT, fingerprint $fingerprint"

@@ -108,6 +108,14 @@ class HttpTest {
         assertThrows(HttpException.class, () -> Http.readResponse(
             in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\nffffffffffffffff\r\n" + "x".repeat(100)), 1024));
 
+        // A transfer coding this does not decode is refused, not read as if the bytes were the body:
+        // hashing gzip output and reporting "not what the release says it is" would blame tampering
+        // for a proxy's compression. The request side has the same rule (readBody's 411).
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\nContent-Length: 3\r\n\r\nabc"), 1024));
+        assertEquals("abc", Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: identity\r\nContent-Length: 3\r\n\r\nabc"), 1024).bodyText());
+
         // HEAD: headers only, even with a Content-Length.
         HttpResponse head = Http.readResponse(in("HTTP/1.1 200 OK\r\nContent-Length: 99\r\nReplay-Nonce: n1\r\n\r\n"), 1024, true);
         assertEquals("n1", head.headers().get("Replay-Nonce"));

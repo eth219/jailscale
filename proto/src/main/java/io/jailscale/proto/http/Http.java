@@ -84,7 +84,10 @@ public final class Http {
         if (headOnly || !hasBody(resp.status())) {
             return resp;
         }
-        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        // Sized from Content-Length when that is what frames the body, so a small body is one
+        // allocation rather than a 32-byte buffer doubled up to it.
+        long len = resp.headers().get("Transfer-Encoding") == null ? contentLength(resp.headers(), maxBody) : -1;
+        ByteArrayOutputStream buf = new ByteArrayOutputStream(len > 0 ? (int) len : 256);
         copyBody(in, resp.headers(), buf, maxBody);
         return resp.body(buf.toByteArray());
     }
@@ -119,7 +122,7 @@ public final class Http {
     }
 
     /** Whether a response with this status carries a body at all. */
-    public static boolean hasBody(int status) {
+    private static boolean hasBody(int status) {
         return status != 101 && status != 204 && status != 304;
     }
 
@@ -130,24 +133,22 @@ public final class Http {
     public static long copyBody(InputStream in, Headers headers, OutputStream out, long maxBody)
         throws IOException, HttpException {
         String te = headers.get("Transfer-Encoding");
-        if (te != null && te.toLowerCase(Locale.ROOT).contains("chunked")) {
-            return copyChunked(in, out, maxBody);
+        if (te != null) {
+            String coding = te.toLowerCase(Locale.ROOT);
+            if (coding.contains("chunked")) {
+                return copyChunked(in, out, maxBody);
+            }
+            if (!coding.equals("identity")) {
+                // gzip and friends: the bytes on the wire are not the body, and a Content-Length
+                // beside them would count the wrong thing. Nothing here asks for them.
+                throw new HttpException(502, "unsupported Transfer-Encoding " + te);
+            }
         }
-        String cl = headers.get("Content-Length");
-        if (cl != null) {
-            long len;
-            try {
-                len = Long.parseLong(cl.trim());
-            } catch (NumberFormatException e) {
-                throw new HttpException(400, "bad Content-Length");
+        long len = contentLength(headers, maxBody);
+        if (len >= 0) {
+            if (len > 0) {
+                copyExactly(in, out, len, new byte[(int) Math.min(8192, len)]);
             }
-            if (len < 0) {
-                throw new HttpException(400, "bad Content-Length");
-            }
-            if (len > maxBody) {
-                throw new HttpException(413, "body too large");
-            }
-            copyExactly(in, out, len);
             return len;
         }
         long total = 0;
@@ -163,9 +164,34 @@ public final class Http {
         return total;
     }
 
+    /**
+     * The Content-Length, checked, or -1 when there is none. One reader for the request side and
+     * the response side, so what one accepts the other does too.
+     */
+    static long contentLength(Headers headers, long maxBody) throws HttpException {
+        String cl = headers.get("Content-Length");
+        if (cl == null) {
+            return -1;
+        }
+        long len;
+        try {
+            len = Long.parseLong(cl.trim());
+        } catch (NumberFormatException e) {
+            throw new HttpException(400, "bad Content-Length");
+        }
+        if (len < 0) {
+            throw new HttpException(400, "bad Content-Length");
+        }
+        if (len > maxBody) {
+            throw new HttpException(413, "body too large");
+        }
+        return len;
+    }
+
     /** Responses only (RFC 9112 §7.1): chunk-size [;ext] CRLF data CRLF ... 0 CRLF trailers CRLF. */
     static long copyChunked(InputStream in, OutputStream out, long maxBody) throws IOException, HttpException {
         long total = 0;
+        byte[] tmp = new byte[8192]; // one for the whole body, not one per chunk
         while (true) {
             String line = readLine(in, MAX_LINE, 502);
             if (line == null) {
@@ -195,7 +221,7 @@ public final class Http {
                 }
                 return total;
             }
-            copyExactly(in, out, size);
+            copyExactly(in, out, size, tmp);
             total += size;
             String crlf = readLine(in, 2, 502);
             if (crlf == null || !crlf.isEmpty()) {
@@ -204,9 +230,8 @@ public final class Http {
         }
     }
 
-    /** Copies exactly {@code len} bytes, or throws: a short read here is a truncated body. */
-    private static void copyExactly(InputStream in, OutputStream out, long len) throws IOException {
-        byte[] tmp = new byte[8192];
+    /** Copies exactly {@code len} bytes through {@code tmp}, or throws: a short read here is a truncated body. */
+    private static void copyExactly(InputStream in, OutputStream out, long len, byte[] tmp) throws IOException {
         long left = len;
         while (left > 0) {
             int n = in.read(tmp, 0, (int) Math.min(tmp.length, left));
@@ -253,32 +278,13 @@ public final class Http {
         if (te != null && !te.toLowerCase(Locale.ROOT).equals("identity")) {
             throw new HttpException(411, "chunked bodies not supported");
         }
-        String cl = headers.get("Content-Length");
-        if (cl == null) {
+        long len = contentLength(headers, maxBody);
+        if (len <= 0) {
             return new byte[0];
         }
-        long len;
-        try {
-            len = Long.parseLong(cl.trim());
-        } catch (NumberFormatException e) {
-            throw new HttpException(400, "bad Content-Length");
-        }
-        if (len < 0) {
-            throw new HttpException(400, "bad Content-Length");
-        }
-        if (len > maxBody) {
-            throw new HttpException(413, "body too large");
-        }
-        byte[] body = new byte[(int) len];
-        int off = 0;
-        while (off < body.length) {
-            int n = in.read(body, off, body.length - off);
-            if (n < 0) {
-                throw new EOFException("truncated body");
-            }
-            off += n;
-        }
-        return body;
+        ByteArrayOutputStream body = new ByteArrayOutputStream((int) len);
+        copyExactly(in, body, len, new byte[(int) Math.min(8192, len)]);
+        return body.toByteArray();
     }
 
     /**

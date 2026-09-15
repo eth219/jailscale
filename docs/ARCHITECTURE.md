@@ -1014,8 +1014,15 @@ should run — target from `os.name` and `os.arch`, or `jailscale.jar` when this
 2. the `sha256sums:` digest in that file against the `SHA256SUMS.txt` actually fetched;
 3. that list's hash for exactly the asset, streamed to disk and hashed as it arrives.
 
-A hash that does not match deletes the file before it reports why, so there is never a half-checked
-binary next to instructions for installing it. The parts of doing this by hand that go wrong quietly
+The bytes go to a `.part` file beside the final name and are moved into place only once the hash
+has matched, so a download that fails leaves nothing behind and touches nothing that was there —
+`--dir .` from the directory holding the running jar must not truncate that jar — and there is never
+a half-checked binary next to instructions for installing it. The file this process runs from is
+refused as a target outright: writing it would be the install this command leaves to the operator.
+A release that answers 404 for `RELEASE.txt` is refused *without* the advice to install by hand,
+because this build carries a key and only releases newer than it are fetched, so every one of them
+was published under signing; a missing signature there is a publishing mistake or a stripped one,
+and steering the operator to unchecked bytes would make stripping it a way past the whole check. The parts of doing this by hand that go wrong quietly
 are exactly the parts it removes: picking the right target, and `sha256sum --ignore-missing -c`,
 which exits 0 for having verified nothing when the file has been renamed — so a name absent from the
 list is an error here rather than a download nobody compared with anything.
@@ -1038,11 +1045,15 @@ is an asset that whoever can write to that release can write. Checking those aga
 proves only that they agree, so an attacker who swaps a binary and the checksum line beside it
 passes every such check and the signature goes on their bytes: the guarantee would degrade from
 "the pipeline cannot make this signature" to "the maintainer has to be tricked once, during a
-window only write-holders can see". The anchor outside the release is the maintainer's own clone.
-`git fetch --tags` will not move a tag that is already present without `--force`, so the commit a
-tag names locally is not something release-write can rewrite, and `tools/sign-release.sh` requires
-every asset to carry build provenance for *that* commit and that workflow (`gh attestation verify
---source-digest --source-ref`) before it will sign. This is the same Sigstore attestation the
+window only write-holders can see". The anchor outside the release is the maintainer's own clone,
+and `tools/sign-release.sh` makes that a check rather than an assumption: the tag has to be in the
+clone already and its commit has to be on the clone's `main`, and a tag that is missing is *not*
+answered with "fetch it and retry" — a tag that appeared on the remote without the maintainer is
+exactly one that write access could have pushed, and fetching it would import that commit and then
+verify the release against it with every check green. The script prints the commits between the
+previous release and this one before it asks, and requires every asset to carry build provenance
+for *that* commit and that workflow (`gh attestation verify --source-digest --source-ref`) before
+it will sign. This is the same Sigstore attestation the
 paragraph below says the client must not trust, used where it does work: the client has no anchor
 to compare an attested commit against, and the maintainer does. What it leaves is source review —
 the attack becomes "get malicious code into the commit the maintainer tagged", which is in the

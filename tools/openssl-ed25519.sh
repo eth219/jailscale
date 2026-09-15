@@ -33,3 +33,16 @@ if [ -z "$OPENSSL" ]; then
     exit 1
 fi
 export OPENSSL
+
+# The two forms of a public key that this project passes around, from a PEM file: the base64 DER
+# SubjectPublicKeyInfo that ReleaseKey.PUBLIC_KEYS holds, and the fingerprint ReleaseKey prints --
+# the first eight bytes of SHA-256 over that DER, as sixteen hex characters. Defined once so the
+# key that release-key.sh tells you to paste and the one sign-release.sh says it signed with are
+# computed the same way, and both match what the binary prints.
+spki_base64() {
+    "$OPENSSL" pkey -pubin -in "$1" -outform DER | base64 | tr -d '\n'
+}
+spki_fingerprint() {
+    "$OPENSSL" pkey -pubin -in "$1" -outform DER | "$OPENSSL" dgst -sha256 -binary | od -An -tx1 \
+        | tr -d ' \n' | cut -c1-16
+}

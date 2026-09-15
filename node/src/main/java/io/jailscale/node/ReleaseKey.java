@@ -2,14 +2,11 @@ package io.jailscale.node;
 
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
-import java.security.MessageDigest;
-import java.security.PublicKey;
 import java.security.Signature;
 import java.security.SignatureException;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HexFormat;
 import java.util.List;
 
 /**
@@ -49,47 +46,39 @@ final class ReleaseKey {
      * pipeline can make is worth what the checksums beside it are worth, which is the reason these
      * keys exist (§9.4).
      *
-     * <p>Empty in a tree whose maintainer has not made a key yet, which {@link #configured}
-     * reports and {@code update --download} refuses on.
+     * <p>A fork that has not made a key yet leaves this empty, and {@code update --download}
+     * refuses on it rather than falling back to the checksum alone.
      */
     static final List<String> PUBLIC_KEYS = List.of(
         "MCowBQYDK2VwAyEAg0LBDS1WpfjvkgUttkrqb+eoByPGmYrivlYjhE3QM3I=");
 
     private ReleaseKey() {}
 
-    /** Whether this build can check a signature at all. */
-    static boolean configured() {
-        return !PUBLIC_KEYS.isEmpty();
-    }
-
     /**
-     * Verifies {@code signature} over {@code message} against the compiled-in keys, and returns the
-     * fingerprint of the one that accepted it — which is what the operator is shown, so that "it
-     * verified" names a key rather than a list.
-     */
-    static String verify(byte[] message, byte[] signature) throws GeneralSecurityException {
-        return verify(PUBLIC_KEYS, message, signature);
-    }
-
-    /**
-     * The same check against named keys, so a test can hold it against key pairs it made itself.
-     * Throws rather than returning false: there is one acceptable outcome and every other one has
-     * a reason worth printing.
+     * Verifies {@code signature} over {@code message} against {@code keys} -- {@link #PUBLIC_KEYS}
+     * in production, key pairs a test made itself otherwise -- and returns the fingerprint of the
+     * one that accepted it, which is what the operator is shown so that "it verified" names a key
+     * rather than a list. Throws rather than returning false: there is one acceptable outcome and
+     * every other one has a reason worth printing. An empty list is a refusal like any other.
      */
     static String verify(List<String> keys, byte[] message, byte[] signature) throws GeneralSecurityException {
-        if (keys.isEmpty()) {
-            throw new SignatureException("this build carries no release signing key");
-        }
         List<String> tried = new ArrayList<>(keys.size());
         for (String key : keys) {
-            PublicKey pub = publicKey(key); // a key on this list that is not one is a build defect, not a "no"
-            tried.add(fingerprint(key));
+            byte[] spki;
+            try {
+                spki = decode(key);
+            } catch (IllegalArgumentException e) {
+                // A key on this list that is not one is a build defect, not a "no".
+                throw new SignatureException("a compiled-in release key is not base64: " + e.getMessage());
+            }
+            String fp = fingerprint(spki);
+            tried.add(fp);
             Signature v = Signature.getInstance("Ed25519");
-            v.initVerify(pub);
+            v.initVerify(KeyFactory.getInstance("Ed25519").generatePublic(new X509EncodedKeySpec(spki)));
             v.update(message);
             try {
                 if (v.verify(signature)) {
-                    return fingerprint(key);
+                    return fp;
                 }
             } catch (SignatureException e) {
                 // Malformed for this key is malformed for all of them; keep going so the message
@@ -97,28 +86,23 @@ final class ReleaseKey {
             }
         }
         throw new SignatureException("the release signature matches none of the keys this build accepts ("
-            + String.join(", ", tried) + ")");
+            + (tried.isEmpty() ? "none" : String.join(", ", tried)) + ")");
     }
 
     /** Eight bytes of SHA-256 over the key, so an operator can say which key checked a download. */
     static String fingerprint(String base64Spki) {
         try {
-            byte[] h = MessageDigest.getInstance("SHA-256").digest(decode(base64Spki));
-            return HexFormat.of().formatHex(h, 0, 8);
-        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            return fingerprint(decode(base64Spki));
+        } catch (IllegalArgumentException e) {
             return "unreadable";
         }
     }
 
-    private static PublicKey publicKey(String base64Spki) throws GeneralSecurityException {
-        try {
-            return KeyFactory.getInstance("Ed25519").generatePublic(new X509EncodedKeySpec(decode(base64Spki)));
-        } catch (IllegalArgumentException e) {
-            throw new SignatureException("a compiled-in release key is not base64: " + e.getMessage());
-        }
+    private static String fingerprint(byte[] spki) {
+        return Updates.sha256Hex(spki).substring(0, 16);
     }
 
     private static byte[] decode(String base64) {
-        return Base64.getDecoder().decode(base64.replaceAll("\\s", ""));
+        return Base64.getDecoder().decode(base64.strip()); // strict: a stray character is a broken key, not one to skip
     }
 }

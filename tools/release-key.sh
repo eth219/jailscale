@@ -25,7 +25,6 @@ if [ -z "$project" ]; then
     echo "usage: tools/release-key.sh PROJECT [LOCATION] [KEYRING] [KEY]" >&2
     exit 2
 fi
-command -v gcloud >/dev/null 2>&1 || { echo "this needs the gcloud CLI, logged in as the release account." >&2; exit 1; }
 
 config=${JAILSCALE_KMS_CONFIG:-$HOME/.jailscale-release/kms-key}
 if [ -e "$config" ]; then
@@ -36,28 +35,46 @@ if [ -e "$config" ]; then
     exit 1
 fi
 
+. "$(dirname "$0")/openssl-ed25519.sh"
+command -v gcloud >/dev/null 2>&1 || { echo "this needs the gcloud CLI, logged in as the release account." >&2; exit 1; }
+
+# "Already exists" is the one failure that is fine, and it is the only one tolerated: a permission
+# denied or a quota swallowed here used to end with a config file naming a key that does not exist,
+# and every later run refusing to make one because the file was there.
+tolerate_existing() {
+    _err=$("$@" 2>&1 >/dev/null) && return 0
+    case "$_err" in
+        *ALREADY_EXISTS*|*"already exists"*) return 0 ;;
+    esac
+    printf '%s\n' "$_err" >&2
+    return 1
+}
+
 gcloud services enable cloudkms.googleapis.com --project="$project"
-gcloud kms keyrings create "$keyring" --location="$location" --project="$project" 2>/dev/null || true
+tolerate_existing gcloud kms keyrings create "$keyring" --location="$location" --project="$project"
 # Asymmetric signing keys are not rotated on a schedule, and this one must not be: the public half
 # is compiled into every binary, so a new version is a release, not a cron job.
-gcloud kms keys create "$key" --location="$location" --keyring="$keyring" --project="$project" \
+tolerate_existing gcloud kms keys create "$key" --location="$location" --keyring="$keyring" --project="$project" \
     --purpose=asymmetric-signing --default-algorithm=ec-sign-ed25519 --protection-level=software \
-    --destroy-scheduled-duration=30d 2>/dev/null || true
+    --destroy-scheduled-duration=30d
 
 name="projects/$project/locations/$location/keyRings/$keyring/cryptoKeys/$key/cryptoKeyVersions/1"
+
+# The public half, fetched the way sign-release.sh fetches it. The config file is written only once
+# this has worked, so a key that cannot be read is not one the next run believes in.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+JAILSCALE_KMS_KEY=$name
+export JAILSCALE_KMS_KEY
+. "$(dirname "$0")/kms-key.sh"
+kms_public_key "$tmp/pub.pem"
+spki=$(spki_base64 "$tmp/pub.pem")
+fingerprint=$(spki_fingerprint "$tmp/pub.pem")
+
 mkdir -p "$(dirname "$config")"
 printf '%s\n' "$name" > "$config"
 
-. "$(dirname "$0")/openssl-ed25519.sh"
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-gcloud kms keys versions get-public-key 1 --project="$project" --location="$location" \
-    --keyring="$keyring" --key="$key" --output-file="$tmp/pub.pem"
-spki=$("$OPENSSL" pkey -pubin -in "$tmp/pub.pem" -outform DER | base64 | tr -d '\n')
-fingerprint=$("$OPENSSL" pkey -pubin -in "$tmp/pub.pem" -outform DER | "$OPENSSL" dgst -sha256 -binary \
-    | od -An -tx1 | tr -d ' \n' | cut -c1-16)
-
-cat <<EOF
+cat <<EOT
 
 key           $name
 fingerprint   $fingerprint
@@ -75,4 +92,4 @@ To ROTATE later, do not replace the entry: add the new key beside the old one, s
 signed with the OLD key, and only sign with the new one from the release after that. Binaries in
 the field accept the list they were built with, so a key that appears and is used in the same
 release is a key nothing out there has heard of.
-EOF
+EOT
