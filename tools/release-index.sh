@@ -37,6 +37,10 @@ INDEX_FORMAT='jailscale-index 1'
 # instant at all, and an empty field in a document this signs is a pointer nobody can read and
 # nothing here will overwrite.
 INDEX_DAYS=${JAILSCALE_INDEX_DAYS:-90}
+# How long before it expires everything starts saying so. The same fortnight is EXPIRY_WARNING_MS in
+# Updates.java, which is what a node says it with; two languages cannot share one constant, so they
+# name each other instead.
+INDEX_WARN_DAYS=14
 case $INDEX_DAYS in
     ''|*[!0-9]*)
         echo "JAILSCALE_INDEX_DAYS is a number of days, and this is not one: '$INDEX_DAYS'" >&2

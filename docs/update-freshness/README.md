@@ -230,8 +230,10 @@ constant with a reason behind it.
    a pointer can name an upgrade *and* be about to expire, and the second is the one nobody else
    notices. `status` carries `expiresAt`, `stale` and the outcome, so the stale line is there for
    anything reading the JSON. The nightly `index` job in ci.yml checks the published pointer from
-   outside and goes red at the same fourteen days, which is the reminder that does not depend on
-   anyone running a node.
+   outside -- the reminder that does not depend on anyone running a node -- annotating the run at
+   the same fourteen days and failing it once the pointer has expired or stops verifying. The
+   fortnight is an annotation rather than a failure because a nightly that is red for fourteen days
+   running is one people stop reading.
 
 Steps 1 and 2 are what make the withholding attack visible; 3 is what makes it un-repeatable against
 a node that has already seen better. 4 removes the unsigned path that would otherwise be a fallback,
@@ -298,8 +300,8 @@ would have raised the floor for exactly where it was.
   the shell, after the release it was signing is already out. Both readers refuse it instead.
 - **Something runs the expiry check.** The fourteen-day warning was reachable only by a human typing
   a command nobody had a reason to type, which for a scheme whose whole cost is a recurring manual
-  act is the wrong place to keep the reminder. The nightly CI run checks the published pointer and
-  goes red two weeks out.
+  act is the wrong place to keep the reminder. The nightly CI run checks the published pointer,
+  annotating two weeks out and failing once it has expired.
 
 ## What building step 2 settled
 

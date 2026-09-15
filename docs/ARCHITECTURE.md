@@ -1213,8 +1213,11 @@ already on the machine as that user.
 **Both ends say it before it lapses.** Fourteen days out, `update` adds a line on stderr and the
 daemon logs one a day -- independent of what the check concluded, because a pointer can name an
 upgrade and be about to expire, and only the second has nobody else watching it. The nightly `index`
-job in `ci.yml` checks the published pointer from outside on the same clock and goes red, which is
-the reminder that does not depend on anyone running a node. Re-issuing is a person at a laptop
+job in `ci.yml` checks the published pointer from outside, which is the reminder that does not
+depend on anyone running a node: it annotates the run at the same fortnight and **fails** once the
+pointer has expired or stops verifying. It annotates rather than fails for the fortnight on purpose
+-- a nightly build that is red for fourteen days running is a build people stop reading, and the
+thing that has to happen in those fourteen days is a person's. Re-issuing is that person at a laptop
 calling KMS, so a warning that arrives after the fact is not a warning.
 
 **The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
