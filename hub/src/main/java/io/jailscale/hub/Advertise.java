@@ -28,21 +28,54 @@ final class Advertise {
 
     private Advertise() {}
 
-    /** What the public resolvers hold as glue: label to IPv4 address, for the labels that resolve. */
+    /**
+     * The glue the parent holds for {@code hub}: label to IPv4 address, for the labels it has.
+     * Read from the parent zone's own name servers, asked without recursion, whose referral for
+     * a delegated name carries the glue. Not from a recursive resolver: once the subdomain is
+     * delegated, a resolver asked for {@code ns2.<hub>} asks the hubs, and a hub that did not yet
+     * know the glue answered from the wildcard with itself -- which the resolver cached and this
+     * lookup then believed, so both hubs thought they were the same host. The first deployment of
+     * the delegation did exactly that.
+     */
     static Map<String, String> glue(String hub) {
-        Map<String, String> out = new LinkedHashMap<>();
-        for (String label : LABELS) {
-            String name = label + "." + hub;
-            for (String r : DnsQuery.PUBLIC_RESOLVERS) {
-                try {
-                    List<String> a = DnsQuery.a(r, 53, name, DnsQuery.PUBLIC_TIMEOUT_MS);
-                    if (!a.isEmpty()) {
-                        out.put(label, a.get(0));
-                        break;
+        String parent = hub.substring(hub.indexOf('.') + 1);
+        List<String> servers = new java.util.ArrayList<>();
+        for (String r : DnsQuery.PUBLIC_RESOLVERS) {
+            try {
+                for (String nsName : DnsQuery.ns(r, 53, parent, DnsQuery.PUBLIC_TIMEOUT_MS)) {
+                    for (String a : DnsQuery.a(r, 53, nsName, DnsQuery.PUBLIC_TIMEOUT_MS)) {
+                        if (!servers.contains(a)) {
+                            servers.add(a);
+                        }
                     }
-                } catch (IOException | RuntimeException e) {
-                    LOG.debug("{} for {}: {}", r, name, e.toString());
                 }
+                if (!servers.isEmpty()) {
+                    break;
+                }
+            } catch (IOException | RuntimeException e) {
+                LOG.debug("{} for NS of {}: {}", r, parent, e.toString());
+            }
+        }
+        return glue(hub, servers, 53);
+    }
+
+    /** As above, asking the parent's servers given (tests pass a fake parent and its port). */
+    static Map<String, String> glue(String hub, List<String> parentServers, int port) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (String server : parentServers) {
+            try {
+                Map<String, String> referral = DnsQuery.referralGlue(server, port, LABELS.get(0) + "." + hub, DIRECT_TIMEOUT_MS);
+                for (String label : LABELS) {
+                    String a = referral.get(label + "." + hub);
+                    if (a != null) {
+                        out.put(label, a);
+                    }
+                }
+                if (!out.isEmpty()) {
+                    return out;
+                }
+            } catch (IOException | RuntimeException e) {
+                LOG.debug("parent {} for {}: {}", server, hub, e.toString());
             }
         }
         return out;

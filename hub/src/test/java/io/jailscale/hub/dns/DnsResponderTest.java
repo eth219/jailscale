@@ -69,6 +69,18 @@ class DnsResponderTest {
         }
         try (DnsResponder d = new DnsResponder("hub.example.com")) {
             d.start("127.0.0.1", 0);
+            d.setZone(new DnsResponder.Zone() {
+                @Override public List<String> serving() { return List.of("203.0.113.1"); }
+                @Override public Map<String, String> nameServers() { return Map.of(); }
+            });
+            // Before the glue is known, a glue name answers nothing rather than the wildcard: the
+            // live primary answered ns2 with itself once, a resolver cached that, and the lookup
+            // that was meant to find the glue read it back.
+            assertEquals(List.of(), DnsQuery.a("127.0.0.1", d.port(), "ns2.hub.example.com", 2000));
+            assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", d.port(), "ns3.hub.example.com", 2000), "only the delegable labels are held back");
+        }
+        try (DnsResponder d = new DnsResponder("hub.example.com")) {
+            d.start("127.0.0.1", 0);
             // Not delegated (three records at the parent): the zone still names itself, as it did.
             assertEquals(List.of("hub.example.com"), DnsQuery.ns("127.0.0.1", d.port(), "hub.example.com", 2000));
         }
