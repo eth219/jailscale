@@ -120,7 +120,14 @@ async def serve(reader, writer):
             elif path == "/":
                 with open(INDEX, "rb") as f:
                     body = f.read()
-                writer.write(response("200 OK", "text/html; charset=utf-8", body))
+                # Stamped like /ping and /stats. The page reads it off its own
+                # navigation entry, because on a reused connection the setup
+                # breakdown has no handshake to charge the round trip to and the
+                # whole bar lands in "Server wait" -- a reader needs the app's
+                # share of that to see it is not the app.
+                dur = (time.perf_counter() - started) * 1000
+                writer.write(response("200 OK", "text/html; charset=utf-8", body,
+                                      ["Server-Timing: app;dur=%.3f" % dur]))
             elif path == "/ping":
                 # The smallest honest unit: a request and a response, nothing in
                 # the app worth measuring. Server-Timing carries what little the
