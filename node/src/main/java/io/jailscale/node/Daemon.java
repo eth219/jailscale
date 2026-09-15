@@ -16,7 +16,9 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
@@ -793,47 +795,80 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * opt out of.
      */
     private void probeLoop() {
-        int next = 0;
+        Set<String> pass = new HashSet<>();
         while (!closed) {
             try {
                 Thread.sleep(PROBE_INTERVAL_MS);
             } catch (InterruptedException e) {
                 return;
             }
-            List<NodeState.LinkRec> links = new ArrayList<>(state.links);
             if (!link.isConnected()) {
                 continue;
             }
-            int i = nextProbeIndex(links, next);
-            if (i < 0) {
+            NodeState.LinkRec rec = dueProbe(new ArrayList<>(state.links), pass);
+            if (rec == null) {
                 continue;
             }
-            next = (i + 1) % links.size();
             try {
-                probe(links.get(i));
+                probe(rec);
             } catch (RuntimeException e) {
                 // probe() is written not to throw; if it ever does, one bad tick must not be the
                 // last one. Say so, at the volume of a thing that should not happen.
-                LOG.error("self-probe of {} failed unexpectedly: {}", links.get(i).name, e.toString());
+                LOG.error("self-probe of {} failed unexpectedly: {}", rec.name, e.toString());
             }
         }
     }
 
     /**
-     * The link to probe on this tick: the first one at or after {@code from}, wrapping, that carries
-     * TLS this node terminates. -1 when none does, which is a node with only raw ports open.
-     * Separate from the probing so that the turn-taking -- the part that keeps the cost of a tick
-     * independent of how many names are open -- can be checked without opening a socket.
+     * The link to probe on this tick, or null when this node holds no name to probe. {@code pass}
+     * is the turn-taking: the names already looked at in the current pass, carried across ticks and
+     * cleared here once every name has had its turn, which is what makes a pass a pass.
+     *
+     * <p>It is a set of names rather than a position because a position is a claim about a list
+     * that does not hold still. Links are opened and closed while a pass runs, and an index into
+     * yesterday's list points at a different name in today's: closing one link used to shift every
+     * later name up a place, which skips the one that moved past the cursor -- for a whole pass,
+     * silently, in the loop whose entire purpose is that no name goes unlooked-at for long. Naming
+     * the names instead makes both cases right by construction: a link that goes away takes its
+     * turn with it, and one that appears is due, because a name not in the set has not been probed.
+     *
+     * <p>A name with no verdict at all goes first. It is the one nothing is known about, and until
+     * its first probe the reassurance in {@code status} is an empty field rather than an answer.
+     *
+     * <p>Separate from the probing so that the turn-taking can be checked without opening a socket.
      */
-    static int nextProbeIndex(List<NodeState.LinkRec> links, int from) {
-        for (int i = 0; i < links.size(); i++) {
-            int at = (from + i) % links.size();
-            NodeState.LinkRec rec = links.get(at);
-            if (Message.LinkOpen.HTTPS.equals(rec.kind) && rec.url != null) {
-                return at;
+    static NodeState.LinkRec dueProbe(List<NodeState.LinkRec> links, Set<String> pass) {
+        List<NodeState.LinkRec> due = remaining(links, pass);
+        if (due.isEmpty()) {
+            pass.clear();
+            due = remaining(links, pass);
+        }
+        if (due.isEmpty()) {
+            return null;
+        }
+        NodeState.LinkRec pick = due.get(0);
+        for (NodeState.LinkRec rec : due) {
+            if (rec.lastProbe == null) {
+                pick = rec;
+                break;
             }
         }
-        return -1;
+        pass.add(pick.name);
+        return pick;
+    }
+
+    /** The links carrying TLS this node terminates that have not had their turn in {@code pass}. */
+    private static List<NodeState.LinkRec> remaining(List<NodeState.LinkRec> links, Set<String> pass) {
+        List<NodeState.LinkRec> due = new ArrayList<>();
+        for (NodeState.LinkRec rec : links) {
+            // Raw ports carry no TLS of ours to compare, and an https link the hub has not answered
+            // for yet has no URL to connect to. Neither is a name this can say anything about.
+            if (Message.LinkOpen.HTTPS.equals(rec.kind) && rec.url != null && rec.name != null
+                && !pass.contains(rec.name)) {
+                due.add(rec);
+            }
+        }
+        return due;
     }
 
     private static String visitUrl(NodeState.LinkRec rec, String token) {

@@ -1318,8 +1318,19 @@ The objection to a schedule was that the period has to scale with the number of 
 enough to matter for one name is a lot of self-traffic for twenty. It does not have to, if a tick
 probes **one** name and the next tick takes the next: the cost of a tick is then one request whatever
 the node holds, and what stretches is how long a full pass takes, from half an hour at one name to
-ten hours at the 20-link ceiling. Raw ports are stepped over within the same tick rather than
-spending it, since they carry no TLS of ours to compare. The result of the last probe of each name
+ten hours at the 20-link ceiling.
+
+**Whose turn it is, is a set of names, not a position in the list of links.** Links open and close
+while a pass runs, so an index into the list of an hour ago points at a different name now: closing
+one link shifts every later name up a place, and whichever name moves past the cursor loses its turn
+for the rest of the pass -- silently, in the loop that exists so that no name goes unlooked-at for
+long. Carrying the names already visited makes both directions right without a special case, because
+a name that is not in the set has not been probed: a link that goes away takes its turn with it, and
+one opened mid-pass is due rather than waiting for the next. Raw ports are never candidates at all,
+since they carry no TLS of ours to compare, and a name with no verdict yet goes ahead of the rest --
+until its first probe what `status` shows for it is an empty field rather than an answer.
+
+The result of the last probe of each name
 rides in `status`, so the answer is visible without running anything, and a `TERMINATED ELSEWHERE`
 from the loop logs exactly as loudly as one the operator asked for. There is no switch to turn it
 off: the traffic goes to this node's own name through its own hub and reaches no third party.
