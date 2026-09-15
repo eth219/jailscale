@@ -43,6 +43,22 @@ class DnsFuzzTest {
                 if (out != null && out.length > 4096) {
                     fail("oversized answer for " + Arrays.toString(in));
                 }
+                if (out != null) {
+                    // What the UDP path would really put on the wire. `truncate` walks the question
+                    // inside a response that echoes these same mutated bytes, so it parses attacker
+                    // input as surely as `respond` does, and it must never throw or answer more than
+                    // a datagram may carry (ARCHITECTURE.md §11.5).
+                    byte[] wire = out.length > DnsResponder.MAX_UDP ? DnsResponder.truncate(out) : out;
+                    if (wire.length > DnsResponder.MAX_UDP) {
+                        fail("answer of " + wire.length + " bytes would go on UDP for " + Arrays.toString(in));
+                    }
+                    // And the truncation itself, on every case rather than only the large ones:
+                    // that is where the walk over the echoed question is exercised.
+                    byte[] cut = DnsResponder.truncate(out);
+                    if (cut.length > out.length || (cut[2] & 0x02) == 0) {
+                        fail("bad truncation of " + Arrays.toString(out));
+                    }
+                }
             } catch (Throwable t) {
                 fail("case " + i + " threw " + t, t);
             }

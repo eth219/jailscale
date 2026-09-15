@@ -30,9 +30,13 @@ import java.util.function.Consumer;
  * {@code nsN.<hub>} to the glue the parent holds, and {@code _jailhub-self.<hub>} to a token this
  * process alone knows, which is how a hub finds out which of the glue addresses is its own.
  *
- * <p>UDP and TCP, no EDNS, no compression beyond a pointer to the question name. Answers are
- * small by construction, so the server is no use as an amplifier; recursion is never offered and
- * names outside the zone are REFUSED.
+ * <p>UDP and TCP, no EDNS, no compression beyond a pointer to the question name. Recursion is never
+ * offered and names outside the zone are REFUSED in twelve bytes, which is a third of what asking
+ * costs. The answers that do exist are small — the largest this zone can hold is 287 bytes and the
+ * worst ratio of answer to query is 5.3, both measured and gated by {@code DnsAmplificationTest} —
+ * so this is a poor amplifier. It is not a harmless one, and a datagram's source address is a claim
+ * rather than a fact, so what leaves on UDP is metered per network by {@link ResponseRate} and never
+ * exceeds {@link #MAX_UDP}.
  */
 public final class DnsResponder implements AutoCloseable {
 
@@ -85,6 +89,17 @@ public final class DnsResponder implements AutoCloseable {
         @Override public List<String> serving() { return List.of(); }
         @Override public Map<String, String> nameServers() { return Map.of(); }
     };
+
+    /**
+     * What a resolver that has not offered EDNS may be sent in a datagram (RFC 1035 §4.2.1). Beyond
+     * it the answer is the header with {@code TC} set and the resolver asks again over TCP.
+     */
+    static final int MAX_UDP = 512;
+    private static final long RATE_LOG_MS = 60_000;
+
+    /** Per-network answer rate on UDP (§11.5); TCP is not metered, having proved its address. */
+    private final ResponseRate rate = new ResponseRate();
+    private long lastRateLog;
 
     private final String zone;      // _acme-challenge.hub.example.com (lower case, no trailing dot)
     private final String hubName;   // hub.example.com, the zone apex
@@ -192,7 +207,7 @@ public final class DnsResponder implements AutoCloseable {
             try {
                 udp.receive(p);
                 byte[] q = java.util.Arrays.copyOf(p.getData(), p.getLength());
-                byte[] r = respond(q);
+                byte[] r = answerForUdp(q, p.getAddress(), System.currentTimeMillis());
                 if (r != null) {
                     udp.send(new DatagramPacket(r, r.length, p.getSocketAddress()));
                 }
@@ -202,6 +217,82 @@ public final class DnsResponder implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /**
+     * What to put in a datagram back to {@code source}, or null to send nothing at all.
+     *
+     * <p>Separate from {@link #respond}, which TCP shares, because both rules here are about the
+     * transport rather than about the zone: a datagram's source address is a claim and not a fact
+     * (§11.5), so what leaves is metered per network, and a datagram has 512 bytes for a resolver
+     * that has not offered EDNS, so anything longer becomes a pointer to TCP. Over TCP neither
+     * applies — the address is proved by a handshake, and a length prefix carries whatever the
+     * answer is.
+     */
+    byte[] answerForUdp(byte[] query, InetAddress source, long now) {
+        byte[] r = respond(query);
+        if (r == null) {
+            return null;
+        }
+        switch (rate.check(source, now)) {
+            case DROP -> {
+                logRate(now);
+                return null;
+            }
+            case TRUNCATE -> {
+                logRate(now);
+                return truncate(r);
+            }
+            default -> {
+                return r.length > MAX_UDP ? truncate(r) : r;
+            }
+        }
+    }
+
+    /**
+     * One line a minute while a flood lasts, the way the node reports a visitor ceiling: per query
+     * it would be a line per packet under exactly the load that makes the limit matter.
+     */
+    private void logRate(long now) {
+        if (now - lastRateLog >= RATE_LOG_MS) {
+            lastRateLog = now;
+            LOG.warn("over the per-network answer rate on :53; {} queries dropped and {} answered truncated "
+                + "so far (ARCHITECTURE.md §11.5)", rate.dropped(), rate.truncated());
+        }
+    }
+
+    /**
+     * The same answer with nothing in it: the header with {@code TC} set and the question echoed, so
+     * a resolver asks again over TCP.
+     *
+     * <p>Two callers with one shape. A response over {@link #MAX_UDP} has to be truncated because
+     * that is what a resolver with no EDNS is allowed to receive, and an answer larger than that
+     * would be quietly dropped by the resolver rather than read -- which for
+     * {@code _acme-challenge} means a certificate that stops renewing, reported nowhere. Over the
+     * rate limit it is the polite half of the refusal ({@code ResponseRate.SLIP}). Nothing here
+     * measures 512 today, at 287 bytes for the largest answer this zone can hold, but nothing
+     * enforced it either, and the zone is what grows.
+     */
+    static byte[] truncate(byte[] response) {
+        int p = 12;
+        while (p < response.length && (response[p] & 0xff) != 0) {
+            int l = response[p] & 0xff;
+            if ((l & 0xc0) != 0) {
+                break;
+            }
+            p += l + 1;
+        }
+        // The question's terminating zero, then qtype and qclass; a response whose question cannot
+        // be walked keeps the header alone, which is still a well-formed TC answer.
+        int end = p + 5 <= response.length ? p + 5 : 12;
+        byte[] out = java.util.Arrays.copyOf(response, end);
+        out[2] |= 0x02;             // TC
+        out[4] = 0;
+        out[5] = (byte) (end == 12 ? 0 : 1);
+        for (int i = 6; i < 12; i++) {
+            out[i] = 0;             // no answer, authority or additional records
+        }
+        return out;
     }
 
     private void tcpLoop() {

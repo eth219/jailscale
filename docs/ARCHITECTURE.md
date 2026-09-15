@@ -1418,6 +1418,45 @@ operator's job. Unauthenticated work is metered with per-source token buckets:
 | Credential presentation (invite token, code, auth-key) | 20 | 0.2/s | `rejected{reason: rate-limited}` |
 | Registration under `--registration open` | 5 | 1 per 12 min | `rejected{reason: rate-limited}` |
 | Knock queue | 5 entries per address | n/a | `rejected{reason: too-many-pending}` |
+| DNS answer on UDP 53, per /24 or /64 | 50 | 20/s | dropped; one in two answered `TC=1` |
+
+**The DNS row is the one that protects somebody else.** Every other line above meters work a stranger
+makes the hub do. A query's source address is a claim rather than a fact, so an attacker puts a
+victim's address on one and the hub sends the answer there. What that is worth is a number and now a
+gated one: the largest answer this zone can hold is **287 bytes** and the worst ratio of answer to
+query is **5.3**, both measured by `DnsAmplificationTest` against the largest zone this design allows
+— two hosts serving, both name servers delegated, and an issuance in flight so both challenge values
+are present. That is a poor amplifier next to the 50-to-70 this class of server has been used at, and
+a poor amplifier answering without limit is still a free one. A name outside the zone is REFUSED in
+twelve bytes, a third of what asking cost, so the query anyone can send for any name reflects
+nothing.
+
+The limit is keyed on the network and not the address, because a reflection attack names a victim and
+a victim is a network: per address, an attacker walks the /24 it is aiming at and gets the rate again
+for each, and against anyone holding a routed /64 a per-address bound means nothing at all. It is a
+fixed table of 2,048 buckets rather than a map, which is the opposite of `RateLimiter` next door and
+for the reason that made a map right there: those callers have already done work to be tracked, where
+this one has sent one unverified packet, so the map would be an attacker's to grow and the scan that
+trimmed it would land on the thread reading the socket, once per packet, under exactly the flood it
+exists for. Two networks that hash together share a budget, which limits more rather than less, and
+the key is deliberately not stored to tell them apart — a table that evicted the loser of a collision
+would let an attacker clear a victim's bucket by choosing addresses that land on it.
+
+One over-limit query in two is answered `TC=1` instead of being dropped, which is the difference
+between a limit and a way to take the zone down: a resolver behind a forged address, or sharing a
+bucket, is told to ask again over TCP, which this server also answers and where an address is proved
+by a handshake. A truncated answer is the question echoed and no records, so it is never larger than
+what asked for it. **Loopback is exempt**, as it is for the visitor caps of §8.1 and for the same
+reason — a forwarder on this host would fold every resolver in the world into one bucket — and it is
+where the hub's own dns-01 self-check asks from. A proxy in front of :53 that is *not* loopback would
+have the same effect and there is no PROXY protocol for DNS; none of the deployments in `deploy/`
+puts one there.
+
+Separately, and not about amplification: a UDP answer is never longer than **512 bytes**, which is
+what a resolver that has not offered EDNS may be sent. Past it the answer is the header with `TC` set.
+Nothing here reaches that today at 287 bytes, but nothing enforced it either, and an oversized
+datagram is not an error a resolver reports — it is one it discards, which under `_acme-challenge`
+is a certificate that stops renewing and says so nowhere.
 
 A node the hub already knows returns before the credential check, so reconnections never touch the
 bucket. The bursts are generous because a node opens up to four connections and a NAT can hide many
@@ -1701,7 +1740,9 @@ with a 30-second TTL, the apex and every name under it -- any label, at any dept
 hosts serving right now**: a primary answers itself, a standby answers the primary while its
 channel to it is up, and nothing otherwise. Whether a name is open is the SNI router's question,
 not DNS's. AAAA, MX and the rest are NODATA with the apex SOA; names outside the zone are REFUSED;
-recursion is never offered; nothing answered is large enough to amplify with.
+recursion is never offered; and what is answered is small enough to be a poor amplifier — 287 bytes
+at the largest, 5.3 times the query at the worst, measured and gated rather than asserted, and
+metered per network on UDP because poor is not the same as harmless (§11.5).
 
 **Liveness is the channel.** A host leaves the other's answer when the hub-to-hub channel drops,
 which the idle timeout bounds at a minute, and resolvers skip a dead name server on their own. In

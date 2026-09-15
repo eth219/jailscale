@@ -1,0 +1,161 @@
+package io.jailscale.hub.dns;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.net.InetAddress;
+import org.junit.jupiter.api.Test;
+
+/** The per-network answer rate on UDP 53 (ARCHITECTURE.md §11.5). */
+class ResponseRateTest {
+
+    private static ResponseRate.Verdict check(ResponseRate r, String ip, long now) throws Exception {
+        return r.check(InetAddress.getByName(ip), now);
+    }
+
+    @Test
+    void anOrdinaryResolverIsNeverTouched() throws Exception {
+        // What this zone actually sees: a handful of queries when a TTL lapses. The limit has to be
+        // somewhere no honest traffic can reach, or it is a way to take the zone down.
+        ResponseRate r = new ResponseRate();
+        long now = 1_000_000;
+        for (int i = 0; i < 200; i++) {
+            assertSame(ResponseRate.Verdict.ANSWER, check(r, "198.51.100.7", now + i * 100L),
+                "query " + i + " at 10 a second");
+        }
+        assertEquals(0, r.dropped());
+        assertEquals(0, r.truncated());
+    }
+
+    @Test
+    void afloodIsCutAndOneInSlipIsToldToUseTcp() throws Exception {
+        ResponseRate r = new ResponseRate();
+        long now = 1_000_000;
+        int answered = 0;
+        int truncated = 0;
+        int dropped = 0;
+        for (int i = 0; i < 500; i++) {
+            switch (check(r, "198.51.100.7", now)) {   // all in the same millisecond: no refill
+                case ANSWER -> answered++;
+                case TRUNCATE -> truncated++;
+                case DROP -> dropped++;
+                default -> { }
+            }
+        }
+        assertEquals(ResponseRate.BURST, answered, "the burst, and then nothing more");
+        // Every SLIP-th of what is left, so a resolver behind a forged address still learns to ask
+        // over TCP rather than being left with silence.
+        assertEquals((500 - ResponseRate.BURST) / ResponseRate.SLIP, truncated);
+        assertEquals(500 - ResponseRate.BURST - truncated, dropped);
+        assertEquals(dropped, r.dropped());
+        assertEquals(truncated, r.truncated());
+    }
+
+    @Test
+    void theBudgetComesBack() throws Exception {
+        ResponseRate r = new ResponseRate();
+        long now = 1_000_000;
+        for (int i = 0; i < ResponseRate.BURST; i++) {
+            check(r, "198.51.100.7", now);
+        }
+        assertNotEquals(ResponseRate.Verdict.ANSWER, check(r, "198.51.100.7", now));
+        // A second later, a second's worth.
+        assertSame(ResponseRate.Verdict.ANSWER, check(r, "198.51.100.7", now + 1000));
+    }
+
+    @Test
+    void v4IsKeyedOnTheNetworkAndNotTheAddress() throws Exception {
+        // A reflection attack aims at a network, so an attacker who could get the full rate for each
+        // address in a /24 would have 256 times the budget against one victim.
+        ResponseRate r = new ResponseRate();
+        long now = 1_000_000;
+        for (int i = 0; i < ResponseRate.BURST; i++) {
+            check(r, "198.51.100." + (i % 256), now);
+        }
+        assertNotEquals(ResponseRate.Verdict.ANSWER, check(r, "198.51.100.200", now),
+            "another address in a spent /24");
+        assertSame(ResponseRate.Verdict.ANSWER, check(r, "203.0.113.1", now), "a different /24");
+    }
+
+    @Test
+    void v6IsKeyedOnTheSixtyFourAndNotTheAddress() throws Exception {
+        // The case a per-address bound cannot survive at all: a routed /64 is what every ordinary
+        // VPS is given, so 2^64 source addresses cost an attacker nothing.
+        ResponseRate r = new ResponseRate();
+        long now = 1_000_000;
+        for (int i = 0; i < ResponseRate.BURST; i++) {
+            check(r, "2001:db8:1:2::" + Integer.toHexString(i + 1), now);
+        }
+        assertNotEquals(ResponseRate.Verdict.ANSWER, check(r, "2001:db8:1:2:ffff::9", now),
+            "another address in a spent /64");
+        assertSame(ResponseRate.Verdict.ANSWER, check(r, "2001:db8:1:3::1", now), "a different /64");
+    }
+
+    @Test
+    void loopbackIsExempt() throws Exception {
+        // §8.1 exempts loopback from the visitor caps because a local proxy would fold everyone into
+        // one address; a forwarder in front of :53 would do the same to every resolver in the world,
+        // and this hub's own dns-01 self-check asks from here.
+        ResponseRate r = new ResponseRate();
+        long now = 1_000_000;
+        for (int i = 0; i < 500; i++) {
+            assertSame(ResponseRate.Verdict.ANSWER, check(r, "127.0.0.1", now), "loopback query " + i);
+        }
+        assertSame(ResponseRate.Verdict.ANSWER, check(r, "::1", now), "v6 loopback");
+        assertEquals(0, r.dropped());
+    }
+
+    @Test
+    void theUdpPathAppliesTheLimitAndTheDatagramBound() throws Exception {
+        // The wiring, not the arithmetic: that what DnsResponder would put in a datagram is what
+        // this class decided. Driven through answerForUdp rather than a socket, so the source
+        // address can be one that is not exempt.
+        DnsResponder d = new DnsResponder("hub.test");
+        d.setZone(new DnsResponder.Zone() {
+            @Override public java.util.List<String> serving() {
+                return java.util.List.of("203.0.113.1");
+            }
+
+            @Override public java.util.Map<String, String> nameServers() {
+                return java.util.Map.of();
+            }
+        });
+        InetAddress far = InetAddress.getByName("198.51.100.7");
+        byte[] q = DnsAmplificationTest.queryFor("myapp.hub.test", 1);
+        long now = 1_000_000;
+
+        byte[] first = d.answerForUdp(q, far, now);
+        assertTrue(first != null && first.length > 12, "an ordinary query should be answered");
+
+        int dropped = 0;
+        int truncated = 0;
+        for (int i = 0; i < 200; i++) {
+            byte[] r = d.answerForUdp(q, far, now);
+            if (r == null) {
+                dropped++;
+            } else if ((r[2] & 0x02) != 0) {
+                truncated++;
+                assertTrue(r.length <= q.length, "a truncated answer must not be larger than the query");
+            }
+        }
+        assertTrue(dropped > 0, "a flood should be dropped");
+        assertTrue(truncated > 0, "and some of it told to use TCP");
+    }
+
+    @Test
+    void manyNetworksCostNothingToTrack() throws Exception {
+        // The point of the fixed table: an attacker rotating source networks is the case that would
+        // grow a map, and the scan that trimmed it would run on the thread reading the socket. Here
+        // a hundred thousand of them touch the same 2,048 buckets and allocate nothing.
+        ResponseRate r = new ResponseRate();
+        long now = 1_000_000;
+        long started = System.nanoTime();
+        for (int i = 0; i < 100_000; i++) {
+            check(r, "10." + (i >> 16 & 0xff) + "." + (i >> 8 & 0xff) + "." + (i & 0xff), now);
+        }
+        long ms = (System.nanoTime() - started) / 1_000_000;
+        assertTrue(ms < 10_000, "100,000 distinct networks took " + ms + " ms");
+    }
+}
