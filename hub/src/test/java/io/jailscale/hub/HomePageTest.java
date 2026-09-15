@@ -106,6 +106,8 @@ class HomePageTest {
         // are in the status JSON as well, so nothing is read from color or height alone.
         assertTrue(html.contains("<svg class=\"avail\""), html);
         assertTrue(html.contains("<title>") && html.contains("up throughout</title>"), html);
+        assertTrue(html.contains("30 days ago") && html.contains("uptime</span><span>Today"), html);
+        assertTrue(html.contains("Shorter bars are worse"), "colour is never the only channel: " + html);
         assertTrue(html.contains("Nodes"), html);
         assertTrue(html.contains("Memory"), html);
         assertFalse(html.contains("mkey:"), "a node's key must not be on the public page");

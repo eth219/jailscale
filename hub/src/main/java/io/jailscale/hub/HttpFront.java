@@ -208,49 +208,6 @@ final class HttpFront {
         return out;
     }
 
-    /**
-     * One inline SVG: a column per bucket, its height the minutes down in that bucket, full at
-     * {@code fullAt} minutes or more. A bucket with nothing down draws nothing but its baseline;
-     * one before the record began draws a fainter baseline and says so. Every column carries its
-     * number in a title, which is the tooltip, and the JSON status carries the same numbers, which
-     * is the table. The ink is the page's own, so light and dark come from the same place as the
-     * text; the marks are 8px in a 10px slot, rounded at the data end and square at the base.
-     */
-    private static String strip(long[] minutes, long now, long bucketMs, long fullAt, String what) {
-        int slot = 10;
-        int w = 8;
-        int h = 36;
-        int base = h + 1;
-        StringBuilder s = new StringBuilder();
-        s.append("<svg class=\"avail\" width=\"").append(minutes.length * slot).append("\" height=\"").append(base + 2)
-            .append("\" viewBox=\"0 0 ").append(minutes.length * slot).append(' ').append(base + 2)
-            .append("\" role=\"img\" aria-label=\"").append(escape(what)).append("\">");
-        for (int i = 0; i < minutes.length; i++) {
-            int x = i * slot + 1;
-            long end = now - (minutes.length - 1 - i) * bucketMs;
-            String when = escape(java.time.Instant.ofEpochMilli(end - bucketMs).toString().substring(0, bucketMs >= 86_400_000L ? 10 : 16)
-                .replace('T', ' '));
-            s.append("<g><title>").append(when).append(": ");
-            if (minutes[i] < 0) {
-                s.append("no record</title><rect x=\"").append(x).append("\" y=\"").append(base).append("\" width=\"").append(w)
-                    .append("\" height=\"1\" fill=\"currentColor\" fill-opacity=\".15\"/></g>");
-                continue;
-            }
-            s.append(minutes[i] == 0 ? "up throughout" : minutes[i] + " min down").append("</title>");
-            s.append("<rect x=\"").append(x).append("\" y=\"").append(base).append("\" width=\"").append(w)
-                .append("\" height=\"1\" fill=\"currentColor\" fill-opacity=\".35\"/>");
-            if (minutes[i] > 0) {
-                int bar = (int) Math.max(3, Math.round(h * Math.min(1.0, (double) minutes[i] / fullAt)));
-                int top = base - bar;
-                // Rounded at the data end, square at the baseline.
-                s.append("<path fill=\"currentColor\" fill-opacity=\".6\" d=\"M").append(x).append(',').append(base)
-                    .append("V").append(top + 2).append("a2,2 0 0 1 2,-2h").append(w - 4).append("a2,2 0 0 1 2,2V").append(base).append("Z\"/>");
-            }
-            s.append("</g>");
-        }
-        return s.append("</svg>").toString();
-    }
-
     private static List<Object> boxed(long[] v) {
         List<Object> l = new ArrayList<>(v.length);
         for (long x : v) {
@@ -258,6 +215,67 @@ final class HttpFront {
         }
         return l;
     }
+
+    /** The status colours (good, warning, critical), validated for colour-vision separation as a set. */
+    private static final String GOOD = "#0ca30c";
+    private static final String WARNING = "#fab219";
+    private static final String CRITICAL = "#d03b3b";
+
+    /**
+     * One inline SVG in the shape a status page uses: a bar per bucket, coloured by what the
+     * bucket was -- green with nothing down, amber with less than {@code severeAt} minutes down,
+     * red with that or more -- and, so that colour is never the only channel, shorter the worse
+     * it was. A bucket from before the record began draws a faint stub and says so. Every bar
+     * carries its number in a title, which is the tooltip, and the JSON status carries the same
+     * numbers, which is the table.
+     */
+    private static String strip(long[] minutes, long now, long bucketMs, long severeAt, String what) {
+        int slot = 10;
+        int w = 8;
+        int h = 26;
+        StringBuilder s = new StringBuilder();
+        s.append("<svg class=\"avail\" width=\"").append(minutes.length * slot).append("\" height=\"").append(h)
+            .append("\" viewBox=\"0 0 ").append(minutes.length * slot).append(' ').append(h)
+            .append("\" role=\"img\" aria-label=\"").append(escape(what)).append("\">");
+        for (int i = 0; i < minutes.length; i++) {
+            int x = i * slot + 1;
+            long end = now - (minutes.length - 1 - i) * bucketMs;
+            String when = escape(java.time.Instant.ofEpochMilli(end - bucketMs).toString().substring(0, bucketMs >= 86_400_000L ? 10 : 16)
+                .replace('T', ' '));
+            s.append("<g><title>").append(when).append(": ");
+            String fill;
+            int bar;
+            if (minutes[i] < 0) {
+                s.append("no record</title><rect x=\"").append(x).append("\" y=\"").append(h - 3).append("\" width=\"").append(w)
+                    .append("\" height=\"3\" rx=\"1.5\" fill=\"currentColor\" fill-opacity=\".2\"/></g>");
+                continue;
+            } else if (minutes[i] == 0) {
+                s.append("up throughout");
+                fill = GOOD;
+                bar = h;
+            } else if (minutes[i] < severeAt) {
+                s.append(minutes[i]).append(" min down");
+                fill = WARNING;
+                bar = h * 2 / 3;
+            } else {
+                s.append(minutes[i]).append(" min down");
+                fill = CRITICAL;
+                bar = h / 3;
+            }
+            s.append("</title><rect x=\"").append(x).append("\" y=\"").append(h - bar).append("\" width=\"").append(w)
+                .append("\" height=\"").append(bar).append("\" rx=\"1.5\" fill=\"").append(fill).append("\"/></g>");
+        }
+        return s.append("</svg>").toString();
+    }
+
+    /** The line under a strip: how far back it reaches, the figure for that window, and where it ends. */
+    private static String ends(String from, Double fraction, String to) {
+        return "<small class=\"ends\"><span>" + from + "</span><span>" + Availability.percent(fraction) + " uptime</span><span>" + to + "</span></small>";
+    }
+
+    private static final String LEGEND = "<small class=\"legend\"><span class=\"sw\" style=\"background:" + GOOD + "\"></span>up "
+        + "<span class=\"sw\" style=\"background:" + WARNING + "\"></span>down under an hour (a quarter, per hour) "
+        + "<span class=\"sw\" style=\"background:" + CRITICAL + "\"></span>down longer. Shorter bars are worse; each bar says its minutes.</small>";
 
     /** "100% 24h · 99.98% 7d · 99.9% 30d", or what the record's age allows. */
     private static String availabilityText(java.util.function.Function<Long, Double> fraction) {
@@ -351,14 +369,16 @@ final class HttpFront {
             ? " (record since " + escape(java.time.Instant.ofEpochMilli(avail.since()).toString().substring(0, 10)) + ")" : "";
         long day = 86_400_000L;
         long hour = 3_600_000L;
-        row(b, "Availability", availabilityText(w -> avail.processFraction(w, now)) + ", by this process's own record" + sinceNote
-            + strip(downMinutes(avail::processDownBetween, now, day, 30), now, day, 60, "Minutes down per day, last 30 days")
-            + strip(downMinutes(avail::processDownBetween, now, hour, 24), now, hour, 15, "Minutes down per hour, last 24 hours")
-            + "<small>Minutes down per day over 30 days, then per hour over 24; a full column is an hour, or a quarter of one.</small>");
+        row(b, "Availability", "by this process's own record" + sinceNote
+            + strip(downMinutes(avail::processDownBetween, now, day, 30), now, day, 60, "Uptime per day, last 30 days")
+            + ends("30 days ago", avail.processFraction(30 * day, now), "Today")
+            + strip(downMinutes(avail::processDownBetween, now, hour, 24), now, hour, 15, "Uptime per hour, last 24 hours")
+            + ends("24 hours ago", avail.processFraction(day, now), "Now") + LEGEND);
         for (String peer : avail.peerNames()) {
-            row(b, "Seen from here", "<code>" + escape(peer) + "</code> " + availabilityText(w -> avail.peerFraction(peer, w, now))
+            row(b, "Seen from here", "<code>" + escape(peer) + "</code>"
                 + strip(downMinutes((f, t) -> avail.peerDownBetween(peer, f, t), now, day, 30), now, day, 60,
-                    "Minutes the channel to " + peer + " was down per day, last 30 days"));
+                    "The channel to " + peer + " per day, last 30 days")
+                + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today"));
         }
         PeerClient pc = hub.peerClient();
         if (hub.isStandby() && pc != null) {
@@ -507,7 +527,9 @@ final class HttpFront {
             + "p{margin:.75rem 0}a{color:var(--link)}"
             + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%;margin:.25rem 0}"
-            + "svg.avail{display:block;margin:.4rem 0 0;max-width:100%}td small{margin:.25rem 0 0}"
+            + "svg.avail{display:block;margin:.5rem 0 0;max-width:100%}td small{margin:.2rem 0 0}"
+            + "small.ends{display:flex;justify-content:space-between;max-width:300px}"
+            + ".sw{display:inline-block;width:.7em;height:.7em;border-radius:2px;margin:0 .3em 0 .1em;vertical-align:-.05em}"
             + "td{padding:.5rem 0;text-align:left;border-top:1px solid var(--rule);vertical-align:baseline}"
             + "tr:first-child td{border-top:0}"
             + "td:first-child{width:11rem;color:var(--dim);padding-right:1rem}"
