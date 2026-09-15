@@ -243,6 +243,9 @@ class UpdateIndexTest {
             Updates.INDEX_FORMAT + "\nseq: seven\ntag: v0.2.0\nissued: " + ISSUED + "\nexpires: " + FAR + "\n"));
         assertThrows(IOException.class, () -> Updates.Index.parse(
             Updates.INDEX_FORMAT + "\nseq: -1\ntag: v0.2.0\nissued: " + ISSUED + "\nexpires: " + FAR + "\n"));
+        // Zero is refused as well, and not for tidiness: `Seen` reads a stored zero as "no floor at
+        // all", so a pointer at zero would be accepted and then remembered as never having been seen.
+        assertThrows(IOException.class, () -> Updates.Index.parse(document(0, "v0.2.0", ISSUED, FAR)));
         // A tag that would steer the URL somewhere else on a host that is otherwise the right one.
         assertThrows(IOException.class, () -> Updates.Index.parse(document(7, "../../evil", ISSUED, FAR)));
         // Every field is required: a pointer missing one is not a pointer with a default.

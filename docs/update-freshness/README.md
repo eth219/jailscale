@@ -246,6 +246,14 @@ a node that has already seen better. Neither 4 nor 5 is required for either prop
   number.
 - **A refused pointer is not one this node has seen.** The floor is written only after every check
   above it has passed, so a pointer nobody accepted cannot raise the bar for the ones that follow.
+- **A sequence starts at 1, in both readers.** A stored zero means "no floor at all", so a pointer
+  at zero would be one a node accepted and then remembered as never having seen; `Index.parse` and
+  `index_verify` both refuse it rather than leaving the two of them to disagree.
+- **A floor that is missing is silent and a floor that is unusable is not.** The first check a node
+  ever makes has no file to read, which is normal; a file that is there and cannot be read or
+  written is the protection off or frozen, and that is a warning, because nobody would otherwise
+  find out. The daemon says a refusal out loud once a day for the same reason -- `status` carries it,
+  but nobody runs `status` daily.
 
 ## What building step 2 settled
 

@@ -141,8 +141,14 @@ index_verify() {
     _tag=$(index_field "$_dir/$INDEX_FILE" tag)
     _issued=$(index_field "$_dir/$INDEX_FILE" issued)
     _expires=$(index_field "$_dir/$INDEX_FILE" expires)
+    # At least 1, not merely a number: the node reads a stored zero as "no floor at all", so a
+    # pointer at zero is one it would accept and then remember as never having been seen.
     printf '%s' "$_seq" | grep -qE '^[0-9]+$' || {
         echo "$INDEX_FILE has no seq, or one that is not a number: '$_seq'" >&2
+        return 1
+    }
+    [ "$_seq" -ge 1 ] || {
+        echo "$INDEX_FILE has a seq below 1: '$_seq'" >&2
         return 1
     }
     release_tag_ok "$_tag" || {

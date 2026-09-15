@@ -518,6 +518,12 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 Updates.Result r = Updates.check(Version.string(), config.updateFile());
                 if (r.newer()) {
                     LOG.info("{}", r.line());
+                } else if (r.error() != null && r.seq() > 0) {
+                    // A pointer that was fetched, verified and then refused -- a sequence that went
+                    // backwards above all (docs/update-freshness) -- is not the connectivity failure
+                    // the silence above is for: those come back with no sequence at all. This is the
+                    // only place a node says it on its own, since nobody runs `status` daily.
+                    LOG.warn("{}", r.line());
                 }
                 lastUpdate = r;
                 Thread.sleep(UPDATE_CHECK_MS);

@@ -249,7 +249,13 @@ final class Updates {
          * rebuilding the floor from the next pointer that verifies.
          */
         static Seen load(Path file) {
-            if (file == null || !Files.isReadable(file)) {
+            if (file == null || Files.notExists(file)) {
+                return NONE; // the first check this node ever makes, which is not worth a word
+            }
+            if (!Files.isReadable(file)) {
+                // There and unusable is a different thing from absent: the node is running with no
+                // floor under it, which is the protection off, and that is worth saying out loud.
+                LOG.warn("{} cannot be read, so nothing bounds the release index below", file);
                 return NONE;
             }
             try {
@@ -257,7 +263,7 @@ final class Updates {
                 Long seq = o.optLong("seq");
                 return seq == null || seq <= 0 ? NONE : new Seen(seq, o.optString("tag", "an earlier release"));
             } catch (IOException | RuntimeException e) {
-                LOG.debug("{} could not be read, so nothing bounds the release index below: {}", file, e.toString());
+                LOG.warn("{} could not be read, so nothing bounds the release index below: {}", file, e.toString());
                 return NONE;
             }
         }
@@ -290,7 +296,10 @@ final class Updates {
                 Files.writeString(tmp, json + "\n", StandardCharsets.UTF_8);
                 Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException | RuntimeException e) {
-                LOG.debug("could not write {}: {}", file, e.toString());
+                // Not raised -- the check itself succeeded and its answer is correct -- but not
+                // whispered either: a floor that has stopped advancing is a protection quietly
+                // going stale, and the operator is the only one who can fix the permissions.
+                LOG.warn("could not write {}, so the release index floor stays where it is: {}", file, e.toString());
             }
         }
     }
@@ -345,8 +354,10 @@ final class Updates {
             } catch (NumberFormatException e) {
                 throw new IOException("the signed " + INDEX + " has a seq that is not a number: " + seq);
             }
-            if (n < 0) {
-                throw new IOException("the signed " + INDEX + " has a negative seq: " + seq);
+            if (n < 1) {
+                // Not merely non-negative: `Seen` reads a stored zero as "no floor at all", so a
+                // pointer at zero would be accepted and then remembered as never having been seen.
+                throw new IOException("the signed " + INDEX + " has a seq below 1: " + seq);
             }
             if (!tagOk(tag)) {
                 throw new IOException("the signed " + INDEX + " names something that is not a release tag: " + tag);
