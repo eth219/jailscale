@@ -19,7 +19,8 @@ This describes the system as it stands, organised by subsystem. Section numbers 
 
 ## 1. Scope
 
-One server you own runs `jailhub`. Every machine that publishes something runs `jailscale`. It does
+One server you own runs `jailhub`, or two that stand in for each other (§13). Every machine that
+publishes something runs `jailscale`. It does
 what ngrok, Cloudflare Tunnel and Tailscale Funnel do, with no third party in the path.
 
 1. **Lightweight.** The node is a resident daemon: one executable, no runtime dependency, small idle
@@ -1473,9 +1474,11 @@ client up writes 139 KB.
 
 ## 13. Availability and hand-off
 
-The hub is one process on one host. The main deployment is a single self-hosted VPS, and at scale one
-hub handles thousands of nodes and tens of thousands of streams, because all it does is copy bytes
-and sign. What remains is availability, and the answer is fast recovery.
+A hub is one process on one host, and at scale one handles thousands of nodes and tens of thousands
+of streams, because all it does is copy bytes and sign. The main deployment is two such hosts: a
+primary and a standby that follows it (§13.1), answers the DNS with it (§13.3), serves visitors
+beside it (§13.4) and takes over on the nodes' word when it dies (§13.5). This section starts with
+what one host does on its own -- fast recovery -- and adds the second host from §13.1 on.
 
 | Item | Target |
 |---|---|
@@ -1586,12 +1589,14 @@ someone here to look.
 Both are reported over 24 hours, 7 days and 30 days, on `/` and in `/v1/status` under
 `availability` (with `since`, because a window that reaches further back than the record is
 reported over less), and the process figure on `/metrics` as `jailhub_process_availability_<window>_ppm`.
-Under each figure the page draws the minutes down per day for 30 days and per hour for 24, as
-columns in the page's own ink -- an outage is the loud thing on a status page, and 99.9 against
-100 in a column of availability would not be -- with the number in each column's tooltip and the
-same numbers in the JSON (`downMinutesPerDay`, `downMinutesPerHour`), which is the table behind the
-picture. A bucket from before the record began draws nothing and says so. `jailhub availability
-reset` starts the record over, for an operator whose day of deliberate restarts should not count.
+The page draws them the way a status page does: a bar per day for 30 days and per hour for 24,
+green when nothing was down, amber when less than an hour (or a quarter of one) was, red when
+more, and shorter the worse it was, so that colour is never the only channel -- the three colours
+are the status set validated for colour-vision separation, and each bar's tooltip says its minutes,
+which the JSON repeats (`downMinutesPerDay`, `downMinutesPerHour`) as the table behind the picture.
+Under each strip: how far back it reaches, the figure for that window, and where it ends. A bucket
+from before the record began draws a faint stub and says so. `jailhub availability reset` starts
+the record over, for an operator whose day of deliberate restarts should not count.
 Public for the reason `/v1/status` is public (§6.3). Anyone scraping `/metrics` already computes
 availability from `up`; this is for the operator with no scraper.
 
@@ -2207,7 +2212,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
   is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
   calls the unit started; the listening sockets are still rebound rather than handed over.
-- **There is no standby hub.** Recovery is restoring one directory and changing DNS (§13).
+- **Two hubs, not more.** The standby holds the store, so it can serve and be promoted; a third
+  host would need a role without the store, which is designed and not built
+  ([docs/ha-design](ha-design/README.md)). Streams in flight on a host that dies are cut with its
+  sockets, raw TCP and UDP ports live on the primary alone, and a promotion with no node attached
+  to the standby waits for a person (§13.5).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller

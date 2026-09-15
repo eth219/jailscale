@@ -23,7 +23,8 @@ TUN device, no root, no inbound ports on the node. Full design:
 
 ## Scope
 
-One server you own runs `jailhub`. Every machine that publishes something runs
+One server you own runs `jailhub`, or two that stand in for each other. Every
+machine that publishes something runs
 `jailscale`. It does what ngrok, Cloudflare Tunnel and frp do — the first two
 hosted, frp on a server you run — with no third party in the path. Tailscale is
 larger: a mesh between your own machines, of which Funnel is this one job.
@@ -71,7 +72,7 @@ own. Neither has a runtime dependency and neither needs root to run.
 
 ### A binary
 
-v0.1.9 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
+v0.1.10 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
 `darwin-arm64` and `windows-amd64.exe`. There is no `darwin-amd64`, because
 GraalVM CE 25.3 does not build one ([ARCHITECTURE.md
 §3.2](docs/ARCHITECTURE.md)); Intel Macs get [the JAR](#anything-else-with-a-jvm-25).
@@ -80,7 +81,7 @@ The two targets the budget measures are 25.3 to 26.4 MiB
 describes; the other two carry no measured figure.
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.1.9
+base=https://github.com/eth219/jailscale/releases/download/v0.1.10
 target=darwin-arm64   # pick yours
 
 curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
@@ -153,7 +154,7 @@ jailscale` — and Windows SmartScreen warns for the same reason.
 
 For linux/amd64 and linux/arm64, built by the same workflow, toolchain and
 options as the binaries above, so [Resource usage](#resource-usage) describes
-them too. `:v0.1.9` pins that tag, `:latest` follows releases (it moves when
+them too. `:v0.1.10` pins that tag, `:latest` follows releases (it moves when
 one is published and its signature has been checked, not when a tag is pushed),
 `:edge` follows
 main.
@@ -164,8 +165,8 @@ directory` instead of starting, and `:latest` pointed at one of them until this
 release.
 
 ```
-docker pull ghcr.io/eth219/jailhub:v0.1.9
-docker pull ghcr.io/eth219/jailscale:v0.1.9
+docker pull ghcr.io/eth219/jailhub:v0.1.10
+docker pull ghcr.io/eth219/jailscale:v0.1.10
 ```
 
 Both images are distroless and run as a non-root user: the binary, glibc and
@@ -180,7 +181,7 @@ The container runs the daemon, and the CLI is `exec`ed into it:
 ```sh
 docker network create demo   # the app joins this too, see below
 docker run -d --name jailscale --network demo \
-    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.9
+    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.10
 docker exec jailscale /jailscale up --hub jailscale.sinabro.io
 docker exec jailscale /jailscale open 3000 --host myapp --name myapp
 ```
@@ -303,7 +304,7 @@ budget on every push there. Two platforms, because an amd64 binary is bigger
 than an arm64 one and Linux counts the binary's own mapped pages in RSS where
 macOS largely does not.
 
-The figures are v0.1.2's; the release [Install](#a-binary) downloads is v0.1.9,
+The figures are v0.1.2's; the release [Install](#a-binary) downloads is v0.1.10,
 which since then changed the hub's control plane (a standby, the availability
 record, the hub answering its own DNS, the standby serving, promotion by the
 nodes' word) and no path a visitor's bytes or an idle process take, and the
@@ -407,13 +408,13 @@ What a compromised hub can and cannot do is written out in
 
 - No production track record. The hub above is the only instance with any
   uptime behind it, and it serves one person's names.
-- The hub is a single process on a single host. A second host can follow it as
-  a standby, holding a current copy of everything the first would be replaced
-  with, but pointing the name at it is still a DNS change made by a person, and
-  visitors and nodes are down until that happens
-  ([ARCHITECTURE.md §13.1](docs/ARCHITECTURE.md)). Replacing the binary
-  without dropping nodes works with `serve --takeover`, but not under a
-  systemd unit, where an upgrade is a restart.
+- Two hubs is the most there can be. A second host follows the first, serves
+  visitors beside it, answers the DNS with it and takes over on the nodes'
+  word; a third would need a role without the store, which is designed and not
+  built ([docs/ha-design](docs/ha-design/README.md)). Streams in flight on a
+  host that dies are cut, and raw TCP and UDP ports live on the primary alone.
+  Replacing the binary without dropping nodes works with `serve --takeover`,
+  but not under a systemd unit, where an upgrade is a restart.
 - Upgrading stops one step short of automatic. `jailscale update --download`
   fetches a release and checks it against the signature; you run the one
   `install` command it prints. A binary built before the signing key existed
@@ -431,7 +432,7 @@ What a compromised hub can and cannot do is written out in
   clean pages, evictable — and standing up the TLS client writes 139 KB. The
   number is real and the explanation for it was not.
 - Upgrades have been exercised once each way they have been tried, on one hub
-  and one node. v0.1.9 is the tenth tagged release. v0.1.1 and v0.1.2 each
+  and one node. v0.1.10 is the eleventh tagged release. v0.1.1 and v0.1.2 each
   added one optional `Hello` field — `host` before v0.1.1, `visitors` before
   v0.1.2 — which is the additive case
   [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md) permits, pinned in
@@ -439,7 +440,7 @@ What a compromised hub can and cannot do is written out in
   types only two hubs exchange, which a node never sees, v0.1.4 and v0.1.5
   changed nothing a node sees, v0.1.6 added a flag to `Hello` and a list to
   its response, both omitted when there is nothing to say, and v0.1.7 added
-  two messages a node only carries between two hubs; v0.1.8 and v0.1.9
+  two messages a node only carries between two hubs; v0.1.8 to v0.1.10
   changed nothing on the wire. Both
   steps have also run mismatched on the hub above: a released v0.1.0 node
   against a hub that reads `host`, and the hub on v0.1.2 for half an hour while
