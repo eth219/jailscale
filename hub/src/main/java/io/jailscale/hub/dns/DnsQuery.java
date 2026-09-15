@@ -26,6 +26,7 @@ public final class DnsQuery {
     private DnsQuery() {}
 
     private static final int TYPE_A = 1;
+    private static final int TYPE_NS = 2;
     private static final int TYPE_TXT = 16;
     private static final int TYPE_AAAA = 28;
     private static final int RCODE_NXDOMAIN = 3;
@@ -64,6 +65,47 @@ public final class DnsQuery {
         return addresses(query(server, port, name, TYPE_AAAA, timeoutMs), 16);
     }
 
+    /**
+     * Sends an NS query for {@code name} and returns the server names, lower case, no trailing dot
+     * (empty if none). Names in the rdata may be compressed against the whole message, so this
+     * reads the message rather than the rdata alone.
+     */
+    public static List<String> ns(String server, int port, String name, int timeoutMs) throws IOException {
+        List<String> out = new ArrayList<>();
+        Message m = queryMessage(server, port, name, TYPE_NS, timeoutMs);
+        for (int off : m.rdataOffsets) {
+            out.add(readName(m.bytes, off).toLowerCase(java.util.Locale.ROOT));
+        }
+        return out;
+    }
+
+    /** A name at {@code p} in {@code m}, following compression pointers a bounded number of times. */
+    static String readName(byte[] m, int p) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        int hops = 0;
+        while (true) {
+            need(m, p, 1);
+            int l = m[p] & 0xff;
+            if (l == 0) {
+                return sb.toString();
+            }
+            if ((l & 0xc0) == 0xc0) {
+                need(m, p, 2);
+                if (++hops > 16) {
+                    throw new IOException("compression pointer loop");
+                }
+                p = ((l & 0x3f) << 8) | (m[p + 1] & 0xff);
+                continue;
+            }
+            need(m, p + 1, l);
+            if (sb.length() > 0) {
+                sb.append('.');
+            }
+            sb.append(new String(m, p + 1, l, StandardCharsets.US_ASCII));
+            p += 1 + l;
+        }
+    }
+
     private static List<String> addresses(List<byte[]> rdatas, int length) throws IOException {
         List<String> out = new ArrayList<>();
         for (byte[] rd : rdatas) {
@@ -75,7 +117,20 @@ public final class DnsQuery {
         return out;
     }
 
+    /** A parsed answer: the whole message, and where each answer of the asked type has its rdata. */
+    private record Message(byte[] bytes, List<Integer> rdataOffsets, List<Integer> rdataLengths) {}
+
     private static List<byte[]> query(String server, int port, String name, int type, int timeoutMs) throws IOException {
+        Message m = queryMessage(server, port, name, type, timeoutMs);
+        List<byte[]> out = new ArrayList<>();
+        for (int i = 0; i < m.rdataOffsets.size(); i++) {
+            int off = m.rdataOffsets.get(i);
+            out.add(java.util.Arrays.copyOfRange(m.bytes, off, off + m.rdataLengths.get(i)));
+        }
+        return out;
+    }
+
+    private static Message queryMessage(String server, int port, String name, int type, int timeoutMs) throws IOException {
         int id = RNG.nextInt(0x10000);
         ByteArrayOutputStream q = new ByteArrayOutputStream(64);
         q.write(id >>> 8);
@@ -99,7 +154,8 @@ public final class DnsQuery {
             byte[] buf = new byte[4096];
             DatagramPacket r = new DatagramPacket(buf, buf.length);
             s.receive(r);
-            return parse(java.util.Arrays.copyOf(buf, r.getLength()), id, type);
+            byte[] m = java.util.Arrays.copyOf(buf, r.getLength());
+            return new Message(m, parseOffsets(m, id, type, true), parseOffsets(m, id, type, false));
         }
     }
 
@@ -114,6 +170,17 @@ public final class DnsQuery {
      * that ends the thread.
      */
     static List<byte[]> parse(byte[] m, int expectedId, int type) throws IOException {
+        List<Integer> offs = parseOffsets(m, expectedId, type, true);
+        List<Integer> lens = parseOffsets(m, expectedId, type, false);
+        List<byte[]> out = new ArrayList<>();
+        for (int i = 0; i < offs.size(); i++) {
+            out.add(java.util.Arrays.copyOfRange(m, offs.get(i), offs.get(i) + lens.get(i)));
+        }
+        return out;
+    }
+
+    /** Offsets (or lengths) of the rdata of every answer of {@code type}, in order; see {@link #parse}. */
+    private static List<Integer> parseOffsets(byte[] m, int expectedId, int type, boolean offsets) throws IOException {
         if (m.length < 12 || (((m[0] & 0xff) << 8) | (m[1] & 0xff)) != expectedId) {
             throw new IOException("bad DNS response");
         }
@@ -137,7 +204,7 @@ public final class DnsQuery {
             need(m, p, 4);
             p += 4;
         }
-        List<byte[]> out = new ArrayList<>();
+        List<Integer> out = new ArrayList<>();
         for (int i = 0; i < an; i++) {
             p = skipName(m, p);
             need(m, p, 10);
@@ -146,7 +213,7 @@ public final class DnsQuery {
             int rdStart = p + 10;
             need(m, rdStart, rdlen);
             if (answerType == type) {
-                out.add(java.util.Arrays.copyOfRange(m, rdStart, rdStart + rdlen));
+                out.add(offsets ? rdStart : rdlen);
             }
             p = rdStart + rdlen;
         }

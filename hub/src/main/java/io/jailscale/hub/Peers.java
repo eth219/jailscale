@@ -58,6 +58,13 @@ final class Peers {
         }
     }
 
+    /** The dns-01 values changed: every standby answers the same ones from now on (§13.3). */
+    void challengeChanged(List<String> txt) {
+        for (Session s : sessions) {
+            s.enqueue(new Message.PeerChallenge(txt));
+        }
+    }
+
     /** A rotation began or completed: every connected standby gets the private keys. */
     void hubKeyChanged() {
         for (Session s : sessions) {
@@ -76,6 +83,8 @@ final class Peers {
 
         private final String remoteIp;
         private final String name;
+        /** The address the standby advertises for itself (§13.3), or null when it does not know one. */
+        private final String address;
         private final LinkedBlockingDeque<Message> queue = new LinkedBlockingDeque<>();
         private final Consumer<JsonObject> listener = ev -> enqueue(new Message.PeerEvent(Json.write(ev.asMap())));
         private final long connectedAt = System.currentTimeMillis();
@@ -83,8 +92,9 @@ final class Peers {
         private volatile boolean closed;
         private final java.util.concurrent.atomic.AtomicLong eventsSent = new java.util.concurrent.atomic.AtomicLong();
 
-        Session(String remoteIp, String peerHost) {
+        Session(String remoteIp, String peerHost, String address) {
             this.remoteIp = remoteIp;
+            this.address = address;
             // A standby normally carries the primary's own name, since that is what it will serve;
             // as a label for "the other host" that says nothing, so the address is used instead.
             this.name = peerHost == null || peerHost.isBlank() || peerHost.equalsIgnoreCase(hub.config().hostname())
@@ -98,6 +108,10 @@ final class Peers {
 
         String remoteIp() {
             return remoteIp;
+        }
+
+        String address() {
+            return address;
         }
 
         long connectedAt() {
@@ -119,6 +133,7 @@ final class Peers {
                 // queue so that an event appended between subscribing and here is sent after it.
                 sendHubKey();
                 sendCert();
+                enqueue(new Message.PeerChallenge(hub.dnsTxt()));
                 String snapshot = hub.store().subscribe(listener);
                 queue.addFirst(new Message.PeerSnapshot(snapshot));
                 Thread.ofVirtual().name("peer-writer-" + name).start(this::writeLoop);

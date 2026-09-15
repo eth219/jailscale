@@ -57,6 +57,8 @@ final class PeerClient implements AutoCloseable {
     private volatile String lastError;
     private final java.util.concurrent.atomic.AtomicLong eventsApplied = new java.util.concurrent.atomic.AtomicLong();
     private volatile long lastEventAt;
+    /** The address the primary advertises for itself (§13.3), from its hello; null until told. */
+    private volatile String primaryAddress;
     private volatile MuxSession mux;
     private Thread thread;
 
@@ -94,6 +96,11 @@ final class PeerClient implements AutoCloseable {
 
     long lastEventAt() {
         return lastEventAt;
+    }
+
+    /** What the primary said its public address is, or null. */
+    String primaryAddress() {
+        return primaryAddress;
     }
 
     synchronized void start() {
@@ -145,16 +152,19 @@ final class PeerClient implements AutoCloseable {
             // given, and the responder it expects is the same key. Completing IK proves the copy.
             NoiseIk hs = NoiseIk.initiator(HubKeys.PROLOGUE, hub.keys().current(), hub.keys().current().publicKey());
             byte[][] payload2 = new byte[1][];
-            Message hello = new Message.PeerHello(Message.PROTO, Hub.version(), hub.config().hostname());
+            Message hello = new Message.PeerHello(Message.PROTO, Hub.version(), hub.config().hostname(), hub.advertisedAddress());
             ch = NoiseChannel.initiate(s.getInputStream(), s.getOutputStream(), hs, Codec.encode(hello), payload2);
             Message m = Codec.decode(payload2[0]);
             if (m instanceof Message.Goodbye g) {
                 ch.close();
                 throw new IOException("primary turned us away: " + g.reason() + (g.detail() == null ? "" : " (" + g.detail() + ")"));
             }
-            if (!(m instanceof Message.PeerHelloResponse)) {
+            if (!(m instanceof Message.PeerHelloResponse hr)) {
                 ch.close();
                 throw new IOException("expected PeerHelloResponse, got " + m.type());
+            }
+            if (hr.address() != null) {
+                primaryAddress = hr.address();
             }
             s.setSoTimeout(IDLE_TIMEOUT_MS);
         } catch (HttpException | CodecException e) {
@@ -206,6 +216,7 @@ final class PeerClient implements AutoCloseable {
                 }
                 case Message.PeerCert pc -> installCert(pc);
                 case Message.PeerHubKey pk -> hub.keys().installFromPeer(pk.current(), pk.next());
+                case Message.PeerChallenge pc -> hub.challengeFromPrimary(pc.txt());
                 case Message.Ping p -> session.control(Codec.encode(new Message.Pong(p.id())));
                 case Message.Goodbye g -> {
                     LOG.info("primary said goodbye: {}", g.reason());

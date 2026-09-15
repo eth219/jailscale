@@ -4,6 +4,7 @@ import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonException;
 import io.jailscale.proto.json.JsonObject;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /** Hand-written JSON codec for {@link Message}; no reflection (ARCHITECTURE.md §3.1). */
 public final class Codec {
@@ -56,8 +57,11 @@ public final class Codec {
             case Message.ChallengeSet x -> b.put("domain", x.domain()).put("token", x.token()).put("keyAuthorization", x.keyAuthorization());
             case Message.ChallengeClear x -> b.put("token", x.token());
             case Message.Ack x -> b.put("inReplyTo", x.inReplyTo());
-            case Message.PeerHello x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host());
-            case Message.PeerHelloResponse x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host());
+            case Message.PeerHello x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host())
+                .put("address", x.address());
+            case Message.PeerHelloResponse x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host())
+                .put("address", x.address());
+            case Message.PeerChallenge x -> b.put("txt", x.txt());
             case Message.PeerSnapshot x -> b.put("json", x.json());
             case Message.PeerEvent x -> b.put("json", x.json());
             case Message.PeerCert x -> b.put("chainPem", x.chainPem()).put("keyPem", x.keyPem()).put("keyId", x.keyId());
@@ -111,8 +115,11 @@ public final class Codec {
                 case "ChallengeSet" -> new Message.ChallengeSet(o.optString("domain", null), o.string("token"), o.string("keyAuthorization"));
                 case "ChallengeClear" -> new Message.ChallengeClear(o.string("token"));
                 case "Ack" -> new Message.Ack(o.optString("inReplyTo", null));
-                case "PeerHello" -> new Message.PeerHello(o.integer("proto"), o.string("version"), o.optString("host", null));
-                case "PeerHelloResponse" -> new Message.PeerHelloResponse(o.integer("proto"), o.string("version"), o.optString("host", null));
+                case "PeerHello" -> new Message.PeerHello(o.integer("proto"), o.string("version"), o.optString("host", null),
+                    o.optString("address", null));
+                case "PeerHelloResponse" -> new Message.PeerHelloResponse(o.integer("proto"), o.string("version"),
+                    o.optString("host", null), o.optString("address", null));
+                case "PeerChallenge" -> new Message.PeerChallenge(o.has("txt") ? o.stringArray("txt") : List.of());
                 case "PeerSnapshot" -> new Message.PeerSnapshot(o.string("json"));
                 case "PeerEvent" -> new Message.PeerEvent(o.string("json"));
                 case "PeerCert" -> new Message.PeerCert(o.stringArray("chainPem"), o.string("keyPem"), o.string("keyId"));

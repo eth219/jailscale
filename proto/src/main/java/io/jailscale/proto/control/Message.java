@@ -215,12 +215,26 @@ public sealed interface Message {
      * host given a copy of {@code hub.key} can complete the handshake with. A node's
      * MachineKey can never be that key, so the two kinds of caller cannot be confused.
      */
-    record PeerHello(int proto, String version, String host) implements Message {
+    record PeerHello(int proto, String version, String host, String address) implements Message {
         @Override public String type() { return "PeerHello"; }
     }
 
-    record PeerHelloResponse(int proto, String version, String host) implements Message {
+    /**
+     * {@code address} is the public address the sender advertises for itself in DNS (§13.3), or
+     * null when it does not know one yet. Each side learns the other's this way rather than from
+     * the socket, which behind address translation says nothing a resolver could use.
+     */
+    record PeerHelloResponse(int proto, String version, String host, String address) implements Message {
         @Override public String type() { return "PeerHelloResponse"; }
+    }
+
+    /**
+     * The dns-01 challenge values the primary is publishing right now (§13.3). With the whole
+     * subdomain delegated to both hubs, the CA may ask either for {@code _acme-challenge}, so the
+     * standby has to answer with the same values. An empty list clears them.
+     */
+    record PeerChallenge(List<String> txt) implements Message {
+        @Override public String type() { return "PeerChallenge"; }
     }
 
     /**

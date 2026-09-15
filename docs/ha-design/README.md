@@ -1,8 +1,9 @@
 # Hub redundancy: control plane, relays, and an uptime figure
 
-A design, of which step 1 below is built ([ARCHITECTURE.md §13.1 and §13.2](../ARCHITECTURE.md)):
-the hub-to-hub channel, the standby, promotion, and the availability figures. The other steps are
-not, and this file is what they would be, in the order they are now meant to land: 1, 4, 2, 3, 5.
+A design, of which steps 1 and 4 below are built ([ARCHITECTURE.md §13.1 to §13.3](../ARCHITECTURE.md)):
+the hub-to-hub channel, the standby, promotion, the availability figures, and the hubs answering
+their own DNS. The other steps are not, and this file is what they would be, in the order they are
+now meant to land: 1, 4, 2, 3, 5.
 It records the shape a two-host hub takes and why, cut so that each step leaves the single-host hub
 untouched. Before step 1, §13's answer to losing the host was "copy the state directory and change
 DNS"; the standby is that sentence done by the hub itself, and after step 4 the DNS change is the
@@ -303,9 +304,10 @@ this is for the operator with no scraper.
    `TlsEndpoint` and `RemoteSigning` shared through `proto`, relay names reserved, per-name DNS
    answers. Raw TCP and UDP ports stay with the primary in this step; moving them to relays is a
    decision for later.
-4. **(lands next)** The hubs answer their own DNS: whole-subdomain delegation, the serving set as
-   the answer, liveness from the channel, the host's own address found from the glue. Makes
-   `jailhub promote` the whole of a failover.
+4. **Built.** The hubs answer their own DNS: whole-subdomain delegation, the serving set as the
+   answer, liveness from the channel, the host's own address found from the glue, the challenge
+   values replicated. Makes `jailhub promote` the whole of a failover. Per-name answers wait for
+   step 3, which is when there is more than one host to name.
 5. (lands last) Promotion without a person: nodes as witnesses with an unforgeable proof, epochs,
    symmetric units, off by default on hubs with open registration.
 

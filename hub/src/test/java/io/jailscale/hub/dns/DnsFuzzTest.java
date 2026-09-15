@@ -17,12 +17,23 @@ class DnsFuzzTest {
     void respondNeverThrows() throws Exception {
         DnsResponder d = new DnsResponder("hub.test");
         d.setTxt(java.util.List.of("abc"));
+        d.setZone(new DnsResponder.Zone() {
+            @Override public java.util.List<String> serving() { return java.util.List.of("203.0.113.1", "203.0.113.2"); }
+            @Override public java.util.Map<String, String> nameServers() { return java.util.Map.of("ns1", "203.0.113.1", "ns2", "203.0.113.2"); }
+        });
         byte[][] seeds = {
             query("_acme-challenge.hub.test", 16),
             query("_acme-challenge.hub.test", 6),
             query("hub.test", 2),
             query("_acme-challenge.hub.test", 255),
             query("other.example", 1),
+            query("hub.test", 1),
+            query("hub.test", 6),
+            query("myapp.hub.test", 1),
+            query("a.b.hub.test", 28),
+            query("ns1.hub.test", 1),
+            query("_jailhub-self.hub.test", 16),
+            query("hub.test", 255),
         };
         Random rng = new Random(53);
         for (int i = 0; i < 20_000; i++) {

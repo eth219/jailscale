@@ -68,7 +68,12 @@ class WireFormatTest {
         "{\"t\":\"PeerEvent\",\"json\":\"{\\\"e\\\":\\\"admin-added\\\",\\\"user\\\":\\\"wq\\\"}\"}",
         "{\"t\":\"PeerCert\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],"
             + "\"keyPem\":\"-----BEGIN PRIVATE KEY-----\\nAA==\\n-----END PRIVATE KEY-----\",\"keyId\":\"sha256:ab\"}",
-        "{\"t\":\"PeerHubKey\",\"current\":\"hkeypriv:AAAA\",\"next\":\"hkeypriv:BBBB\"}"
+        "{\"t\":\"PeerHubKey\",\"current\":\"hkeypriv:AAAA\",\"next\":\"hkeypriv:BBBB\"}",
+        // §13.3: the hello carries the sender's advertised address (absent when unknown, so the
+        // v0.1.3 line above still reads the same), and the challenge values travel to the standby.
+        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.2\"}",
+        "{\"t\":\"PeerHelloResponse\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.1\"}",
+        "{\"t\":\"PeerChallenge\",\"txt\":[\"abc\",\"def\"]}"
     };
 
     @Test
