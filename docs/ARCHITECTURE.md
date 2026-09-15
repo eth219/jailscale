@@ -629,7 +629,7 @@ root or `CAP_NET_BIND_SERVICE`, which the reference systemd unit grants to a ded
 
 **The address check.** The self-check above proves the `_acme-challenge` delegation reaches this
 process and says nothing about the address records every visitor actually follows, so a hub started
-with ACME, unless `--no-address-check` says otherwise, also asks once in the background: do public
+with ACME, unless `--no-address-check` says otherwise, also asks in the background: do public
 resolvers have an address (A or AAAA) for `hub.example.com` and for a name under
 `*.hub.example.com`, do those two share one, and does that address answer `/v1/key` on the base
 URL's port with **this process's** hub key? The last question needs no PKI — the hub key is what a
@@ -652,6 +652,26 @@ and never asked DNS), and a handshake that completed against the pinned hub key 
 node on the hub's own host or LAN may have the name from `/etc/hosts` or a split-horizon resolver,
 which says nothing about what the world is told — and only for its own name, compared against what
 it already knows rather than stored from the wire.
+
+**Where the answer goes.** The check runs once the hub knows what it answers for its own name, and
+again every hour, and the verdict it reaches is kept rather than written to the log and dropped:
+`jailhub status` carries it, `/admin` shows it above the node list, and `/metrics` exports
+`jailhub_address_check_fault` — 1 only for a fault an operator has to fix, so inconclusive never
+pages anyone — beside `jailhub_address_check{verdict="..."}` and `jailhub_address_check_age_seconds`.
+The log line is written when the verdict **changes**, not on every pass — for a fault, a change of
+problem under the same verdict counts, since a missing wildcard replaced by one pointing elsewhere is
+a new fault — so a broken deployment files one error rather than one an hour, and the verdict that
+stands is there to be asked for instead. `since` is when that finding was first reached **by this
+process**: nothing is written to disk, so a restart starts the clock over and a fault that predates
+it reads as beginning at boot. `jailhub address check` asks again now, which is what the operator
+who has just edited a record wants; it is refused on the terms the hourly pass waits on — off, a
+standby, a delegated hub that does not yet know its own address — so it never leaves a verdict the
+pass would not have reached. Runs do not overlap. A node's arrival is folded in as it happens rather
+than at the next pass, moving the verdict but not when the check last ran, and expires after a day:
+the handshake proves what the records said at that moment, and a record can be edited after it. A
+standby runs none of this — the records being checked are the primary's — and a hub promoted to
+primary starts the pass afresh. `--no-address-check` silences the repeat, the log and the command
+alike, and the age series is exported only while the pass is running.
 
 Two operational traps. SNI passthrough needs raw TCP 443, so **no TLS-terminating HTTP proxy can sit
 in front** (nginx `http`, Caddy, Cloudflare Proxied); a layer-4 proxy that only copies bytes is
@@ -2178,10 +2198,12 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 - **The self-probe reaches one name every half hour** (§11.3), so at the 20-link ceiling a given name
   is looked at about every ten hours, and a tick is skipped entirely while the node is not connected
   to the hub. What bounds detection is that pass, not the tick.
-- **The address check runs once, at startup, and its answer is only a log line** (§7.2). Nothing
-  re-runs it and nothing keeps the verdict, so a record that changes afterwards -- a proxy switched
-  on in front of the name, an edited A record -- is never noticed, and an operator who missed the
-  line at boot has nowhere to look it up.
+- **The address check is one vantage point, and an hour behind** (§7.2). It repeats hourly and the
+  verdict is kept, so a record edited after boot is noticed and can be looked up afterwards -- but
+  within an hour rather than at once, and only as far as two public resolvers and this host can see.
+  A resolver that answers something else to visitors in some other network is invisible to it, and
+  the outside view a node supplies expires after a day, so a hub whose nodes all stay connected
+  falls back to inconclusive rather than standing on an old handshake.
 - **Delegated signing depends on reconstructing JSSE's ServerHello and EncryptedExtensions** (§9.2).
   The binding of a signature to the visitor's handshake is only as good as the node's ability to
   say what JSSE wrote, which it derives from the ClientHello, a fixed configuration and the
