@@ -82,8 +82,10 @@ final class ResponseRate {
     private final double perSecond;
     private double globalTokens = GLOBAL_BURST;
     private long globalAt;
+    private long answered;
     private long dropped;
     private long truncated;
+    private long globalRefused;
 
     ResponseRate() {
         this(BURST, PER_SECOND);
@@ -128,7 +130,15 @@ final class ResponseRate {
         if (have >= 1 && total >= 1) {
             tokens[i] = have - 1;
             globalTokens = total - 1;
+            answered++;
             return Verdict.ANSWER;
+        }
+        if (have >= 1) {
+            // Counted apart, because the two refusals mean opposite things to an operator: one
+            // network over its share is somebody being noisy, and the table-wide budget binding is
+            // this zone outgrowing the number -- or a reflection aimed at a prefix, which is what
+            // that budget is for. Without the split the log line cannot tell them apart either.
+            globalRefused++;
         }
         // Only the bucket that refused pays: an answer stopped by the table-wide budget must not
         // also spend this network's tokens, or a flood elsewhere would empty a quiet network's
@@ -149,13 +159,22 @@ final class ResponseRate {
         return Verdict.DROP;
     }
 
-    /** Queries dropped and answered truncated since this hub started, for the log line. */
-    long dropped() {
+    /** Queries answered, dropped and answered truncated since this hub started (§11.5). */
+    synchronized long answered() {
+        return answered;
+    }
+
+    synchronized long dropped() {
         return dropped;
     }
 
-    long truncated() {
+    synchronized long truncated() {
         return truncated;
+    }
+
+    /** Of the refusals, how many were the table-wide budget rather than one network's own. */
+    synchronized long globalRefused() {
+        return globalRefused;
     }
 
     /**

@@ -139,7 +139,12 @@ class MetricsEndpointTest {
         assertEquals(200, r.status());
         String body = r.bodyText();
         for (String name : new String[] {"jailhub_visitors_total", "jailhub_signatures_total",
-            "jailhub_relay_bytes_total", "jailhub_nodes_online", "jailhub_links_open", "jailhub_uptime_seconds"}) {
+            "jailhub_relay_bytes_total", "jailhub_nodes_online", "jailhub_links_open", "jailhub_uptime_seconds",
+            // What :53 is doing. Published because the answer-rate limits of §11.5 were chosen and
+            // shipped with nothing counting the traffic they bound, so the headroom a real zone has
+            // could not be stated -- and the limit biting would have shown up only as a log line.
+            "jailhub_dns_answers_total", "jailhub_dns_dropped_total", "jailhub_dns_truncated_total",
+            "jailhub_dns_refused_global_total"}) {
             assertTrue(body.contains("# HELP " + name + " "), name + " has no HELP: " + body);
             assertTrue(body.contains("# TYPE " + name + " "), name + " has no TYPE: " + body);
             assertTrue(body.matches("(?s).*\n" + name + " \\d+\n.*") || body.startsWith(name + " "),

@@ -262,6 +262,24 @@ public final class DnsResponder implements AutoCloseable {
         return r.length > MAX_UDP ? truncate(r) : r;
     }
 
+    /** Queries answered on UDP 53 since this hub started, for the metrics endpoint (§6.3). */
+    public long answered() {
+        return rate.answered();
+    }
+
+    /** Of those refused, how many by each budget: one network's own, and the table-wide one. */
+    public long dropped() {
+        return rate.dropped();
+    }
+
+    public long truncatedByRate() {
+        return rate.truncated();
+    }
+
+    public long refusedByGlobalBudget() {
+        return rate.globalRefused();
+    }
+
     /**
      * Whether this is a hub asking {@code _jailhub-self} (§13.3). Compared as the bytes the question
      * already holds rather than parsed again: the name is fixed, so the encoded form is too, and a

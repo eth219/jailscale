@@ -1444,6 +1444,16 @@ exists for. Two networks that hash together share a budget, which limits more ra
 the key is deliberately not stored to tell them apart — a table that evicted the loser of a collision
 would let an attacker clear a victim's bucket by choosing addresses that land on it.
 
+**What the limit is doing is a number on `/metrics`.** `jailhub_dns_answers_total` is what :53
+actually answers, and `jailhub_dns_dropped_total`, `jailhub_dns_truncated_total` and
+`jailhub_dns_refused_global_total` are what the two budgets refused -- the last one split out
+because one network over its share and the table-wide budget binding mean opposite things: somebody
+noisy, against this zone outgrowing the number or a reflection aimed at a prefix. These exist
+because the rates below were chosen and shipped with nothing counting the traffic they bound, so
+neither an operator nor anyone picking the numbers could say what headroom a real zone has, and the
+limit biting would have surfaced only as a log line. An operator deciding whether 200 a second fits
+their zone reads the first counter over an interval; nothing else here can tell them.
+
 **The per-network limit bounds a bucket; a victim owns a prefix.** An attacker forging sources
 across a victim's /48 walks 65,536 distinct /64 keys against a table of 2,048 buckets and collects
 every bucket's budget at once, so the per-network figure is not what a victim receives: the ceiling

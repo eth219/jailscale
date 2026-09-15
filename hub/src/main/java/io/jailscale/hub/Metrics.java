@@ -82,6 +82,20 @@ final class Metrics {
                 f == null ? 0 : Math.round(f * 1_000_000));
         }
         gauge(b, "jailhub_standbys_connected", "Standby hubs following this one right now.", hub.peers().count());
+        // What :53 is actually doing. The rate limits of §11.5 were added with nothing counting the
+        // traffic they bound, so neither the operator nor anyone choosing the numbers could say how
+        // much headroom a real zone has -- which is the question those numbers are an answer to.
+        if (hub.dns() != null) {
+            counter(b, "jailhub_dns_answers_total", "DNS queries answered on UDP 53.", hub.dns().answered());
+            counter(b, "jailhub_dns_dropped_total",
+                "DNS queries dropped by the answer-rate limit (§11.5).", hub.dns().dropped());
+            counter(b, "jailhub_dns_truncated_total",
+                "DNS queries answered TC=1 by the answer-rate limit, telling the resolver to use TCP.",
+                hub.dns().truncatedByRate());
+            counter(b, "jailhub_dns_refused_global_total",
+                "Of the refusals, those the table-wide budget made rather than one network's own share.",
+                hub.dns().refusedByGlobalBudget());
+        }
         // Where the time goes admitting a visitor (§6.3). The point of having all five is the
         // comparison: first_byte running ahead of peek+resolve+open+reply is time spent in no stage
         // at all -- scheduling, queueing or a pause -- which no single stage's timer can show.
