@@ -43,7 +43,7 @@ public final class Main {
         jailhub authkey create (--owner USER | --tag TAG) [--uses N] [--ttl 7d] | list | revoke <id>
         jailhub admin add <user> | remove <user> | login-link
         jailhub key rotate [--grace 30d]
-        jailhub setting invitePolicy members|admins | registration invite|open | knock on|off
+        jailhub setting invitePolicy members|admins | registration invite|open | knock on|off | autoPromote on|off
         Admin commands talk to the running server through <state>/jailhub.sock (--state or $JAILHUB_STATE).
         """;
 

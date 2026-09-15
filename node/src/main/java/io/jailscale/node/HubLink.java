@@ -47,6 +47,14 @@ final class HubLink implements AutoCloseable {
         default void onRelays(HubLink control, List<String> relays) {
         }
 
+        /** A standby asked, on a relay connection, whether the primary can be reached (§13.5). */
+        default void onProbe(HubLink relay, Message.PeerProbe probe) {
+        }
+
+        /** The primary answered a probe on the control connection; it goes back to whoever asked (§13.5). */
+        default void onProbeAnswer(Message.PeerProbeAnswer answer) {
+        }
+
         void onCert(Message.CertUpdate cert);
 
         /** The hub says this node no longer serves a name it opened (ARCHITECTURE.md §11.4). */
@@ -565,6 +573,16 @@ final class HubLink implements AutoCloseable {
             }
             case Message.CertUpdate c -> events.onCert(c);
             case Message.LinkRevoked r -> events.onRevoked(r);
+            case Message.PeerProbe pp -> {
+                if (isRelay()) {
+                    events.onProbe(this, pp);
+                }
+            }
+            case Message.PeerProbeAnswer pa -> {
+                if (!isRelay()) {
+                    events.onProbeAnswer(pa);
+                }
+            }
             case Message.RelaysChanged rc -> {
                 lastRelays = rc.relays() == null ? List.of() : rc.relays();
                 if (!isRelay() && state.registered) {

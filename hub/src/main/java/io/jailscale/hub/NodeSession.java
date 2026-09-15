@@ -134,6 +134,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             boolean[] rejected = new boolean[1];
             String[] peerHost = new String[1];
             String[] peerAddress = new String[1];
+            Message.PeerHello[] demoteTo = new Message.PeerHello[1];
             String[] peerEndpoint = new String[1];
             NoiseChannel ch = NoiseChannel.respond(in, out, hub.keys().responders(), (p1, hs) -> {
                 Message m;
@@ -149,10 +150,26 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                     if (!(m instanceof Message.PeerHello ph)) {
                         throw new NoiseException("a peer's first message must be PeerHello, got " + m.type());
                     }
-                    if (hub.isStandby()) {
+                    if (Role.PRIMARY.equals(ph.role()) && !hub.isStandby()) {
+                        // Two primaries meeting (§13.5): the epochs decide, and the tie by address.
                         rejected[0] = true;
-                        return Codec.encode(new Message.Goodbye("standby", "this hub is itself a standby of "
-                            + hub.config().peer().getHost() + "; follow the primary"));
+                        if (hub.roleFile().outrankedBy(ph.epoch(), ph.address(), hub.advertisedAddress())) {
+                            LOG.warn("{} says it is the primary at epoch {}; this hub is at {} and stands down", ph.host(),
+                                ph.epoch(), hub.epoch());
+                            demoteTo[0] = ph;
+                            return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
+                                hub.advertisedAddress(), hub.relayEndpoint(), Role.STANDBY, hub.epoch()));
+                        }
+                        return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
+                            hub.advertisedAddress(), hub.relayEndpoint(), Role.PRIMARY, hub.epoch()));
+                    }
+                    if (hub.isStandby()) {
+                        // Told what this hub is, with its epoch: a primary that dialled it learns
+                        // there is no primary here to stand down before; a standby learns both
+                        // are standbys, which is for a person to sort out (§13.5).
+                        rejected[0] = true;
+                        return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
+                            hub.advertisedAddress(), hub.relayEndpoint(), Role.STANDBY, hub.epoch()));
                     }
                     peerHost[0] = ph.host() == null ? remoteIp : ph.host();
                     peerAddress[0] = ph.address();
@@ -160,7 +177,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                     LOG.info("standby {} from {} (v{}{})", peerHost[0], remoteIp, ph.version(),
                         ph.address() == null ? "" : ", advertises " + ph.address());
                     return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
-                        hub.advertisedAddress(), hub.relayEndpoint()));
+                        hub.advertisedAddress(), hub.relayEndpoint(), Role.PRIMARY, hub.epoch()));
                 }
                 mkey = KeyText.format(KeyText.MACHINE, hs.remoteStatic());
                 if (!(m instanceof Message.Hello hello)) {
@@ -201,6 +218,9 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                     relay ? null : hub.relaysForNodes()));
             });
             if (rejected[0]) {
+                if (demoteTo[0] != null) {
+                    hub.demote(demoteTo[0].epoch(), demoteTo[0].host());
+                }
                 return;
             }
             if (peerHost[0] != null) {
@@ -278,6 +298,17 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 return false;
             }
             case Message.SignRequest sr -> signOffThread(sr);
+            // §13.5: a node carrying a standby's question here, and carrying the primary's answer
+            // back. The primary answers on any of the node's connections; the standby accepts the
+            // answer on the relay connection it asked on.
+            case Message.PeerProbe pp -> {
+                if (hub.isStandby()) {
+                    send(new Message.Error(pp.type(), "primary-only"));
+                } else {
+                    send(new Message.PeerProbeAnswer(pp.nonce(), Liveness.mac(hub.livenessSecret(), pp.nonce(), hub.epoch()), hub.epoch()));
+                }
+            }
+            case Message.PeerProbeAnswer pa -> hub.probeAnswered(pa);
             // A newer node sending something this hub has no case for (ARCHITECTURE.md §5.4). The
             // Error is the point: the node learns the message did not happen, rather than assuming
             // silence means success.

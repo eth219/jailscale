@@ -235,9 +235,14 @@ public sealed interface Message {
      * host given a copy of {@code hub.key} can complete the handshake with. A node's
      * MachineKey can never be that key, so the two kinds of caller cannot be confused.
      */
-    record PeerHello(int proto, String version, String host, String address, String endpoint) implements Message {
+    record PeerHello(int proto, String version, String host, String address, String endpoint, String role, long epoch)
+        implements Message {
         public PeerHello(int proto, String version, String host, String address) {
-            this(proto, version, host, address, null);
+            this(proto, version, host, address, null, null, 0);
+        }
+
+        public PeerHello(int proto, String version, String host, String address, String endpoint) {
+            this(proto, version, host, address, endpoint, null, 0);
         }
 
         @Override public String type() { return "PeerHello"; }
@@ -249,13 +254,37 @@ public sealed interface Message {
      * the socket, which behind address translation says nothing a resolver could use.
      * {@code endpoint} is what a node dials to reach the sender as a relay (§13.4),
      * {@code address[:port]}; absent when it is the address on 443, which is every real deployment.
+     * {@code role} and {@code epoch} (§13.5) say what the sender believes it is and how many
+     * promotions it has seen; two primaries meeting decide by them which one stands down.
      */
-    record PeerHelloResponse(int proto, String version, String host, String address, String endpoint) implements Message {
+    record PeerHelloResponse(int proto, String version, String host, String address, String endpoint, String role, long epoch)
+        implements Message {
         public PeerHelloResponse(int proto, String version, String host, String address) {
-            this(proto, version, host, address, null);
+            this(proto, version, host, address, null, null, 0);
+        }
+
+        public PeerHelloResponse(int proto, String version, String host, String address, String endpoint) {
+            this(proto, version, host, address, endpoint, null, 0);
         }
 
         @Override public String type() { return "PeerHelloResponse"; }
+    }
+
+    /**
+     * §13.5: a standby asking a node whether the primary can be reached, and the node passing the
+     * question up its control connection. The nonce is the standby's; the node carries it.
+     */
+    record PeerProbe(byte[] nonce) implements Message {
+        @Override public String type() { return "PeerProbe"; }
+    }
+
+    /**
+     * The primary's answer, carried back by the node: a MAC over the nonce and its epoch under a
+     * key derived from {@code hub.key}, which both hubs hold and no node does. A node cannot make
+     * one, so "the primary is reachable" is proof, not testimony.
+     */
+    record PeerProbeAnswer(byte[] nonce, byte[] mac, long epoch) implements Message {
+        @Override public String type() { return "PeerProbeAnswer"; }
     }
 
     /**

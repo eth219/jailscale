@@ -1687,10 +1687,60 @@ and it stays designed rather than built until there is one.
 **What survives the primary now.** Streams in flight on the dead host are gone with its sockets;
 new visitors to every open name are served by the other host within the DNS TTL; nodes keep their
 relay connections, since nobody tells them otherwise. Joining, opening a new name, administering,
-lease-free as this is, wait for `jailhub promote`, which is still a person, and the apex resolves to
-nothing until then. Raw ports go with the primary. `StandbyTest` runs the sequence in that order:
-the primary closes first, the name is still served through the standby, then the standby is
-promoted and a new node joins it.
+lease-free as this is, wait for `jailhub promote` -- a person's, or the standby's own (§13.5) --
+and the apex resolves to nothing until then. Raw ports go with the primary. `StandbyTest` runs the
+sequence in that order: the primary closes first, the name is still served through the standby,
+then the standby is promoted and a new node joins it.
+
+### 13.5 Promotion without a person: the nodes as witnesses
+
+Two hosts cannot elect. A majority of two is two, so Raft buys nothing below three, and the usual
+third party -- a witness host, a cloud object with conditional writes as a lease -- is a cost or a
+dependency this design does not take. jailscale has a third party of its own: after §13.4 every
+node is connected to both hubs. **The nodes are the witnesses.**
+
+**The rule.** A standby whose channel to the primary has been down for `promoteAfterMs` (30 s)
+asks every witness for proof that the primary is reachable, and waits `witnessWindowMs` (10 s). A
+witness is a node attached here by a relay connection, registered, one per user however many
+machines that user has. One valid proof means a partition: the standby stays what it is, and looks
+again after the same interval. None means the primary is dead, or cut off from everyone, which for
+serving purposes is the same: the standby promotes itself, exactly as `jailhub promote` would, and
+says so. No witness at all means no automatic decision; the log says the primary is unreachable and
+promotion stays with the operator. Automatic promotion happens at most once per ten minutes, and
+`jailhub setting autoPromote on|off` turns it off. **Off by default where registration is open**,
+because there anyone can be every witness at an hour when the honest ones are away, and on by
+default where it is by invitation, since those nodes are the operator's own people's machines.
+
+**Proof, not testimony.** The standby sends `PeerProbe{nonce}` down a witness's relay connection.
+The node passes it up its control connection to the primary, which answers `PeerProbeAnswer` with a
+MAC over the nonce and its epoch under a key derived from `hub.key`, which both hubs hold and no
+node does; the node carries the bytes back down the relay connection it was asked on. "I can see
+the primary" therefore cannot be forged. A lying node has one lie left, "I cannot", and one honest
+node with a valid proof outvotes any number of those: the vote is an existence proof, not a
+majority.
+
+**Epochs, and units that are the same on both hosts.** Each hub keeps a `role` file in its state
+directory: `primary` or `standby`, and an **epoch** that rises by one on every promotion. The file
+outranks the flag: `--peer` on a primary means "the other host is there", not "follow it", so both
+units can name each other and be identical but for their addresses. A hub with no file yet takes
+the old rule -- a peer named means standby, none means primary. The hub-to-hub hello carries role
+and epoch, and **two primaries that meet decide by them**: the higher epoch stays, the lower stands
+down and becomes the other's standby, following from the connection that found it; on a tie the
+lower address stays, so both sides decide the same way. A primary that names a peer dials it for
+that one purpose, and the standby of a newer primary that returns from the dead is settled by the
+old primary's next dial or the new one's next hello. Standing down closes the control connections
+with `Goodbye{standby}`, stops issuance and port 80, and keeps the relay connections, which serve
+on. `AutoPromoteTest` runs the three cases: a dead primary replaced with nobody typing, a partition
+with one node still reaching the primary and nothing promoted, and no witness at all leaving the
+decision where it was; and a returning primary standing down by epoch.
+
+**What this is and is not.** A lease with fencing and an epoch, not a replicated log with
+consensus. The writes it protects are rare -- names claimed, nodes joined -- and the worst outcome
+of a wrong promotion is two primaries until the link heals, at which point the epoch settles it and
+the writes made in between merge, the later epoch winning. Visitors notice nothing throughout. What
+a hostile node can do with this is make that merge happen, on an open-registration hub, at an hour
+when it is the only node; the default above and the rate limit are what make that worthless. What a
+node can do outside this vote is what §11.1 already bounds.
 
 ---
 
@@ -2135,11 +2185,12 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   has next to every issuance failure and on its status page, and `ls` marks the link. None of that
   helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
   nobody hears from, and its domain goes dark when the certificate runs out.
-- **Promotion is a person** (§13.1, §13.3). With the subdomain delegated to both hubs and the
-  standby serving (§13.4), losing the primary stops nothing a visitor sees; what stops is joining,
-  opening new names, administering and raw ports, until someone types `jailhub promote`, because
-  two hosts cannot tell a partition from a death without a third party. With three records at the
-  parent instead, the DNS change is the operator's too.
+- **Promotion is automatic only with a witness** (§13.5). With the subdomain delegated to both hubs
+  and the standby serving (§13.4), losing the primary stops nothing a visitor sees; joining, opening
+  new names, administering and raw ports come back when the standby promotes itself, which it does
+  only when at least one node is attached to it and none can reach the primary. With no node on
+  it, or with registration open (the default there is off), it waits for `jailhub promote`. With
+  three records at the parent instead, the DNS change is the operator's too.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
   is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
   calls the unit started; the listening sockets are still rebound rather than handed over.

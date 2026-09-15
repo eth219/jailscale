@@ -302,7 +302,7 @@ class AdminCommandTest {
             assertEquals("knock is on or off, not OFF", set(ipc, "knock", "OFF"));
             assertEquals("registration is invite or open, not opne", set(ipc, "registration", "opne"));
             assertEquals("invitePolicy is members or admins, not admin", set(ipc, "invitePolicy", "admin"));
-            assertEquals("no such setting knok (invitePolicy, knock, registration)", set(ipc, "knok", "off"));
+            assertEquals("no such setting knok (autoPromote, invitePolicy, knock, registration)", set(ipc, "knok", "off"));
             assertEquals("on", hub.store().setting(Store.SETTING_KNOCK, "on"), "a refused setting must not have been written");
 
             assertNull(set(ipc, "knock", "off"));

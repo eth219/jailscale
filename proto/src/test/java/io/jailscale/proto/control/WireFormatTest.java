@@ -81,7 +81,12 @@ class WireFormatTest {
         "{\"t\":\"HelloResponse\",\"proto\":1,\"minProto\":1,\"version\":\"0.1.6\",\"dnsSuffix\":\"hub.example.com\",\"relays\":[\"203.0.113.1\",\"203.0.113.2:8443\"]}",
         "{\"t\":\"RelaysChanged\",\"relays\":[\"203.0.113.2\"]}",
         "{\"t\":\"PeerNodes\",\"mkeys\":[\"mkey:a\",\"mkey:b\"]}",
-        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.2\",\"endpoint\":\"203.0.113.2:8443\"}"
+        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.2\",\"endpoint\":\"203.0.113.2:8443\"}",
+        // §13.5: role and epoch on the hellos (omitted before a hub has a role to state), and the
+        // liveness proof a node carries between the standby and the primary.
+        "{\"t\":\"PeerHelloResponse\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.1\",\"role\":\"primary\",\"epoch\":4}",
+        "{\"t\":\"PeerProbe\",\"nonce\":\"AQID\"}",
+        "{\"t\":\"PeerProbeAnswer\",\"nonce\":\"AQID\",\"mac\":\"CQk\",\"epoch\":4}"
     };
 
     @Test

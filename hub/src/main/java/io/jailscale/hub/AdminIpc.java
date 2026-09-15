@@ -15,7 +15,8 @@ final class AdminIpc implements Ipc.Handler {
     static final Map<String, List<String>> SETTING_VALUES = Map.of(
         Store.SETTING_INVITE_POLICY, List.of(HubConfig.POLICY_MEMBERS, HubConfig.POLICY_ADMINS),
         Store.SETTING_REGISTRATION, List.of("invite", "open"),
-        Store.SETTING_KNOCK, List.of("on", "off"));
+        Store.SETTING_KNOCK, List.of("on", "off"),
+        Store.SETTING_AUTO_PROMOTE, List.of("on", "off"));
 
     private final Hub hub;
 
@@ -253,6 +254,8 @@ final class AdminIpc implements Ipc.Handler {
             .put("invitePolicy", store.setting(Store.SETTING_INVITE_POLICY, "members"))
             .put("knock", store.setting(Store.SETTING_KNOCK, "on"))
             .put("role", hub.role())
+            .put("epoch", hub.epoch())
+            .put("autoPromote", hub.autoPromote() ? "on" : "off")
             .put("standbys", standbys());
         PeerClient pc = hub.peerClient();
         if (pc != null) {

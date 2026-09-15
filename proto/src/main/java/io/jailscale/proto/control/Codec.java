@@ -66,9 +66,13 @@ public final class Codec {
             case Message.ChallengeClear x -> b.put("token", x.token());
             case Message.Ack x -> b.put("inReplyTo", x.inReplyTo());
             case Message.PeerHello x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host())
-                .put("address", x.address()).put("endpoint", x.endpoint());
+                .put("address", x.address()).put("endpoint", x.endpoint()).put("role", x.role())
+                .put("epoch", x.role() == null ? null : Long.valueOf(x.epoch()));
             case Message.PeerHelloResponse x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host())
-                .put("address", x.address()).put("endpoint", x.endpoint());
+                .put("address", x.address()).put("endpoint", x.endpoint()).put("role", x.role())
+                .put("epoch", x.role() == null ? null : Long.valueOf(x.epoch()));
+            case Message.PeerProbe x -> b.putBytes("nonce", x.nonce());
+            case Message.PeerProbeAnswer x -> b.putBytes("nonce", x.nonce()).putBytes("mac", x.mac()).put("epoch", x.epoch());
             case Message.PeerChallenge x -> b.put("txt", x.txt());
             case Message.PeerSnapshot x -> b.put("json", x.json());
             case Message.PeerEvent x -> b.put("json", x.json());
@@ -124,9 +128,13 @@ public final class Codec {
                 case "ChallengeClear" -> new Message.ChallengeClear(o.string("token"));
                 case "Ack" -> new Message.Ack(o.optString("inReplyTo", null));
                 case "PeerHello" -> new Message.PeerHello(o.integer("proto"), o.string("version"), o.optString("host", null),
-                    o.optString("address", null), o.optString("endpoint", null));
+                    o.optString("address", null), o.optString("endpoint", null), o.optString("role", null),
+                    o.has("epoch") ? o.lng("epoch") : 0);
                 case "PeerHelloResponse" -> new Message.PeerHelloResponse(o.integer("proto"), o.string("version"),
-                    o.optString("host", null), o.optString("address", null), o.optString("endpoint", null));
+                    o.optString("host", null), o.optString("address", null), o.optString("endpoint", null),
+                    o.optString("role", null), o.has("epoch") ? o.lng("epoch") : 0);
+                case "PeerProbe" -> new Message.PeerProbe(o.bytes("nonce"));
+                case "PeerProbeAnswer" -> new Message.PeerProbeAnswer(o.bytes("nonce"), o.bytes("mac"), o.lng("epoch"));
                 case "PeerChallenge" -> new Message.PeerChallenge(o.has("txt") ? o.stringArray("txt") : List.of());
                 case "PeerSnapshot" -> new Message.PeerSnapshot(o.string("json"));
                 case "PeerEvent" -> new Message.PeerEvent(o.string("json"));
