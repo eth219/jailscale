@@ -77,7 +77,9 @@ class StoreReplicationTest {
     }
 
     private static void assertSame(Store expected, Store actual) throws IOException {
-        assertEquals(expected.nodes(), actual.nodes(), "nodes");
+        // The probe registered below is stamped with each store's own clock, so it is compared by
+        // id only and left out of the record comparison; on CI the two stamps were a millisecond apart.
+        assertEquals(withoutProbe(expected.nodes()), withoutProbe(actual.nodes()), "nodes");
         assertEquals(expected.names(), actual.names(), "names");
         assertEquals(expected.admins(), actual.admins(), "admins");
         assertEquals(expected.invites(), actual.invites(), "invites");
@@ -85,5 +87,15 @@ class StoreReplicationTest {
         assertNotNull(actual.node("mkey:alice"));
         // Node ids continue from where the primary's would, or a promoted standby would reuse one.
         assertEquals(expected.registerNode("mkey:probe", "p", "h", "os").id(), actual.registerNode("mkey:probe", "p", "h", "os").id());
+    }
+
+    private static List<Store.NodeRec> withoutProbe(List<Store.NodeRec> nodes) {
+        List<Store.NodeRec> l = new ArrayList<>();
+        for (Store.NodeRec n : nodes) {
+            if (!n.mkey().equals("mkey:probe")) {
+                l.add(n);
+            }
+        }
+        return l;
     }
 }
