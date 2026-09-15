@@ -18,25 +18,21 @@ final class Links {
     private static final Log LOG = Log.get("links");
     private static final Pattern NAME = Pattern.compile("[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?");
     private static final Set<String> RESERVED = Set.of("hub", "admin", "www", "api", "mail", "ns", "ns1", "ns2",
-        "_acme-challenge", "join", "acme", "hubs", "static");
+        "_acme-challenge", "join", "acme", "hubs", "static", "links");
     private static final String RANDOM_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
     private static final SecureRandom RNG = new SecureRandom();
     static final int MAX_LINKS_PER_NODE = 20;
 
-    /** An active link: a name served by a node (all of its connections). */
+    /**
+     * An active link: a name served by a node (all of its connections). {@code openedAt} is when
+     * this link opened, not when the name was claimed: a node that reconnects or hands a name over
+     * opens a new one and the clock starts again, which is what the directory means by "open for".
+     * It is passed in rather than read from a clock in here, so that the reset is visible at the
+     * site that decides it, a test can build a link that has been open for a day, and no copy of a
+     * link made to change one field can silently land on a shorter constructor and reset it.
+     */
     record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port,
         String domain, long openedAt) {
-
-        /**
-         * Every link is opened now, so the clock is read here rather than at each of the five
-         * places that build one. {@code openedAt} is when this link opened, not when the name was
-         * claimed: a node that reconnects or hands a name over opens a new link and the clock
-         * starts again, which is what the directory means by "open for".
-         */
-        Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port,
-            String domain) {
-            this(linkId, name, kind, user, mkey, group, local, port, domain, System.currentTimeMillis());
-        }
 
         boolean raw() {
             return port > 0;
@@ -168,7 +164,7 @@ final class Links {
             // Same owner from another (or restarted) node: the newest opener wins.
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null, System.currentTimeMillis());
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
@@ -201,7 +197,7 @@ final class Links {
             if (existing != null && existing.group() != s.group()) {
                 byId.remove(existing.linkId());
             }
-            Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
+            Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain, System.currentTimeMillis());
             byDomain.put(domain, link);
             byId.put(link.linkId(), link);
             LOG.info("domain {} reopened here by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
@@ -219,7 +215,7 @@ final class Links {
         if (existing != null && existing.group() != s.group()) {
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null, System.currentTimeMillis());
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} reopened here by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
@@ -269,7 +265,7 @@ final class Links {
         if (prior != null && !prior.mkey().equals(node.mkey())) {
             notifyRevoked(prior.mkey(), null, domain, Message.LinkRevoked.REASSIGNED);
         }
-        Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
+        Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain, System.currentTimeMillis());
         byDomain.put(domain, link);
         byId.put(link.linkId(), link);
         LOG.info("domain {} opened by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
@@ -320,7 +316,7 @@ final class Links {
                 byId.remove(existing.linkId());
                 byPort.remove(port);
             }
-            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port, null);
+            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port, null, System.currentTimeMillis());
             try {
                 raw.start(link);
             } catch (IOException e) {
@@ -440,7 +436,8 @@ final class Links {
         return l;
     }
 
-    private String portSuffix() {
+    /** Package-private: the hub's own page builds the same URL the node was told (§8.2). */
+    String portSuffix() {
         return config.listenPort() == 443 || config.baseUrl().getPort() <= 0 ? "" : ":" + config.baseUrl().getPort();
     }
 

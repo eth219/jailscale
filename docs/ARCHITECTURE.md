@@ -517,11 +517,21 @@ the name. Who owns a name and which local port it reaches stay behind the admin 
 list does. The directory renders at most 200 rows at a time, like every other unauthenticated
 answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
 reachable -- the sentence at the top counts every open link, so every one of them has to be. A
-cursor is a string a visitor sends, so it is treated as one: a query is percent-decoded per escape
+row's address carries the port the hub answers on, the same `portSuffix` the node was told when the
+link opened, because a row is a link someone is meant to click. The cursor is a string a visitor
+sends, so it is treated as one: a query is percent-decoded per escape
 and a malformed one throws, which on a path where nothing but `IOException` is caught took the
 response down with it, so an unreadable cursor is simply no cursor; and one that sorts past the
 last row -- what a forwarded cursor becomes once the links it started from close -- says so rather
-than drawing an empty table under a sentence that has just counted the links. The
+than drawing an empty table under a sentence that has just counted the links. The key is built in
+`Locale.ROOT` and percent-encoded on the way out, because it is read back by machine and a JVM
+numbering in Arabic-Indic digits would otherwise mint a cursor no other hub can match; and the list
+it indexes is already sorted by it, so finding the start is a binary search, not a walk that rebuilt
+a key per row it passed. Behind all of it, `HttpFront.serve` now answers **500 for any unchecked
+throw** out of a handler: every one of these runs on the connection's own virtual thread and nothing
+above it caught more than `IOException`, so one bad cursor closed the socket with no response at all
+and killed the thread printing a stack trace outside `Log`. Catching it per handler is one fix per
+handler; catching it at the boundary is the one that holds for the next one. The
 order is the order the rows *read* in, not the links' internal names: a raw port is named
 `tcp/<port>` and drawn as `<hub>:<port>`, so sorting by the name put it among the names beginning
 with "t", at a position matching nothing on the page. Its port is zero-padded in the key so 9000
@@ -578,14 +588,15 @@ lives in `Metrics`, six `LongAdder`s written from every visitor thread and read 
 the signature counter sits at the one point that decides, so a refusal added later cannot forget to
 be counted.
 
-It lists the open links as well -- the address a visitor would type and whether it is https, tcp or
-udp -- because a hub that serves nothing and a hub that is busy look identical without it. The count
-that used to sit in the status table is gone with it: the list is the count, and saying both invited
-them to disagree. Those
-addresses are public by construction: a visitor reaches one by typing it, and a DNS lookup finds it
-either way. What stays behind the admin session is the part that is nobody else's business -- who
-opened a name and which local port it reaches -- and the list stops at fifty rows and says how many
-are left, so a busy hub does not turn its front page into a directory dump.
+It shows the first of the open links as well -- the address a visitor would type and whether it is
+https, tcp or udp -- because a hub that serves nothing and a hub that is busy look identical without
+it, and points at `/links` for the rest. The count that used to sit in the status table is gone with
+it: the list is the count, and saying both invited them to disagree. Those addresses are public by
+construction: a visitor reaches one by typing it. (Not because "a DNS lookup finds it either way",
+which this document used to say and which `DnsResponder` makes false -- a held name and a name
+nobody holds are answered identically, so DNS neither confirms nor enumerates.) What stays behind
+the admin session is the part that is nobody else's business: who opened a name and which local port
+it reaches.
 
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's

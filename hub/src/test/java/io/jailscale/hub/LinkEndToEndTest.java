@@ -11,6 +11,7 @@ import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
+import io.jailscale.proto.http.Headers;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
@@ -25,6 +26,8 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLEngine;
@@ -214,7 +217,9 @@ class LinkEndToEndTest {
         ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
 
         String after = visit("hub.test", "/").bodyText();
-        assertTrue(after.contains("<a href=\"https://myapp.hub.test\">myapp.hub.test</a>"), after);
+        // With the hub's own port, which is what `open` told the node. Without it every row on a
+        // hub that is not on 443 links to nothing.
+        assertTrue(after.contains("<a href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), after);
         assertFalse(after.contains("alice"), "the owner must not be on the public page: " + after);
         assertFalse(after.contains("127.0.0.1:" + localApp.getLocalPort()),
             "the local target must not be on the public page: " + after);
@@ -242,7 +247,7 @@ class LinkEndToEndTest {
         waitFor(() -> hub.links().byName("myapp") != null);
 
         String idle = visit("hub.test", "/links").bodyText();
-        assertTrue(idle.contains("<a href=\"https://myapp.hub.test\">myapp.hub.test</a>"), idle);
+        assertTrue(idle.contains("<a href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), idle);
         assertTrue(idle.contains("&middot; open "), "how long it has been open: " + idle);
         assertFalse(idle.contains("&middot; 1 visitor"), "nothing is connected, so no count is claimed: " + idle);
         assertFalse(idle.contains("alice"), "the owner must not be on the public page: " + idle);
@@ -318,6 +323,25 @@ class LinkEndToEndTest {
         String past = visit("hub.test", "/links?from=zzzz").bodyText();
         assertTrue(past.contains("Nothing is open at that point"), past);
         assertFalse(past.contains("<table class=\"links\"></table>"), "an empty table instead of a reason: " + past);
+
+        // Past the cap, which is 200 in production and more links than a test wants to open, so
+        // the page size is given here instead. This is the block that carries the cursor a visitor
+        // never types: the "next" link the page generates for itself, and the round trip back.
+        String first = hub.front().directory(
+            new HttpRequest("GET", "/links", "HTTP/1.1", new Headers(), null), 4);
+        assertTrue(first.contains(">app0.hub.test") && first.contains(">app3.hub.test"), first);
+        // ">" so this matches a row's anchor text and not the cursor in the "next" href.
+        assertFalse(first.contains(">app4.hub.test"), "the page size was not honoured: " + first);
+        assertTrue(first.contains("The next 4 of 5 remaining"), first);
+        // The generated cursor has to be one the hub reads back, not just one it can print.
+        Matcher m = Pattern.compile("/links\\?from=([^\"]+)").matcher(first);
+        assertTrue(m.find(), first);
+        String second = hub.front().directory(
+            new HttpRequest("GET", "/links?from=" + m.group(1), "HTTP/1.1", new Headers(), null), 4);
+        assertTrue(second.contains(">app4.hub.test") && second.contains(">app7.hub.test"), second);
+        assertFalse(second.contains(">app3.hub.test"), "the cursor did not advance: " + second);
+        // And the way back names the page it returns to, not the constant.
+        assertTrue(second.contains("Back to the first 4"), second);
     }
 
     /**

@@ -91,7 +91,16 @@ final class HttpFront {
                 new NodeSession(hub, socket, ip).run(in, out);
                 return;
             }
-            route(req).writeTo(out);
+            try {
+                route(req).writeTo(out);
+            } catch (RuntimeException e) {
+                // Every handler below here runs on this connection's virtual thread, and nothing
+                // above catches anything but IOException: an unchecked throw used to close the
+                // socket with no response and kill the thread printing a stack trace outside Log.
+                // One handler doing that was found in review; this is so the next one answers.
+                LOG.warn("error serving {}: {}", req.path(), e.toString());
+                HttpResponse.text(500, "internal error").writeTo(out);
+            }
         } catch (IOException e) {
             LOG.debug("connection error: {}", e.toString());
         }
@@ -434,7 +443,7 @@ final class HttpFront {
         // length. The rows are the directory's rows, so the two pages are one list and not two
         // designs; what /links adds is the rest of them and what they mean.
         b.append("<h2>Open links</h2>");
-        List<Links.Link> links = sortedLinks();
+        List<Keyed> links = sortedLinks();
         if (links.isEmpty()) {
             b.append("<p>None open right now.</p>");
         } else {
@@ -495,8 +504,13 @@ final class HttpFront {
      * which local port it reaches stay behind the admin session, as the node list does.
      */
     private String directory(HttpRequest req) {
+        return directory(req, LINKS_SHOWN);
+    }
+
+    /** Package-private with the page size, so a test can reach the second page without 201 links. */
+    String directory(HttpRequest req, int pageSize) {
         StringBuilder b = new StringBuilder(nav("/links"));
-        List<Links.Link> links = sortedLinks();
+        List<Keyed> links = sortedLinks();
         if (links.isEmpty()) {
             b.append("<p>None open right now. <a href=\"/\">What this hub is</a>.</p>");
             return b.toString();
@@ -510,10 +524,10 @@ final class HttpFront {
         // then unreachable -- no next page and no way to ask for one. The cursor is the ordering
         // key itself and every link has a distinct one, so paging cannot stall on a repeat.
         String from = cursor(req);
-        int start = 0;
-        while (from != null && start < links.size() && sortKey(links.get(start)).compareTo(from) < 0) {
-            start++;
-        }
+        // The list is already sorted by exactly this key, so the cursor is a binary search rather
+        // than a walk: the walk rebuilt a key per row it skipped, which is the cost sortedLinks
+        // exists to avoid, and on a long list it made paging to the end quadratic.
+        int start = from == null ? 0 : firstAtOrAfter(links, from);
         if (start == links.size()) {
             // The cursor names a point past the last row, which is what a bookmarked or forwarded
             // one becomes once the links it started from close. Saying so beats an empty table
@@ -521,17 +535,21 @@ final class HttpFront {
             b.append("<p>Nothing is open at that point in the list any more. ")
                 .append("<a href=\"/links\">Start from the first</a>.</p>");
         } else {
-            int end = Math.min(start + LINKS_SHOWN, links.size());
+            int end = Math.min(start + pageSize, links.size());
             linkRows(b, links.subList(start, end));
             if (end < links.size()) {
                 // The next row's own key, never the cursor the caller sent, so nothing a visitor
-                // typed is echoed back into the page.
-                b.append("<p><a href=\"/links?from=").append(escape(sortKey(links.get(end)))).append("\">The next ")
-                    .append(Math.min(LINKS_SHOWN, links.size() - end)).append(" of ").append(links.size() - end)
+                // typed is echoed back into the page; and percent-encoded, because it is going
+                // into a query string that URLDecoder reads back, not only into an attribute.
+                b.append("<p><a href=\"/links?from=").append(escape(urlEncode(links.get(end).key()))).append("\">The next ")
+                    .append(Math.min(pageSize, links.size() - end)).append(" of ").append(links.size() - end)
                     .append(" remaining &rarr;</a></p>");
             }
             if (start > 0) {
-                b.append("<p><a href=\"/links\">&larr; Back to the first ").append(LINKS_SHOWN).append("</a></p>");
+                // What the first page actually holds, not the cap: a hub with nine links offered
+                // to take the reader "back to the first 200".
+                b.append("<p><a href=\"/links\">&larr; Back to the first ").append(Math.min(pageSize, links.size()))
+                    .append("</a></p>");
             }
         }
         b.append("<p><small>A visitor count is the connections open at the moment this page was")
@@ -560,10 +578,11 @@ final class HttpFront {
      * One row per link: the address, and beside it the three things the hub already knows for its
      * own routing. Nothing here is fetched from the link itself.
      */
-    private void linkRows(StringBuilder b, List<Links.Link> links) {
+    private void linkRows(StringBuilder b, List<Keyed> links) {
         long now = System.currentTimeMillis();
         b.append("<table class=\"links\">");
-        for (Links.Link l : links) {
+        for (Keyed k : links) {
+            Links.Link l = k.link();
             StringBuilder facts = new StringBuilder(escape(l.kind()));
             // Only names and domains are counted per name, so a raw port says nothing here rather
             // than a zero that would read as "nobody is connected" when it means "not measured".
@@ -586,18 +605,36 @@ final class HttpFront {
      * hundreds of thousands of short-lived strings per request, on a page that shows eight rows,
      * in the process relaying every visitor's bytes.
      */
-    private List<Links.Link> sortedLinks() {
-        record Keyed(String key, Links.Link link) {}
+    private List<Keyed> sortedLinks() {
         List<Keyed> keyed = new ArrayList<>();
         for (Links.Link l : hub.links().all()) {
             keyed.add(new Keyed(sortKey(l), l));
         }
         keyed.sort(Comparator.comparing(Keyed::key));
-        List<Links.Link> links = new ArrayList<>(keyed.size());
-        for (Keyed k : keyed) {
-            links.add(k.link());
+        return keyed;
+    }
+
+    /** A link beside the key it sorts and pages by, so that key is built once per request. */
+    private record Keyed(String key, Links.Link link) {}
+
+    /** The first index whose key is not before {@code from}, by binary search on the sorted keys. */
+    private static int firstAtOrAfter(List<Keyed> links, String from) {
+        int lo = 0;
+        int hi = links.size();
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (links.get(mid).key().compareTo(from) < 0) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
-        return links;
+        return lo;
+    }
+
+    /** For a value going into a query string, which {@link #escape} does not cover. */
+    private static String urlEncode(String s) {
+        return java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /**
@@ -606,10 +643,17 @@ final class HttpFront {
      * kind -- {@code tcp/2001} sorts under "t" while the row reads {@code <hub>:2001} -- so raw
      * rows landed at a position matching nothing on the page. The port is padded because this key
      * is compared as text and 9000 belongs before 20000, not after it; that also makes every
-     * link's key distinct, which is what lets it serve as the paging cursor.
+     * link's key distinct, which is what lets it serve as the paging cursor. {@code Locale.ROOT}
+     * because of that second job: a JVM whose default locale numbers in Arabic-Indic or Devanagari
+     * digits would put those code points in the cursor and in the URL carrying it, and the hub that
+     * read it back -- a standby, or the same hub under a different {@code LANG} -- would not match
+     * them. The hub's own listen port is left off the key although the row shows it, because it is
+     * the same on every row and so cannot change the order.
      */
     private String sortKey(Links.Link l) {
-        return l.raw() ? hub.config().hostname() + ":" + String.format("%05d", l.port()) : l.host(hub.config());
+        return l.raw()
+            ? hub.config().hostname() + ":" + String.format(java.util.Locale.ROOT, "%05d", l.port())
+            : l.host(hub.config());
     }
 
     /**
@@ -635,7 +679,11 @@ final class HttpFront {
         if (l.raw()) {
             return "<code>" + escape(hub.config().hostname()) + ":" + l.port() + "</code>";
         }
-        return "<a href=\"https://" + host + "\">" + host + "</a>";
+        // With the port the hub is answering on, which is what the node was told when the link
+        // opened (Links.portSuffix). Without it every row on a hub that is not on 443 is a link
+        // to nothing, which matters more now that the rows are a page meant to be handed around.
+        String suffix = hub.links().portSuffix();
+        return "<a href=\"https://" + host + suffix + "\">" + host + suffix + "</a>";
     }
 
     /**
