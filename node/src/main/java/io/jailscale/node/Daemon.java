@@ -1145,9 +1145,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     @Override
     public void close() throws IOException {
-        closed = true;
+        // The flag is set under the self-probe's monitor because that is what the probe thread is
+        // waiting on: it would otherwise sleep out the rest of a tick before noticing.
         synchronized (probeWake) {
-            probeWake.notifyAll();   // the self-probe is asleep for up to a tick otherwise
+            closed = true;
+            probeWake.notifyAll();
         }
         link.close();
         closeRelays();
