@@ -56,26 +56,52 @@ class UpdatesTest {
         assertNull(Updates.compare("-1.0.0", "0.1.0"));
     }
 
-    @Test
-    void everyOutcomeSaysSomethingUseful() {
-        assertEquals("jailscale 0.1.0 is the latest release.",
-            new Updates.Result("0.1.0", "v0.1.0", false, 0, null).line());
-        assertTrue(new Updates.Result("0.1.0", "v0.2.0", true, 0, null).line().contains("0.2.0 is out"));
-        assertTrue(new Updates.Result("0.1.0", "v0.2.0", true, 0, null).line().contains(Updates.PAGE));
-        assertEquals("could not check for updates: no route to host",
-            new Updates.Result("0.1.0", null, false, 0, "no route to host").line());
-        // The version is the tag's, derived rather than carried beside it, so the two cannot disagree.
-        assertEquals("0.2.0", new Updates.Result("0.1.0", "v0.2.0", true, 0, null).latest());
-        assertEquals("0.2.0", new Updates.Result("0.1.0", "0.2.0", true, 0, null).latest());
-        assertNull(new Updates.Result("0.1.0", null, false, 0, "x").latest());
+    private static Updates.Result result(String running, String tag, boolean newer, String error) {
+        return new Updates.Result(running, tag, newer, 0, error, 0, false);
+    }
+
+    /** The same outcome, with the pointer that named it past its expiry. */
+    private static Updates.Result stale(String running, String tag, boolean newer) {
+        return new Updates.Result(running, tag, newer, 0, null, 1_760_000_000_000L, true);
     }
 
     @Test
-    void theUpdateUrlIsNotSomethingAPeerCanChoose() {
+    void everyOutcomeSaysSomethingUseful() {
+        assertEquals("jailscale 0.1.0 is the latest release.", result("0.1.0", "v0.1.0", false, null).line());
+        assertTrue(result("0.1.0", "v0.2.0", true, null).line().contains("0.2.0 is out"));
+        assertTrue(result("0.1.0", "v0.2.0", true, null).line().contains(Updates.PAGE));
+        assertEquals("could not check for updates: no route to host",
+            result("0.1.0", null, false, "no route to host").line());
+        // The version is the tag's, derived rather than carried beside it, so the two cannot disagree.
+        assertEquals("0.2.0", result("0.1.0", "v0.2.0", true, null).latest());
+        assertEquals("0.2.0", result("0.1.0", "0.2.0", true, null).latest());
+        assertNull(result("0.1.0", null, false, "x").latest());
+    }
+
+    @Test
+    void aStaleIndexIsNeverReportedAsBeingUpToDate() {
+        // The whole point of the expiry (docs/update-freshness): withholding an upgrade is invisible
+        // as long as a node answers "you are the latest release" to a pointer nobody is re-issuing.
+        // What it can honestly say is that it cannot tell, and since when.
+        String line = stale("0.1.0", "v0.1.0", false).line();
+        assertFalse(line.contains("is the latest release"));
+        assertTrue(line.startsWith("cannot tell whether jailscale 0.1.0 is current"), line);
+        assertTrue(line.contains("2025-10-09"), line); // the expiry, so "since when" is answerable
+        // A stale pointer is not evidence against the release it names, only against it being the
+        // last one, so an upgrade it announces is still announced -- with the caveat attached.
+        String newer = stale("0.1.0", "v0.2.0", true).line();
+        assertTrue(newer.startsWith("jailscale 0.2.0 is out"), newer);
+        assertTrue(newer.contains("there may be something newer still"), newer);
+    }
+
+    @Test
+    void theUpdateUrlIsNotSomethingAPeerCanChoose() throws Exception {
         // The hub is trusted to route bytes, not to say what this node should run (§11.2). If this
-        // ever becomes configurable, a compromised hub can point every node at a binary it picked.
-        assertEquals("https://api.github.com/repos/eth219/jailscale/releases/latest", Updates.LATEST.toString());
-        assertEquals("https", Updates.LATEST.getScheme());
+        // ever becomes configurable, a compromised hub can point every node at a binary it picked --
+        // and the pointer that says which release is current is the first thing it would move.
+        assertEquals("https://github.com/eth219/jailscale/releases/download/release-index/latest.txt",
+            Updates.assetUrl(Updates.DOWNLOADS, Updates.INDEX_TAG, Updates.INDEX).toString());
+        assertEquals("https", Updates.assetUrl(Updates.DOWNLOADS, Updates.INDEX_TAG, Updates.INDEX).getScheme());
         // And the same for where a download comes from and the key it must be signed with: the pair
         // production uses is built from two constants, so there is no configuration that moves it.
         assertEquals("https://github.com/eth219/jailscale/releases/download/", Updates.DOWNLOADS);

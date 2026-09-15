@@ -6,9 +6,15 @@ this design does not have". It changes what `jailscale update` believes, not wha
 three-link chain over a download ([§9.4](../ARCHITECTURE.md), and
 [docs/release-verification.md](../release-verification.md) for the same chain by hand) is untouched.
 
-**Step 1 of the five below is built**: the release tooling signs, publishes and re-issues the
-pointer. No client reads it, so nothing in the field behaves differently yet, and the first pointer
-is one command a person still has to run (`tools/refresh-index.sh --first`).
+**Steps 1, 2 and 4 of the five below are built**: the release tooling signs, publishes and re-issues
+the pointer, and `update` now takes the announcement from it instead of from an unsigned release
+index. What is not built is the **sequence floor** (step 3), which is what makes withholding
+un-repeatable rather than only visible, and the warnings (step 5).
+
+**Ordering, which matters once step 2 is in a binary.** A build that reads the pointer needs one to
+read: until `tools/refresh-index.sh --first` has been run against the repository, `jailscale update`
+in such a build reports that it could not check. So the first pointer has to be published *before* a
+release carrying this code goes out, not after.
 
 It is written first because the two ergonomic steps queued behind it -- `update --install` doing the
 replacement where the privilege is already there, and restarting the service after it -- each make
@@ -211,15 +217,34 @@ constant with a reason behind it.
 
 1. **Publish the pointer.** *(built)* `sign-release.sh` writes and uploads it; `refresh-index.sh`
    exists; `verify-release.sh --index` checks it. No client reads it. Nothing in the field changes.
-2. **Read it for the announcement.** `check` takes the tag from the pointer, `--download` is
-   untouched. `status` carries `issued`/`expires` and whether the pointer is stale.
+2. **Read it for the announcement.** *(built)* `check` takes the tag from the pointer, `--download`
+   is untouched. `status` carries `expiresAt` and whether the pointer is stale.
 3. **The sequence floor.** `update.json`, the refusal, and the loud message.
-4. **Retire the API index** and the `LATEST` constant with it.
+4. **Retire the API index** and the `LATEST` constant with it. *(built, with step 2: once the
+   pointer is what `check` reads, leaving the unsigned call in place would be dead code that a
+   later edit could make load-bearing again -- and the design's own rule is that there is no
+   falling back to it.)*
 5. **Warnings**: fourteen days out in `update`, once a day in the daemon's log, and the stale line in
    `status`.
 
 Steps 1 and 2 are what make the withholding attack visible; 3 is what makes it un-repeatable against
 a node that has already seen better. Neither 4 nor 5 is required for either property.
+
+## What building step 2 settled
+
+- **An expired pointer is reported on stderr and exits 1 when there is nothing newer**, so a script
+  can tell "up to date" from "could not tell" the way §9.4 already promises for a check that failed.
+  With something newer to fetch, `--download` runs and the caveat rides along on stderr: the exit
+  status follows the work that was asked for, not the freshness of the pointer that named it.
+- **A future `issued` is an error, not a stale pointer.** Both end in "cannot tell", but they are
+  different facts and the message says which one happened -- a clock that is wrong is the node's
+  problem to fix, and an expiry that has passed is the maintainer's.
+- **`Index.parse` takes the last of a repeated field**, matching `Manifest.parse` and the shell
+  tooling, and `UpdateIndexTest` pins both parsers to that in one test. A tool and a node reading
+  one signed document differently is the failure worth ruling out.
+- **The tag rule is written once.** `Updates.tagOk` is what refuses a tag before it is pasted into a
+  URL, and the pointer's tag goes through it too: a name refused in one place and used in the other
+  is the gap worth not having.
 
 ## What building step 1 settled that the design above did not
 

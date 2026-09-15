@@ -252,9 +252,11 @@ What a compromised hub can and cannot do is written out in
   binary without dropping nodes works with `serve --takeover`, but not under a
   systemd unit, where an upgrade is a restart.
 - Upgrading stops one step short of automatic: `update --download` verifies,
-  you run the `install` it prints. Which release is *current* comes from an
-  unsigned index, so publishing can withhold an upgrade from a node, though
-  never move one backwards.
+  you run the `install` it prints. Which release is *current* now comes from a
+  signed pointer that expires, so a node that is being held back eventually says
+  it cannot tell rather than that it is up to date -- but nothing yet remembers
+  the newest pointer it has seen, so an older signed one can still be replayed
+  within its lifetime. A node is never moved below what it runs.
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).

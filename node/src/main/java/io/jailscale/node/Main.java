@@ -144,8 +144,17 @@ public final class Main {
         if (r.error() != null) {
             throw new IOException(r.line()); // like every other command: stderr, exit 1
         }
-        System.out.println(r.line());
+        // A pointer past its expiry means this node cannot say whether what it runs is current, and
+        // that is a failed check rather than an answer -- so it goes to stderr and, with nothing to
+        // fetch, exits 1, which is what lets a script tell "up to date" from "could not tell". It
+        // is deliberately not a reason to refuse a download: the signature, the tag binding and
+        // never-below-running all still hold over a stale pointer, so refusing would forbid a
+        // genuine upgrade to avert a risk the refusal does not reduce (docs/update-freshness).
+        (r.stale() ? System.err : System.out).println(r.line());
         if (!a.flag("download") || !r.newer()) {
+            if (r.stale()) {
+                System.exit(1);
+            }
             return; // nothing to fetch: there is no newer release, or nobody asked for it
         }
         boolean temp = !a.has("dir");

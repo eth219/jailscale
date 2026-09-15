@@ -1024,11 +1024,11 @@ what the OS already has (a launchd agent, a `systemctl --user` unit, or a logon 
 no service wrapper.
 
 **`update` reports; `update --download` fetches; neither installs.** The plain form reads the
-published release index and prints the version and where to get it, and the daemon does the same
+signed pointer below, prints the version it names and where to get it, and the daemon does the same
 once a day so `status` carries the answer without anyone asking. The check runs in the CLI process,
 so it answers while the daemon is down, and a check that could not be made is an error like any
 other command's: the reason goes to stderr and the exit status is 1, so a script can tell "up to
-date" from "could not tell".
+date" from "could not tell" -- a distinction the pointer's expiry gives something to say.
 
 **What `--download` adds is the checking, not the installing.** It works out which asset this build
 should run — target from `os.name` and `os.arch`, or `jailscale.jar` when this is not a native image
@@ -1103,8 +1103,8 @@ compare" on. The public half is compiled into the binary, like `LATEST` and for 
 (§11.2). A build that carries no key refuses to download rather than falling back to the checksum
 alone; the check that cannot be made is not quietly skipped.
 
-**The release tooling publishes a signed pointer beside the releases, and nothing reads it yet.**
-`RELEASE.txt` says which release it *is*, and §15 records that nothing says which one is *current*.
+**A signed pointer says which release is current, and `update` reads it.**
+`RELEASE.txt` says which release it *is*, and nothing used to say which one is *current*.
 `latest.txt`, under
 the fixed `release-index` pre-release, is that missing sentence: a sequence number, the tag, and an
 expiry, signed with the same key. `tools/sign-release.sh` moves it forward whenever it publishes a
@@ -1112,9 +1112,22 @@ full release — never backwards, and never onto a draft or a pre-release — an
 re-issues it between releases, because an expiry is only worth what re-issuing it is. The sequence
 is taken from the published pointer and incremented, so a fetch that fails stops the script rather
 than starting a new sequence. A sequence only ever starts where a person typed
-`refresh-index.sh --first`, which is also what puts the first pointer up at all. The client half —
-refusing a pointer that went backwards, and saying "cannot tell" instead of "up to date" when one
-has expired — is [docs/update-freshness](update-freshness/README.md), and is not built.
+`refresh-index.sh --first`, which is also what puts the first pointer up at all.
+
+**What the node does with it.** `check` fetches `latest.txt` and its signature, verifies the
+signature against the same compiled-in key list a download is checked with, and takes the tag from
+there — so the version a node announces is now authenticated, where it used to come from an
+unsigned `tag_name`. That API index is gone rather than kept as a fallback: falling back to the
+unsigned answer is the check being skipped by default, which is the shape §9.4 refuses everywhere
+else. A build with no key cannot check at all and says so, as it already refused to download.
+**An expired pointer is not "up to date"** — it is "cannot tell whether this is current", with the
+date, because "you are the latest release" is exactly the sentence a withheld upgrade produces, and
+saying it is how the withholding stays invisible. It is deliberately **not** a reason to refuse a
+download: the signature, the tag binding and never-below-running all still hold over a stale
+pointer, so refusing would forbid a genuine upgrade to avert a risk the refusal does not reduce.
+The node's clock is allowed to be wrong for the same reason — the worst a bad one does is report
+"cannot tell". What is still missing is the sequence floor, which is what would stop a pointer being
+replayed at a lower `seq`: [docs/update-freshness](update-freshness/README.md), step 3.
 
 **The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
 key that has to move: every binary in the field accepts that one and nothing else, so publishing
@@ -2216,19 +2229,17 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   operator to run. A binary released before the signing key existed carries no key and refuses to
   download at all, so the first release able to verify another is the one after the key was
   compiled in.
-- **Nothing signed says which release is current.** `update` learns that from `releases/latest`,
-  which is not signed, and `RELEASE.txt` says which release it *is* rather than whether it is the
-  newest. Whoever can publish can therefore keep a node that is behind on an older release -- one
-  genuinely signed, so the whole chain verifies -- for as long as the index keeps naming it. What
-  bounds the damage is that a node is never moved below what it runs (`newer` is strictly above the
-  running version) and the binary installed is always the version announced, so this withholds an
-  upgrade rather than forcing a downgrade, and the same party could equally delete the newer
-  release. Closing it needs signed freshness: a sequence number the client refuses to go backwards
-  on, or an expiring signed pointer to the current release. That is the piece of an update
-  framework this design does not have; [docs/update-freshness](update-freshness/README.md) designs
-  it as both at once -- the sequence number to prevent, the expiry to make withholding visible.
-  What is built is the publishing half (§9.4): the tooling signs and re-issues the pointer. No
-  client reads it, so everything in this bullet still holds for every node in the field.
+- **Withholding an upgrade is visible now, not impossible.** Which release is current comes from a
+  signed pointer (§9.4) rather than from an unsigned `releases/latest`, so the version a node
+  announces is authenticated and an old release cannot be presented as the newest one indefinitely:
+  the pointer expires, and past that a node says it cannot tell instead of saying it is up to date.
+  What is not built is the **sequence floor** ([docs/update-freshness](update-freshness/README.md),
+  step 3): nothing yet records the highest `seq` a node has seen, so whoever can publish can still
+  replay an older, genuinely signed pointer and hold a node on the release it names for as long as
+  that pointer has not expired. What bounds the damage either way is that a node is never moved
+  below what it runs (`newer` is strictly above the running version) and the binary installed is
+  always the version announced, so this withholds an upgrade rather than forcing a downgrade, and
+  the same party could equally delete the newer release.
 - **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
   sides at a third of the lifetime remaining. When it does not happen the node logs the name and
   the time left once a day inside the last fortnight, the hub says how long the installed wildcard
