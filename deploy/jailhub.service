@@ -10,8 +10,9 @@
 # A standby (ARCHITECTURE.md §13.1) is this same unit on a second host with the primary's hub.key
 # copied into /var/lib/jailhub and `--peer https://hub.example.com` added to ExecStart; the base URL
 # stays the primary's name, since that is the name the standby will serve once promoted. It has no
-# nodes to relay challenges for and issues no certificate, so its port 80 and 53 are unused until
-# `jailhub promote`, after which the same records the primary needed (443, 53, optionally 80) apply.
+# nodes to relay challenges for and issues no certificate, so its port 80 is unused until
+# `jailhub promote`; port 53 it serves from the start, as the second name server of the subdomain
+# (ARCHITECTURE.md §13.3), so open UDP/TCP 53 on both hosts and delegate the subdomain to both.
 #
 # Not `systemctl reload`, and there is deliberately no ExecReload here. `serve --takeover` works by
 # starting a second process that takes the listeners and lets the first exit. Under a unit that

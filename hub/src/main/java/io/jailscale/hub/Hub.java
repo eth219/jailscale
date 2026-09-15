@@ -21,6 +21,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** The jailhub process: keys, store, TLS listener, node sessions, admin IPC (ARCHITECTURE.md §2). */
 public final class Hub implements AutoCloseable {
@@ -61,6 +62,14 @@ public final class Hub implements AutoCloseable {
     /** Set while this hub follows a primary (ARCHITECTURE.md §13.1); cleared by {@link #promote}. */
     private volatile boolean standby;
     private volatile PeerClient peerClient;
+    /** The public address this hub answers for itself (§13.3); null until known. */
+    private volatile String advertised;
+    /** The name servers the parent delegates to, label to address; empty until looked up or when not delegated. */
+    private volatile Map<String, String> nameServers = Map.of();
+    /** Whether port 53 could be bound: the DNS answers exist only when it could. */
+    private volatile boolean dnsUp;
+    private volatile boolean stopped;
+    private volatile Thread advertiseThread;
     private final FileChannel lockChannel;
     private final FileLock lock;
     private ServerSocket listener;
@@ -155,6 +164,8 @@ public final class Hub implements AutoCloseable {
 
     public void start() throws IOException, GeneralSecurityException {
         promoteRotationIfDue();
+        advertised = config.advertise();
+        startDns();
         if (standby) {
             // Own files if given, so 443 can open at once; otherwise the certificate is the
             // primary's and arrives over the channel, and this blocks for it the way ACME does.
@@ -219,10 +230,96 @@ public final class Hub implements AutoCloseable {
         }
     }
 
-    /** The DNS responder and ACME: blocks until a certificate is installed. Primary only. */
-    private void startAcme() throws IOException, GeneralSecurityException {
+    /**
+     * The hub's authoritative DNS (§7.1, §13.3), on both roles and whichever way the certificate
+     * comes: a standby answers as the second name server, and an operator with their own files may
+     * still delegate the subdomain. Port 53 not bindable is fatal only where issuance needs it --
+     * a primary obtaining its own certificate -- and a warning everywhere else.
+     */
+    private void startDns() throws IOException {
         dns = new io.jailscale.hub.dns.DnsResponder(config.hostname());
-        dns.start(config.dnsListenHost(), config.dnsListenPort());
+        dns.setZone(new io.jailscale.hub.dns.DnsResponder.Zone() {
+            @Override public List<String> serving() { return Hub.this.serving(); }
+            @Override public Map<String, String> nameServers() { return nameServers; }
+        });
+        dns.onTxtChanged(peers::challengeChanged);
+        try {
+            dns.start(config.dnsListenHost(), config.dnsListenPort());
+            dnsUp = true;
+        } catch (IOException e) {
+            if (config.acme() && !standby) {
+                throw e;
+            }
+            LOG.warn("port {} unavailable ({}); this hub answers no DNS, so the subdomain cannot be delegated to it",
+                config.dnsListenPort(), e.getMessage());
+        }
+        if (dnsUp && config.addressCheck()) {
+            // Off the startup path, and under the same switch as the address check: both ask the
+            // public resolvers about this hub's own name, and a test hub has no name they know.
+            advertiseThread = Thread.ofVirtual().name("advertise").start(this::findAddresses);
+        }
+    }
+
+    /**
+     * The hosts answered for the hub's name right now (§13.3): a primary answers itself, a
+     * standby answers the primary while it can reach it, and after step 3 both relays.
+     */
+    List<String> serving() {
+        if (!standby) {
+            return advertised == null ? List.of() : List.of(advertised);
+        }
+        PeerClient pc = peerClient;
+        String primary = pc == null ? null : pc.primaryAddress();
+        return pc != null && pc.isConnected() && primary != null ? List.of(primary) : List.of();
+    }
+
+    /** The public address this hub answers for itself, or null while unknown. */
+    String advertisedAddress() {
+        return advertised;
+    }
+
+    /** The name servers the parent delegates to, as last looked up. */
+    Map<String, String> nameServers() {
+        return nameServers;
+    }
+
+    /** Looks up the glue and, unless told, which of it is this host; again every hour. */
+    private void findAddresses() {
+        while (!stopped) {
+            try {
+                Map<String, String> glue = Advertise.glue(config.hostname());
+                nameServers = glue;
+                if (config.advertise() == null) {
+                    String me = glue.isEmpty() ? null : Advertise.whoAmI(glue, config.hostname(), 53, dns.selfToken());
+                    if (me != null && !me.equals(advertised)) {
+                        LOG.info("this hub is {} in the delegation of {} ({})", me, config.hostname(), glue);
+                    } else if (me == null && advertised == null) {
+                        LOG.info("{} is not delegated to this hub ({}); the name is answered at the parent, as with three records",
+                            config.hostname(), glue.isEmpty() ? "no ns1/ns2 glue" : "glue " + glue + ", none answering with our token");
+                    }
+                    if (me != null) {
+                        advertised = me;
+                    }
+                }
+                Thread.sleep(3600_000);
+            } catch (InterruptedException e) {
+                return;
+            } catch (RuntimeException e) {
+                LOG.warn("finding this hub's address: {}", e.toString());
+                try {
+                    Thread.sleep(60_000);
+                } catch (InterruptedException ie) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /** ACME on the DNS responder already running: blocks until a certificate is installed. Primary only. */
+    private void startAcme() throws IOException, GeneralSecurityException {
+        if (!dnsUp) {
+            throw new IOException("port " + config.dnsListenPort() + " is not bound, and dns-01 issuance needs it");
+        }
         acme = new AcmeManager(config, tls, dns, () -> {
             for (NodeGroup g : registry.all()) {
                 NodeSession p = g.primary();
@@ -301,6 +398,18 @@ public final class Hub implements AutoCloseable {
             if (p != null) {
                 p.certChanged();
             }
+        }
+    }
+
+    /** The dns-01 values this hub is answering right now; empty when no issuance is under way. */
+    List<String> dnsTxt() {
+        return dns == null ? List.of() : dns.txt();
+    }
+
+    /** The primary's current dns-01 values, to answer with here too (§13.3). Standby only. */
+    void challengeFromPrimary(List<String> txt) {
+        if (standby && dns != null) {
+            dns.setTxt(txt);
         }
     }
 
@@ -548,6 +657,10 @@ public final class Hub implements AutoCloseable {
         }
         handingOff = true;
         running = false;
+        stopped = true;
+        if (advertiseThread != null) {
+            advertiseThread.interrupt();
+        }
         LOG.info("hand-off requested: releasing listener and state");
         if (listener != null) {
             listener.close();
@@ -606,9 +719,14 @@ public final class Hub implements AutoCloseable {
     /** Whether hand-off should end the process (true for the binary, false in tests). */
     volatile boolean exitOnDrain = true;
 
-    /** Test hook: the DNS responder's port (0 if certificates come from files). */
+    /** The DNS responder's port, or 0 when port 53 could not be bound. */
     public int dnsPort() {
-        return dns == null ? 0 : dns.port();
+        return dnsUp ? dns.port() : 0;
+    }
+
+    /** The responder itself (tests). */
+    io.jailscale.hub.dns.DnsResponder dns() {
+        return dns;
     }
 
     /** The port {@code /metrics} is on, or 0 when it is not served. */
@@ -619,6 +737,10 @@ public final class Hub implements AutoCloseable {
     @Override
     public void close() throws IOException {
         running = false;
+        stopped = true;
+        if (advertiseThread != null) {
+            advertiseThread.interrupt();
+        }
         if (timer != null) {
             timer.shutdownNow();
         }

@@ -123,6 +123,8 @@ class ServeOptionsTest {
         assertEquals(Path.of("/tmp/ca.pem"), c.peerCa());
         assertNull(serve("--peer", "https://hub-b.example.com").peerCa());
         assertNull(serve("--peer", "https://hub-b.example.com").peerAddr(), "no --peer-addr means resolve the name");
+        assertNull(serve().advertise(), "no --advertise means the address is found from the glue");
+        assertEquals("203.0.113.1", serve("--advertise", "203.0.113.1").advertise());
         assertEquals("10.0.0.2", serve("--peer", "https://hub-b.example.com", "--peer-addr", "10.0.0.2").peerAddr());
         assertTrue(refused("--peer", "http://hub-b.example.com").contains("https"));
         // The primary's own name is what a standby is given: it will serve that name once promoted,

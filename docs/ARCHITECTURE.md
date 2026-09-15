@@ -582,6 +582,11 @@ firewall opening for TCP 443 and UDP/TCP 53, optionally TCP 80 and the raw port 
 operator setup is complete. First run is `jailhub serve --base-url https://hub.example.com`, which
 prints the first invite link (§10).
 
+The responder answers for the whole of `hub.example.com` as well, not only the challenge name, so
+an operator running two hubs can delegate the subdomain itself instead and let the hubs answer the
+address records (§13.3). With one hub the three records above are the simpler choice and nothing
+changes.
+
 ### 7.2 Issuance and renewal
 
 A still-fresh wildcard in `$JAILHUB_STATE/tls/` is installed at once and 443 opens immediately.
@@ -1584,6 +1589,65 @@ reported over less), and the process figure on `/metrics` as `jailhub_process_av
 Public for the reason `/v1/status` is public (§6.3). Anyone scraping `/metrics` already computes
 availability from `up`; this is for the operator with no scraper.
 
+### 13.3 The hubs answer their own DNS
+
+A standby keeps the copy current; what pointed visitors at the old host was two address records at
+the parent, and moving them was the operator's. With two `A` records instead, a browser moves to
+the second address within a few hundred milliseconds when the dead host answers RST, and only after
+a full connect timeout per new connection when it is black-holed. A health-checked DNS product or a
+load balancer fixes that for a provider's price and API, which is the dependency this design does
+not take. What keeps the principle is the responder of §7.1 being an authoritative server already:
+it now answers for the whole subdomain, and the operator with two hubs delegates the subdomain
+itself.
+
+```
+hub.example.com.      NS  ns1.hub.example.com.
+hub.example.com.      NS  ns2.hub.example.com.
+ns1.hub.example.com.  A   203.0.113.10     (glue: the first hub)
+ns2.hub.example.com.  A   203.0.113.11     (glue: the second)
+```
+
+Four records in place of three, and the delegation is the same act as the `_acme-challenge` one
+with the cut one label higher; the apex `A`, the wildcard `A` and the challenge `NS` go, since
+everything under the cut is now the hubs' to answer. The hub always answers the whole zone, so
+which cut to make is the operator's choice and no flag says it. Port 53 is already open on every
+hub host; a standby binds it too, and a hub with its own certificate files binds it and warns if it
+cannot rather than refusing to start, since only dns-01 issuance needs it.
+
+**What is answered.** `SOA` and `NS` at the apex with an hour's TTL, the `NS` set being the labels
+that have glue at the parent and the hub's own name when none has; `nsN` as that glue; the
+challenge name exactly as before; `_jailhub-self` as a TXT token this process alone knows; and,
+with a 30-second TTL, the apex and every name under it -- any label, at any depth -- as **the
+hosts serving right now**: a primary answers itself, a standby answers the primary while its
+channel to it is up, and nothing otherwise. Whether a name is open is the SNI router's question,
+not DNS's. AAAA, MX and the rest are NODATA with the apex SOA; names outside the zone are REFUSED;
+recursion is never offered; nothing answered is large enough to amplify with.
+
+**Liveness is the channel.** A host leaves the other's answer when the hub-to-hub channel drops,
+which the idle timeout bounds at a minute, and resolvers skip a dead name server on their own. In
+a partition where both hosts live and only the link between them is down, each answers with what
+it can vouch for -- the primary itself, the standby nothing -- so a resolver reaches a working host
+whichever server it asked. No consensus is involved in DNS and no split-brain is possible in it;
+which host *writes* is a separate question, and promotion answers it.
+
+**A hub finds its own address in the glue.** The operator wrote the addresses down once, at the
+parent, and is not asked again: the hub asks the public resolvers for `ns1` and `ns2`, then asks
+each glue address directly on port 53 for `_jailhub-self` and takes as its own the one that answers
+with its token. A peer answers with a different token. The lookup runs off the startup path, again
+every hour, and under the same switch as the address check (`--no-address-check`), both being
+questions to public resolvers about a name a test hub does not have. `--advertise` overrides it for
+a host whose public address no resolver can be asked about. A peer's advertised address travels in
+the hub-to-hub hello, so neither side guesses it from a socket that address translation may have
+rewritten.
+
+**The challenge travels too.** With both hubs authoritative for `_acme-challenge`, the CA may ask
+either, so the primary's dns-01 values are sent to every standby (`PeerChallenge`) whenever they
+change, and a standby answers them as its own.
+
+**What this makes of a failover.** When the primary dies, the standby stops answering its address
+within the channel's timeout; the moment the standby is promoted it answers itself, and visitors
+arrive within the TTL with nothing touched at the parent. `jailhub promote` is the whole of it.
+
 ---
 
 ## 14. Current characteristics
@@ -2027,9 +2091,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   has next to every issuance failure and on its status page, and `ls` marks the link. None of that
   helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
   nobody hears from, and its domain goes dark when the certificate runs out.
-- **A standby fails over the visitor path only after DNS moves** (§13.1). What it keeps current is
-  the copy; pointing the name at it is the operator's act, and until then the standby's 443 is a
-  page saying what it is. Nodes on the old primary are down for the DNS change plus their backoff.
+- **A standby fails over the visitor path only after promotion** (§13.1, §13.3). What it keeps
+  current is the copy, and with the subdomain delegated to both hubs the promoted standby answers
+  its own name; but promotion itself is a person typing `jailhub promote`, because two hosts cannot
+  tell a partition from a death without a third party. Until then the standby's 443 is a page
+  saying what it is. With three records at the parent instead, the DNS change is the operator's too.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
   is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
   calls the unit started; the listening sockets are still rebound rather than handed over.

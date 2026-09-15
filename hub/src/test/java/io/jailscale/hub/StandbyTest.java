@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.jailscale.hub.dns.DnsQuery;
 import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.http.Http;
@@ -21,6 +22,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.List;
 import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -97,8 +99,11 @@ class StandbyTest {
         int portA = freePort();
         int portB = freePort();
         primary = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + portA), root.resolve("a"), "127.0.0.1", portA,
-            CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
+            CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1"));
         primary.start();
+        // §13.3: the primary answers its own name with itself, for the apex and any name under it.
+        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", primary.dnsPort(), "hub.test", 2000));
+        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", primary.dnsPort(), "web.hub.test", 2000));
 
         // A member with a name, before the standby exists: the snapshot has to carry it.
         app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
@@ -117,7 +122,7 @@ class StandbyTest {
         // the primary's own name, as deployed: that is the name it serves once promoted.
         HubConfig sbConfig = HubConfig.withCert(URI.create("https://hub.test:" + portB), root.resolve("b"), "127.0.0.1", portB,
             null, null, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
-            .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1");
+            .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1").withAdvertise("203.0.113.2");
         IOException noKey = org.junit.jupiter.api.Assertions.assertThrows(IOException.class, () -> new Hub(sbConfig));
         assertTrue(noKey.getMessage().contains("hub.key"), noKey.getMessage());
         Files.createDirectories(root.resolve("b"));
@@ -130,6 +135,16 @@ class StandbyTest {
         assertTrue(Files.exists(root.resolve("b/tls/wildcard.key")));
         assertEquals(primary.keys().publicText(), standby.keys().publicText());
         waitFor("the snapshot never reached the standby", () -> standby.peerClient().isSynced());
+        // §13.3: while it can reach the primary, the standby answers the primary's address, not its
+        // own -- it serves nothing yet -- and it answers the primary's challenge values.
+        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000));
+        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "web.hub.test", 2000));
+        primary.dns().setTxt(List.of("challenge-for-the-ca"));
+        waitFor("the challenge value never reached the standby",
+            () -> DnsQuery.txt("127.0.0.1", standby.dnsPort(), "_acme-challenge.hub.test", 2000).contains("challenge-for-the-ca"));
+        primary.dns().clearTxt();
+        waitFor("the cleared challenge never reached the standby",
+            () -> DnsQuery.txt("127.0.0.1", standby.dnsPort(), "_acme-challenge.hub.test", 2000).isEmpty());
         assertNotNull(standby.store().node(alice.machineKey()), "the member registered before the standby existed");
         assertEquals("alice", standby.store().nameOwner("web"));
         assertEquals("open", standby.store().setting(Store.SETTING_REGISTRATION, "invite"), "settings follow the primary, not the standby's flags");
@@ -182,6 +197,9 @@ class StandbyTest {
         assertEquals("primary", promoted.string("role"));
         assertEquals("primary", status("hub.test", portB).string("role"));
         waitFor("the primary still counts the promoted hub as a standby", () -> primary.peers().count() == 0);
+        // §13.3: promoted, it answers itself; nothing at the parent had to change.
+        assertEquals(List.of("203.0.113.2"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000));
+        assertEquals(List.of("203.0.113.2"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "web.hub.test", 2000));
         JsonObject again = Ipc.call(root.resolve("b/jailhub.sock"), JsonObject.builder().put("cmd", "promote").build());
         assertFalse(again.optBool("ok", false), "promoting a primary is an error, not a no-op: " + again);
 

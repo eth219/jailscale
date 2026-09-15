@@ -123,6 +123,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             socket.setSoTimeout(IDLE_TIMEOUT_MS);
             boolean[] rejected = new boolean[1];
             String[] peerHost = new String[1];
+            String[] peerAddress = new String[1];
             NoiseChannel ch = NoiseChannel.respond(in, out, hub.keys().responders(), (p1, hs) -> {
                 Message m;
                 try {
@@ -143,8 +144,11 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                             + hub.config().peer().getHost() + "; follow the primary"));
                     }
                     peerHost[0] = ph.host() == null ? remoteIp : ph.host();
-                    LOG.info("standby {} from {} (v{})", peerHost[0], remoteIp, ph.version());
-                    return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname()));
+                    peerAddress[0] = ph.address();
+                    LOG.info("standby {} from {} (v{}{})", peerHost[0], remoteIp, ph.version(),
+                        ph.address() == null ? "" : ", advertises " + ph.address());
+                    return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
+                        hub.advertisedAddress()));
                 }
                 mkey = KeyText.format(KeyText.MACHINE, hs.remoteStatic());
                 if (!(m instanceof Message.Hello hello)) {
@@ -183,7 +187,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 return;
             }
             if (peerHost[0] != null) {
-                hub.peers().new Session(remoteIp, peerHost[0]).run(ch);
+                hub.peers().new Session(remoteIp, peerHost[0], peerAddress[0]).run(ch);
                 return;
             }
             Metrics.NODE_SESSIONS.increment();
