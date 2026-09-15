@@ -140,7 +140,7 @@ final class HttpFront {
             return HttpResponse.html(200, page("jailscale hub", home(req))).header("Cache-Control", "no-store");
         }
         if (path.equals("/links")) {
-            return HttpResponse.html(200, page("Open links", directory())).header("Cache-Control", "no-store");
+            return HttpResponse.html(200, page("Open links", directory(req))).header("Cache-Control", "no-store");
         }
         return HttpResponse.text(404, "not found");
     }
@@ -438,7 +438,7 @@ final class HttpFront {
         if (links.isEmpty()) {
             b.append("<p>None open right now.</p>");
         } else {
-            linkRows(b, links, LINKS_ON_HOME);
+            linkRows(b, links.subList(0, Math.min(links.size(), LINKS_ON_HOME)));
             if (links.size() > LINKS_ON_HOME) {
                 b.append("<p><a href=\"/links\">All ").append(links.size()).append(" open links &rarr;</a></p>");
             }
@@ -494,7 +494,7 @@ final class HttpFront {
      * put whatever anyone who can join chooses to serve on the operator's page. Who owns a name and
      * which local port it reaches stay behind the admin session, as the node list does.
      */
-    private String directory() {
+    private String directory(HttpRequest req) {
         StringBuilder b = new StringBuilder(nav("/links"));
         List<Links.Link> links = sortedLinks();
         if (links.isEmpty()) {
@@ -505,9 +505,26 @@ final class HttpFront {
             .append(" being served through <code>").append(escape(hub.config().hostname()))
             .append("</code> right now. Each is somebody's own machine; the hub relays the bytes and")
             .append(" does not terminate the TLS, so what is behind one of these is between you and it.</p>");
-        linkRows(b, links, LINKS_SHOWN);
-        if (links.size() > LINKS_SHOWN) {
-            b.append("<p>and ").append(links.size() - LINKS_SHOWN).append(" more.</p>");
+        // Where this page starts: the first row whose key is not before the cursor. A page's worth
+        // is capped, so without this the rows past the cap were counted in the sentence above and
+        // then unreachable -- no next page and no way to ask for one. The cursor is the ordering
+        // key itself and every link has a distinct one, so paging cannot stall on a repeat.
+        String from = req.query().get("from");
+        int start = 0;
+        while (from != null && start < links.size() && sortKey(links.get(start)).compareTo(from) < 0) {
+            start++;
+        }
+        int end = Math.min(start + LINKS_SHOWN, links.size());
+        linkRows(b, links.subList(start, end));
+        if (end < links.size()) {
+            // The next row's own key, never the cursor the caller sent, so nothing a visitor
+            // typed is echoed back into the page.
+            b.append("<p><a href=\"/links?from=").append(escape(sortKey(links.get(end)))).append("\">The next ")
+                .append(Math.min(LINKS_SHOWN, links.size() - end)).append(" of ").append(links.size() - end)
+                .append(" remaining &rarr;</a></p>");
+        }
+        if (start > 0) {
+            b.append("<p><a href=\"/links\">&larr; Back to the first ").append(LINKS_SHOWN).append("</a></p>");
         }
         b.append("<p><small>A visitor count is the connections open at the moment this page was")
             .append(" built, not a total, and a link with none says nothing rather than zero. \"Open\"")
@@ -517,13 +534,13 @@ final class HttpFront {
     }
 
     /**
-     * One row per link, up to {@code limit}: the address, and beside it the three things the hub
-     * already knows for its own routing. Nothing here is fetched from the link itself.
+     * One row per link: the address, and beside it the three things the hub already knows for its
+     * own routing. Nothing here is fetched from the link itself.
      */
-    private void linkRows(StringBuilder b, List<Links.Link> links, int limit) {
+    private void linkRows(StringBuilder b, List<Links.Link> links) {
         long now = System.currentTimeMillis();
         b.append("<table class=\"links\">");
-        for (Links.Link l : links.subList(0, Math.min(links.size(), limit))) {
+        for (Links.Link l : links) {
             StringBuilder facts = new StringBuilder(escape(l.kind()));
             // Only names and domains are counted per name, so a raw port says nothing here rather
             // than a zero that would read as "nobody is connected" when it means "not measured".
@@ -539,11 +556,23 @@ final class HttpFront {
         b.append("</table>");
     }
 
-    /** Every live link, in the order a directory wants them. */
+    /** Every live link, in the order a directory wants them: the order the rows read in. */
     private List<Links.Link> sortedLinks() {
         List<Links.Link> links = new ArrayList<>(hub.links().all());
-        links.sort(Comparator.comparing(Links.Link::name));
+        links.sort(Comparator.comparing(this::sortKey));
         return links;
+    }
+
+    /**
+     * What the row will actually say, which is what a reader scans and so what the list is
+     * ordered by. Sorting by {@code name()} put a raw port among the names beginning with its
+     * kind -- {@code tcp/2001} sorts under "t" while the row reads {@code <hub>:2001} -- so raw
+     * rows landed at a position matching nothing on the page. The port is padded because this key
+     * is compared as text and 9000 belongs before 20000, not after it; that also makes every
+     * link's key distinct, which is what lets it serve as the paging cursor.
+     */
+    private String sortKey(Links.Link l) {
+        return l.raw() ? hub.config().hostname() + ":" + String.format("%05d", l.port()) : l.host(hub.config());
     }
 
     /**

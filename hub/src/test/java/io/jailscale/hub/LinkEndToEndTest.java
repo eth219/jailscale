@@ -286,6 +286,23 @@ class LinkEndToEndTest {
         for (int i = 0; i < 9; i++) {
             assertTrue(directory.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + directory);
         }
+
+        // A page of the directory is capped, and the cap counted rows the page then had no way to
+        // show: the sentence at the top says how many there are, so every one of them has to be
+        // reachable. The cursor is the row's own ordering key, and asking for one starts the list
+        // there. (The cap is 200, which is more links than a test wants to open, so the cursor is
+        // exercised here at a size the assertions can see; the "next" link that carries it appears
+        // only past the cap.)
+        String fromFive = visit("hub.test", "/links?from=app5.hub.test").bodyText();
+        for (int i = 5; i < 9; i++) {
+            assertTrue(fromFive.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + fromFive);
+        }
+        for (int i = 0; i < 5; i++) {
+            assertFalse(fromFive.contains("app" + i + ".hub.test"), "app" + i + " is before the cursor: " + fromFive);
+        }
+        // The count at the top is of everything open, not of this page, so it does not move.
+        assertTrue(fromFive.contains("9 links are being served"), fromFive);
+        assertTrue(fromFive.contains("Back to the first"), fromFive);
     }
 
     /**

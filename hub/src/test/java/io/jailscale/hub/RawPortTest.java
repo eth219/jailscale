@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
+import io.jailscale.proto.http.Headers;
+import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.net.DuplexThread;
@@ -141,6 +143,21 @@ class RawPortTest {
         int tcpPort = tcp.integer("hubPort");
         assertEquals("tcp://hub.test:" + tcpPort, tcp.string("url"));
         assertTrue(tcpPort >= lo && tcpPort <= lo + 3);
+
+        // The directory is ordered by what each row says, not by the link's internal name. A raw
+        // port is named "tcp/<port>" and drawn as "<hub>:<port>", so ordering by the name put it
+        // under "t" -- after every https name up to "s" -- at a position matching nothing a reader
+        // can see. Between "bravo" and "sierra" is where "hub.test:<port>" reads as belonging.
+        for (String n : new String[] {"bravo", "sierra"}) {
+            assertTrue(Ipc.call(sock, JsonObject.builder().put("cmd", "open")
+                .put("port", echoTcp.getLocalPort()).put("name", n).build()).optBool("ok", false));
+        }
+        String dir = hub.front().route(new HttpRequest("GET", "/links", "HTTP/1.1", new Headers(), null)).bodyText();
+        int bravo = dir.indexOf("bravo.hub.test");
+        int rawRow = dir.indexOf("hub.test:" + tcpPort);
+        int sierra = dir.indexOf("sierra.hub.test");
+        assertTrue(bravo >= 0 && rawRow >= 0 && sierra >= 0, dir);
+        assertTrue(bravo < rawRow && rawRow < sierra, "the raw port is not where its address reads: " + dir);
 
         // Bytes both ways, more than one frame, through hub port -> node -> local echo.
         byte[] payload = new byte[200_000];
