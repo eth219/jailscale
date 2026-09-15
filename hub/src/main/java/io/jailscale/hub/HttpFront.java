@@ -509,28 +509,51 @@ final class HttpFront {
         // is capped, so without this the rows past the cap were counted in the sentence above and
         // then unreachable -- no next page and no way to ask for one. The cursor is the ordering
         // key itself and every link has a distinct one, so paging cannot stall on a repeat.
-        String from = req.query().get("from");
+        String from = cursor(req);
         int start = 0;
         while (from != null && start < links.size() && sortKey(links.get(start)).compareTo(from) < 0) {
             start++;
         }
-        int end = Math.min(start + LINKS_SHOWN, links.size());
-        linkRows(b, links.subList(start, end));
-        if (end < links.size()) {
-            // The next row's own key, never the cursor the caller sent, so nothing a visitor
-            // typed is echoed back into the page.
-            b.append("<p><a href=\"/links?from=").append(escape(sortKey(links.get(end)))).append("\">The next ")
-                .append(Math.min(LINKS_SHOWN, links.size() - end)).append(" of ").append(links.size() - end)
-                .append(" remaining &rarr;</a></p>");
-        }
-        if (start > 0) {
-            b.append("<p><a href=\"/links\">&larr; Back to the first ").append(LINKS_SHOWN).append("</a></p>");
+        if (start == links.size()) {
+            // The cursor names a point past the last row, which is what a bookmarked or forwarded
+            // one becomes once the links it started from close. Saying so beats an empty table
+            // under a sentence that has just counted the links this hub is serving.
+            b.append("<p>Nothing is open at that point in the list any more. ")
+                .append("<a href=\"/links\">Start from the first</a>.</p>");
+        } else {
+            int end = Math.min(start + LINKS_SHOWN, links.size());
+            linkRows(b, links.subList(start, end));
+            if (end < links.size()) {
+                // The next row's own key, never the cursor the caller sent, so nothing a visitor
+                // typed is echoed back into the page.
+                b.append("<p><a href=\"/links?from=").append(escape(sortKey(links.get(end)))).append("\">The next ")
+                    .append(Math.min(LINKS_SHOWN, links.size() - end)).append(" of ").append(links.size() - end)
+                    .append(" remaining &rarr;</a></p>");
+            }
+            if (start > 0) {
+                b.append("<p><a href=\"/links\">&larr; Back to the first ").append(LINKS_SHOWN).append("</a></p>");
+            }
         }
         b.append("<p><small>A visitor count is the connections open at the moment this page was")
             .append(" built, not a total, and a link with none says nothing rather than zero. \"Open\"")
             .append(" is since the link was opened: a node that restarts or hands its name to another")
             .append(" machine opens a new one, so this counts the current one, not the name.</small></p>");
         return b.toString();
+    }
+
+    /**
+     * The paging cursor, or null when there is none. A query string is decoded per-escape, so a
+     * malformed one -- {@code ?from=%zz}, a truncated {@code %2} -- makes {@code query()} throw,
+     * and nothing between here and the virtual thread serving the connection catches anything but
+     * {@link IOException}: the visitor got no response at all and the thread died printing a
+     * stack trace. A cursor nobody can read is no cursor, and the page still answers.
+     */
+    private static String cursor(HttpRequest req) {
+        try {
+            return req.query().get("from");
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**
@@ -556,10 +579,24 @@ final class HttpFront {
         b.append("</table>");
     }
 
-    /** Every live link, in the order a directory wants them: the order the rows read in. */
+    /**
+     * Every live link, in the order a directory wants them: the order the rows read in. The key is
+     * built once per link and sorted alongside it, because {@code Comparator.comparing} would build
+     * it afresh on both sides of every comparison -- on a hub holding thousands of links that is
+     * hundreds of thousands of short-lived strings per request, on a page that shows eight rows,
+     * in the process relaying every visitor's bytes.
+     */
     private List<Links.Link> sortedLinks() {
-        List<Links.Link> links = new ArrayList<>(hub.links().all());
-        links.sort(Comparator.comparing(this::sortKey));
+        record Keyed(String key, Links.Link link) {}
+        List<Keyed> keyed = new ArrayList<>();
+        for (Links.Link l : hub.links().all()) {
+            keyed.add(new Keyed(sortKey(l), l));
+        }
+        keyed.sort(Comparator.comparing(Keyed::key));
+        List<Links.Link> links = new ArrayList<>(keyed.size());
+        for (Keyed k : keyed) {
+            links.add(k.link());
+        }
         return links;
     }
 

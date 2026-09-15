@@ -516,7 +516,12 @@ a node that restarts or hands its name on starts the clock again -- it counts th
 the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
 list does. The directory renders at most 200 rows at a time, like every other unauthenticated
 answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
-reachable -- the sentence at the top counts every open link, so every one of them has to be. The
+reachable -- the sentence at the top counts every open link, so every one of them has to be. A
+cursor is a string a visitor sends, so it is treated as one: a query is percent-decoded per escape
+and a malformed one throws, which on a path where nothing but `IOException` is caught took the
+response down with it, so an unreadable cursor is simply no cursor; and one that sorts past the
+last row -- what a forwarded cursor becomes once the links it started from close -- says so rather
+than drawing an empty table under a sentence that has just counted the links. The
 order is the order the rows *read* in, not the links' internal names: a raw port is named
 `tcp/<port>` and drawn as `<hub>:<port>`, so sorting by the name put it among the names beginning
 with "t", at a position matching nothing on the page. Its port is zero-padded in the key so 9000

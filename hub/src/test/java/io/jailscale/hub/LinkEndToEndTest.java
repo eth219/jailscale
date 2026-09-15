@@ -303,6 +303,21 @@ class LinkEndToEndTest {
         // The count at the top is of everything open, not of this page, so it does not move.
         assertTrue(fromFive.contains("9 links are being served"), fromFive);
         assertTrue(fromFive.contains("Back to the first"), fromFive);
+
+        // A cursor is a string a visitor sends, so the page has to survive every string. A query
+        // is percent-decoded per escape and a malformed one makes query() throw; nothing between
+        // route() and the virtual thread catches anything but IOException, so this used to close
+        // the connection with no response at all and die printing a stack trace.
+        HttpResponse rubbish = visit("hub.test", "/links?from=%zz");
+        assertEquals(200, rubbish.status(), "a cursor nobody can read is no cursor, not no page");
+        assertTrue(rubbish.bodyText().contains("app0.hub.test"), rubbish.bodyText());
+
+        // And one that sorts after everything open -- what a bookmarked cursor becomes once the
+        // links it started from close -- says so rather than drawing an empty table under a
+        // sentence that has just counted nine links.
+        String past = visit("hub.test", "/links?from=zzzz").bodyText();
+        assertTrue(past.contains("Nothing is open at that point"), past);
+        assertFalse(past.contains("<table class=\"links\"></table>"), "an empty table instead of a reason: " + past);
     }
 
     /**
