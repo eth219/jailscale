@@ -77,6 +77,7 @@ public final class Hub implements AutoCloseable {
      * first (ARCHITECTURE.md §13); without it, a held lock is an error.
      */
     public Hub(HubConfig config, boolean takeover) throws IOException, GeneralSecurityException {
+        Resources.markStarted(System.currentTimeMillis());
         this.config = config;
         java.nio.file.Files.createDirectories(config.stateDir());
         this.lockChannel = FileChannel.open(config.stateDir().resolve("jailhub.lock"),

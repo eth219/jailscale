@@ -15,7 +15,13 @@ import java.nio.file.Path;
 final class Resources {
 
     private static final Path PROC_STATUS = Path.of("/proc/self/status");
-    private static final long STARTED = System.currentTimeMillis();
+    /**
+     * When the hub started, set by {@link #markStarted} from the Hub's constructor. It was a
+     * {@code static final} initialised to the current time, which a class initialised on first use
+     * reads as "the first time anyone asked": the live hub's page said 0s ninety seconds after a
+     * restart, because the first request for the page was what initialised this class.
+     */
+    private static volatile long startedAt = System.currentTimeMillis();
 
     private Resources() {
     }
@@ -38,8 +44,13 @@ final class Resources {
         return -1;
     }
 
+    /** Uptime is measured from here. Called once, when the hub is constructed. */
+    static void markStarted(long now) {
+        startedAt = now;
+    }
+
     static long uptimeMillis() {
-        return System.currentTimeMillis() - STARTED;
+        return System.currentTimeMillis() - startedAt;
     }
 
     /** Heap in use. Under a native image this is a fraction of RSS, so it is labelled as heap. */
