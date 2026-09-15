@@ -340,6 +340,10 @@
     return {
       proto: n.nextHopProtocol || "unknown",
       reused: (n.connectEnd - n.connectStart) <= 0,
+      // The navigation entry carries Server-Timing like any other resource, and
+      // the app stamps one on the document too. Reported rather than subtracted:
+      // the bar has to keep adding up to the time to the first byte.
+      app: serverDur(n),
       v: [
         Math.max(0, n.domainLookupEnd - n.domainLookupStart),
         Math.max(0, tcp),
@@ -407,13 +411,23 @@
 
     $("tTls").textContent = d.v[2] > 0 ? ms(d.v[2]) : "—";
     $("tTcp").textContent = d.v[1] > 0 ? ms(d.v[1]) : "—";
+    // "Server wait" is responseStart minus requestStart, so it holds one round
+    // trip as well as the server. With a handshake in the bar that is easy to
+    // read past; with the handshake at zero the round trip has nowhere else to
+    // sit and the segment becomes the whole chart, which reads as a slow hub.
+    var appShare = d.app > 0
+      ? " The app itself took <b>" + ms(d.app) + " ms</b> of that."
+      : "";
     $("setupHint").innerHTML = d.reused
       ? "DNS, TCP and TLS measure zero here: either the browser reused a connection it " +
         "opened earlier, or there is no network to measure — a hub and node on the same " +
-        "machine connect in under the clock's resolution. Over a real link, open the page " +
-        "in a private window to see the setup paid in full."
+        "machine connect in under the clock's resolution. With no handshake to charge it " +
+        "to, your round trip to the hub is inside <b>Server wait</b> — that segment is " +
+        "the network, not the hub's thinking." + appShare + " Over a real link, open the " +
+        "page in a private window to see the setup paid in full."
       : "Protocol on the wire: <code>" + d.proto + "</code>. The hub never parses the HTTP " +
-        "inside this, and never holds a session key for it.";
+        "inside this, and never holds a session key for it. <b>Server wait</b> carries one " +
+        "more round trip on top of the TCP connect above." + appShare;
   }
 
   // ---- the warm series ---------------------------------------------------
