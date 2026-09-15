@@ -30,6 +30,12 @@ final class AdminIpc implements Ipc.Handler {
         Store store = hub.store();
         switch (cmd) {
             case "status" -> reply.done(statusReply(store));
+            case "availability-reset" -> {
+                // The record restarts now: an operator who has finished a day of deliberate restarts
+                // does not want them counted against the service from here on (§13.2).
+                hub.availability().reset(System.currentTimeMillis());
+                reply.done(JsonObject.builder().put("ok", true).put("since", System.currentTimeMillis() / 1000));
+            }
             case "promote" -> {
                 hub.promote();
                 reply.done(JsonObject.builder().put("ok", true).put("role", hub.role())
@@ -258,7 +264,7 @@ final class AdminIpc implements Ipc.Handler {
             .put("autoPromote", hub.autoPromote() ? "on" : "off")
             .put("standbys", standbys());
         PeerClient pc = hub.peerClient();
-        if (pc != null) {
+        if (hub.isStandby() && pc != null) {
             b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());
         }
         return b;

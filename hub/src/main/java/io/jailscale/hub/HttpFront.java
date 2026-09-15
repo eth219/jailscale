@@ -154,9 +154,12 @@ final class HttpFront {
             .put("role", hub.role())
             .put("availability", availability());
         PeerClient pc = hub.peerClient();
-        if (pc != null) {
+        if (hub.isStandby() && pc != null) {
+            // Only a standby has a primary to name. A primary that names a peer (§13.5) has a
+            // client too, but it dials for a comparison of epochs, not to follow.
             b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());
         }
+        b.put("epoch", hub.epoch());
         return b.build();
     }
 
@@ -284,10 +287,11 @@ final class HttpFront {
             row(b, "Seen from here", "<code>" + escape(peer) + "</code> " + availabilityText(w -> avail.peerFraction(peer, w, now)));
         }
         PeerClient pc = hub.peerClient();
-        if (pc != null) {
+        if (hub.isStandby() && pc != null) {
             row(b, "Role", "standby of <code>" + escape(pc.primaryHost()) + "</code>, "
                 + (pc.isSynced() ? "in sync" : pc.isConnected() ? "connected, not yet in sync" : "not connected"
-                    + (pc.lastError() == null ? "" : " (" + escape(pc.lastError()) + ")")));
+                    + (pc.lastError() == null ? "" : " (" + escape(pc.lastError()) + ")"))
+                + ", epoch " + hub.epoch());
         } else {
             List<Peers.Session> standbys = hub.peers().all();
             StringBuilder r = new StringBuilder("primary");
@@ -300,6 +304,7 @@ final class HttpFront {
                 }
                 r.append(" in sync");
             }
+            r.append(", epoch ").append(hub.epoch());
             row(b, "Role", r.toString());
         }
         row(b, "Nodes", online + " online of " + hub.store().nodes().size() + " registered");

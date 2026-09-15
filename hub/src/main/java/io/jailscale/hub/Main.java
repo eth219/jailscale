@@ -34,6 +34,7 @@ public final class Main {
                       [--advertise IP]  answer this address for the hub's name; default: found from the ns1/ns2 glue (ARCHITECTURE.md §13.3)
         jailhub status
         jailhub promote     make this standby the primary (ARCHITECTURE.md §13.1)
+        jailhub availability reset     start the uptime record over from now (ARCHITECTURE.md §13.2)
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
         jailhub name list | reassign <name> --user NAME | release <name>
