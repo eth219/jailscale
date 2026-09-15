@@ -125,8 +125,9 @@ class ServeOptionsTest {
         assertNull(serve("--peer", "https://hub-b.example.com").peerAddr(), "no --peer-addr means resolve the name");
         assertEquals("10.0.0.2", serve("--peer", "https://hub-b.example.com", "--peer-addr", "10.0.0.2").peerAddr());
         assertTrue(refused("--peer", "http://hub-b.example.com").contains("https"));
-        assertTrue(refused("--peer", "https://hub.example.com").contains("own base URL"),
-            "a hub following itself would wait for a snapshot from nobody");
+        // The primary's own name is what a standby is given: it will serve that name once promoted,
+        // and until then the name resolves to the primary. The first real standby was refused here.
+        assertEquals("hub.example.com", serve("--peer", "https://hub.example.com").peer().getHost());
     }
 
     @Test

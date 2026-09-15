@@ -85,7 +85,10 @@ final class Peers {
 
         Session(String remoteIp, String peerHost) {
             this.remoteIp = remoteIp;
-            this.name = peerHost == null || peerHost.isBlank() ? remoteIp : peerHost;
+            // A standby normally carries the primary's own name, since that is what it will serve;
+            // as a label for "the other host" that says nothing, so the address is used instead.
+            this.name = peerHost == null || peerHost.isBlank() || peerHost.equalsIgnoreCase(hub.config().hostname())
+                ? remoteIp : peerHost;
         }
 
         /** What the standby called itself in its hello, or its address when it said nothing. */

@@ -227,9 +227,9 @@ public record HubConfig(
             if (peer.getHost() == null || !"https".equals(peer.getScheme())) {
                 throw new IllegalArgumentException("--peer must be https://<host> (the primary's base URL)");
             }
-            if (peer.getHost().equalsIgnoreCase(base.getHost()) && (peer.getPort() < 0 ? 443 : peer.getPort()) == (base.getPort() < 0 ? 443 : base.getPort())) {
-                throw new IllegalArgumentException("--peer names this hub's own base URL; a standby follows a different host");
-            }
+            // The same name as --base-url is the normal case, not a mistake: a standby serves the
+            // primary's name once promoted, and until then that name resolves to the primary. The
+            // first standby deployed was refused here for exactly that configuration.
         }
         return new HubConfig(
             base,
