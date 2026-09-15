@@ -17,6 +17,16 @@ import org.junit.jupiter.api.Timeout;
 class AdvertiseTest {
 
     @Test
+    void theGlueComesFromTheParentsReferralNotFromAResolver() throws Exception {
+        try (java.net.DatagramSocket parent = io.jailscale.hub.dns.ReferralTest.fakeParent()) {
+            Map<String, String> glue = Advertise.glue("hub.example.com", java.util.List.of("127.0.0.1"), parent.getLocalPort());
+            assertEquals("203.0.113.1", glue.get("ns1"));
+            assertEquals("203.0.113.2", glue.get("ns2"));
+        }
+        assertEquals(Map.of(), Advertise.glue("hub.example.com", java.util.List.of(), 53), "no parent server, no glue");
+    }
+
+    @Test
     void theAddressThatAnswersWithOurTokenIsOurs() throws Exception {
         try (DnsResponder me = new DnsResponder("hub.test", "mine")) {
             me.start("127.0.0.1", 0);

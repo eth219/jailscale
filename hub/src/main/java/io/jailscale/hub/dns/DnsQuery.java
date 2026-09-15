@@ -117,6 +117,42 @@ public final class DnsQuery {
         return out;
     }
 
+    /**
+     * What a parent's name server says when asked, without recursion, for a name it has delegated:
+     * a referral, whose additional section carries the glue. Returned as name to dotted quad for
+     * every A record in that section (§13.3). Asking a recursive resolver instead would get the
+     * child zone's own answer, which for the glue names is the very thing being looked for.
+     */
+    public static java.util.Map<String, String> referralGlue(String server, int port, String name, int timeoutMs) throws IOException {
+        byte[] m = exchange(server, port, name, TYPE_A, timeoutMs, false);
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        int qd = ((m[4] & 0xff) << 8) | (m[5] & 0xff);
+        int an = ((m[6] & 0xff) << 8) | (m[7] & 0xff);
+        int ns = ((m[8] & 0xff) << 8) | (m[9] & 0xff);
+        int ar = ((m[10] & 0xff) << 8) | (m[11] & 0xff);
+        int p = 12;
+        for (int i = 0; i < qd; i++) {
+            p = skipName(m, p);
+            need(m, p, 4);
+            p += 4;
+        }
+        for (int i = 0; i < an + ns + ar; i++) {
+            int nameAt = p;
+            p = skipName(m, p);
+            need(m, p, 10);
+            int type = ((m[p] & 0xff) << 8) | (m[p + 1] & 0xff);
+            int rdlen = ((m[p + 8] & 0xff) << 8) | (m[p + 9] & 0xff);
+            int rdStart = p + 10;
+            need(m, rdStart, rdlen);
+            if (i >= an + ns && type == TYPE_A && rdlen == 4) {
+                out.put(readName(m, nameAt).toLowerCase(java.util.Locale.ROOT),
+                    InetAddress.getByAddress(java.util.Arrays.copyOfRange(m, rdStart, rdStart + 4)).getHostAddress());
+            }
+            p = rdStart + rdlen;
+        }
+        return out;
+    }
+
     /** A parsed answer: the whole message, and where each answer of the asked type has its rdata. */
     private record Message(byte[] bytes, List<Integer> rdataOffsets, List<Integer> rdataLengths) {}
 
@@ -131,11 +167,18 @@ public final class DnsQuery {
     }
 
     private static Message queryMessage(String server, int port, String name, int type, int timeoutMs) throws IOException {
+        byte[] m = exchange(server, port, name, type, timeoutMs, true);
+        int id = ((m[0] & 0xff) << 8) | (m[1] & 0xff);
+        return new Message(m, parseOffsets(m, id, type, true), parseOffsets(m, id, type, false));
+    }
+
+    /** One query and its reply, id checked, with or without asking for recursion. */
+    private static byte[] exchange(String server, int port, String name, int type, int timeoutMs, boolean recurse) throws IOException {
         int id = RNG.nextInt(0x10000);
         ByteArrayOutputStream q = new ByteArrayOutputStream(64);
         q.write(id >>> 8);
         q.write(id);
-        q.write(0x01); // RD
+        q.write(recurse ? 0x01 : 0x00); // RD, or not: a parent asked without it answers with the delegation
         q.write(0x00);
         q.write(0);
         q.write(1);
@@ -155,7 +198,10 @@ public final class DnsQuery {
             DatagramPacket r = new DatagramPacket(buf, buf.length);
             s.receive(r);
             byte[] m = java.util.Arrays.copyOf(buf, r.getLength());
-            return new Message(m, parseOffsets(m, id, type, true), parseOffsets(m, id, type, false));
+            if (m.length < 12 || (((m[0] & 0xff) << 8) | (m[1] & 0xff)) != id) {
+                throw new IOException("bad DNS response");
+            }
+            return m;
         }
     }
 

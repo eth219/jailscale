@@ -52,6 +52,10 @@ public final class DnsResponder implements AutoCloseable {
     public static final int TTL_ADDRESS = 30;
     /** Delegation and zone records change when the operator changes them. */
     static final int TTL_ZONE = 3600;
+    /** A glue name's address: what the parent holds, bounded so a wrong one cannot outlive an hour by much. */
+    static final int TTL_GLUE = 300;
+    /** The labels the parent may delegate to; never answered from the wildcard, even before the glue is known. */
+    public static final List<String> GLUE_LABELS = List.of("ns1", "ns2");
     /** The name whose TXT is this process's own token (§13.3). */
     public static final String SELF_LABEL = "_jailhub-self";
 
@@ -327,7 +331,7 @@ public final class DnsResponder implements AutoCloseable {
                 answers.add(rr(TYPE_NS, TTL_ZONE, encodeName(nsName)));
                 byte[] rd = ipv4(e.getValue());
                 if (rd != null) {
-                    additional.add(rrNamed(encodeName(nsName), TYPE_A, TTL_ZONE, rd));
+                    additional.add(rrNamed(encodeName(nsName), TYPE_A, TTL_GLUE, rd));
                 }
             }
         } else if (qtype == TYPE_SOA) {
@@ -348,11 +352,13 @@ public final class DnsResponder implements AutoCloseable {
             if (qtype == TYPE_TXT) {
                 answers.add(rr(TYPE_TXT, TTL_TXT, txtRdata(selfToken)));
             }
-        } else if (ns.containsKey(label)) {
-            if (qtype == TYPE_A) {
+        } else if (ns.containsKey(label) || GLUE_LABELS.contains(label)) {
+            // A glue name answers the parent's glue, or nothing until that is known: never the
+            // wildcard, which would tell a resolver the other name server is this host.
+            if (qtype == TYPE_A && ns.containsKey(label)) {
                 byte[] rd = ipv4(ns.get(label));
                 if (rd != null) {
-                    answers.add(rr(TYPE_A, TTL_ZONE, rd));
+                    answers.add(rr(TYPE_A, TTL_GLUE, rd));
                 }
             }
         } else if (qtype == TYPE_A) {

@@ -483,7 +483,14 @@ public final class Hub implements AutoCloseable {
                             config.hostname(), glue.isEmpty() ? "no ns1/ns2 glue" : "glue " + glue + ", none answering with our token");
                     }
                     if (me != null) {
+                        boolean first = advertised == null;
                         advertised = me;
+                        if (first && !standby && config.acme()) {
+                            // The address check asks the world what the hub's name resolves to,
+                            // and with the hubs answering their own DNS that is this hub's own
+                            // answer: run it once this hub knows what to answer, not before.
+                            Thread.ofVirtual().name("address-check").start(() -> Reachability.report(config, keys));
+                        }
                     }
                 }
                 Thread.sleep(3600_000);
@@ -528,7 +535,7 @@ public final class Hub implements AutoCloseable {
      * being checked.
      */
     private void startPrimaryFronts() {
-        if (config.acme() && config.addressCheck()) {
+        if (config.acme() && config.addressCheck() && (advertised != null || !dnsUp)) {
             // After the listener is up, or the one connection that proves the records reach this
             // process would arrive with nothing to answer it. Off the startup path: the answer is a
             // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied

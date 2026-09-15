@@ -1631,14 +1631,21 @@ whichever server it asked. No consensus is involved in DNS and no split-brain is
 which host *writes* is a separate question, and promotion answers it.
 
 **A hub finds its own address in the glue.** The operator wrote the addresses down once, at the
-parent, and is not asked again: the hub asks the public resolvers for `ns1` and `ns2`, then asks
-each glue address directly on port 53 for `_jailhub-self` and takes as its own the one that answers
-with its token. A peer answers with a different token. The lookup runs off the startup path, again
-every hour, and under the same switch as the address check (`--no-address-check`), both being
-questions to public resolvers about a name a test hub does not have. `--advertise` overrides it for
-a host whose public address no resolver can be asked about. A peer's advertised address travels in
-the hub-to-hub hello, so neither side guesses it from a socket that address translation may have
-rewritten.
+parent, and is not asked again: the hub finds the parent zone's name servers through a public
+resolver, asks one of them -- without recursion -- for `ns1.<hub>`, and reads the glue out of the
+referral it answers with; then it asks each glue address directly on port 53 for `_jailhub-self`
+and takes as its own the one that answers with its token. A peer answers with a different token.
+**Not from a recursive resolver**, which was the first version: once the subdomain is delegated, a
+resolver asked for `ns2.<hub>` asks the hubs, and a hub that did not yet know the glue answered from
+the wildcard with itself, the resolver cached that, and the lookup meant to find the glue read it
+back -- both live hubs believed `ns2` was the primary for an hour. The responder now answers a glue
+label with the glue or with nothing, never the wildcard, and the referral is the parent's word
+rather than anyone's cache. The lookup runs off the startup path, again every hour, and under the
+same switch as the address check (`--no-address-check`), which itself waits until the hub knows its
+address, since with the hubs answering their own DNS it would otherwise be checking an answer not
+yet given. `--advertise` overrides it for a host whose public address no resolver can be asked
+about. A peer's advertised address travels in the hub-to-hub hello, so neither side guesses it from
+a socket that address translation may have rewritten.
 
 **The challenge travels too.** With both hubs authoritative for `_acme-challenge`, the CA may ask
 either, so the primary's dns-01 values are sent to every standby (`PeerChallenge`) whenever they
