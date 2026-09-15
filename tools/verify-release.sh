@@ -83,7 +83,9 @@ if [ "$tag" = "--index" ]; then
         echo "  this pointer expired on $expires. Re-issue it: tools/refresh-index.sh" >&2
         exit 1
     fi
-    if index_before "$expires" "$(index_when 14)"; then
+    soon=$(index_when "$INDEX_WARN_DAYS")
+    [ -n "$soon" ] || { echo "this system's date could not say what it will be in $INDEX_WARN_DAYS days." >&2; exit 1; }
+    if index_before "$expires" "$soon"; then
         echo "  less than two weeks left on it. Re-issue it: tools/refresh-index.sh"
     fi
     exit 0

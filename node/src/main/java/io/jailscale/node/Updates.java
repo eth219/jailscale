@@ -77,6 +77,11 @@ final class Updates {
      * How long before a pointer expires a node starts saying so. Re-issuing it is a person at a
      * laptop calling KMS (§9.4), so the warning has to arrive while there is still time to do it --
      * and it arrives where the operator already looks, rather than in a command nobody runs.
+     *
+     * <p>The same fortnight is {@code INDEX_WARN_DAYS} in {@code tools/release-index.sh}, which is
+     * what the maintainer's own check and the nightly job use. Two languages cannot share one
+     * constant; they can at least name each other, so that changing one without the other is a
+     * thing somebody did rather than a thing that drifted.
      */
     static final long EXPIRY_WARNING_MS = 14L * 24 * 60 * 60 * 1000;
 
@@ -156,11 +161,18 @@ final class Updates {
         }
 
         /**
-         * Whether the pointer is still good but running out. Not for a stale one: that has already
-         * stopped answering the question, and {@link #line()} says so instead.
+         * Whether the pointer this answer came from is still good and running out.
+         *
+         * <p><b>Only a pointer this node accepted.</b> A refused one carries an expiry too -- the
+         * floor refusal reports the sequence and the dates the rejected document claimed -- and
+         * repeating those as "the release index expires on ..." would be this node stating, as fact
+         * about the current index, a date chosen by whoever published the document it just refused.
+         * A stale one is excluded for a different reason: it has already stopped answering, and
+         * {@link #line()} says so rather than promising it is about to.
          */
         boolean expiringSoon(long now) {
-            return expiresAt != 0 && !stale(now) && now >= expiresAt - EXPIRY_WARNING_MS;
+            return (outcome == Outcome.CURRENT || outcome == Outcome.NEWER)
+                && expiresAt != 0 && !stale(now) && now >= expiresAt - EXPIRY_WARNING_MS;
         }
 
         /** The sentence for {@link #expiringSoon}, or null when there is nothing to say. */
@@ -168,9 +180,16 @@ final class Updates {
             if (!expiringSoon(now)) {
                 return null;
             }
-            return "the release index expires on "
-                + Instant.ofEpochMilli(expiresAt).truncatedTo(ChronoUnit.SECONDS)
-                + "; past that this node can no longer tell whether it is current.";
+            // Named, not just "the release index": on a node whose operator is not the maintainer
+            // this is the first mention of it, and the page is what they can act on themselves.
+            return "the signed release index that says which jailscale is current expires on "
+                + until() + "; past that this node can no longer tell whether it is current. " + PAGE;
+        }
+
+        /** The expiry as a human reads it, rendered in one place because two lines quote it. */
+        private String until() {
+            return expiresAt == 0 ? ""
+                : Instant.ofEpochMilli(expiresAt).truncatedTo(ChronoUnit.SECONDS).toString();
         }
 
         JsonObject.Builder json(long now) {
@@ -194,7 +213,7 @@ final class Updates {
             if (error != null) {
                 return "could not check for updates: " + error;
             }
-            String until = expiresAt == 0 ? "" : Instant.ofEpochMilli(expiresAt).truncatedTo(ChronoUnit.SECONDS).toString();
+            String until = until();
             if (!newer) {
                 return outcome == Outcome.STALE
                     ? "cannot tell whether jailscale " + running + " is current: the release index expired on "

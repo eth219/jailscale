@@ -266,6 +266,41 @@ class UpdateIndexTest {
         }
     }
 
+    @Test
+    void aRefusedPointersExpiryIsNotThisNodesToRepeat(@TempDir Path home) throws Exception {
+        // A refused pointer carries dates too -- chosen by whoever published the document this node
+        // just rejected. Repeating one as "the release index expires on ..." would be the node
+        // stating an attacker's date as a fact about the current index, daily, beside the refusal.
+        Path floor = home.resolve("update.json");
+        Published newer = publish(document(9, "v0.3.0", ISSUED, FAR));
+        try (ServerSocket ss = serve(newer.files())) {
+            assertEquals(Updates.Outcome.NEWER, check(newer, ss, floor).outcome());
+        }
+        long soon = NOW + 3L * 24 * 60 * 60 * 1000;
+        Published replayed = publish(document(7, "v0.2.0", ISSUED, Instant.ofEpochMilli(soon).toString()));
+        try (ServerSocket ss = serve(replayed.files())) {
+            Updates.Result r = check(replayed, ss, floor);
+            assertEquals(Updates.Outcome.REFUSED, r.outcome());
+            assertFalse(r.expiringSoon(NOW), "a refused pointer's expiry is not the index's");
+            assertNull(r.warning(NOW));
+        }
+    }
+
+    @Test
+    void aClockThisNodeDoesNotTrustDoesNotDateTheWarningEither() throws Exception {
+        // The skew case says "cannot tell" because this node's clock disagrees with the document.
+        // A fortnight measured with that same clock is not something to then assert.
+        long issued = NOW + Updates.CLOCK_SKEW_MS + 120_000;
+        long soon = NOW + 3L * 24 * 60 * 60 * 1000;
+        Published p = publish(document(7, "v0.2.0", Instant.ofEpochMilli(issued).toString(),
+            Instant.ofEpochMilli(soon).toString()));
+        try (ServerSocket ss = serve(p.files())) {
+            Updates.Result r = check(p, ss);
+            assertEquals(Updates.Outcome.CANNOT_TELL, r.outcome());
+            assertNull(r.warning(NOW));
+        }
+    }
+
     // --- the document itself ---------------------------------------------------------------------
 
     @Test
