@@ -20,7 +20,7 @@ which it has to be, since a page that pulls a script from a CDN would measure
 the CDN.
 
 In a container, the node reaches the app by name rather than on `127.0.0.1`
-(see the root README), so the app has to listen on more than its own loopback:
+(see [deploy/README.md](../../deploy/README.md)), so the app has to listen on more than its own loopback:
 
 ```sh
 python3 docs/demo/demo.py 3000 --bind 0.0.0.0
@@ -46,6 +46,18 @@ Setup phases read zero in two different situations — the browser reused a
 connection, or there is no network to measure because hub and node are on one
 machine — and the page says both rather than sending you to open a private
 window for the same zeros.
+
+## What it said once
+
+Through `jailscale.sinabro.io` on 2026-09-14, with the visitor and the node
+each about 7 ms from it: a TCP round trip of 6.6 to 6.7 ms, a TLS handshake of
+29 to 33 ms on top of that, and a warm round trip of 14 ms at p50, about twice
+the floor for the extra hop. **The keyless handshake costs round trips, not
+CPU**: the same handshake measures 2.4 ms on loopback, where the round trips
+are free, and the hub's own work in it is one signature. That is the shape to
+plan for: a visitor pays it once on arrival, and nothing after that. It is a
+demonstration, not a gate; a browser on the internet measures its own distance
+to the hub at least as much as it measures either binary.
 
 ## Endpoints
 
