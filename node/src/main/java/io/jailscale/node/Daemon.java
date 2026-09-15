@@ -889,11 +889,16 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * <p>It counts as the pass, so the names it covers are marked and the loop carries on into the
      * next one rather than going round again. If the link goes down mid-sweep the rest are left
      * unmarked, so the ordinary ticks pick them up instead of the sweep pretending to have.
+     *
+     * <p>Nothing is spent until it is about to probe: a sweep that turns back -- no names to look
+     * at, or the link gone again -- neither takes the pass in flight down with it nor holds the
+     * next sweep off for a pass. Both would cost the thing this exists to shorten. A node whose
+     * link blips mid-pass would lose the turns already taken and start over, so the names still
+     * waiting would wait nearly two passes rather than the one PROBE_PASS_MS bounds; and a sweep
+     * that made no requests at all has nothing to answer the cooldown for.
      */
     private void sweepProbe(List<NodeState.LinkRec> links, Set<String> pass) throws InterruptedException {
-        lastSweepAt = System.currentTimeMillis();
-        pass.clear();
-        List<NodeState.LinkRec> all = remaining(links, pass);
+        List<NodeState.LinkRec> all = remaining(links, Set.of());
         if (all.isEmpty()) {
             return;
         }
@@ -903,6 +908,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (!link.isConnected()) {
             return;
         }
+        lastSweepAt = System.currentTimeMillis();
+        pass.clear();
         for (NodeState.LinkRec rec : all) {
             probeSafely(rec);
             pass.add(rec.name);

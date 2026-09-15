@@ -3,7 +3,6 @@ package io.jailscale.hub;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -400,14 +399,13 @@ class LinkEndToEndTest {
             .put("user", "alice").put("caFile", CERT.toString())));
         waitFor(() -> alice.hasCert(hub.tls().keyId()));
         ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "backagain")));
-        // The sweep on this node's first connection happened before the name existed, and the next
-        // tick is half an hour away, so nothing has looked at it yet.
-        assertNull(probeVerdict("alice", "backagain"));
 
         alice.close();
         daemons.remove(alice);
         waitFor(() -> hub.links().byName("backagain") == null);
 
+        // A verdict on the node that comes back can only be this process's work: the last probe of
+        // a name is not persisted, and the next ordinary tick is half an hour away.
         Daemon back = node("alice");
         waitFor(() -> back.hasCert(hub.tls().keyId()));
         waitFor(() -> "terminated by this node".equals(probeVerdict("alice", "backagain")));
