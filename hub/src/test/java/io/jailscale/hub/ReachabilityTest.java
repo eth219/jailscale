@@ -211,6 +211,38 @@ class ReachabilityTest {
     }
 
     @Test
+    void aDifferentFaultUnderTheSameVerdictIsAChange() {
+        // Misconfigured covers a missing wildcard and a wildcard pointing elsewhere. The operator
+        // who adds the record and gets it wrong has changed something, and "misconfigured since
+        // Tuesday" over the new problem would date their edit to the fault it replaced.
+        Reachability.Status noWildcard = Reachability.fold(null, result(Reachability.MISCONFIGURED, "no wildcard"), 0, null, NOW);
+        Reachability.Status wrongWildcard = Reachability.fold(noWildcard,
+            result(Reachability.MISCONFIGURED, "names would reach different places"), 0, null, NOW + 3_600_000);
+        assertEquals(NOW + 3_600_000, wrongWildcard.since());
+        assertTrue(!noWildcard.sameAs(wrongWildcard), "a new problem is a new finding, with its own log line");
+
+        // An inconclusive answer's text carries the socket's own words, which are not a change.
+        Reachability.Status timedOut = Reachability.fold(null, result(Reachability.INCONCLUSIVE, "could not reach it (timed out)."), 0, null, NOW);
+        Reachability.Status refused = Reachability.fold(timedOut,
+            result(Reachability.INCONCLUSIVE, "could not reach it (refused)."), 0, null, NOW + 3_600_000);
+        assertEquals(NOW, refused.since());
+        assertTrue(timedOut.sameAs(refused));
+    }
+
+    @Test
+    void anArrivalFoldedIntoAStandingRunMovesTheVerdictAndNotWhenItRan() {
+        // The run happened an hour ago; the node arrived now. The verdict is the node's to move,
+        // the age of the check is not: a monitor reads it to know the check is still running.
+        Reachability.Status run = Reachability.fold(null, result(Reachability.INCONCLUSIVE, "could not reach it."), 0, null, NOW);
+        Reachability.Status folded = Reachability.fold(run, run.run(), run.at(), NOW + 3_600_000, "203.0.113.5", NOW + 3_600_000);
+        assertEquals(Reachability.OUTSIDE, folded.verdict());
+        assertEquals(NOW, folded.at(), "the check last ran when it ran");
+        assertEquals(NOW + 3_600_000, folded.since(), "and the verdict moved when the node arrived");
+        assertTrue(!folded.text(HOST).startsWith("inconclusive"), folded.text(HOST));
+        assertTrue(!run.text(HOST).startsWith("inconclusive: inconclusive"), run.text(HOST));
+    }
+
+    @Test
     void aNodeArrivingFromOutsideAnswersWhatThisHostCannot() {
         // The translated-address case: this host cannot dial its own public address, and a node
         // that resolved the name and handshook against the pinned key already has the answer.

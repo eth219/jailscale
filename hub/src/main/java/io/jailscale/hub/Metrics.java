@@ -97,10 +97,15 @@ final class Metrics {
                 .append("# TYPE jailhub_address_check gauge\n")
                 .append("jailhub_address_check{verdict=\"").append(label(address.verdict()))
                 .append("\"} ").append(address.ok() ? 1 : 0).append('\n');
-            gauge(b, "jailhub_address_check_age_seconds",
-                "Seconds since the address check last ran. It climbs without bound if the check has stopped,"
-                    + " so the rule that catches that is a threshold above the interval, not a test for no change.",
-                (now - address.at()) / 1000);
+            if (hub.addressCheckRunning()) {
+                // Only while the hourly loop runs. A verdict an operator asked for by hand on a hub
+                // where nothing repeats it would otherwise age past every threshold and page for a
+                // check that was never scheduled.
+                gauge(b, "jailhub_address_check_age_seconds",
+                    "Seconds since the address check last ran. It climbs without bound if the check has stopped,"
+                        + " so the rule that catches that is a threshold above the interval, not a test for no change.",
+                    (now - address.at()) / 1000);
+            }
         }
         // Where the time goes admitting a visitor (§6.3). The point of having all five is the
         // comparison: first_byte running ahead of peek+resolve+open+reply is time spent in no stage

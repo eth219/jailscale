@@ -32,20 +32,13 @@ final class AdminIpc implements Ipc.Handler {
             case "status" -> reply.done(statusReply(store));
             case "address-check" -> {
                 // Asked for, so it runs now rather than at the next hourly pass (§7.2): the reason
-                // to type this is having just edited a record. --no-address-check silences it here
-                // as it does the loop; whether the certificate came from ACME is the loop's
-                // business and not this command's, because an operator who asks has said which
-                // deployment this is.
-                if (!hub.config().addressCheck()) {
-                    throw new IllegalArgumentException("the address check is off (--no-address-check)");
-                }
-                if (hub.isStandby()) {
-                    // Named only when there is one to name: a hub that stood down by epoch (§13.5)
-                    // rather than by --peer has no peer in its configuration, and an NPE here would
-                    // answer a diagnosis with an internal error.
-                    String primary = hub.config().peer() == null ? null : hub.config().peer().getHost();
-                    throw new IllegalArgumentException("this hub is a standby; the records to check are the primary's"
-                        + (primary == null ? "" : " (" + primary + ")"));
+                // to type this is having just edited a record. Refused on the terms the loop waits
+                // on -- off, a standby, a delegated hub still finding its own address -- and no
+                // others: whether the certificate came from ACME is the loop's business and not this
+                // command's, because an operator who asks has said which deployment this is.
+                String blocker = hub.addressCheckBlocker();
+                if (blocker != null) {
+                    throw new IllegalArgumentException(blocker);
                 }
                 reply.done(JsonObject.builder().put("ok", true).put("addressCheck", hub.checkAddress().json()));
             }

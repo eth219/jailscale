@@ -74,10 +74,13 @@ class AddressCheckStatusTest {
             hub.addressProbe = () -> result(Reachability.INCONCLUSIVE, "could not reach it from this host.");
             assertEquals(Reachability.INCONCLUSIVE, hub.checkAddress().verdict());
 
+            long ran = hub.addressStatus().at();
+            Thread.sleep(25);
             hub.reachedBy("hub.test", "203.0.113.5");
             Reachability.Status s = hub.addressStatus();
             assertEquals(Reachability.OUTSIDE, s.verdict());
             assertTrue(s.ok());
+            assertEquals(ran, s.at(), "the arrival moved the verdict, not when the check last ran");
             assertTrue(s.text("hub.test").contains("203.0.113.5"), s.text("hub.test"));
 
             // A node on this machine says nothing about what the world is told, so it moves

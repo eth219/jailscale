@@ -658,15 +658,20 @@ again every hour, and the verdict it reaches is kept rather than written to the 
 `jailhub status` carries it, `/admin` shows it above the node list, and `/metrics` exports
 `jailhub_address_check_fault` — 1 only for a fault an operator has to fix, so inconclusive never
 pages anyone — beside `jailhub_address_check{verdict="..."}` and `jailhub_address_check_age_seconds`.
-The log line is written when the verdict **changes**, not on every pass: a broken deployment files
-one error rather than one an hour, and the verdict that stands is there to be asked for instead.
-`since` is when that verdict was first reached **by this process**: nothing is written to disk, so a
-restart starts the clock over and a fault that predates it reads as beginning at boot.
-`jailhub address check` asks again now, which is what the operator who has just edited a record
-wants. A node's arrival is folded in as it happens rather than at the next pass, and expires after a
-day: the handshake proves what the records said at that moment, and a record can be edited after it.
-A standby runs none of this — the records being checked are the primary's — and
-`--no-address-check` silences the repeat, the log and the command alike.
+The log line is written when the verdict **changes**, not on every pass — for a fault, a change of
+problem under the same verdict counts, since a missing wildcard replaced by one pointing elsewhere is
+a new fault — so a broken deployment files one error rather than one an hour, and the verdict that
+stands is there to be asked for instead. `since` is when that finding was first reached **by this
+process**: nothing is written to disk, so a restart starts the clock over and a fault that predates
+it reads as beginning at boot. `jailhub address check` asks again now, which is what the operator
+who has just edited a record wants; it is refused on the terms the hourly pass waits on — off, a
+standby, a delegated hub that does not yet know its own address — so it never leaves a verdict the
+pass would not have reached. Runs do not overlap. A node's arrival is folded in as it happens rather
+than at the next pass, moving the verdict but not when the check last ran, and expires after a day:
+the handshake proves what the records said at that moment, and a record can be edited after it. A
+standby runs none of this — the records being checked are the primary's — and a hub promoted to
+primary starts the pass afresh. `--no-address-check` silences the repeat, the log and the command
+alike, and the age series is exported only while the pass is running.
 
 Two operational traps. SNI passthrough needs raw TCP 443, so **no TLS-terminating HTTP proxy can sit
 in front** (nginx `http`, Caddy, Cloudflare Proxied); a layer-4 proxy that only copies bytes is

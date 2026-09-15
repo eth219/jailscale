@@ -14,6 +14,7 @@ import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
@@ -80,46 +81,83 @@ final class Reachability {
     static final long OUTSIDE_FRESH_MS = 86_400_000L;
 
     /**
-     * The check as it stands, for an operator who was not at the console when it ran: the verdict,
-     * when the run behind it happened, when that verdict was first reached, and the outside view
-     * folded in. {@code since} is when the verdict last changed rather than when it was last
-     * confirmed, so "misconfigured since 09:14" says how long this has been true -- of this
-     * process: nothing here is written to disk, and a restart starts that clock over.
+     * The check as it stands, for an operator who was not at the console when it ran: the run
+     * behind it, when it happened, when the verdict was first reached, and the outside view folded
+     * in. {@code at} is the run's own time and does not move when a node's arrival is folded in
+     * afterwards, so "seconds since the check last ran" means that and nothing else. {@code since}
+     * is when the verdict last changed rather than when it was last confirmed, so "misconfigured
+     * since 09:14" says how long this has been true -- of this process: nothing here is written to
+     * disk, and a restart starts that clock over.
      */
-    record Status(String verdict, String problem, List<String> addresses, long at, long since,
-        long outsideAt, String outsideIp) {
+    record Status(Result run, long at, long since, long outsideAt, String outsideIp) {
+
+        /**
+         * Whether a node's arrival speaks for the verdict: only over {@link #INCONCLUSIVE} (see
+         * {@link #fold}), and only while it is fresh against the run. An arrival after the run is
+         * always fresh; one from before it ages out after {@link #OUTSIDE_FRESH_MS}.
+         */
+        private boolean outside() {
+            return INCONCLUSIVE.equals(run.verdict()) && outsideAt > 0 && at - outsideAt <= OUTSIDE_FRESH_MS;
+        }
+
+        String verdict() {
+            return outside() ? OUTSIDE : run.verdict();
+        }
+
+        /** Null when nothing is wrong that this can see. */
+        String problem() {
+            return outside() ? null : run.problem();
+        }
+
+        List<String> addresses() {
+            return run.addresses();
+        }
 
         /** The records point here, whether this host proved it or a node did. */
         boolean ok() {
+            String verdict = verdict();
             return PROVEN.equals(verdict) || OUTSIDE.equals(verdict);
         }
 
         /** The two verdicts that name something only the operator can fix; inconclusive is not one. */
         boolean fault() {
+            String verdict = verdict();
             return ELSEWHERE.equals(verdict) || MISCONFIGURED.equals(verdict);
+        }
+
+        /**
+         * The same finding as far as an operator is concerned: the verdict, and for a fault the
+         * problem too, because {@link #MISCONFIGURED} covers both a missing wildcard and a wildcard
+         * pointing elsewhere, and the pass that sees the second replace the first has seen a
+         * change worth a log line and its own {@code since}. An inconclusive answer's text carries
+         * the resolver's or the socket's own words, which vary between runs while nothing in the
+         * world has moved, so those are not compared.
+         */
+        boolean sameAs(Status other) {
+            return verdict().equals(other.verdict()) && (!fault() || Objects.equals(problem(), other.problem()));
         }
 
         /** One line, the same sentence on a log, a page and an admin reply. */
         String text(String host) {
-            return switch (verdict) {
-                case PROVEN -> host + " and *." + host + " resolve to " + addresses + " and that is this hub";
+            return switch (verdict()) {
+                case PROVEN -> host + " and *." + host + " resolve to " + addresses() + " and that is this hub";
                 case OUTSIDE -> "this host cannot reach its own public address, and a node at " + outsideIp
                     + " resolved " + host + " and arrived here: from where that node stands, the record"
                     + " points at this hub";
-                case INCONCLUSIVE -> "inconclusive: " + problem + " A node arriving from a public address"
+                case INCONCLUSIVE -> problem() + " A node arriving from a public address"
                     + " answers it from outside, where this failure mode does not exist.";
-                default -> problem;
+                default -> problem();
             };
         }
 
         JsonObject json() {
             Long outside = outsideAt > 0 ? outsideAt / 1000 : null;
             return JsonObject.builder()
-                .put("verdict", verdict)
+                .put("verdict", verdict())
                 .put("ok", ok())
                 .put("fault", fault())
-                .put("problem", problem)
-                .put("addresses", addresses)
+                .put("problem", problem())
+                .put("addresses", addresses())
                 .put("at", at / 1000)
                 .put("since", since / 1000)
                 .put("outsideAt", outside)
@@ -291,14 +329,17 @@ final class Reachability {
      * average away.
      */
     static Status fold(Status previous, Result r, long outsideAt, String outsideIp, long now) {
-        String verdict = r.verdict();
-        String problem = r.problem();
-        if (INCONCLUSIVE.equals(verdict) && outsideAt > 0 && now - outsideAt <= OUTSIDE_FRESH_MS) {
-            verdict = OUTSIDE;
-            problem = null;
-        }
-        long since = previous != null && previous.verdict().equals(verdict) ? previous.since() : now;
-        return new Status(verdict, problem, r.addresses(), now, since, outsideAt, outsideIp);
+        return fold(previous, r, now, outsideAt, outsideIp, now);
+    }
+
+    /**
+     * As above, for a run made at {@code at} and folded at {@code now}: the two differ when a
+     * node's arrival is folded into a run that already stands, which moves the verdict and its
+     * {@code since} but not when the check last ran.
+     */
+    static Status fold(Status previous, Result r, long at, long outsideAt, String outsideIp, long now) {
+        Status fresh = new Status(r, at, now, outsideAt, outsideIp);
+        return previous != null && previous.sameAs(fresh) ? new Status(r, at, previous.since(), outsideAt, outsideIp) : fresh;
     }
 
     /**
@@ -309,8 +350,7 @@ final class Reachability {
      * {@code /admin}, {@code /metrics} -- which is the point of keeping it.
      */
     static void report(String host, Status previous, Status current) {
-        if (previous != null && previous.verdict().equals(current.verdict())) {
-            LOG.debug("address check unchanged ({}): {}", current.verdict(), current.text(host));
+        if (previous != null && previous.sameAs(current)) {
             return;
         }
         String was = previous == null ? "" : " (was " + previous.verdict() + ")";
