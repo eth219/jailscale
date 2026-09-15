@@ -120,7 +120,9 @@ alone.
 
 What is signed is `RELEASE.txt` — the release's tag and the SHA-256 of
 `SHA256SUMS.txt` — rather than the checksum list on its own, which would say
-nothing about *which* release it belongs to. To check a release by hand:
+nothing about *which* release it belongs to. `tools/verify-release.sh v0.2.0`
+checks a release the way the node does, from a clone, and is what the
+`published` workflow runs to put an unsigned release back into draft. By hand:
 
 ```sh
 curl -fsSL -O "$base/RELEASE.txt" -O "$base/RELEASE.txt.sig" -O "$base/SHA256SUMS.txt"
@@ -152,7 +154,8 @@ jailscale` — and Windows SmartScreen warns for the same reason.
 For linux/amd64 and linux/arm64, built by the same workflow, toolchain and
 options as the binaries above, so [Resource usage](#resource-usage) describes
 them too. `:v0.1.2` pins that tag, `:latest` follows releases (it moves when
-one is published, after signing, not when a tag is pushed), `:edge` follows
+one is published and its signature has been checked, not when a tag is pushed),
+`:edge` follows
 main.
 
 The images tagged `:v0.1.0` are not worth pulling: they were built before the

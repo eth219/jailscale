@@ -84,10 +84,7 @@ public final class Http {
         if (headOnly || !hasBody(resp.status())) {
             return resp;
         }
-        // Sized from Content-Length when that is what frames the body, so a small body is one
-        // allocation rather than a 32-byte buffer doubled up to it.
-        long len = resp.headers().get("Transfer-Encoding") == null ? contentLength(resp.headers(), maxBody) : -1;
-        ByteArrayOutputStream buf = new ByteArrayOutputStream(len > 0 ? (int) len : 256);
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
         copyBody(in, resp.headers(), buf, maxBody);
         return resp.body(buf.toByteArray());
     }
@@ -132,17 +129,26 @@ public final class Http {
      */
     public static long copyBody(InputStream in, Headers headers, OutputStream out, long maxBody)
         throws IOException, HttpException {
-        String te = headers.get("Transfer-Encoding");
-        if (te != null) {
-            String coding = te.toLowerCase(Locale.ROOT);
-            if (coding.contains("chunked")) {
-                return copyChunked(in, out, maxBody);
+        // The header is a list, in the order the codings were applied (RFC 9112 §6.1), and the
+        // only lists this decodes are [chunked] and [identity]. "gzip, chunked" is a legal way to
+        // say the de-chunked bytes are still compressed; taking the chunked branch on the
+        // substring would hash gzip output and call the download tampered with. Nothing here asks
+        // for a coding, so anything but plain chunked is refused rather than guessed at.
+        String coding = null;
+        for (String te : headers.all("Transfer-Encoding")) {
+            for (String c : te.split(",")) {
+                c = c.trim().toLowerCase(Locale.ROOT);
+                if (c.isEmpty() || c.equals("identity")) {
+                    continue;
+                }
+                if (coding != null || !c.equals("chunked")) {
+                    throw new HttpException(502, "unsupported Transfer-Encoding " + te);
+                }
+                coding = c;
             }
-            if (!coding.equals("identity")) {
-                // gzip and friends: the bytes on the wire are not the body, and a Content-Length
-                // beside them would count the wrong thing. Nothing here asks for them.
-                throw new HttpException(502, "unsupported Transfer-Encoding " + te);
-            }
+        }
+        if (coding != null) {
+            return copyChunked(in, out, maxBody);
         }
         long len = contentLength(headers, maxBody);
         if (len >= 0) {
@@ -282,9 +288,11 @@ public final class Http {
         if (len <= 0) {
             return new byte[0];
         }
-        ByteArrayOutputStream body = new ByteArrayOutputStream((int) len);
-        copyExactly(in, body, len, new byte[(int) Math.min(8192, len)]);
-        return body.toByteArray();
+        byte[] body = in.readNBytes((int) len); // one allocation: this is the hub's public request path
+        if (body.length != len) {
+            throw new EOFException("truncated body");
+        }
+        return body;
     }
 
     /**

@@ -22,6 +22,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      # Before anything is built: the tag has to be one the node can parse. The rule is written in
+      # tools/release-keys.sh once; sign-release.sh applies the same one. A v0.2.0_rc1 that got past
+      # here would build, draft and -- with no hyphen -- publish as a full release that every node
+      # then reports "cannot compare" on, and the hyphen-means-pre-release rule below would not
+      # have seen it either.
+      - name: Refuse a tag the node cannot parse
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          . tools/release-keys.sh
+          release_tag_ok "$GITHUB_REF_NAME" \
+            || { echo "$GITHUB_REF_NAME does not match $RELEASE_TAG_PATTERN; delete the tag and use vMAJOR.MINOR.PATCH[-suffix]"; exit 1; }
       # GraalVM CE on the 25.3 line, and a JDK newer than 25.0.2, both on purpose (§3.2, §14).
       # JDK 25.0.0-25.0.2 lose timed virtual-thread wake-ups once a delayed task is cancelled
       # (JDK-8370887, with JDK-8369227 next to it); a hand-off cancels the old connections'
@@ -149,8 +161,8 @@ jobs:
       # is written by the person, not here: a release this job could sign on its own would be worth
       # what the checksums it also writes are worth. A release visible before its signature is up is
       # one that `jailscale update --download` refuses and that `update` has already announced.
-      # `prerelease` from the tag, the same hyphen rule images.yml uses: a v0.2.0-rc1 that is
-      # signed and published must not become `releases/latest`, which is what every node's daily
+      # `prerelease` from the tag, the same hyphen rule Updates.compare applies: a v0.2.0-rc1 that
+      # is signed and published must not become `releases/latest`, which is what every node's daily
       # check reads and what `update --download` fetches. Updates.compare sorts an rc above the
       # release before it, so without this flag publishing a candidate announces it to the field.
       # Re-running this job for a tag whose release exists keeps that release's draft state: the

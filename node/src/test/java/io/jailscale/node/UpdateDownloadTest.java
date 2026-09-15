@@ -15,8 +15,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
+import java.security.MessageDigest;
 import java.security.SignatureException;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -34,7 +36,7 @@ import org.junit.jupiter.api.io.TempDir;
 class UpdateDownloadTest {
 
     private static final String TAG = "v0.2.0";
-    private static final Updates.Result NEWER = new Updates.Result("0.1.0", TAG, true, 0, null);
+    private static final String RUNNING = "0.1.0";
 
     private record Release(Map<String, byte[]> files, List<String> keys) {}
 
@@ -68,13 +70,14 @@ class UpdateDownloadTest {
             rel.keys());
     }
 
-    private static String sha256(byte[] b) {
-        return Updates.sha256Hex(b);
+    /** An oracle independent of the code under test, so a regression in Sha256.hex is not compared with itself. */
+    private static String sha256(byte[] b) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(b));
     }
 
     /** {@link Updates#fetch} as the CLI calls it, minus the compiled-in source and with no running binary. */
-    private static Updates.Downloaded fetch(Updates.Result r, Path dir, Updates.Source source) throws Exception {
-        return Updates.fetch(r, dir, source, null);
+    private static Updates.Downloaded fetch(String running, Path dir, Updates.Source source) throws Exception {
+        return Updates.fetch(running, TAG, dir, source, null);
     }
 
     /** A binary big enough that it arrives in more than one read. */
@@ -129,7 +132,7 @@ class UpdateDownloadTest {
         byte[] asset = binary("jailscale");
         Release rel = honest(asset);
         try (ServerSocket ss = serve(rel.files())) {
-            Updates.Downloaded d = fetch(NEWER, dir, at(ss, rel));
+            Updates.Downloaded d = fetch(RUNNING, dir, at(ss, rel));
             assertEquals("jailscale.jar", d.asset());
             assertEquals(asset.length, d.bytes());
             assertEquals(sha256(asset), d.sha256());
@@ -148,7 +151,7 @@ class UpdateDownloadTest {
         Release rel = publish(binary("old vulnerable"), binary("old vulnerable"), "v0.1.0",
             Updates.MANIFEST_FORMAT, true);
         try (ServerSocket ss = serve(rel.files())) {
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir, at(ss, rel)));
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir, at(ss, rel)));
             assertTrue(e.getMessage().contains("says it belongs to v0.1.0"), e.getMessage());
             assertEquals(List.of(), left(dir));
         }
@@ -165,7 +168,7 @@ class UpdateDownloadTest {
         swapped.put("/v0.2.0/SHA256SUMS.txt", (sha256(other) + "  jailscale.jar\n").getBytes(StandardCharsets.UTF_8));
         swapped.put("/v0.2.0/jailscale.jar", other);
         try (ServerSocket ss = serve(swapped)) {
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir, at(ss, rel)));
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir, at(ss, rel)));
             assertTrue(e.getMessage().contains("not the one that was signed"), e.getMessage());
             assertEquals(List.of(), left(dir));
         }
@@ -177,7 +180,7 @@ class UpdateDownloadTest {
         // not the file it names.
         Release rel = publish(binary("swapped"), binary("jailscale"), TAG, Updates.MANIFEST_FORMAT, true);
         try (ServerSocket ss = serve(rel.files())) {
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir, at(ss, rel)));
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir, at(ss, rel)));
             assertTrue(e.getMessage().contains("not what the release says it is"), e.getMessage());
             // Nothing is left for a hurried operator to install: the message names a file that is gone.
             assertEquals(List.of(), left(dir));
@@ -190,7 +193,7 @@ class UpdateDownloadTest {
         // written, and this must not get as far as fetching 25 MiB on its say-so.
         Release rel = publish(binary("jailscale"), binary("jailscale"), TAG, Updates.MANIFEST_FORMAT, false);
         try (ServerSocket ss = serve(rel.files())) {
-            assertThrows(SignatureException.class, () -> fetch(NEWER, dir, at(ss, rel)));
+            assertThrows(SignatureException.class, () -> fetch(RUNNING, dir, at(ss, rel)));
             assertEquals(List.of(), left(dir));
         }
     }
@@ -201,7 +204,7 @@ class UpdateDownloadTest {
         // it cannot assume is additive, so it stops rather than guessing (§5.4's rule, on a file).
         Release rel = publish(binary("jailscale"), binary("jailscale"), TAG, "jailscale-release 2", true);
         try (ServerSocket ss = serve(rel.files())) {
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir, at(ss, rel)));
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir, at(ss, rel)));
             assertTrue(e.getMessage().contains("not in a format this build reads"), e.getMessage());
             assertEquals(List.of(), left(dir));
         }
@@ -219,7 +222,7 @@ class UpdateDownloadTest {
         unsigned.remove("/v0.2.0/RELEASE.txt");
         unsigned.remove("/v0.2.0/RELEASE.txt.sig");
         try (ServerSocket ss = serve(unsigned)) {
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir, at(ss, rel)));
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir, at(ss, rel)));
             assertTrue(e.getMessage().contains("carries no signed RELEASE.txt"), e.getMessage());
             assertTrue(e.getMessage().contains("Do not install it by hand"), e.getMessage());
             // And it says so plainly rather than as an HTTP status, which is the 404's whole point:
@@ -232,18 +235,16 @@ class UpdateDownloadTest {
 
     @Test
     void aReleaseThatIsNotAnUpgradeIsRefusedOnTheSignedTag(@TempDir Path dir) throws Exception {
-        // check() decides "newer" from the unsigned index. fetch() decides it again from the tag the
-        // signature vouches for, so a Result that lies -- a stale one, or one a future caller
-        // fabricates -- cannot get a genuinely signed older binary out of this.
+        // check() decides "newer" for the announcement, from the unsigned index. fetch() decides it
+        // for the download, from the tag the signature was checked to name, and takes no answer
+        // from its caller -- so nothing a caller passes can get a genuinely signed older binary
+        // out of this.
         Release rel = honest(binary("jailscale"));
         try (ServerSocket ss = serve(rel.files())) {
-            Updates.Result behind = new Updates.Result("0.3.0", TAG, true, 0, null);
-            IOException e = assertThrows(IOException.class, () -> fetch(behind, dir, at(ss, rel)));
+            IOException e = assertThrows(IOException.class, () -> fetch("0.3.0", dir, at(ss, rel)));
             assertTrue(e.getMessage().contains("not newer than the running 0.3.0"), e.getMessage());
-            Updates.Result same = new Updates.Result("0.2.0", TAG, true, 0, null);
-            assertThrows(IOException.class, () -> fetch(same, dir, at(ss, rel)));
-            Updates.Result dev = new Updates.Result("dev", TAG, true, 0, null);
-            assertThrows(IOException.class, () -> fetch(dev, dir, at(ss, rel)));
+            assertThrows(IOException.class, () -> fetch("0.2.0", dir, at(ss, rel)));
+            assertThrows(IOException.class, () -> fetch("dev", dir, at(ss, rel)));
             assertEquals(List.of(), left(dir));
         }
     }
@@ -258,7 +259,7 @@ class UpdateDownloadTest {
         Files.write(existing, "the one that is installed".getBytes(StandardCharsets.UTF_8));
         Release bad = publish(binary("swapped"), binary("jailscale"), TAG, Updates.MANIFEST_FORMAT, true);
         try (ServerSocket ss = serve(bad.files())) {
-            assertThrows(IOException.class, () -> fetch(NEWER, dir, at(ss, bad)));
+            assertThrows(IOException.class, () -> fetch(RUNNING, dir, at(ss, bad)));
         }
         assertEquals("the one that is installed", Files.readString(existing));
         assertEquals(List.of("jailscale.jar"), left(dir)); // and no .part left beside it
@@ -266,11 +267,30 @@ class UpdateDownloadTest {
         byte[] asset = binary("jailscale");
         Release good = honest(asset);
         try (ServerSocket ss = serve(good.files())) {
-            Updates.Downloaded d = fetch(NEWER, dir, at(ss, good));
+            Updates.Downloaded d = fetch(RUNNING, dir, at(ss, good));
             assertEquals(existing, d.file());
         }
         assertEquals(-1, java.util.Arrays.mismatch(asset, Files.readAllBytes(existing)));
         assertEquals(List.of("jailscale.jar"), left(dir));
+    }
+
+    @Test
+    void aDirectoryMadeForAFailedDownloadIsRemovedAgain(@TempDir Path tmp) throws Exception {
+        // --dir names a place that does not exist yet; a download that then fails must not leave an
+        // empty directory as the one trace of itself. One that existed before is left alone.
+        Release bad = publish(binary("swapped"), binary("jailscale"), TAG, Updates.MANIFEST_FORMAT, true);
+        Path fresh = tmp.resolve("new").resolve("place");
+        try (ServerSocket ss = serve(bad.files())) {
+            assertThrows(IOException.class, () -> fetch(RUNNING, fresh, at(ss, bad)));
+        }
+        assertFalse(Files.exists(fresh), "the directory fetch created is still there");
+        Path existing = tmp.resolve("existing");
+        Files.createDirectory(existing);
+        try (ServerSocket ss = serve(bad.files())) {
+            assertThrows(IOException.class, () -> fetch(RUNNING, existing, at(ss, bad)));
+        }
+        assertTrue(Files.isDirectory(existing));
+        assertEquals(List.of(), left(existing));
     }
 
     @Test
@@ -282,7 +302,7 @@ class UpdateDownloadTest {
         Files.write(self, "running".getBytes(StandardCharsets.UTF_8));
         Release rel = honest(binary("jailscale"));
         try (ServerSocket ss = serve(rel.files())) {
-            IOException e = assertThrows(IOException.class, () -> Updates.fetch(NEWER, dir, at(ss, rel), self));
+            IOException e = assertThrows(IOException.class, () -> Updates.fetch(RUNNING, TAG, dir, at(ss, rel), self));
             assertTrue(e.getMessage().contains("running from"), e.getMessage());
         }
         assertEquals("running", Files.readString(self));
@@ -311,7 +331,7 @@ class UpdateDownloadTest {
             t.start();
             Updates.Source source = new Updates.Source(
                 "http://" + ss.getInetAddress().getHostAddress() + ":" + ss.getLocalPort() + "/", rel.keys());
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir, source));
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir, source));
             assertTrue(e.getMessage().contains("503"), e.getMessage());
             assertFalse(e.getMessage().contains("by hand"), e.getMessage());
             assertEquals(List.of(), left(dir));
@@ -322,7 +342,7 @@ class UpdateDownloadTest {
     void withoutAKeyNothingIsEvenAsked(@TempDir Path dir) throws Exception {
         Release rel = honest(binary("jailscale"));
         try (ServerSocket ss = serve(rel.files())) {
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir,
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir,
                 new Updates.Source(at(ss, rel).base(), List.of())));
             assertTrue(e.getMessage().contains("no release signing key"), e.getMessage());
             assertEquals(List.of(), left(dir));
@@ -345,7 +365,7 @@ class UpdateDownloadTest {
         files.put("/v0.2.0/RELEASE.txt.sig", ReleaseKeyTest.sign(kp, manifest));
         Release named = new Release(files, List.of(ReleaseKeyTest.spki(kp)));
         try (ServerSocket ss = serve(files)) {
-            IOException e = assertThrows(IOException.class, () -> fetch(NEWER, dir, at(ss, named)));
+            IOException e = assertThrows(IOException.class, () -> fetch(RUNNING, dir, at(ss, named)));
             assertTrue(e.getMessage().contains("no line for jailscale.jar"), e.getMessage());
             assertFalse(Files.exists(dir.resolve("jailscale.jar")));
         }

@@ -1,5 +1,6 @@
 package io.jailscale.node;
 
+import io.jailscale.proto.util.Sha256;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.Signature;
@@ -99,7 +100,7 @@ final class ReleaseKey {
     }
 
     private static String fingerprint(byte[] spki) {
-        return Updates.sha256Hex(spki).substring(0, 16);
+        return Sha256.hex(spki).substring(0, 16);
     }
 
     private static byte[] decode(String base64) {

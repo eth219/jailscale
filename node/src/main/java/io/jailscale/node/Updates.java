@@ -6,6 +6,7 @@ import io.jailscale.proto.http.HttpException;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Sha256;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -18,7 +19,6 @@ import java.nio.file.StandardCopyOption;
 import java.security.DigestOutputStream;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
@@ -83,9 +83,9 @@ final class Updates {
      */
     record Result(String running, String tag, boolean newer, long checkedAt, String error) {
 
-        /** The version the tag names: the tag without its leading {@code v}. */
+        /** The version the tag names. */
         String latest() {
-            return tag == null ? null : tag.startsWith("v") ? tag.substring(1) : tag;
+            return tag == null ? null : version(tag);
         }
 
         JsonObject.Builder json() {
@@ -141,6 +141,11 @@ final class Updates {
         return x == null || y == null ? null : Arrays.compare(x, y);
     }
 
+    /** The version a tag names: the tag without its leading {@code v}. The one place that rule is written. */
+    static String version(String tag) {
+        return tag.startsWith("v") ? tag.substring(1) : tag;
+    }
+
     /**
      * {@code {major, minor, patch, release}}, where the last is 0 for a pre-release such as
      * {@code 0.2.0-SNAPSHOT} and 1 for the release itself: a snapshot is the build on the way to a
@@ -151,7 +156,7 @@ final class Updates {
         if (v == null) {
             return null;
         }
-        String s = v.startsWith("v") ? v.substring(1) : v;
+        String s = version(v);
         int dash = s.indexOf('-');
         boolean pre = dash >= 0;
         String[] parts = (pre ? s.substring(0, dash) : s).split("\\.", -1);
@@ -196,16 +201,19 @@ final class Updates {
      * the hash has matched, so nothing that was in {@code dir} before is touched by a download that
      * fails, and there is never a half-checked binary lying next to instructions for installing it.
      */
-    static Downloaded fetch(Result r, Path dir) throws IOException, GeneralSecurityException, HttpException {
-        return fetch(r, dir, Source.compiledIn(), self());
+    static Downloaded fetch(String running, String tag, Path dir)
+        throws IOException, GeneralSecurityException, HttpException {
+        return fetch(running, tag, dir, Source.compiledIn(), self());
     }
 
     /**
+     * @param running the version this process is, which the signed release has to be above
+     * @param tag the release to fetch, as the index named it; what the signature is checked to name
      * @param self the file this process runs from, or null; a download is refused rather than
      *     written over it, because that would be the install this command deliberately leaves to
      *     the operator, done without the privilege check or the restart it needs
      */
-    static Downloaded fetch(Result r, Path dir, Source source, Path self)
+    static Downloaded fetch(String running, String tag, Path dir, Source source, Path self)
         throws IOException, GeneralSecurityException, HttpException {
         if (source.keys().isEmpty()) {
             throw new IOException("this build carries no release signing key, so a download cannot be"
@@ -216,13 +224,11 @@ final class Updates {
             throw new IOException("no binary is published for " + System.getProperty("os.name") + "/"
                 + System.getProperty("os.arch") + "; see " + PAGE);
         }
-        String tag = r.tag();
-        checkTag(tag); // once, for the four URLs below
         byte[] manifest;
         byte[] signature;
         try {
-            manifest = get(source.base() + tag + "/" + MANIFEST, MAX_MANIFEST);
-            signature = get(source.base() + tag + "/" + SIGNATURE, MAX_SIGNATURE);
+            manifest = get(assetUrl(source.base(), tag, MANIFEST), MAX_MANIFEST);
+            signature = get(assetUrl(source.base(), tag, SIGNATURE), MAX_SIGNATURE);
         } catch (HttpException e) {
             if (e.status() != 404) {
                 throw new IOException("could not read the signed " + MANIFEST + " for " + tag + ": "
@@ -249,49 +255,59 @@ final class Updates {
             throw new IOException("the signed " + MANIFEST + " under " + tag + " says it belongs to "
                 + m.tag() + "; an old release has been republished under a new version");
         }
-        // And, on the tag the signature vouches for rather than the one the index announced: never
-        // below what is running. check() decided that from unsigned data; this is where the same
-        // rule is a property of the verified chain, so a caller handing this a stale or forged
-        // Result still cannot get an older binary out of it.
-        Integer cmp = compare(r.running(), m.tag());
+        // Never below what is running, decided here, against the tag the signature was just checked
+        // to name: the one place on the download path where "is this an upgrade" is answered.
+        // check() answers the same question for the announcement; a caller of this does not get to
+        // pass that answer in.
+        Integer cmp = compare(running, m.tag());
         if (cmp == null || cmp >= 0) {
             throw new IOException("the signed " + MANIFEST + " names " + m.tag() + ", which is not newer than"
-                + " the running " + r.running() + "; refusing to fetch a release that is not an upgrade");
+                + " the running " + running + "; refusing to fetch a release that is not an upgrade");
         }
         byte[] sums;
         try {
-            sums = get(source.base() + tag + "/" + SUMS, MAX_SUMS);
+            sums = get(assetUrl(source.base(), tag, SUMS), MAX_SUMS);
         } catch (HttpException e) {
             throw new IOException("could not read " + SUMS + " for " + tag + ": " + e.getMessage(), e);
         }
-        String sumsHash = sha256Hex(sums);
+        String sumsHash = Sha256.hex(sums);
         if (!sumsHash.equals(m.sums())) {
             throw new IOException(SUMS + " hashes to " + sumsHash + ", and the signed " + MANIFEST
                 + " says " + m.sums() + "; the checksum list is not the one that was signed");
         }
         String want = hashFor(new String(sums, StandardCharsets.UTF_8), asset);
 
+        boolean made = !Files.isDirectory(dir); // so a failure removes what this created and nothing else
         Files.createDirectories(dir);
         Path file = dir.resolve(asset);
-        if (self != null && Files.exists(file) && Files.isSameFile(file, self)) {
-            throw new IOException(file + " is the binary this is running from; download somewhere else"
-                + " (--dir) and install from there");
-        }
         Path part = dir.resolve(asset + PARTIAL);
-        Downloaded got;
+        MessageDigest sha = Sha256.digest();
+        long bytes;
         try {
-            got = download(source.base() + tag + "/" + asset, part, asset, key);
-            if (!got.sha256().equals(want)) {
-                throw new IOException(asset + " hashes to " + got.sha256() + ", and the signed " + SUMS
+            if (self != null && Files.exists(file) && Files.exists(self) && Files.isSameFile(file, self)) {
+                throw new IOException(file + " is the binary this is running from; download somewhere else"
+                    + " (--dir) and install from there");
+            }
+            bytes = download(assetUrl(source.base(), tag, asset), part, sha);
+            String got = HexFormat.of().formatHex(sha.digest());
+            if (!got.equals(want)) {
+                throw new IOException(asset + " hashes to " + got + ", and the signed " + SUMS
                     + " says " + want + "; the download was not what the release says it is");
             }
             executable(part);
             Files.move(part, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            return new Downloaded(file, asset, bytes, got, key);
         } catch (IOException | RuntimeException e) {
             Files.deleteIfExists(part);
+            if (made) {
+                try {
+                    Files.deleteIfExists(dir); // the leaf only; empty, since the .part is gone
+                } catch (IOException ignored) {
+                    // the download's own reason is the one to report
+                }
+            }
             throw e;
         }
-        return new Downloaded(file, asset, got.bytes(), got.sha256(), key);
     }
 
     /**
@@ -385,15 +401,11 @@ final class Updates {
      * this somewhere else entirely on a host that is otherwise the right one.
      */
     static URI assetUrl(String base, String tag, String name) throws IOException {
-        checkTag(tag);
-        return URI.create(base + tag + "/" + name);
-    }
-
-    private static void checkTag(String tag) throws IOException {
         if (tag == null || tag.isEmpty() || tag.length() > 64 || !tag.matches("[A-Za-z0-9][A-Za-z0-9._+-]*")
             || tag.contains("..")) {
             throw new IOException("the release index named a tag this will not put in a URL: " + tag);
         }
+        return URI.create(base + tag + "/" + name);
     }
 
     /** {@code linux-amd64}, {@code darwin-arm64}, ... or null where the OS or the CPU is neither. */
@@ -407,10 +419,13 @@ final class Updates {
      * release.yml's matrix in this file would be the one that was forgotten when the matrix grew.
      */
     static String target(String osName, String osArch) {
-        String os = osName.toLowerCase(Locale.ROOT);
+        String o = switch (HubLink.osName(osName)) { // one classification of os.name, shared with windows()
+            case "windows" -> "windows";
+            case "macos" -> "darwin"; // the release names it as the toolchain does
+            case "linux" -> "linux";
+            default -> null;
+        };
         String arch = osArch.toLowerCase(Locale.ROOT);
-        String o = os.contains("windows") ? "windows" : os.contains("mac") || os.contains("darwin") ? "darwin"
-            : os.contains("linux") ? "linux" : null;
         String a = arch.equals("amd64") || arch.equals("x86_64") ? "amd64"
             : arch.equals("aarch64") || arch.equals("arm64") ? "arm64" : null;
         return o == null || a == null ? null : o + "-" + a;
@@ -460,7 +475,10 @@ final class Updates {
 
     /** {@code s} as one word to a POSIX shell: as it is when nothing in it needs it, else single-quoted. */
     static String shellQuote(String s) {
-        if (!s.isEmpty() && s.chars().allMatch(c -> Character.isLetterOrDigit(c) || "_-./:@%+=,".indexOf(c) >= 0)) {
+        // A leading = is a zsh command-path expansion (=ls), so it is quoted even though the
+        // character is otherwise safe inside a word.
+        if (!s.isEmpty() && s.charAt(0) != '='
+            && s.chars().allMatch(c -> Character.isLetterOrDigit(c) || "_-./:@%+=,".indexOf(c) >= 0)) {
             return s;
         }
         return "'" + s.replace("'", "'\\''") + "'";
@@ -502,39 +520,24 @@ final class Updates {
         }
     }
 
-    /** Lowercase hex of SHA-256 over {@code bytes}; the one spelling of it in this package's release checks. */
-    static String sha256Hex(byte[] bytes) {
-        return HexFormat.of().formatHex(sha256().digest(bytes));
-    }
-
-    private static MessageDigest sha256() {
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("no SHA-256 in this runtime", e); // every Java platform has one
-        }
-    }
-
     /** Throws {@link HttpException} rather than flattening it, so the caller can read the status. */
-    private static byte[] get(String url, int max) throws IOException, HttpException {
+    private static byte[] get(URI url, int max) throws IOException, HttpException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        HttpCall.get(URI.create(url), headers(), buf, TIMEOUT_MS, max);
+        HttpCall.get(url, headers(), buf, TIMEOUT_MS, max);
         return buf.toByteArray();
     }
 
     /**
-     * Streams {@code url} into {@code file}, hashing as it goes. Buffered underneath the digest so
-     * that a 25 MiB body is a few hundred writes rather than one per socket read.
+     * Streams {@code url} into {@code file} through {@code sha}, and returns how many bytes.
+     * Buffered underneath the digest so that a 25 MiB body is a few hundred writes rather than
+     * one per socket read.
      */
-    private static Downloaded download(String url, Path file, String asset, String key) throws IOException {
-        MessageDigest sha = sha256();
-        long bytes;
+    private static long download(URI url, Path file, MessageDigest sha) throws IOException {
         try (OutputStream out = new DigestOutputStream(new BufferedOutputStream(Files.newOutputStream(file), 64 * 1024), sha)) {
-            bytes = HttpCall.get(URI.create(url), headers(), out, ASSET_TIMEOUT_MS, MAX_ASSET);
+            return HttpCall.get(url, headers(), out, ASSET_TIMEOUT_MS, MAX_ASSET);
         } catch (HttpException e) {
             throw new IOException(url + ": " + e.getMessage(), e);
         }
-        return new Downloaded(file, asset, bytes, HexFormat.of().formatHex(sha.digest()), key);
     }
 
     private static Headers headers() {

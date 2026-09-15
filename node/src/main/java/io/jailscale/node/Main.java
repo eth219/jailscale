@@ -148,24 +148,22 @@ public final class Main {
         if (!a.flag("download") || !r.newer()) {
             return; // nothing to fetch: there is no newer release, or nobody asked for it
         }
-        Path dir = a.has("dir") ? Path.of(a.get("dir")) : null;
+        boolean temp = !a.has("dir");
+        Path dir = temp ? Files.createTempDirectory("jailscale-update") : Path.of(a.get("dir"));
         Updates.Downloaded d;
-        if (dir != null) {
-            d = Updates.fetch(r, dir);
-        } else {
+        try {
+            d = Updates.fetch(r.running(), r.tag(), dir);
+        } catch (Exception e) {
             // A temp directory made here is removed here on failure: fetch leaves nothing in it,
             // and one empty jailscale-updateNNNN per failed attempt is not "nothing left behind".
-            dir = Files.createTempDirectory("jailscale-update");
-            try {
-                d = Updates.fetch(r, dir);
-            } catch (Exception e) {
+            if (temp) {
                 try {
                     Files.deleteIfExists(dir);
                 } catch (IOException ignored) {
                     // the download's own reason is the one to report
                 }
-                throw e;
             }
+            throw e;
         }
         System.out.printf("downloaded  %s  %.1f MiB%n", d.asset(), d.bytes() / (1024.0 * 1024.0));
         System.out.println("verified    sha256 " + d.sha256());

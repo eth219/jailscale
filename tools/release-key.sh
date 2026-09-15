@@ -38,25 +38,35 @@ fi
 . "$(dirname "$0")/openssl-ed25519.sh"
 command -v gcloud >/dev/null 2>&1 || { echo "this needs the gcloud CLI, logged in as the release account." >&2; exit 1; }
 
-# "Already exists" is the one failure that is fine, and it is the only one tolerated: a permission
-# denied or a quota swallowed here used to end with a config file naming a key that does not exist,
-# and every later run refusing to make one because the file was there.
-tolerate_existing() {
-    _err=$("$@" 2>&1 >/dev/null) && return 0
-    case "$_err" in
-        *ALREADY_EXISTS*|*"already exists"*) return 0 ;;
-    esac
-    printf '%s\n' "$_err" >&2
-    return 1
-}
-
+# Look before creating, and require what is found to be the key this script means. A create whose
+# failure is swallowed used to leave a config file naming a key that did not exist; and "a key by
+# that name exists" is not "an Ed25519 signing key exists" -- one made by hand with another
+# algorithm would have its public half printed here for pasting, and every download would then
+# fail in KeyFactory rather than here.
 gcloud services enable cloudkms.googleapis.com --project="$project"
-tolerate_existing gcloud kms keyrings create "$keyring" --location="$location" --project="$project"
-# Asymmetric signing keys are not rotated on a schedule, and this one must not be: the public half
-# is compiled into every binary, so a new version is a release, not a cron job.
-tolerate_existing gcloud kms keys create "$key" --location="$location" --keyring="$keyring" --project="$project" \
-    --purpose=asymmetric-signing --default-algorithm=ec-sign-ed25519 --protection-level=software \
-    --destroy-scheduled-duration=30d
+if ! gcloud kms keyrings describe "$keyring" --location="$location" --project="$project" >/dev/null 2>&1; then
+    gcloud kms keyrings create "$keyring" --location="$location" --project="$project"
+fi
+found=$(gcloud kms keys describe "$key" --location="$location" --keyring="$keyring" --project="$project" \
+    --format='value(purpose,versionTemplate.algorithm)' 2>/dev/null || true)
+if [ -z "$found" ]; then
+    # Asymmetric signing keys are not rotated on a schedule, and this one must not be: the public
+    # half is compiled into every binary, so a new version is a release, not a cron job.
+    gcloud kms keys create "$key" --location="$location" --keyring="$keyring" --project="$project" \
+        --purpose=asymmetric-signing --default-algorithm=ec-sign-ed25519 --protection-level=software \
+        --destroy-scheduled-duration=30d
+else
+    case "$found" in
+        *ASYMMETRIC_SIGN*EC_SIGN_ED25519*) ;;
+        *)
+            echo "$keyring/$key already exists in $project and is not an Ed25519 signing key: $found" >&2
+            echo "Pick another name (the fourth argument) rather than reusing it." >&2
+            exit 1 ;;
+    esac
+fi
+state=$(gcloud kms keys versions describe 1 --location="$location" --keyring="$keyring" --key="$key" \
+    --project="$project" --format='value(state)')
+[ "$state" = "ENABLED" ] || { echo "$keyring/$key version 1 is $state, not ENABLED." >&2; exit 1; }
 
 name="projects/$project/locations/$location/keyRings/$keyring/cryptoKeys/$key/cryptoKeyVersions/1"
 

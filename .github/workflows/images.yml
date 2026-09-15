@@ -23,15 +23,13 @@ name: images
 
 # `:latest` is not set here on the tag push. release.yml leaves a draft that only becomes a release
 # once tools/sign-release.sh has signed and published it, and README says `:latest` follows
-# releases -- so it moves on `release: published`, in the `latest` job below, by re-tagging the
-# version manifest that the tag push built. A tag whose draft is never published, or is deleted,
-# never reaches `:latest`.
+# releases -- so it moves in published.yml, on `release: published`, after that workflow has
+# verified the signature, by re-tagging the version manifest this one built. A tag whose draft is
+# never published, or is deleted, never reaches `:latest`.
 on:
   push:
     tags: ['v*']
     branches: [main]
-  release:
-    types: [published]
   workflow_dispatch:
 
 env:
@@ -39,7 +37,6 @@ env:
 
 jobs:
   build:
-    if: github.event_name != 'release'
     strategy:
       fail-fast: false
       matrix:
@@ -216,8 +213,8 @@ jobs:
           # pull on the other arch starts failing.
           count=$(echo $refs | wc -w)
           [ "$count" -eq 2 ] || { echo "expected 2 digests, found $count in /tmp/digests/${{ matrix.component }}"; exit 1; }
-          # A tag push gets the version and nothing else; a main push gets edge. :latest is the
-          # `latest` job's, on the release being published.
+          # A tag push gets the version and nothing else; a main push gets edge. :latest is
+          # published.yml's, on the release being published.
           if [ "${{ github.ref_type }}" = "tag" ]; then
             tags="${{ github.ref_name }}"
           else
@@ -233,31 +230,3 @@ jobs:
           first=$(echo $tags | cut -d' ' -f1)
           docker run --rm "${repo}:${first}" version
 
-  latest:
-    # The release was signed and published (tools/sign-release.sh, ARCHITECTURE.md §9.4), so the
-    # version image the tag push built is now what `:latest` should be. Not on a pre-release:
-    # GitHub keeps one out of `releases/latest` for the same reason, and release.yml marks a
-    # hyphenated tag as one.
-    if: github.event_name == 'release' && !github.event.release.prerelease
-    runs-on: ubuntu-24.04
-    permissions:
-      packages: write
-    strategy:
-      matrix:
-        image: [jailhub, jailscale]
-    steps:
-      - uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Point :latest at the released version
-        run: |
-          set -eu
-          repo="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}"
-          tag="${{ github.event.release.tag_name }}"
-          # The version tag has to exist: it is what the tag push built and smoke-tested. A release
-          # published for a tag whose image job failed is not something :latest should invent.
-          docker buildx imagetools inspect "${repo}:${tag}" >/dev/null
-          docker buildx imagetools create -t "${repo}:latest" "${repo}:${tag}"
-          docker buildx imagetools inspect "${repo}:latest"

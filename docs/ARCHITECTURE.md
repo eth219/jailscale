@@ -1064,8 +1064,18 @@ published the binaries proves that the download was not corrupted on the way and
 produced it: whoever could replace the binary could replace the list beside it. So the release
 workflow leaves a draft, and `tools/sign-release.sh` — run on a machine that is not the pipeline,
 with a key the pipeline cannot reach — downloads every asset, re-hashes it against `SHA256SUMS.txt`,
-checks that the key it is about to sign with is the one the tag compiled in, signs that file and
-publishes. The public half is compiled into the binary, like `LATEST` and for the same reason
+checks that the key it is about to sign with is the one the previous release compiled in, signs
+that file and publishes. **"Published" is made to mean "signed"** rather than left as a convention
+the web UI's Publish button does not know: `published.yml` runs `tools/verify-release.sh` the
+moment a release is published, against the keys that tag's own `ReleaseKey.java` lists, and a
+release that fails is put back into draft. `releases/latest` never shows a draft, so an unsigned
+release is visible to nodes for the seconds that takes. The same check is what lets `:latest` on
+GHCR move — after it, and after the tag push's image build has finished, which runs on its own
+clock. A release tag has to match `vMAJOR.MINOR.PATCH[-suffix]`, checked before the four native
+builds and again by the signing script; the rule is written once, in `tools/release-keys.sh`,
+because the hyphen in it is what marks a pre-release for the workflow and for `Updates.compare`
+alike, and a tag outside the grammar would have been a full release every node reports "cannot
+compare" on. The public half is compiled into the binary, like `LATEST` and for the same reason
 (§11.2). A build that carries no key refuses to download rather than falling back to the checksum
 alone; the check that cannot be made is not quietly skipped.
 

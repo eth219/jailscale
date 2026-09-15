@@ -1,0 +1,109 @@
+# What happens when a release is published (ARCHITECTURE.md §9.4): it is checked to be signed,
+# and only then does `:latest` move to it.
+#
+# release.yml leaves a draft and tools/sign-release.sh signs and publishes it, so a published
+# release is meant to be a signed one -- but "meant to" is a convention, and the Publish button in
+# the web UI does not know it. This is what makes it a rule: the moment a release is published,
+# the signature is verified against the keys the tag itself compiles in, and a release that fails
+# goes straight back to draft. `jailscale update` reads releases/latest, which never shows a
+# draft, so the window in which nodes could see an unsigned release is the seconds this takes.
+name: published
+on:
+  release:
+    types: [published]
+  # Recovery: `:latest` for a release whose images were not ready when it was published (the
+  # tag-push build in images.yml runs on its own clock). The signature is checked again; nothing
+  # is re-drafted from here, because a release published before signing existed (v0.1.x) is not
+  # one to pull back, only one never to point `:latest` at.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: the release tag to point :latest at
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  signed:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # to read the release and, when it is not signed, to draft it again
+    outputs:
+      tag: ${{ steps.which.outputs.tag }}
+      prerelease: ${{ steps.which.outputs.prerelease }}
+    steps:
+      - id: which
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$(gh release view -R "$GITHUB_REPOSITORY" "$tag" --json isPrerelease --jq .isPrerelease)" >> "$GITHUB_OUTPUT"
+      # The tag's own commit, because the key list read is the one that tag compiled in: what the
+      # binaries of that release accept, and what tools/sign-release.sh checked against before it
+      # signed. A key list from main could have moved on.
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ steps.which.outputs.tag }}
+      - name: Verify the signature, or take the release back
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_KEYS_REV: HEAD
+        run: |
+          set -eu
+          tag="${{ steps.which.outputs.tag }}"
+          if tools/verify-release.sh "$tag"; then
+            exit 0
+          fi
+          if [ "${{ github.event_name }}" = "release" ]; then
+            gh release edit -R "$GITHUB_REPOSITORY" "$tag" --draft=true
+            echo "::error::$tag was published without a valid signature and has been put back into draft. Sign it with tools/sign-release.sh $tag, which publishes it again."
+          else
+            echo "::error::$tag is not signed; :latest stays where it is."
+          fi
+          exit 1
+
+  latest:
+    needs: signed
+    if: needs.signed.outputs.prerelease != 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+      actions: read # to find and wait for the tag push's image build
+    strategy:
+      matrix:
+        image: [jailhub, jailscale]
+    steps:
+      # The version image is built by images.yml on the tag push, on its own clock: the release
+      # can be signed and published while the arm64 leg is still queued. So this waits for that
+      # run rather than hoping, and fails only when it did.
+      - name: Wait for the tag push's image build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="${{ needs.signed.outputs.tag }}"
+          run=""
+          for _ in $(seq 20); do
+            run=$(gh run list -R "$GITHUB_REPOSITORY" --workflow images.yml --event push --branch "$tag" \
+              --json databaseId --jq '.[0].databaseId // empty' --limit 1)
+            [ -n "$run" ] && break
+            sleep 15
+          done
+          [ -n "$run" ] || { echo "no images.yml run for the push of $tag; was the tag pushed?"; exit 1; }
+          gh run watch -R "$GITHUB_REPOSITORY" "$run" --exit-status --interval 30
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Point :latest at the released version
+        run: |
+          set -eu
+          repo="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}"
+          tag="${{ needs.signed.outputs.tag }}"
+          docker buildx imagetools inspect "${repo}:${tag}" >/dev/null
+          docker buildx imagetools create -t "${repo}:latest" "${repo}:${tag}"
+          docker buildx imagetools inspect "${repo}:latest"

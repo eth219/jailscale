@@ -28,6 +28,13 @@ fi
 command -v gh >/dev/null 2>&1 || { echo "this needs the gh CLI, logged in to the release account." >&2; exit 1; }
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+. "$(dirname "$0")/release-keys.sh"
+release_tag_ok "$tag" || {
+    echo "$tag is not a release tag: vMAJOR.MINOR.PATCH, with an optional -suffix for a pre-release." >&2
+    echo "The node parses exactly that shape, and a release under any other name is one every node" >&2
+    echo "reports \"cannot compare\" on." >&2
+    exit 1
+}
 # Every gh call names the repository. The script works in a temp directory from here on, and gh
 # resolves a repository from the working tree's remotes -- so without -R the upload at the end
 # fails, or worse, finds a different checkout's.
@@ -71,7 +78,7 @@ sha256 -c SHA256SUMS.txt
 assets | while IFS= read -r f; do
     # -F and a cut list rather than a regex: an asset named jailscale-linux-amd.4 would otherwise
     # match the line for jailscale-linux-amd64 and ride along uncovered.
-    sed 's/^[0-9a-fA-F]*[ *]*//' SHA256SUMS.txt | grep -qxF "$f" \
+    sed 's/^[0-9a-fA-F]*[ *]*//' SHA256SUMS.txt | grep -qxF "$f" </dev/null \
         || { echo "$f is published but not in SHA256SUMS.txt" >&2; exit 1; }
 done || exit 1 # the loop is a subshell, so its exit has to be carried out of the pipeline
 
@@ -82,11 +89,11 @@ fingerprint=$(spki_fingerprint pub.pem)
 # What accepts this signature is the binaries already in the field, so the key has to be on the
 # list the PREVIOUS release compiled in -- not this one's, which only governs the release after it.
 # That is exactly what makes a rotation work: ship {old, new} signed with old, then sign the next
-# with new. Reading the key list means every string literal long enough to be one, because the
-# field is a List.of(...) spread over lines.
-src=node/src/main/java/io/jailscale/node/ReleaseKey.java
+# with new. The list is read by release_keys_at (tools/release-keys.sh), the same reader the
+# published-release check uses.
+src=$RELEASE_KEYS_SRC
 keys_at() {
-    git -C "$root" show "$1:$src" 2>/dev/null | sed -n 's/.*"\([A-Za-z0-9+/=]\{40,\}\)".*/\1/p'
+    release_keys_at "$root" "$1"
 }
 # The tag has to be in this clone already, and it has to be on this clone's main. Those two
 # together are what make the local checkout an anchor at all: a tag that is only on the remote is
@@ -103,15 +110,26 @@ git -C "$root" rev-parse -q --verify "$tag^{commit}" >/dev/null || {
     exit 1
 }
 want_commit=$(git -C "$root" rev-parse "$tag^{commit}")
-git -C "$root" merge-base --is-ancestor "$want_commit" main 2>/dev/null || {
-    echo "$tag names $want_commit, which is not on this clone's main." >&2
-    echo "A release is a commit on main that has been reviewed there; this one has not been." >&2
+# The local branch, on purpose, not origin/main: whoever can push a tag can push to main too, and
+# the reviewed history is the one in this clone. The cost is that a stale local main refuses a
+# good tag, so the message says what to do about that rather than calling the tag unreviewed.
+git -C "$root" rev-parse -q --verify 'main^{commit}' >/dev/null || {
+    echo "$root has no local branch main, which is what a release tag is checked against." >&2
     exit 1
 }
-# --match, so a tag that is not a release (a benchmark baseline, a bisect marker) is never "the
-# previous release": if such a tag carried a key list, the rotation check below would be made
-# against a list no binary in the field was built with.
-previous=$(git -C "$root" describe --tags --match 'v*' --abbrev=0 "$tag^" 2>/dev/null || true)
+git -C "$root" merge-base --is-ancestor "$want_commit" main || {
+    echo "$tag names $want_commit, which is not on this clone's main." >&2
+    echo "If you tagged origin/main, fast-forward main here first and rerun:" >&2
+    echo "  git -C $root fetch origin main:main" >&2
+    echo "If main is current, this tag names a commit main never had, and it should not be signed." >&2
+    exit 1
+}
+# --match so a tag that is not a release (a benchmark baseline, a bisect marker) is never "the
+# previous release", and --exclude so a pre-release is not either: nothing in the field was built
+# from an rc, because releases/latest skips pre-releases and nodes only ever fetch that. A key
+# list read from an rc is a list no deployed binary accepts, and a rotation checked against it
+# would publish a release every node refuses -- the exact outcome this check exists to stop.
+previous=$(git -C "$root" describe --tags --match 'v*' --exclude 'v*-*' --abbrev=0 "$tag^" 2>/dev/null || true)
 accepted=""
 accepted_from=$previous
 [ -n "$previous" ] && accepted=$(keys_at "$previous")
@@ -140,9 +158,11 @@ fi
 # supply. Build provenance is what ties the published bytes back to that commit.
 echo "verifying build provenance against $want_commit ($tag in $root) ..."
 assets | while IFS= read -r f; do
+    # </dev/null: the loop's stdin is the asset list, and a gh that read from it would end the loop
+    # early with the remaining assets unverified and the exit status clean.
     gh attestation verify "$f" -R "$repo" \
         --signer-workflow "$repo/.github/workflows/release.yml" \
-        --source-digest "$want_commit" --source-ref "refs/tags/$tag" >/dev/null \
+        --source-digest "$want_commit" --source-ref "refs/tags/$tag" >/dev/null </dev/null \
         || { echo "$f is not attested as built by $repo's release workflow from $want_commit." >&2; exit 1; }
     echo "  $f"
 done || exit 1

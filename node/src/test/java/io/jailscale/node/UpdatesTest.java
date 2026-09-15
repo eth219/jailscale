@@ -140,6 +140,9 @@ class UpdatesTest {
         assertEquals("windows-arm64", Updates.target("Windows 11", "aarch64"));
         assertNull(Updates.target("FreeBSD", "amd64"));
         assertNull(Updates.target("Linux", "riscv64"));
+        // "Darwin" contains "win"; it is a Mac, and the same classification windows() uses says so.
+        assertEquals("darwin-arm64", Updates.target("Darwin", "arm64"));
+        assertEquals("macos", HubLink.osName("Darwin"));
 
         assertEquals("jailscale-darwin-arm64", Updates.asset("darwin-arm64", true));
         assertEquals("jailscale-windows-amd64.exe", Updates.asset("windows-amd64", true));
@@ -219,6 +222,8 @@ class UpdatesTest {
             Updates.shellQuote("/Users/me/My Downloads/jailscale-darwin-arm64"));
         assertEquals("'/tmp/it'\\''s/x'", Updates.shellQuote("/tmp/it's/x"));
         assertEquals("'$HOME/x'", Updates.shellQuote("$HOME/x")); // and a shell does not expand it
+        assertEquals("'=dl/x'", Updates.shellQuote("=dl/x")); // zsh: =cmd is a command-path expansion
+        assertEquals("a=b/x", Updates.shellQuote("a=b/x")); // but only at the start of the word
         assertEquals("''", Updates.shellQuote(""));
         // Through installCommand, with paths whose separators Path.of rewrites on Windows, so the
         // assertion is on the quoting rather than on the slashes.
