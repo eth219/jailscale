@@ -2,6 +2,7 @@ package io.jailscale.hub.dns;
 
 import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
+import io.jailscale.proto.util.Throttle;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -97,6 +98,7 @@ public final class DnsResponder implements AutoCloseable {
      */
     static final int MAX_UDP = 512;
     private static final long RATE_LOG_MS = 60_000;
+    private final Throttle rateLog = new Throttle(RATE_LOG_MS);
 
     /** Per-network answer rate on UDP (§11.5); TCP is not metered, having proved its address. */
     private final ResponseRate rate = new ResponseRate();
@@ -113,13 +115,7 @@ public final class DnsResponder implements AutoCloseable {
      * attacker: its answer is 87 bytes for a 52-byte query, the lowest ratio the zone has.
      */
     private final byte[] selfQuestion;
-    /**
-     * When the rate warning was last said, or 0 for never. Not seeded from the clock: doing that
-     * suppressed the first sixty seconds of every flood, so a hub restarted into one said nothing
-     * about it for exactly the minute its operator was watching. Zero is the sentinel rather than a
-     * reading because {@link Clock} has no defined origin.
-     */
-    private long lastRateLog;
+
 
     private final String zone;      // _acme-challenge.hub.example.com (lower case, no trailing dot)
     private final String hubName;   // hub.example.com, the zone apex
@@ -288,8 +284,7 @@ public final class DnsResponder implements AutoCloseable {
      * it would be a line per packet under exactly the load that makes the limit matter.
      */
     private void logRate(long now) {
-        if (lastRateLog == 0 || now - lastRateLog >= RATE_LOG_MS) {
-            lastRateLog = now;
+        if (rateLog.ready()) {
             LOG.warn("over the per-network answer rate on :53; {} queries dropped and {} answered truncated "
                 + "so far (ARCHITECTURE.md §11.5)", rate.dropped(), rate.truncated());
         }
@@ -312,13 +307,20 @@ public final class DnsResponder implements AutoCloseable {
         while (p < response.length && (response[p] & 0xff) != 0) {
             int l = response[p] & 0xff;
             if ((l & 0xc0) != 0) {
+                // A compression pointer: two bytes, so the question ends at p + 6 and not p + 5.
+                // Rather than encode a second reading of that, give up and keep the header, which
+                // is a well-formed TC answer whatever follows. Unreachable while respond() FORMERRs
+                // any question label with the pointer bits set, which is why this was wrong and
+                // harmless at once -- the fix worth making is build() emitting the bounded form
+                // from the length it already has, which is a change to the encoder, not to this.
+                p = -1;
                 break;
             }
             p += l + 1;
         }
         // The question's terminating zero, then qtype and qclass; a response whose question cannot
         // be walked keeps the header alone, which is still a well-formed TC answer.
-        int end = p + 5 <= response.length ? p + 5 : 12;
+        int end = p >= 0 && p + 5 <= response.length ? p + 5 : 12;
         byte[] out = java.util.Arrays.copyOf(response, end);
         out[2] |= 0x02;             // TC
         out[4] = 0;

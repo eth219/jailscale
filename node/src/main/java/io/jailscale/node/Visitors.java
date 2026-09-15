@@ -9,6 +9,7 @@ import io.jailscale.proto.net.ProxyProtocol;
 import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
+import io.jailscale.proto.util.Throttle;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -54,10 +55,10 @@ final class Visitors {
     private final Map<String, SSLContext> domainContexts = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger inFlight = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicLong refused = new java.util.concurrent.atomic.AtomicLong();
-    private volatile long lastRefusalLog;
-    /** Visitors dropped at {@link #FIRST_BYTE_MS} since this daemon started, and when that was last said. */
+    private final Throttle refusalLog = new Throttle(LOG_EVERY_MS);
+    /** Visitors dropped at {@link #FIRST_BYTE_MS} since this daemon started. */
     private final java.util.concurrent.atomic.AtomicLong stalledOut = new java.util.concurrent.atomic.AtomicLong();
-    private volatile long lastStallLog;
+    private final Throttle stallLog = new Throttle(LOG_EVERY_MS);
     /** A visitor handshake slower than this is worth a line; healthy is single-digit milliseconds. */
     private static final long SLOW_HANDSHAKE_MS = 1_000;
 
@@ -295,16 +296,15 @@ final class Visitors {
         stream.reset(Frame.RST_NO_CAPACITY);
         // One line a minute. A node at its ceiling refuses continuously, and a log that says so on
         // every stream buries the reason among its own symptoms.
-        long now = Clock.millis();
-        if (lastRefusalLog == 0 || now - lastRefusalLog >= REFUSAL_LOG_MS) {
-            lastRefusalLog = now;
+        if (refusalLog.ready()) {
             LOG.warn("at the visitor ceiling ({}), refusing new visitors; {} refused so far. "
                 + "Raise it with -XX:MaxHeapSize= in JAILSCALE_DAEMON_OPTS (ARCHITECTURE.md §9.3)",
                 maxInFlight, n);
         }
     }
 
-    private static final long REFUSAL_LOG_MS = 60_000;
+    /** How often a condition that is true of every request may say so ({@link Throttle}). */
+    private static final long LOG_EVERY_MS = 60_000;
 
     /**
      * One visitor dropped at {@link #FIRST_BYTE_MS}, reported the way a refusal is: at most a line a
@@ -318,12 +318,7 @@ final class Visitors {
      */
     private void stalled(String sni) {
         long n = stalledOut.incrementAndGet();
-        long now = Clock.millis();
-        // Zero means never said, so the first one always is. Seeding this from the clock suppressed
-        // the first sixty seconds, which is the window an operator restarting into an attack is
-        // watching; and a reading cannot be a sentinel here because Clock has no defined origin.
-        if (lastStallLog == 0 || now - lastStallLog >= REFUSAL_LOG_MS) {
-            lastStallLog = now;
+        if (stallLog.ready()) {
             LOG.info("visitor for {} never finished its handshake; dropped after {} ms and the slot released "
                 + "({} so far, ARCHITECTURE.md §9.3)", sni, firstByteMs, n);
         }
