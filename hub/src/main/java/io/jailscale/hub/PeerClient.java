@@ -52,6 +52,8 @@ final class PeerClient implements AutoCloseable {
     private final Path ca;
     private final String addr;
     private volatile boolean running;
+    /** Test hook (§13.5): a partition, made by not dialling. The primary is up; this hub cannot reach it. */
+    volatile boolean suspended;
     private volatile boolean connected;
     private volatile boolean synced;
     private volatile String lastError;
@@ -135,12 +137,27 @@ final class PeerClient implements AutoCloseable {
         thread = Thread.ofVirtual().name("peer-client").start(this::loop);
     }
 
+    /** Not an error: a primary looked at its peer and found no primary that outranks it. */
+    private static final class PeerIsNotAPrimary extends IOException {
+        private static final long serialVersionUID = 1L;
+    }
+
     private void loop() {
         int attempt = 0;
         while (running) {
             try {
+                if (suspended) {
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    continue;
+                }
                 connectAndRun();
                 attempt = 0;
+            } catch (PeerIsNotAPrimary e) {
+                attempt = BACKOFF_SECONDS.length; // look again at the longest interval
             } catch (IOException | NoiseException | GeneralSecurityException e) {
                 lastError = e.getMessage();
                 if (running) {
@@ -177,7 +194,7 @@ final class PeerClient implements AutoCloseable {
             NoiseIk hs = NoiseIk.initiator(HubKeys.PROLOGUE, hub.keys().current(), hub.keys().current().publicKey());
             byte[][] payload2 = new byte[1][];
             Message hello = new Message.PeerHello(Message.PROTO, Hub.version(), hub.config().hostname(), hub.advertisedAddress(),
-                hub.relayEndpoint());
+                hub.relayEndpoint(), hub.role(), hub.epoch());
             ch = NoiseChannel.initiate(s.getInputStream(), s.getOutputStream(), hs, Codec.encode(hello), payload2);
             Message m = Codec.decode(payload2[0]);
             if (m instanceof Message.Goodbye g) {
@@ -192,6 +209,27 @@ final class PeerClient implements AutoCloseable {
                 primaryAddress = hr.address();
             }
             primaryEndpoint = hr.endpoint();
+            if (!hub.isStandby()) {
+                // A primary dialled its peer (§13.5). It learns one thing: whether the peer is a
+                // primary that outranks it. If so it stands down and this client, on its next
+                // round, follows; if not there is nothing to be fed, and it looks again later.
+                ch.close();
+                s.close();
+                if (Role.PRIMARY.equals(hr.role()) && hub.roleFile().outrankedBy(hr.epoch(), hr.address(), hub.advertisedAddress())) {
+                    hub.demote(hr.epoch(), host);
+                    return;
+                }
+                if (Role.PRIMARY.equals(hr.role())) {
+                    LOG.warn("{} is also a primary (epoch {} against our {}); it stands down when it sees us", host, hr.epoch(), hub.epoch());
+                }
+                throw new PeerIsNotAPrimary();
+            }
+            if (!Role.PRIMARY.equals(hr.role()) && hr.role() != null) {
+                ch.close();
+                s.close();
+                throw new IOException("the peer is a " + hr.role() + " at epoch " + hr.epoch() + ", not a primary to follow; "
+                    + "promote one of the two hubs");
+            }
             s.setSoTimeout(IDLE_TIMEOUT_MS);
         } catch (HttpException | CodecException e) {
             s.close();
@@ -299,6 +337,17 @@ final class PeerClient implements AutoCloseable {
             hub.certificateArrived();
         } catch (GeneralSecurityException e) {
             throw new IOException("certificate from primary unusable: " + e.getMessage(), e);
+        }
+    }
+
+    /** Test hook: cut the channel and keep it cut, or let it reconnect. */
+    void suspend(boolean on) {
+        suspended = on;
+        if (on) {
+            MuxSession m = mux;
+            if (m != null) {
+                m.close();
+            }
         }
     }
 

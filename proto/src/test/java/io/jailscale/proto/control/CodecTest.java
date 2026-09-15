@@ -49,6 +49,10 @@ class CodecTest {
             new Message.PeerHello(1, "0.2.0", "hub-b.example.com", "203.0.113.2"),
             new Message.PeerHello(1, "0.2.0", "hub-b.example.com", "203.0.113.2", "203.0.113.2:8443"),
             new Message.PeerHelloResponse(1, "0.2.0", "hub.example.com", "203.0.113.1", "203.0.113.1:8443"),
+            new Message.PeerHello(1, "0.2.0", "hub.example.com", "203.0.113.2", null, "standby", 3),
+            new Message.PeerHelloResponse(1, "0.2.0", "hub.example.com", "203.0.113.1", null, "primary", 4),
+            new Message.PeerProbe(new byte[] {1, 2, 3}),
+            new Message.PeerProbeAnswer(new byte[] {1, 2, 3}, new byte[] {9, 9}, 4),
             new Message.PeerHello(1, "0.2.0", "hub-b.example.com", null),
             new Message.PeerHelloResponse(1, "0.2.0", "hub.example.com", "203.0.113.1"),
             new Message.PeerChallenge(List.of("abc", "def")),
@@ -79,6 +83,12 @@ class CodecTest {
                 assertEquals(a.domain(), b.domain());
                 assertEquals(a.chainPem(), b.chainPem());
                 assertArrayEquals(a.domainProof(), b.domainProof());
+            } else if (m instanceof Message.PeerProbe a && dec instanceof Message.PeerProbe b) {
+                assertArrayEquals(a.nonce(), b.nonce());
+            } else if (m instanceof Message.PeerProbeAnswer a && dec instanceof Message.PeerProbeAnswer b) {
+                assertArrayEquals(a.nonce(), b.nonce());
+                assertArrayEquals(a.mac(), b.mac());
+                assertEquals(a.epoch(), b.epoch());
             } else if (m instanceof Message.SignResponse a && dec instanceof Message.SignResponse b) {
                 assertArrayEquals(a.sig(), b.sig());
                 assertEquals(a.reason(), b.reason());

@@ -129,6 +129,42 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
     }
 
+    /** Probes in flight (§13.5): the standby's nonce to the relay connection it asked on. Bounded by pruning. */
+    private final java.util.Map<String, HubLink> probes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * §13.5: a standby asks whether the primary is reachable. This node passes the question up
+     * its control connection and the answer back down the relay connection it came on. It cannot
+     * make the answer: the MAC is under a key only the hubs hold. What it can do is stay silent,
+     * and one honest node answering is enough to block a promotion.
+     */
+    @Override
+    public void onProbe(HubLink relay, Message.PeerProbe probe) {
+        String key = java.util.HexFormat.of().formatHex(probe.nonce());
+        if (probes.size() > 64) {
+            probes.clear();
+        }
+        probes.put(key, relay);
+        try {
+            link.send(probe);
+        } catch (IOException e) {
+            probes.remove(key);
+            LOG.debug("probe from {} not forwarded: {}", relay.relayAddress(), e.getMessage());
+        }
+    }
+
+    @Override
+    public void onProbeAnswer(Message.PeerProbeAnswer answer) {
+        HubLink relay = probes.remove(java.util.HexFormat.of().formatHex(answer.nonce()));
+        if (relay != null && relay.isConnected()) {
+            try {
+                relay.send(answer);
+            } catch (IOException e) {
+                LOG.debug("probe answer to {} not delivered: {}", relay.relayAddress(), e.getMessage());
+            }
+        }
+    }
+
     /** The relay connections and whether each is up, for {@code status}. */
     private List<Object> relayRows() {
         List<Object> rows = new ArrayList<>();

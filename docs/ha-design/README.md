@@ -1,11 +1,11 @@
 # Hub redundancy: control plane, relays, and an uptime figure
 
-A design, of which steps 1, 4 and -- for two hosts -- 2 and 3 below are built
-([ARCHITECTURE.md §13.1 to §13.4](../ARCHITECTURE.md)): the hub-to-hub channel, the standby,
-promotion, the availability figures, the hubs answering their own DNS, and the standby serving
-visitors through relay connections with per-name DNS. What is not built is the signed lease, which
-only a third, stateless relay would need, and step 5. The order the steps landed in: 1, 4, 2+3;
-5 is next.
+A design, all of which is built for two hosts ([ARCHITECTURE.md §13.1 to §13.5](../ARCHITECTURE.md)):
+the hub-to-hub channel, the standby, promotion, the availability figures, the hubs answering their
+own DNS, the standby serving visitors through relay connections with per-name DNS, and promotion
+without a person with the nodes as witnesses. What is not built is the signed lease and the
+relay-only role, which only a third, stateless relay would need. The steps landed in the order
+1, 4, 2+3, 5.
 It records the shape a two-host hub takes and why, cut so that each step leaves the single-host hub
 untouched. Before step 1, §13's answer to losing the host was "copy the state directory and change
 DNS"; the standby is that sentence done by the hub itself, and after step 4 the DNS change is the
@@ -312,8 +312,8 @@ this is for the operator with no scraper.
    answer, liveness from the channel, the host's own address found from the glue, the challenge
    values replicated. Makes `jailhub promote` the whole of a failover. Per-name answers wait for
    step 3, which is when there is more than one host to name.
-5. (lands last) Promotion without a person: nodes as witnesses with an unforgeable proof, epochs,
-   symmetric units, off by default on hubs with open registration.
+5. **Built.** Promotion without a person: nodes as witnesses with an unforgeable proof, epochs in a
+   `role` file, units that may name each other, off by default on hubs with open registration.
 
 ## What this does not fix
 

@@ -51,7 +51,7 @@ public final class Hub implements AutoCloseable {
     private final Links links;
     private final RawPorts rawPorts;
     private final Challenges challenges;
-    private HttpChallengeFront http;
+    private volatile HttpChallengeFront http;
     private MetricsFront metrics;
     private final SniRouter router;
     private final AdminWeb adminWeb;
@@ -59,8 +59,19 @@ public final class Hub implements AutoCloseable {
     private AcmeManager acme;
     private final Availability availability;
     private final Peers peers = new Peers(this);
-    /** Set while this hub follows a primary (ARCHITECTURE.md §13.1); cleared by {@link #promote}. */
+    private final Role roleFile;
+    /** Set while this hub follows a primary (ARCHITECTURE.md §13.1); cleared by {@link #promote}, set by {@link #demote}. */
     private volatile boolean standby;
+    /** §13.5: when the channel to the primary was last seen up, or 0 while it is; the watch reads it. */
+    private volatile long primaryLostAt;
+    private volatile long lastAutoPromoteAt;
+    /** Nonces out to witnesses right now, and whether a valid answer came back for the round. */
+    private final java.util.Set<String> probeNonces = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private volatile boolean primaryProven;
+    /** §13.5 timings; tests shorten them. */
+    static volatile long promoteAfterMs = 30_000;
+    static volatile long witnessWindowMs = 10_000;
+    static volatile long autoPromoteIntervalMs = 10 * 60_000;
     private volatile PeerClient peerClient;
     /** The public address this hub answers for itself (§13.3); null until known. */
     private volatile String advertised;
@@ -119,7 +130,8 @@ public final class Hub implements AutoCloseable {
             lockChannel.close();
             throw new IOException("another jailhub serve holds " + config.stateDir() + (takeover ? "" : " (use --takeover)"));
         }
-        this.standby = config.standby();
+        this.roleFile = new Role(config.stateDir(), config.standby());
+        this.standby = !roleFile.isPrimary();
         if (standby && !HubKeys.exists(config.stateDir())) {
             // Generating one would make a hub that cannot authenticate to its primary and never
             // says why: the handshake just fails. The missing file is the whole problem.
@@ -178,6 +190,9 @@ public final class Hub implements AutoCloseable {
             if (!config.acme()) {
                 tls.load(config.tlsCert(), config.tlsKey());
             }
+            if (config.peer() == null) {
+                throw new IOException("this hub's role file says standby, but no --peer names the primary to follow");
+            }
             peerClient = new PeerClient(this, config.peer(), config.peerCa(), config.peerAddr());
             peerClient.start();
             if (!tls.isLoaded()) {
@@ -195,6 +210,12 @@ public final class Hub implements AutoCloseable {
             startAcme(); // blocks until a certificate is installed
         } else {
             tls.load(config.tlsCert(), config.tlsKey());
+        }
+        if (!standby && config.peer() != null) {
+            // A primary that names a peer (§13.5): the units are the same on both hosts, and this
+            // one dials the other only to find out whether it is a primary that outranks this one.
+            peerClient = new PeerClient(this, config.peer(), config.peerCa(), config.peerAddr());
+            peerClient.start();
         }
         listener = new ServerSocket();
         listener.setReuseAddress(true);
@@ -223,6 +244,7 @@ public final class Hub implements AutoCloseable {
         timer.scheduleAtFixedRate(this::tick, KEEPALIVE_SECONDS, KEEPALIVE_SECONDS, TimeUnit.SECONDS);
         timer.scheduleAtFixedRate(() -> availability.stamp(System.currentTimeMillis()),
             Availability.STAMP_EVERY_MS, Availability.STAMP_EVERY_MS, TimeUnit.MILLISECONDS);
+        timer.scheduleAtFixedRate(this::watchPrimary, 1000, 1000, TimeUnit.MILLISECONDS);
 
         LOG.info("jailhub {} listening on {}:{} for {} (hub key {}){}", version(), config.listenHost(), port(),
             config.hostname(), keys.publicText(), standby ? ", standby of " + config.peer().getHost() : "");
@@ -524,24 +546,33 @@ public final class Hub implements AutoCloseable {
     }
 
     /**
-     * Makes this standby the primary (ARCHITECTURE.md §13.1): stops following, and starts what a
-     * primary runs and a standby does not -- issuance, the DNS responder, port 80. The operator
-     * points the apex at this host afterwards; nothing here can do that. One way: the old primary,
-     * if it comes back, has to be restarted with {@code --peer} pointing here.
+     * Makes this standby the primary (ARCHITECTURE.md §13.1, §13.5): stops following, takes the
+     * next epoch, and starts what a primary runs and a standby does not -- issuance, port 80.
+     * With the subdomain delegated to both hubs the name follows on its own (§13.3); with three
+     * records at the parent the operator moves them. An old primary that returns and meets this
+     * one stands down by epoch (§13.5).
      */
     synchronized void promote() throws IOException {
+        promote("by the operator");
+    }
+
+    private synchronized void promote(String why) throws IOException {
         if (!standby) {
             throw new IOException("this hub is already the primary");
         }
         String primary = config.peer().getHost();
         boolean synced = peerClient != null && peerClient.isSynced();
+        roleFile.promote();
         standby = false;
-        if (peerClient != null) {
-            peerClient.close();
-            peerClient = null;
+        primaryLostAt = 0;
+        PeerClient old = peerClient;
+        peerClient = null;
+        if (old != null) {
+            old.close();
         }
-        LOG.warn("promoted: this hub is now the primary{}. Point {} at this host, and restart {} with --peer if it returns",
-            synced ? "" : " (it was NOT in sync with " + primary + " at the time)", config.hostname(), primary);
+        LOG.warn("promoted {}: this hub is now the primary at epoch {}{}. {} stands down by epoch when it returns",
+            why, roleFile.epoch(), synced ? "" : " (it was NOT in sync with " + primary + " at the time)", primary);
+        relaysChanged();
         Thread.ofVirtual().name("promote").start(() -> {
             try {
                 if (config.acme()) {
@@ -551,7 +582,152 @@ public final class Hub implements AutoCloseable {
             } catch (IOException | GeneralSecurityException e) {
                 LOG.error("after promotion: {}", e.getMessage());
             }
+            if (config.peer() != null) {
+                PeerClient pc = new PeerClient(this, config.peer(), config.peerCa(), config.peerAddr());
+                peerClient = pc;
+                pc.start();
+            }
         });
+    }
+
+    /**
+     * Stands down before a primary that outranks this one (§13.5): this hub becomes its standby.
+     * Nodes on the control connection are told to go, issuance and port 80 stop, and the peer
+     * client that found the other primary keeps its connection and follows from here on.
+     */
+    synchronized void demote(long theirEpoch, String theirHost) throws IOException {
+        if (standby) {
+            return;
+        }
+        roleFile.demote(theirEpoch);
+        standby = true;
+        primaryLostAt = 0;
+        LOG.warn("standing down: {} is the primary at epoch {}, this hub was one at a lower epoch and is now its standby",
+            theirHost, theirEpoch);
+        if (acme != null) {
+            acme.close();
+            acme = null;
+        }
+        if (http != null) {
+            http.close();
+            http = null;
+        }
+        peers.closeAll();
+        registry.closeAll("standby");
+        relaysChanged();
+    }
+
+    Role roleFile() {
+        return roleFile;
+    }
+
+    /** The current epoch (§13.5): rises by one on every promotion. */
+    long epoch() {
+        return roleFile.epoch();
+    }
+
+    /** §13.5: whether a standby may promote itself; off by default where registration is open. */
+    boolean autoPromote() {
+        String dflt = "open".equals(store.setting(Store.SETTING_REGISTRATION, "invite")) ? "off" : "on";
+        return "on".equals(store.setting(Store.SETTING_AUTO_PROMOTE, dflt));
+    }
+
+    /** The private half of the hub key, the secret the liveness proof (§13.5) is made under. */
+    byte[] livenessSecret() {
+        return keys.current().privateKey();
+    }
+
+    /**
+     * §13.5, on the standby, once a second: notice the channel to the primary down, and after
+     * {@link #promoteAfterMs} ask every witness whether the primary can be reached; when none can
+     * within {@link #witnessWindowMs}, promote. A witness is a node attached here by a relay
+     * connection, approved, one per user. With no witness the decision stays a person's.
+     */
+    private void watchPrimary() {
+        if (!standby || stopped) {
+            return;
+        }
+        PeerClient pc = peerClient;
+        long now = System.currentTimeMillis();
+        if (pc != null && pc.isConnected()) {
+            primaryLostAt = 0;
+            probeNonces.clear();
+            return;
+        }
+        if (primaryLostAt == 0) {
+            primaryLostAt = now;
+            return;
+        }
+        if (now - primaryLostAt < promoteAfterMs || !probeNonces.isEmpty() || !autoPromote()
+            || now - lastAutoPromoteAt < autoPromoteIntervalMs) {
+            return;
+        }
+        // One round: a nonce to every witness, then a window to answer in.
+        List<NodeGroup> witnesses = new ArrayList<>();
+        java.util.Set<String> users = new java.util.HashSet<>();
+        for (NodeGroup g : registry.all()) {
+            Store.NodeRec n = store.node(g.machineKey());
+            if (n != null && users.add(n.user())) {
+                witnesses.add(g);
+            }
+        }
+        if (witnesses.isEmpty()) {
+            LOG.warn("primary unreachable for {} s and no node attached here to ask; promotion stays with the operator",
+                (now - primaryLostAt) / 1000);
+            primaryLostAt = now; // ask again after another interval
+            return;
+        }
+        primaryProven = false;
+        for (NodeGroup g : witnesses) {
+            NodeSession s = g.primary();
+            if (s == null) {
+                continue;
+            }
+            byte[] nonce = Liveness.nonce();
+            probeNonces.add(java.util.HexFormat.of().formatHex(nonce));
+            try {
+                s.send(new Message.PeerProbe(nonce));
+            } catch (IOException e) {
+                LOG.debug("witness {}: {}", g.machineKey(), e.getMessage());
+            }
+        }
+        int asked = probeNonces.size();
+        Thread.ofVirtual().name("witness-round").start(() -> {
+            try {
+                Thread.sleep(witnessWindowMs);
+            } catch (InterruptedException e) {
+                return;
+            }
+            probeNonces.clear();
+            PeerClient now2 = peerClient;
+            if (!standby || (now2 != null && now2.isConnected())) {
+                return;
+            }
+            if (primaryProven) {
+                LOG.warn("primary unreachable from here but reachable from a node: a partition, not a death; not promoting");
+                primaryLostAt = System.currentTimeMillis();
+                return;
+            }
+            try {
+                lastAutoPromoteAt = System.currentTimeMillis();
+                promote("automatically: " + asked + " witness(es) asked, none could reach the primary");
+            } catch (IOException e) {
+                LOG.error("automatic promotion failed: {}", e.getMessage());
+            }
+        });
+    }
+
+    /** A node brought back the primary's answer to one of this standby's probes (§13.5). */
+    void probeAnswered(Message.PeerProbeAnswer a) {
+        String key = java.util.HexFormat.of().formatHex(a.nonce());
+        if (!probeNonces.contains(key)) {
+            return;
+        }
+        if (Liveness.verify(livenessSecret(), a.nonce(), a.epoch(), a.mac())) {
+            primaryProven = true;
+        } else {
+            LOG.warn("a witness brought back a liveness answer that does not verify; ignored");
+        }
     }
 
     /** A standby installed a certificate from its primary: nodes on it, if any, get the public half. */
