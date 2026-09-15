@@ -69,6 +69,7 @@ class AdminCommandTest {
             new Route("key-rotate", "key", "rotate"),
             new Route("setting", "setting", "knock", "off"),
             new Route("promote", "promote"),
+            new Route("address-check", "address", "check"),
             new Route("availability-reset", "availability", "reset"),
             new Route("handoff", "handoff"));
     }

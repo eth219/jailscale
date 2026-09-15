@@ -513,6 +513,77 @@ class LinkEndToEndTest {
         assertNotNull(hub.tls().sign(hub.tls().keyId(), certVerify));
     }
 
+    /**
+     * ARCHITECTURE.md §11.3: nobody types `jailscale verify` on an unattended node and the periodic
+     * pass is half an hour from its next tick, so a node whose link has just come up checks every
+     * name it holds there and then. That moment is the one the schedule is worst at: a node that
+     * loses a name is usually offline when it happens, because being offline is why someone else
+     * took it (§11.4).
+     */
+    @Test
+    void aNodeComingBackChecksItsNamesWithoutBeingAsked() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "backagain")));
+
+        alice.close();
+        daemons.remove(alice);
+        waitFor(() -> hub.links().byName("backagain") == null);
+
+        // A verdict on the node that comes back can only be this process's work: the last probe of
+        // a name is not persisted, and the next ordinary tick is half an hour away.
+        Daemon back = node("alice");
+        waitFor(() -> back.hasCert(hub.tls().keyId()));
+        waitFor(() -> "terminated by this node".equals(probeVerdict("alice", "backagain")));
+    }
+
+    /**
+     * ARCHITECTURE.md §11.3: a link the hub is not routing here is not an interception, and the
+     * command this section sends operators to has to say so. `down` leaves the names in the node's
+     * list with nothing serving them, and the hub answers each with its own page under the wildcard
+     * certificate -- which is a session this node did not terminate, and would read as a compromised
+     * hub to anything comparing keying material without looking first.
+     */
+    @Test
+    void verifyCallsAClosedLinkNotOpenRatherThanAnInterception() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "goingdown")));
+        ok(cli("alice", JsonObject.builder().put("cmd", "down")));
+        waitFor(() -> hub.links().byName("goingdown") == null);
+
+        // `ok` is that the check ran; the CLI prints the rows on that and nothing else. What the
+        // rows concluded is `allOk`, which is what the exit status follows.
+        JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));
+        assertFalse(verified.optBool("allOk", true), verified.toString());
+        assertEquals(1, verified.integer("checked"), verified.toString());
+        for (Object o : verified.array("results")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            assertEquals("link not open", row.get("verdict"), row.toString());
+            // and named the way a probed row is named, so one answer does not carry two shapes
+            assertEquals("goingdown.hub.test", row.get("name"), row.toString());
+        }
+    }
+
+    /** What `status` says the last self-probe of one name concluded, or null when none has run. */
+    private String probeVerdict(String node, String name) throws IOException {
+        for (Object o : cli(node, JsonObject.builder().put("cmd", "status")).array("links")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            if (name.equals(row.get("name")) && row.get("probe") != null) {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> probe = (java.util.Map<String, Object>) row.get("probe");
+                return (String) probe.get("verdict");
+            }
+        }
+        return null;
+    }
+
     private interface Check {
         boolean ok() throws Exception;
     }

@@ -79,7 +79,16 @@ public final class Main {
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
                 case "status" -> print(call(cfg, JsonObject.builder().put("cmd", "status").build(), false));
-                case "down", "leave", "netcheck", "verify" -> print(call(cfg, JsonObject.builder().put("cmd", cmd).build(), false));
+                case "down", "leave", "netcheck" -> print(call(cfg, JsonObject.builder().put("cmd", cmd).build(), false));
+                case "verify" -> {
+                    // The rows are the answer; `ok` only says the daemon ran the check. Exit
+                    // status still says whether every name verified, for anything scripting this.
+                    JsonObject r = call(cfg, JsonObject.builder().put("cmd", "verify").build(), false);
+                    print(r);
+                    if (!r.optBool("allOk", true)) {
+                        System.exit(1);
+                    }
+                }
                 case "invite" -> invite(cfg, a);
                 case "open" -> open(cfg, a);
                 case "ls" -> ls(cfg);
