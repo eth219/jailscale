@@ -113,9 +113,10 @@ class StandbyTest {
 
         // The standby gets no certificate files of its own: the wildcard, its key and the state
         // all have to come over the channel. What it is given is hub.key, which is the whole
-        // provisioning act. Without it, starting is refused with the file named.
-        HubConfig sbConfig = HubConfig.withCert(URI.create("https://localhost:" + portB), root.resolve("b"), "127.0.0.1", portB,
-            null, null, false, HubConfig.POLICY_MEMBERS, true, "localhost")
+        // provisioning act. Without it, starting is refused with the file named. Its base URL is
+        // the primary's own name, as deployed: that is the name it serves once promoted.
+        HubConfig sbConfig = HubConfig.withCert(URI.create("https://hub.test:" + portB), root.resolve("b"), "127.0.0.1", portB,
+            null, null, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1");
         IOException noKey = org.junit.jupiter.api.Assertions.assertThrows(IOException.class, () -> new Hub(sbConfig));
         assertTrue(noKey.getMessage().contains("hub.key"), noKey.getMessage());
@@ -141,20 +142,20 @@ class StandbyTest {
         waitFor("the admin never reached the standby", () -> standby.store().isAdmin("alice"));
 
         // Both sides say what they are, to a person and to a monitor.
-        JsonObject sbStatus = status("localhost", portB);
+        JsonObject sbStatus = status("hub.test", portB);
         assertEquals("standby", sbStatus.string("role"));
         assertEquals("hub.test", sbStatus.string("primary"));
         assertTrue(sbStatus.bool("inSync"));
         JsonObject prStatus = status("hub.test", portA);
         assertEquals("primary", prStatus.string("role"));
         assertFalse(prStatus.has("primary"));
-        assertTrue(prStatus.object("availability").object("peers").has("localhost"), prStatus.toString());
+        assertTrue(prStatus.object("availability").object("peers").has("127.0.0.1"), "a standby with the primary's own name is known by its address: " + prStatus);
         assertTrue(sbStatus.object("availability").object("peers").has("hub.test"), sbStatus.toString());
         assertTrue(sbStatus.object("availability").object("process").has("24h"), sbStatus.toString());
         String prPage = page("hub.test", portA);
-        assertTrue(prPage.contains("standby <code>localhost</code> in sync"), prPage);
+        assertTrue(prPage.contains("standby <code>127.0.0.1</code> in sync"), prPage);
         assertTrue(prPage.contains("Seen from here"), prPage);
-        assertTrue(page("localhost", portB).contains("standby of <code>hub.test</code>, in sync"));
+        assertTrue(page("hub.test", portB).contains("standby of <code>hub.test</code>, in sync"));
         JsonObject ipcStatus = Ipc.call(root.resolve("a/jailhub.sock"), JsonObject.builder().put("cmd", "status").build());
         assertEquals(1, ipcStatus.array("standbys").size(), ipcStatus.toString());
 
@@ -165,7 +166,7 @@ class StandbyTest {
         Path bobSock = root.resolve("bob/jailscale.sock");
         Thread bobUp = Thread.ofVirtual().start(() -> {
             try {
-                Ipc.call(bobSock, JsonObject.builder().put("cmd", "up").put("hub", "localhost").put("addr", "127.0.0.1")
+                Ipc.call(bobSock, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1")
                     .put("port", portB).put("user", "bob").put("caFile", CERT.toString()).build());
             } catch (IOException ignored) {
                 // the answer is read from status below
@@ -179,7 +180,7 @@ class StandbyTest {
         JsonObject promoted = Ipc.call(root.resolve("b/jailhub.sock"), JsonObject.builder().put("cmd", "promote").build());
         assertTrue(promoted.optBool("ok", false), promoted.toString());
         assertEquals("primary", promoted.string("role"));
-        assertEquals("primary", status("localhost", portB).string("role"));
+        assertEquals("primary", status("hub.test", portB).string("role"));
         waitFor("the primary still counts the promoted hub as a standby", () -> primary.peers().count() == 0);
         JsonObject again = Ipc.call(root.resolve("b/jailhub.sock"), JsonObject.builder().put("cmd", "promote").build());
         assertFalse(again.optBool("ok", false), "promoting a primary is an error, not a no-op: " + again);
