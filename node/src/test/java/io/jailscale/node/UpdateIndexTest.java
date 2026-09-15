@@ -9,17 +9,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
+import io.jailscale.proto.json.Json;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * The signed pointer that says which release is current (docs/update-freshness), against one this
@@ -92,7 +96,16 @@ class UpdateIndexTest {
     }
 
     private static Updates.Result check(Published p, ServerSocket ss) {
-        return Updates.check(RUNNING, at(ss, p), NOW);
+        return Updates.check(RUNNING, at(ss, p), NOW, null);
+    }
+
+    private static Updates.Result check(Published p, ServerSocket ss, Path floor) {
+        return Updates.check(RUNNING, at(ss, p), NOW, floor);
+    }
+
+    /** What the node wrote down, read back as the node would rather than as a string it contains. */
+    private static long seqIn(Path floor) throws IOException {
+        return Json.parseObject(Files.readString(floor)).lng("seq");
     }
 
     @Test
@@ -237,5 +250,85 @@ class UpdateIndexTest {
             Updates.INDEX_FORMAT + "\nseq: 7\ntag: v0.2.0\nissued: " + ISSUED + "\n"));
         // Expiring before it was issued is not a stale pointer, it is a broken one.
         assertThrows(IOException.class, () -> Updates.Index.parse(document(7, "v0.2.0", FAR, ISSUED)));
+    }
+
+    // --- the floor: what stops an older signed pointer being put back up ---------------------------
+
+    @Test
+    void aPointerThatWentBackwardsIsRefused(@TempDir Path home) throws Exception {
+        // The prevention half (docs/update-freshness, step 3). Everything about this pointer is
+        // genuine -- it is signed, unexpired, and names a release above the running one -- and it is
+        // still refused, because this node has already been told about a later one. Without the
+        // floor, whoever can publish can put an old pointer back up and hold a node on the release
+        // it names for as long as they like.
+        Path floor = home.resolve("update.json");
+        Published newer = publish(document(9, "v0.3.0", ISSUED, FAR));
+        try (ServerSocket ss = serve(newer.files())) {
+            assertEquals("0.3.0", check(newer, ss, floor).latest());
+        }
+        assertEquals(9, seqIn(floor));
+
+        Published replayed = publish(document(7, "v0.2.0", ISSUED, FAR));
+        try (ServerSocket ss = serve(replayed.files())) {
+            Updates.Result r = check(replayed, ss, floor);
+            assertNotNull(r.error());
+            assertFalse(r.newer());
+            assertTrue(r.error().contains("went backwards"), r.error());
+            assertTrue(r.error().contains("9"), r.error()); // what it has seen, so the operator can tell
+        }
+        // And the refusal did not quietly lower the floor it was refused against.
+        assertEquals(9, seqIn(floor));
+    }
+
+    @Test
+    void theSameSequenceAgainIsTheNormalCase(@TempDir Path home) throws Exception {
+        // A daily check reads the same pointer it read yesterday. Only *below* is a refusal.
+        Path floor = home.resolve("update.json");
+        Published p = publish(document(9, "v0.3.0", ISSUED, FAR));
+        try (ServerSocket ss = serve(p.files())) {
+            assertNull(check(p, ss, floor).error());
+            assertNull(check(p, ss, floor).error());
+        }
+    }
+
+    @Test
+    void aRefusedPointerIsNotOneThisNodeHasSeen(@TempDir Path home) throws Exception {
+        // The floor must not be advanced by a pointer that failed a check above it -- otherwise a
+        // pointer nobody accepted still raises the bar for the ones that follow.
+        Path floor = home.resolve("update.json");
+        Published bad = publish(document(11, "v0.4.0", ISSUED, FAR), "not the document");
+        try (ServerSocket ss = serve(bad.files())) {
+            assertNotNull(check(bad, ss, floor).error());
+        }
+        assertFalse(Files.exists(floor), "a signature that did not verify wrote a floor");
+    }
+
+    @Test
+    void aNodeWithNowhereToKeepTheFloorStillChecks(@TempDir Path home) throws Exception {
+        // `jailscale update` runs on machines with no state directory, and there the floor is the
+        // weaker one it has always had: the version this binary is. It is not a reason to refuse.
+        Published p = publish(document(7, "v0.2.0", ISSUED, FAR));
+        try (ServerSocket ss = serve(p.files())) {
+            assertNull(check(p, ss, null).error());
+            // An unwritable home does not fail the check either; the floor simply does not advance.
+            Path unwritable = home.resolve("nope/update.json");
+            Files.createFile(home.resolve("nope"));
+            Updates.Result r = check(p, ss, unwritable);
+            assertNull(r.error(), r.line());
+            assertTrue(r.newer());
+        }
+    }
+
+    @Test
+    void aFloorThatCannotBeReadIsRebuiltRatherThanFatal(@TempDir Path home) throws Exception {
+        // Whoever can corrupt this file is already on this machine as this user. Refusing to check
+        // for updates ever again would be a worse answer than taking the next pointer that verifies.
+        Path floor = home.resolve("update.json");
+        Files.writeString(floor, "{ this is not json");
+        Published p = publish(document(7, "v0.2.0", ISSUED, FAR));
+        try (ServerSocket ss = serve(p.files())) {
+            assertNull(check(p, ss, floor).error());
+        }
+        assertEquals(7, seqIn(floor));
     }
 }

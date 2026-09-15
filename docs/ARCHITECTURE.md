@@ -1126,8 +1126,20 @@ saying it is how the withholding stays invisible. It is deliberately **not** a r
 download: the signature, the tag binding and never-below-running all still hold over a stale
 pointer, so refusing would forbid a genuine upgrade to avert a risk the refusal does not reduce.
 The node's clock is allowed to be wrong for the same reason — the worst a bad one does is report
-"cannot tell". What is still missing is the sequence floor, which is what would stop a pointer being
-replayed at a lower `seq`: [docs/update-freshness](update-freshness/README.md), step 3.
+"cannot tell".
+
+**The floor is what makes the expiry a defence rather than a notice.** `update.json`, beside the
+state file, holds the highest `seq` this node has accepted, and a pointer below it is refused with
+what it said and what this node has already seen. Without it, whoever can publish can put an old —
+genuinely signed, so every other check passes — pointer back up and hold a node on the release it
+names. It is written only after every other check has passed, re-read immediately before writing
+because the daemon's daily check and a `jailscale update` in a terminal are two processes on one
+file, and kept beside `node.json` rather than inside it: `update` runs in the CLI process so that it
+answers while the daemon is down, and a second writer on the file that holds the MachineKey is not a
+race worth introducing for a counter. A node with nowhere to keep it still checks — there the floor
+is the one it has always had, the version this binary is — and a file that cannot be read is rebuilt
+from the next pointer that verifies rather than being fatal, because whoever could corrupt it is
+already on the machine as that user.
 
 **The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
 key that has to move: every binary in the field accepts that one and nothing else, so publishing
@@ -2229,14 +2241,14 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   operator to run. A binary released before the signing key existed carries no key and refuses to
   download at all, so the first release able to verify another is the one after the key was
   compiled in.
-- **Withholding an upgrade is visible now, not impossible.** Which release is current comes from a
+- **Withholding an upgrade is bounded now, not impossible.** Which release is current comes from a
   signed pointer (§9.4) rather than from an unsigned `releases/latest`, so the version a node
-  announces is authenticated and an old release cannot be presented as the newest one indefinitely:
-  the pointer expires, and past that a node says it cannot tell instead of saying it is up to date.
-  What is not built is the **sequence floor** ([docs/update-freshness](update-freshness/README.md),
-  step 3): nothing yet records the highest `seq` a node has seen, so whoever can publish can still
-  replay an older, genuinely signed pointer and hold a node on the release it names for as long as
-  that pointer has not expired. What bounds the damage either way is that a node is never moved
+  announces is authenticated; the pointer expires, and past that a node says it cannot tell instead
+  of saying it is up to date; and a sequence below the highest it has recorded is refused, so an old
+  pointer cannot be put back up in front of a node that has seen a later one. What remains is **first
+  contact**: a node with no floor yet -- a fresh install -- has nothing to compare with, and can be
+  handed any genuinely signed, unexpired pointer, so it can be started on an older release and kept
+  there until that pointer expires. What bounds the damage throughout is that a node is never moved
   below what it runs (`newer` is strictly above the running version) and the binary installed is
   always the version announced, so this withholds an upgrade rather than forcing a downgrade, and
   the same party could equally delete the newer release.

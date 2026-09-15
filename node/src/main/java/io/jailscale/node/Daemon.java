@@ -515,7 +515,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         try {
             Thread.sleep(ThreadLocalRandom.current().nextLong(60_000, 300_000));
             while (!closed) {
-                Updates.Result r = Updates.check(Version.string());
+                Updates.Result r = Updates.check(Version.string(), config.updateFile());
                 if (r.newer()) {
                     LOG.info("{}", r.line());
                 }

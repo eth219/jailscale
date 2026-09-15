@@ -6,10 +6,10 @@ this design does not have". It changes what `jailscale update` believes, not wha
 three-link chain over a download ([§9.4](../ARCHITECTURE.md), and
 [docs/release-verification.md](../release-verification.md) for the same chain by hand) is untouched.
 
-**Steps 1, 2 and 4 of the five below are built**: the release tooling signs, publishes and re-issues
-the pointer, and `update` now takes the announcement from it instead of from an unsigned release
-index. What is not built is the **sequence floor** (step 3), which is what makes withholding
-un-repeatable rather than only visible, and the warnings (step 5).
+**Steps 1 to 4 of the five below are built**: the release tooling signs, publishes and re-issues the
+pointer; `update` takes the announcement from it instead of from an unsigned release index; and a
+node refuses a pointer whose sequence is below the highest it has recorded. What is not built is the
+warnings (step 5).
 
 **Ordering, which matters once step 2 is in a binary.** A build that reads the pointer needs one to
 read: until `tools/refresh-index.sh --first` has been run against the repository, `jailscale update`
@@ -219,7 +219,7 @@ constant with a reason behind it.
    exists; `verify-release.sh --index` checks it. No client reads it. Nothing in the field changes.
 2. **Read it for the announcement.** *(built)* `check` takes the tag from the pointer, `--download`
    is untouched. `status` carries `expiresAt` and whether the pointer is stale.
-3. **The sequence floor.** `update.json`, the refusal, and the loud message.
+3. **The sequence floor.** *(built)* `update.json`, the refusal, and the loud message.
 4. **Retire the API index** and the `LATEST` constant with it. *(built, with step 2: once the
    pointer is what `check` reads, leaving the unsigned call in place would be dead code that a
    later edit could make load-bearing again -- and the design's own rule is that there is no
@@ -229,6 +229,23 @@ constant with a reason behind it.
 
 Steps 1 and 2 are what make the withholding attack visible; 3 is what makes it un-repeatable against
 a node that has already seen better. Neither 4 nor 5 is required for either property.
+
+## What building step 3 settled
+
+- **A node that has never seen a higher sequence can still be given an old pointer.** The floor is
+  built from what this node has been told, so first contact has nothing to compare with: a fresh
+  install can be handed any genuinely signed, unexpired pointer, and what bounds that is the expiry
+  and never-below-running, not the sequence. The floor makes withholding *un-repeatable against a
+  node that has already seen better*, which is a different claim from making it impossible.
+- **A floor that cannot be read rebuilds itself.** Whoever can corrupt `update.json` is already on
+  the machine as that user; refusing to check for updates ever again would be a worse answer than
+  taking the next pointer that verifies. An unwritable home is the same story: the check succeeds,
+  the floor does not advance, and nothing is raised.
+- **The write re-reads first.** The daemon's daily check and a `jailscale update` in a terminal are
+  two processes on one file, and the later writer must not carry an older read back over a higher
+  number.
+- **A refused pointer is not one this node has seen.** The floor is written only after every check
+  above it has passed, so a pointer nobody accepted cannot raise the bar for the ones that follow.
 
 ## What building step 2 settled
 

@@ -57,12 +57,12 @@ class UpdatesTest {
     }
 
     private static Updates.Result result(String running, String tag, boolean newer, String error) {
-        return new Updates.Result(running, tag, newer, 0, error, 0, false);
+        return new Updates.Result(running, tag, newer, 0, error, 0, false, 0);
     }
 
     /** The same outcome, with the pointer that named it past its expiry. */
     private static Updates.Result stale(String running, String tag, boolean newer) {
-        return new Updates.Result(running, tag, newer, 0, null, 1_760_000_000_000L, true);
+        return new Updates.Result(running, tag, newer, 0, null, 1_760_000_000_000L, true, 7);
     }
 
     @Test

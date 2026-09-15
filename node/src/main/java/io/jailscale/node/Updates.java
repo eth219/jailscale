@@ -3,7 +3,9 @@ package io.jailscale.node;
 import io.jailscale.proto.http.Headers;
 import io.jailscale.proto.http.HttpCall;
 import io.jailscale.proto.http.HttpException;
+import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Log;
 import io.jailscale.proto.util.Sha256;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
@@ -50,6 +52,8 @@ import java.util.Locale;
  */
 final class Updates {
 
+    private static final Log LOG = Log.get("update");
+
     /** The published releases of this project. */
     static final String PAGE = "https://github.com/eth219/jailscale/releases/latest";
     static final String DOWNLOADS = "https://github.com/eth219/jailscale/releases/download/";
@@ -95,7 +99,7 @@ final class Updates {
      * the version inside it, which is what compares and what a human is told.
      */
     record Result(String running, String tag, boolean newer, long checkedAt, String error, long expiresAt,
-        boolean stale) {
+        boolean stale, long seq) {
 
         /** The version the tag names. */
         String latest() {
@@ -105,7 +109,8 @@ final class Updates {
         JsonObject.Builder json() {
             return JsonObject.builder().put("running", running).put("latest", latest())
                 .put("newer", newer).put("checkedAt", checkedAt / 1000).put("error", error)
-                .put("expiresAt", expiresAt == 0 ? null : expiresAt / 1000).put("stale", stale);
+                .put("expiresAt", expiresAt == 0 ? null : expiresAt / 1000).put("stale", stale)
+                .put("seq", seq == 0 ? null : Long.valueOf(seq));
         }
 
         /**
@@ -133,9 +138,20 @@ final class Updates {
         }
     }
 
-    /** Asks what the current release is. Never throws: a failed check is a Result carrying why. */
-    static Result check(String running) {
-        return check(running, Source.compiledIn(), System.currentTimeMillis());
+    /**
+     * Asks what the current release is. Never throws: a failed check is a Result carrying why.
+     *
+     * @param floor where the highest sequence this node has seen is kept, or null when there is no
+     *     state directory to keep it in -- a {@code jailscale update} on a machine with no node is a
+     *     question about a binary, not about a node's history, and the floor it still has is the
+     *     version it is running
+     */
+    static Result check(String running, Path floor) {
+        return check(running, Source.compiledIn(), System.currentTimeMillis(), floor);
+    }
+
+    static Result check(String running, Source source, long now) {
+        return check(running, source, now, null);
     }
 
     /**
@@ -144,31 +160,46 @@ final class Updates {
      * @param now this node's clock, which is allowed to be wrong: the worst a bad one does here is
      *     report "cannot tell", because nothing on the download path is gated on the expiry
      */
-    static Result check(String running, Source source, long now) {
+    static Result check(String running, Source source, long now, Path floor) {
         if (source.keys().isEmpty()) {
             // The same rule --download applies, applied one step earlier: this build cannot check
             // a signature, so it cannot tell which release is current either, and an unsigned
             // answer is not a smaller version of that -- it is the check skipped by default.
             return new Result(running, null, false, now,
                 "this build carries no release signing key, so it cannot tell which release is current; see " + PAGE,
-                0, false);
+                0, false, 0);
         }
         try {
             Index i = index(source);
             if (i.issued() > now + CLOCK_SKEW_MS) {
                 return new Result(running, i.tag(), false, now,
                     "the release index says it was issued at " + Instant.ofEpochMilli(i.issued())
-                        + ", which is ahead of this clock", i.expires(), false);
+                        + ", which is ahead of this clock", i.expires(), false, i.seq());
+            }
+            // The floor, and the reason it is worth a file of its own: an expiry makes withholding
+            // visible, and this is what makes it un-repeatable. Without it, whoever can publish can
+            // put an older -- genuinely signed, so every other check here passes -- pointer back up
+            // and hold this node on the release it names. A sequence that has gone backwards is not
+            // a mistake anybody makes by accident, so it is said loudly rather than shrugged at.
+            Seen seen = Seen.load(floor);
+            if (i.seq() < seen.seq()) {
+                return new Result(running, i.tag(), false, now,
+                    "the release index went backwards: it says sequence " + i.seq() + " (" + i.tag()
+                        + "), and this node has already seen " + seen.seq() + " (" + seen.tag()
+                        + "). Refusing it; see " + PAGE, i.expires(), false, i.seq());
             }
             Integer cmp = compare(running, i.tag());
             if (cmp == null) {
                 return new Result(running, i.tag(), false, now,
-                    "cannot compare this build (" + running + ") with " + i.tag(), i.expires(), false);
+                    "cannot compare this build (" + running + ") with " + i.tag(), i.expires(), false, i.seq());
             }
-            return new Result(running, i.tag(), cmp < 0, now, null, i.expires(), now >= i.expires());
+            // Recorded only once everything above has passed: a sequence this node refused is not
+            // one it has seen.
+            Seen.record(floor, i, now);
+            return new Result(running, i.tag(), cmp < 0, now, null, i.expires(), now >= i.expires(), i.seq());
         } catch (IOException | HttpException | GeneralSecurityException | RuntimeException e) {
             return new Result(running, null, false, now,
-                e.getMessage() == null ? e.toString() : e.getMessage(), 0, false);
+                e.getMessage() == null ? e.toString() : e.getMessage(), 0, false, 0);
         }
     }
 
@@ -194,6 +225,74 @@ final class Updates {
         }
         ReleaseKey.verify(source.keys(), doc, sig);
         return Index.parse(new String(doc, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The highest sequence this node has accepted, in {@code update.json} beside the state file
+     * (docs/update-freshness). It is the whole of what makes an expiry into a defence rather than a
+     * notice: a pointer that has gone backwards is refused, so an old signed one cannot be put back
+     * up to hold this node on the release it names.
+     *
+     * <p><b>A node with nowhere to keep it is not refused a check.</b> {@code jailscale update} runs
+     * on machines with no state directory at all, and there the floor is what it has always been --
+     * the version this binary is, which {@code fetch} refuses to go below. That is a weaker floor
+     * and the right degradation: it is a question about a binary, not about a node's history.
+     */
+    record Seen(long seq, String tag) {
+
+        private static final Seen NONE = new Seen(0, "nothing");
+
+        /**
+         * What this node has seen, or a floor of zero. An unreadable or malformed file reads as
+         * zero rather than as a failure: whoever can corrupt it is already on this machine as this
+         * user, and refusing to check for updates for ever afterwards would be a worse answer than
+         * rebuilding the floor from the next pointer that verifies.
+         */
+        static Seen load(Path file) {
+            if (file == null || !Files.isReadable(file)) {
+                return NONE;
+            }
+            try {
+                JsonObject o = Json.parseObject(Files.readString(file));
+                Long seq = o.optLong("seq");
+                return seq == null || seq <= 0 ? NONE : new Seen(seq, o.optString("tag", "an earlier release"));
+            } catch (IOException | RuntimeException e) {
+                LOG.debug("{} could not be read, so nothing bounds the release index below: {}", file, e.toString());
+                return NONE;
+            }
+        }
+
+        /**
+         * Writes {@code i} down when it is at or above what is there. Re-read immediately before
+         * writing because the daemon's daily check and a {@code jailscale update} in a terminal are
+         * two processes on one file: the later writer must not be allowed to carry an older read
+         * back over a higher number.
+         *
+         * <p>A write that fails is logged and not raised. The check itself succeeded, the answer is
+         * already correct, and the floor simply does not advance -- on a read-only home, or where
+         * the file belongs to the user who ran the other process, that is the whole of the harm.
+         */
+        static void record(Path file, Index i, long now) {
+            if (file == null) {
+                return;
+            }
+            try {
+                if (i.seq() < load(file).seq()) {
+                    return;
+                }
+                String json = JsonObject.builder().put("seq", i.seq()).put("tag", i.tag())
+                    .put("checkedAt", now / 1000).toJson();
+                Path dir = file.getParent(); // null for a bare filename, which needs no directory made
+                if (dir != null) {
+                    Files.createDirectories(dir);
+                }
+                Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+                Files.writeString(tmp, json + "\n", StandardCharsets.UTF_8);
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException | RuntimeException e) {
+                LOG.debug("could not write {}: {}", file, e.toString());
+            }
+        }
     }
 
     /**

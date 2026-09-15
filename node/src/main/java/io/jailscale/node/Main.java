@@ -74,7 +74,7 @@ public final class Main {
         try {
             switch (cmd) {
                 case "version" -> System.out.println("jailscale " + Version.string());
-                case "update" -> update(a);
+                case "update" -> update(cfg, a);
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
@@ -139,8 +139,11 @@ public final class Main {
      * for having checked nothing. What it deliberately leaves is the step that needs a privilege
      * this process does not have.
      */
-    private static void update(Args a) throws Exception {
-        Updates.Result r = Updates.check(Version.string());
+    private static void update(NodeConfig cfg, Args a) throws Exception {
+        // The config directory is where the highest release-index sequence this node has seen is
+        // kept (docs/update-freshness). It is passed even though this command talks to no daemon:
+        // the floor belongs to the node, not to whichever process happened to ask.
+        Updates.Result r = Updates.check(Version.string(), cfg.updateFile());
         if (r.error() != null) {
             throw new IOException(r.line()); // like every other command: stderr, exit 1
         }
