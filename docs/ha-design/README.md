@@ -1,11 +1,18 @@
 # Hub redundancy: control plane, relays, and an uptime figure
 
 A design, of which step 1 below is built ([ARCHITECTURE.md §13.1 and §13.2](../ARCHITECTURE.md)):
-the hub-to-hub channel, the standby, promotion, and the availability figures. Steps 2 to 4 are not,
-and this file is what they would be. It records the shape a two-host hub takes and why, cut so
-that each step leaves the single-host hub untouched. Before step 1, §13's answer to losing the host
-was "copy the state directory and change DNS"; the standby is that sentence done by the hub itself,
-and the DNS change is still the operator's.
+the hub-to-hub channel, the standby, promotion, and the availability figures. The other steps are
+not, and this file is what they would be, in the order they are now meant to land: 1, 4, 2, 3, 5.
+It records the shape a two-host hub takes and why, cut so that each step leaves the single-host hub
+untouched. Before step 1, §13's answer to losing the host was "copy the state directory and change
+DNS"; the standby is that sentence done by the hub itself, and after step 4 the DNS change is the
+hub's as well.
+
+Two constraints were settled after step 1 shipped and hold for everything below. **No load balancer
+in front**: it would take the DNS problem away for one cloud's price and one cloud's API, and the
+project's answer to that class of dependency is to not have it. **Running two hubs must feel like
+running one plus a file and a line**: the operator copies `hub.key` and adds `--peer`; anything more
+that a step asks of them is a regression against §1's setup list.
 
 ## What the split borrows from Tailscale, and what it cannot
 
@@ -58,11 +65,17 @@ beyond that relay's own identity, and nothing to synchronise before it can serve
 The recommended minimum is **two hosts, each running both roles**, one of them primary:
 
 ```
-                       jailscale.example.com  A → hostA            control: join, admin, status, control channel
-                     *.jailscale.example.com  A → hostA, hostB     relays: visitors
+  at the parent (Cloudflare), for a two-host operator -- four records, and the hub answers the rest:
+                       jailscale.example.com  NS → ns1.jailscale.example.com.
+                       jailscale.example.com  NS → ns2.jailscale.example.com.
+                   ns1.jailscale.example.com  A  → hostA   (glue)
+                   ns2.jailscale.example.com  A  → hostB   (glue)
+  answered by the hubs themselves (step 4):
+                       jailscale.example.com  A → the hosts serving right now   control channel, join, admin, status
+                     *.jailscale.example.com  A → the hosts serving right now, or per name the relays that node is on
               relay1.jailscale.example.com    A → hostA            the relay name nodes connect to
               relay2.jailscale.example.com    A → hostB
-     _acme-challenge.jailscale.example.com    NS → jailscale.example.com.   unchanged; issuance is the primary's
+       _acme-challenge.jailscale.example.com  TXT                  as today
 
   hostA: control C1 (primary: writes)          + relay R1
   hostB: control C2 (standby: reads, signs)    + relay R2
@@ -139,7 +152,7 @@ and `RemoteSigning` move from the node module to `proto` for this; that is the c
 |---|---|---|---|
 | Process restart on either host | as today | seconds | nothing |
 | hostB lost | everything; visitors fall over to hostA | nothing | replace, start with `--peer`, it syncs |
-| hostA (primary) lost | streams in flight; new visitors to existing names (C2 signs); nodes reconnecting to relays on their leases | joins, `open`, admin, lease renewal, certificate renewal | promote C2, move the apex A record |
+| hostA (primary) lost | streams in flight; new visitors to existing names (C2 signs); nodes reconnecting to relays on their leases | joins, `open`, admin, lease renewal, certificate renewal | `jailhub promote` on C2, nothing else (step 4); nothing at all once step 5 is in |
 | Both lost | nothing | everything | restore the state directory from backup |
 
 The property this is for: losing the primary stops nothing on the visitor side, because relays are
@@ -151,23 +164,97 @@ A further step, not in the first version: two A records on the apex too, with th
 control connections and forwarding writes to the primary. That makes the node side fail over without
 DNS as well, at the price of a moment during promotion where both hosts may write.
 
-**A node that is not on every relay.** A visitor reaching relay B for a name whose node is connected
-only to relay A gets the "not open" page after the 3-second hold. Until every node runs a build that
-connects to every relay, the wildcard A record for a new relay must not be added, and the admin page
-should list the nodes that are not on all relays so the operator can see when it may be. The
-alternative is the relay forwarding the stream to the relay that has the node, which is DERP's mesh
-and is not in this design; the control plane knows which relays each node is on, so it could be
-added behind the same lease.
+**A node that is not on every relay** is answered by DNS rather than by forwarding: once the hub
+answers per name (step 4, below), `myapp.<hub>` resolves only to the relays that node is on, so a
+visitor never reaches a relay that cannot serve the name. No mesh forwarding, and no rule about when
+a second relay may be added to a wildcard record, because there is no wildcard record.
 
-**Relay loss is the weak side, and it is DNS.** With two A records a browser moves to the next
-address within a few hundred milliseconds when the dead host answers RST, and only after a full TCP
-connect timeout per new connection when it is black-holed. A health-checked DNS product fixes that
-and costs a provider token, which the project has declined to need. The alternative that keeps the
-principle is the hub becoming authoritative for the whole subdomain -- the `_acme-challenge`
-responder already exists -- with each host answering short-TTL A records for itself and its live
-peer and dropping a dead one; resolvers skip a dead NS on their own. That needs the responder
-brought up to public-authoritative quality and adds NS and glue records for two-host operators only.
-Deferred.
+## Step 4: the hubs answer their own DNS
+
+Relay loss was the weak side, and it was DNS: with two A records at the parent, a browser moves to
+the next address within a few hundred milliseconds when the dead host answers RST, and only after a
+full TCP connect timeout per new connection when it is black-holed. A health-checked DNS product
+fixes that for a provider token, which the project has declined to need. What keeps the principle is
+the hub becoming authoritative for the whole subdomain: the `_acme-challenge` responder already is
+one, for one name. Decided as follows.
+
+**Delegation.** The operator delegates the whole subdomain at the parent: two `NS` records naming
+`ns1.<hub>` and `ns2.<hub>`, and a glue `A` for each. The apex `A`, the wildcard `A` and the
+`_acme-challenge` `NS` go away, because everything under the cut is the hubs' to answer. A single-host
+operator keeps today's three records; the hub always answers the whole zone, so which cut to make at
+the parent is the operator's choice and needs no flag. Ports do not change: 53 is already open on
+every hub host.
+
+**What is answered.** `SOA` and `NS` for the zone with an hour's TTL; `_acme-challenge` `TXT` as
+today; `relayN` `A` as each host's fixed address; and, with a 30-second TTL, the apex and every
+name under it as **the set of hosts serving right now** -- the primary alone before step 3, both
+relays after it -- and, after step 3, each open name as **the relays its node is connected to**,
+falling back to the serving set for a claimed name with no node so the "not open" page is reached.
+Everything else is NXDOMAIN or NODATA as the zone's contents dictate. That is the part the
+responder does not do today and has to: correct negative answers, case-insensitive matching, EDNS,
+TCP (it has it), `ANY` refused, recursion refused, answers kept small so the server is no use as an
+amplifier. DNSSEC is not needed; the CA does not require it.
+
+**Liveness.** A host is in the serving set while its hub-to-hub channel to this host is up, and this
+host is in its own set while it is serving. Nothing else is probed: the channel is the signal, and
+its up and down intervals are already what the availability figure (§13.2) records. A dead host is
+dropped by its peer within the channel's idle timeout, and resolvers skip the dead `NS` on their own.
+In a partition where both hosts live and only the link between them is down, each answers with
+itself alone, so a resolver reaches a working host whichever `NS` it asked. **No consensus is
+involved in the DNS layer and no split-brain is possible in it.** Which host writes is a separate
+question, answered by promotion.
+
+**Knowing one's own address, without asking the operator.** A `--advertise` flag would be a new
+line in every hub's unit, which is exactly the regression the second constraint above forbids. The
+address is already written down by the operator, in the glue: the hub asks a public resolver for
+`ns1` and `ns2`, publishes a random `TXT` the way the dns-01 self-check does, and asks each glue
+address on port 53 directly for it; the one that answers with the hub's own token is the hub. A
+peer's address is the remote address of the hub-to-hub channel. `--advertise` exists only as an
+override for hosts whose public address is not the one any resolver can see.
+
+**What this changes in the order.** Step 4 depends on nothing in steps 2 and 3, and it moves the
+whole visitor-side failover onto `jailhub promote`: when the primary dies, the standby stops
+advertising it, and the moment it is promoted it advertises itself, so visitors arrive within the
+TTL with nothing touched at the parent. That is the gain a load balancer would have bought, without
+one. So step 4 comes next.
+
+## Step 5: promotion without a person, with the nodes as witnesses
+
+Two hosts cannot elect: a majority of two is two. Raft buys nothing below three, and the usual third
+party -- a witness host, or a cloud object with conditional writes as a lease -- is a cost or a
+dependency the design does not want. jailscale has a third party of its own: after step 2 every node
+is connected to both hubs. The nodes are the witnesses.
+
+**The rule.** A standby that has lost its channel to the primary asks every approved node it holds
+for proof that the primary is reachable. If any node returns a valid proof within the window, this
+is a partition: no promotion. If none does, the primary is dead or isolated from everyone, which
+for serving purposes is the same thing: the standby promotes itself. The primary runs the mirror
+rule: a primary that has lost its standby and every node steps down. Each promotion increments an
+**epoch**, carried in the hub-to-hub hello; a former primary that reconnects and sees a higher epoch
+becomes the standby without being told, so both units can carry `--peer` naming the other and be
+identical but for their addresses, and "restart the old primary with `--peer`" stops being a chore.
+
+**Proof, not testimony.** A node's word is not asked for. The standby hands the node a nonce; the
+node passes it up its own control connection; the primary answers with a MAC over the nonce, the
+epoch and the time under a key derived from `hub.key`, which both hubs hold and no node does; the
+node carries the bytes back. "I can see the primary" therefore cannot be forged, which leaves a
+lying node exactly one lie -- "I cannot" -- and one honest node with a valid proof outvotes any
+number of those. The vote is not a majority but an existence proof.
+
+**What a hostile node can still do.** On a hub with open registration it can be every node, at an
+hour when the honest ones are off, and force a promotion by silence. The result is two primaries
+until the link heals, at which point the higher epoch wins and the writes made in between --
+names claimed, nodes joined, small in number by construction -- are merged with the later epoch
+winning. Visitors notice nothing throughout; the attacker gains the ability to make that merge
+happen, which a rate limit of one automatic promotion per interval and a loud line on the page and
+in the log make worthless. Witnesses are approved nodes only, one vote per user however many
+machines, and on a hub with `registration open` automatic promotion is off by default and the
+operator turns it on knowing what it means. What a node can do outside this vote is what §11.1
+already bounds: signatures for its own names over its own streams, and nothing else.
+
+**What this is and is not.** A lease with fencing and an epoch, not a replicated log with consensus.
+The writes it protects are rare and small, and the worst outcome is a merge, not corruption. That
+is the trade the size of the state allows, and why step 4 lands first with `promote` still manual.
 
 ## Wire changes
 
@@ -179,7 +266,10 @@ move together:
 - `LinkOpened` gains an optional `lease`.
 - A hub-to-hub channel, Noise IK between control hosts and from relays to control hosts, carrying
   the event-log tail, `CertUpdate`, revocations, forwarded `SignRequest`/`SignResponse`, and
-  status probes.
+  status probes. Built in step 1 for the first three; the hello gains the sender's role and epoch
+  in step 5.
+- Step 5 adds a liveness proof on the node's control connection: a nonce from a hub, answered by
+  the other hub with a MAC the node cannot make.
 
 ## Uptime as a number
 
@@ -205,11 +295,19 @@ this is for the operator with no scraper.
    The channel is authenticated by the hub key itself -- the standby's Noise static is the copy of
    `hub.key` the operator made -- and rides 443 under the hub's own name. "Mutual probes" became
    the channel's own up and down intervals, which cost nothing and measure the same thing.
-2. Leases and the relay list: `LinkOpened.lease`, `Hello.relays`, `Hello.controls`. Nodes store
-   leases and connect to every relay.
-3. The relay role: SNI router and signing forwarder separable from the store, `TlsEndpoint` and
-   `RemoteSigning` shared through `proto`, relay names reserved, wildcard A records on both hosts.
-4. Optional: authoritative DNS for the subdomain, for relay failover without a provider token.
+2. (lands fourth) Leases and the relay list: `LinkOpened.lease`, `Hello.relays`,
+   `Hello.controls`. Nodes store leases and connect to every relay. The lease key is a signing key
+   of its own -- `hub.key` is X25519 and cannot sign, and the wildcard key has one job -- and it
+   travels to the standby the way the hub key does.
+3. (lands fifth) The relay role: SNI router and signing forwarder separable from the store,
+   `TlsEndpoint` and `RemoteSigning` shared through `proto`, relay names reserved, per-name DNS
+   answers. Raw TCP and UDP ports stay with the primary in this step; moving them to relays is a
+   decision for later.
+4. **(lands next)** The hubs answer their own DNS: whole-subdomain delegation, the serving set as
+   the answer, liveness from the channel, the host's own address found from the glue. Makes
+   `jailhub promote` the whole of a failover.
+5. (lands last) Promotion without a person: nodes as witnesses with an unforgeable proof, epochs,
+   symmetric units, off by default on hubs with open registration.
 
 ## What this does not fix
 
