@@ -200,6 +200,11 @@ final class Availability {
         for (Observed o : peers.values()) {
             prune(o.gaps, horizon);
         }
+        // A peer that has been down for the whole of the longest window is one that is not coming
+        // back under that name: a standby that was relabelled (the primary on v0.1.3 named it by
+        // hostname, v0.1.4 by address) or replaced. Left in, it would sit on the page at 0% for ever.
+        peers.entrySet().removeIf(e -> e.getValue().downSince > 0 && e.getValue().downSince <= horizon
+            && e.getValue().gaps.isEmpty());
     }
 
     private static void prune(List<Gap> gaps, long horizon) {
