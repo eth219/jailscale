@@ -30,6 +30,18 @@ final class AdminIpc implements Ipc.Handler {
         Store store = hub.store();
         switch (cmd) {
             case "status" -> reply.done(statusReply(store));
+            case "address-check" -> {
+                // Asked for, so it runs now rather than at the next hourly pass (§7.2): the reason
+                // to type this is having just edited a record. Refused on the terms the loop waits
+                // on -- off, a standby, a delegated hub still finding its own address -- and no
+                // others: whether the certificate came from ACME is the loop's business and not this
+                // command's, because an operator who asks has said which deployment this is.
+                String blocker = hub.addressCheckBlocker();
+                if (blocker != null) {
+                    throw new IllegalArgumentException(blocker);
+                }
+                reply.done(JsonObject.builder().put("ok", true).put("addressCheck", hub.checkAddress().json()));
+            }
             case "availability-reset" -> {
                 // The record restarts now: an operator who has finished a day of deliberate restarts
                 // does not want them counted against the service from here on (§13.2).
@@ -263,6 +275,13 @@ final class AdminIpc implements Ipc.Handler {
             .put("epoch", hub.epoch())
             .put("autoPromote", hub.autoPromote() ? "on" : "off")
             .put("standbys", standbys());
+        // §7.2: the verdict that stands, so the operator who missed the line at boot has somewhere
+        // to look it up. Absent, rather than "unknown", where the check is off or has not run yet:
+        // a field that says nothing is worse than a field that is not there.
+        Reachability.Status address = hub.addressStatus();
+        if (address != null) {
+            b.put("addressCheck", address.json());
+        }
         PeerClient pc = hub.peerClient();
         if (hub.isStandby() && pc != null) {
             b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());

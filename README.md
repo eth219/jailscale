@@ -233,9 +233,10 @@ What each side needs:
 The hub holds the wildcard private key. A compromised hub cannot read traffic to
 a healthy node, but it can move a name to a node of its own and sign for it. The
 node catches that afterwards from its own side: the daemon opens a session to
-one of its own public names every half hour, `jailscale verify` does all of them
-at once, and either way it compares RFC 5705 exported keying material against
-what it recorded, which a hub that terminated the TLS itself cannot match.
+each of its own public names once every half hour, one at a time, and
+`jailscale verify` does all of them at once; either way it compares RFC 5705
+exported keying material against what it recorded, which a hub that terminated
+the TLS itself cannot match.
 `status` keeps each name's last verdict, and an honest hub reports the move on
 its own. Names you bring yourself are not exposed this way: the key stays on the
 node and the hub only routes.
@@ -252,9 +253,11 @@ What a compromised hub can and cannot do is written out in
   binary without dropping nodes works with `serve --takeover`, but not under a
   systemd unit, where an upgrade is a restart.
 - Upgrading stops one step short of automatic: `update --download` verifies,
-  you run the `install` it prints. Which release is *current* comes from an
-  unsigned index, so publishing can withhold an upgrade from a node, though
-  never move one backwards.
+  you run the `install` it prints. Which release is *current* comes from a signed
+  pointer that expires, and a node refuses one older than the newest it has seen,
+  so being held back on an old release is visible and cannot be repeated. A node
+  installed fresh has nothing to compare with yet, which is the gap that remains.
+  It is never moved below what it runs.
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).

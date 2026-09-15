@@ -19,6 +19,16 @@ public record NodeConfig(Path configDir, Path socketPath) {
         return configDir.resolve("node.json");
     }
 
+    /**
+     * Where the highest release-index sequence this node has seen is kept (docs/update-freshness).
+     * Beside {@link #stateFile()} rather than inside it: {@code update} runs in the CLI process so
+     * that it answers while the daemon is down, and a second writer on the file that holds the
+     * MachineKey is not a race worth introducing for a counter.
+     */
+    public Path updateFile() {
+        return configDir.resolve("update.json");
+    }
+
     public Path daemonLog() {
         return configDir.resolve("daemon.log");
     }

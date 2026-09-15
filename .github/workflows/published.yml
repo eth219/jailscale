@@ -26,6 +26,12 @@ env:
 
 jobs:
   signed:
+    # `release-index` is not a release. It is the fixed pre-release that carries the signed pointer
+    # saying which release is current (docs/update-freshness), and its assets are replaced in place
+    # by tools/sign-release.sh and tools/refresh-index.sh, which verify what they uploaded. Creating
+    # it fires this workflow once, and without this line the check below would find no RELEASE.txt
+    # in it, take it back into draft, and leave every node's view of "what is current" unreachable.
+    if: (github.event.release.tag_name || inputs.tag) != 'release-index'
     runs-on: ubuntu-24.04
     permissions:
       contents: write # to read the release and, when it is not signed, to draft it again

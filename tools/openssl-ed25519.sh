@@ -46,3 +46,28 @@ spki_fingerprint() {
     "$OPENSSL" pkey -pubin -in "$1" -outform DER | "$OPENSSL" dgst -sha256 -binary | od -An -tx1 \
         | tr -d ' \n' | cut -c1-16
 }
+
+# Verifies $2 as a signature over $1 under any one of the base64 SPKI keys in $3, and prints the
+# fingerprint of the key that worked. Defined here rather than in each caller because "any key on
+# the list may sign" is the rule ReleaseKey applies in the node, and a second copy of it is a
+# second chance to apply it to a different list or to stop at the first key.
+verify_with_keys() {
+    _v=$(mktemp -d)
+    for _spki in $3; do
+        printf '%s' "$_spki" | base64 -d > "$_v/key.der" 2>/dev/null || continue
+        "$OPENSSL" pkey -pubin -inform DER -in "$_v/key.der" -out "$_v/key.pem" 2>/dev/null || continue
+        if "$OPENSSL" pkeyutl -verify -pubin -inkey "$_v/key.pem" -rawin \
+            -in "$1" -sigfile "$2" >/dev/null 2>&1; then
+            # The fingerprint is the return value, so an empty one is a failure and not a success
+            # with nothing to say: callers split this output into fixed fields, and a missing last
+            # field turns into an unbound variable rather than a diagnosis.
+            _fp=$(spki_fingerprint "$_v/key.pem")
+            rm -rf "$_v"
+            [ -n "$_fp" ] || return 1
+            printf '%s\n' "$_fp"
+            return 0
+        fi
+    done
+    rm -rf "$_v"
+    return 1
+}

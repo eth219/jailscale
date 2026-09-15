@@ -21,7 +21,7 @@ import java.util.List;
  * binary was worth handing to anyone.
  *
  * <p><b>The keys live here and nowhere else.</b> Not in the state file, not in a flag, and above
- * all not in anything the hub says: the same reasoning that keeps {@link Updates#LATEST} compiled
+ * all not in anything the hub says: the same reasoning that keeps {@link Updates#DOWNLOADS} compiled
  * in (§11.2) applies with more force to what decides which binaries are acceptable. A build
  * carrying no key refuses to download rather than falling back to the checksum alone, which would
  * be the whole exercise undone by a default.
