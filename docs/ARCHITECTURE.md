@@ -216,12 +216,13 @@ TCP 443, SNI = hub.example.com
              └─ [2B len BE][Noise transport message]    <- one mux frame in each
 ```
 
-Both HTTP ends are hand-written (§3.1): the hub's front is about 300 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*` and a root page, the node's client about 40, and the socket
-read timeout is 60 s. WebSocket was rejected as the carrier because its 4-byte client-to-server
-masking would touch every visitor byte again, frame headers and close semantics come with it, and it
-would only help behind proxies passing `Upgrade: websocket` when SNI passthrough already rules out an
-HTTP proxy in front of the hub (§7.2). ALPN is pinned to `http/1.1`, because HTTP/2 has no Upgrade.
+Both HTTP ends are hand-written (§3.1): the hub's front is about 750 lines serving `/v1/key`,
+`/v1/noise`, `/join/<token>`, `/admin/*`, a root page and the link directory, the node's client
+about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier because its
+4-byte client-to-server masking would touch every visitor byte again, frame headers and close
+semantics come with it, and it would only help behind proxies passing `Upgrade: websocket` when SNI
+passthrough already rules out an HTTP proxy in front of the hub (§7.2). ALPN is pinned to
+`http/1.1`, because HTTP/2 has no Upgrade.
 
 **Noise parameters.** `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `jailscale-control-v1`. The
 version string is mixed into the handshake hash, so incompatible versions fail the handshake itself
@@ -496,6 +497,51 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
+**The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
+open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
+-- so the front page shows the first eight and points at the directory for the rest, and the pair
+are two real URLs with a nav between them rather than one page with scripted tabs, so either half
+can be sent to someone and neither needs a script to arrive at. The status went nowhere: the
+availability record is what tells a first visitor this hub is real, and it belongs where they land.
+
+Each row carries the address, the kind and how long the link has been open -- every one of them
+something the hub already holds for its own routing. **Nothing on the page is fetched from the
+link.** A thumbnail or a favicon would mean the hub connecting to a node's
+app as a visitor and republishing what came back on its own front page, which is the one thing that
+page tells people it does not do, and it would put whatever anyone who can join chooses to serve on
+the operator's name. **Nor how many visitors a link is serving**, though the hub has that number and
+this page carried it briefly: that a name is open was already public, that somebody is on it right
+now was not, and a page anyone can poll turns the second into a live activity feed for a machine
+belonging to somebody else. It is also the figure `AdminWeb` keeps for the operator in as many words
+-- "how close a particular node is to its bound ... is the operator's business and nobody else's" --
+and the one this section refuses on `/metrics`, which listens on loopback and so has a narrower
+audience than a page on 443. The reader loses little: someone deciding whether to click a link
+learns more by clicking it. "Open" is since the *link* opened, so
+a node that restarts or hands its name on starts the clock again -- it counts the current link, not
+the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
+list does. The directory renders at most 200 rows at a time, like every other unauthenticated
+answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
+reachable -- the sentence at the top counts every open link, so every one of them has to be. A
+row's address carries the port the hub answers on, the same `portSuffix` the node was told when the
+link opened, because a row is a link someone is meant to click. The cursor is a string a visitor
+sends, so it is treated as one: a query is percent-decoded per escape
+and a malformed one throws, which on a path where nothing but `IOException` is caught took the
+response down with it, so an unreadable cursor is simply no cursor; and one that sorts past the
+last row -- what a forwarded cursor becomes once the links it started from close -- says so rather
+than drawing an empty table under a sentence that has just counted the links. The key is built in
+`Locale.ROOT` and percent-encoded on the way out, because it is read back by machine and a JVM
+numbering in Arabic-Indic digits would otherwise mint a cursor no other hub can match; and the list
+it indexes is already sorted by it, so finding the start is a binary search, not a walk that rebuilt
+a key per row it passed. Behind all of it, `HttpFront.serve` now answers **500 for any unchecked
+throw** out of a handler: every one of these runs on the connection's own virtual thread and nothing
+above it caught more than `IOException`, so one bad cursor closed the socket with no response at all
+and killed the thread printing a stack trace outside `Log`. Catching it per handler is one fix per
+handler; catching it at the boundary is the one that holds for the next one. The
+order is the order the rows *read* in, not the links' internal names: a raw port is named
+`tcp/<port>` and drawn as `<hub>:<port>`, so sorting by the name put it among the names beginning
+with "t", at a position matching nothing on the page. Its port is zero-padded in the key so 9000
+sorts before 20000, which also makes every key distinct and lets it double as the paging cursor.
+
 The page is one column, 48rem. It was 40rem, and what was wrong there was not the margins but the
 measure: a 64-character binary hash ran to the edge of its cell and a two-word label wrapped onto two
 lines. Both fit on one line now, and the rows are full-width with a hairline between them rather than
@@ -547,14 +593,15 @@ lives in `Metrics`, six `LongAdder`s written from every visitor thread and read 
 the signature counter sits at the one point that decides, so a refusal added later cannot forget to
 be counted.
 
-It lists the open links as well -- the address a visitor would type and whether it is https, tcp or
-udp -- because a hub that serves nothing and a hub that is busy look identical without it. The count
-that used to sit in the status table is gone with it: the list is the count, and saying both invited
-them to disagree. Those
-addresses are public by construction: a visitor reaches one by typing it, and a DNS lookup finds it
-either way. What stays behind the admin session is the part that is nobody else's business -- who
-opened a name and which local port it reaches -- and the list stops at fifty rows and says how many
-are left, so a busy hub does not turn its front page into a directory dump.
+It shows the first of the open links as well -- the address a visitor would type and whether it is
+https, tcp or udp -- because a hub that serves nothing and a hub that is busy look identical without
+it, and points at `/links` for the rest. The count that used to sit in the status table is gone with
+it: the list is the count, and saying both invited them to disagree. Those addresses are public by
+construction: a visitor reaches one by typing it. (Not because "a DNS lookup finds it either way",
+which this document used to say and which `DnsResponder` makes false -- a held name and a name
+nobody holds are answered identically, so DNS neither confirms nor enumerates.) What stays behind
+the admin session is the part that is nobody else's business: who opened a name and which local port
+it reaches.
 
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's

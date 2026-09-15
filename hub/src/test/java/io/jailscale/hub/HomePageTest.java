@@ -186,6 +186,32 @@ class HomePageTest {
         assertTrue(html.contains("None open right now"), html);
     }
 
+    /**
+     * Two pages and two URLs, not one page with a script swapping panels: either can be sent to
+     * someone, and both arrive with no script at all, which is the bargain the rest of this front
+     * end makes. What is on which page is the point of the split -- the evidence that this hub is
+     * up and worth joining stays on the front page, and the list that grows is the one that moved.
+     */
+    @Test
+    void theDirectoryIsItsOwnUrlAndEachPageSaysWhereYouAre() throws Exception {
+        String home = http("GET", "/", null, null).bodyText();
+        assertTrue(home.contains("<span aria-current=\"page\">Hub</span>"), home);
+        assertTrue(home.contains("<a href=\"/links\">Links</a>"), home);
+        assertFalse(home.contains("<script"), "no script on either page: " + home);
+
+        HttpResponse r = http("GET", "/links", null, null);
+        assertEquals(200, r.status());
+        String links = r.bodyText();
+        assertTrue(links.contains("<span aria-current=\"page\">Links</span>"), links);
+        assertTrue(links.contains("<a href=\"/\">Hub</a>"), links);
+        assertTrue(links.contains("None open right now"), links);
+        assertFalse(links.contains("<script"), "no script on either page: " + links);
+        // The availability record is what says this hub is real, so it stays where a first visitor
+        // lands rather than moving behind a click.
+        assertTrue(home.contains("<svg class=\"avail\""), home);
+        assertFalse(links.contains("<svg class=\"avail\""), links);
+    }
+
     @Test
     void anAdminSeesTheNodesAndCanRemoveOrBanFromTheSamePage() throws Exception {
         String cookie = loginAsAdmin();
