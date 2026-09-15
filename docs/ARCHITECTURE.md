@@ -1103,6 +1103,19 @@ compare" on. The public half is compiled into the binary, like `LATEST` and for 
 (§11.2). A build that carries no key refuses to download rather than falling back to the checksum
 alone; the check that cannot be made is not quietly skipped.
 
+**The release tooling publishes a signed pointer beside the releases, and nothing reads it yet.**
+`RELEASE.txt` says which release it *is*, and §15 records that nothing says which one is *current*.
+`latest.txt`, under
+the fixed `release-index` pre-release, is that missing sentence: a sequence number, the tag, and an
+expiry, signed with the same key. `tools/sign-release.sh` moves it forward whenever it publishes a
+full release — never backwards, and never onto a draft or a pre-release — and `tools/refresh-index.sh`
+re-issues it between releases, because an expiry is only worth what re-issuing it is. The sequence
+is taken from the published pointer and incremented, so a fetch that fails stops the script rather
+than starting a new sequence. A sequence only ever starts where a person typed
+`refresh-index.sh --first`, which is also what puts the first pointer up at all. The client half —
+refusing a pointer that went backwards, and saying "cannot tell" instead of "up to date" when one
+has expired — is [docs/update-freshness](update-freshness/README.md), and is not built.
+
 **The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
 key that has to move: every binary in the field accepts that one and nothing else, so publishing
 under a new key strands all of them and publishing under a key believed compromised is the only
@@ -2212,7 +2225,10 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   upgrade rather than forcing a downgrade, and the same party could equally delete the newer
   release. Closing it needs signed freshness: a sequence number the client refuses to go backwards
   on, or an expiring signed pointer to the current release. That is the piece of an update
-  framework this design does not have.
+  framework this design does not have; [docs/update-freshness](update-freshness/README.md) designs
+  it as both at once -- the sequence number to prevent, the expiry to make withholding visible.
+  What is built is the publishing half (§9.4): the tooling signs and re-issues the pointer. No
+  client reads it, so everything in this bullet still holds for every node in the field.
 - **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
   sides at a third of the lifetime remaining. When it does not happen the node logs the name and
   the time left once a day inside the last fortnight, the hub says how long the installed wildcard
