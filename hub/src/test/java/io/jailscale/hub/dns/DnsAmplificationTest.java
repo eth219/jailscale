@@ -20,8 +20,16 @@ import org.junit.jupiter.api.Test;
  * <p>The zone is set to the largest this design allows — two hosts serving, both name servers
  * delegated, and an issuance in flight so both challenge values are present, which is the only time
  * the TXT set is non-empty ({@code AcmeManager.issue} orders exactly {@code hub} and {@code *.hub}).
- * The hub name is the live one rather than {@code hub.test}, because a short name makes a short
- * query and a short query flatters the ratio.
+ *
+ * <p><b>And the hub name is swept, because the ratio moves with it and the short name is the bad
+ * one.</b> A longer name lengthens the query in full and the answer hardly at all, since every
+ * mention of it inside the answer is a compression pointer to the question — so the ratio falls as
+ * the name grows: 5.31 at {@code jailscale.sinabro.io}, 5.69 at {@code hub.test}, 5.87 at
+ * {@code x.io}, 5.92 at {@code a.b}. This used to measure the live name alone and call it the worst
+ * case, with the reasoning written down backwards; measuring only there is measuring the most
+ * flattering hub anyone could deploy, and a later change could lift that below the bound while a
+ * hub on a short domain sat above it. The absolute size goes the other way -- the longest name
+ * holds the largest answer -- so both ends are kept.
  */
 class DnsAmplificationTest {
 
@@ -34,30 +42,34 @@ class DnsAmplificationTest {
      */
     private static final double MAX_RATIO = 8;
 
+    /** The live hub, and the shortest name anybody could register: the ratio's two ends. */
+    private static final List<String> HUBS = List.of("jailscale.sinabro.io", "a.b");
     private static final String HUB = "jailscale.sinabro.io";
 
     @Test
     void noAnswerIsWorthReflecting() {
-        DnsResponder d = fullest();
         double worst = 0;
         String worstAt = "";
         int biggest = 0;
         String biggestAt = "";
-        for (String name : names()) {
-            for (int type : new int[] {1, 2, 6, 16, 28, 255, 99}) {
-                byte[] q = query(name, type);
-                byte[] r = d.respond(q);
-                if (r == null) {
-                    continue;
-                }
-                double ratio = (double) r.length / q.length;
-                if (ratio > worst) {
-                    worst = ratio;
-                    worstAt = name + " type " + type;
-                }
-                if (r.length > biggest) {
-                    biggest = r.length;
-                    biggestAt = name + " type " + type;
+        for (String hub : HUBS) {
+            DnsResponder d = fullest(hub);
+            for (String name : names(hub)) {
+                for (int type : new int[] {1, 2, 6, 16, 28, 255, 99}) {
+                    byte[] q = query(name, type);
+                    byte[] r = d.respond(q);
+                    if (r == null) {
+                        continue;
+                    }
+                    double ratio = (double) r.length / q.length;
+                    if (ratio > worst) {
+                        worst = ratio;
+                        worstAt = name + " type " + type;
+                    }
+                    if (r.length > biggest) {
+                        biggest = r.length;
+                        biggestAt = name + " type " + type;
+                    }
                 }
             }
         }
@@ -137,7 +149,11 @@ class DnsAmplificationTest {
 
     /** The zone at its largest: two hosts, both name servers, an issuance in flight. */
     private static DnsResponder fullest() {
-        DnsResponder d = new DnsResponder(HUB);
+        return fullest(HUB);
+    }
+
+    private static DnsResponder fullest(String hub) {
+        DnsResponder d = new DnsResponder(hub);
         d.setTxt(List.of("HRpBmSGlhQU7ZP6QzkPXVaTHi0Nw4N4iCNMLrGgGTMY", "oCyDnBOLHQiVBnHJc1xPzLHQjQvKLKBOr3ZSW3E6xBo"));
         d.setZone(new DnsResponder.Zone() {
             @Override public List<String> serving() {
@@ -151,10 +167,10 @@ class DnsAmplificationTest {
         return d;
     }
 
-    private static List<String> names() {
+    private static List<String> names(String hub) {
         return List.of(
-            "_acme-challenge." + HUB, HUB, "myapp." + HUB, "a.b.c." + HUB,
-            "ns1." + HUB, "ns2." + HUB, DnsResponder.SELF_LABEL + "." + HUB, "other.example.com");
+            "_acme-challenge." + hub, hub, "myapp." + hub, "a.b.c." + hub,
+            "ns1." + hub, "ns2." + hub, DnsResponder.SELF_LABEL + "." + hub, "other.example.com");
     }
 
     static byte[] queryFor(String name, int type) {

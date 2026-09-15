@@ -143,6 +143,28 @@ class StoreCrashTest {
     }
 
     @Test
+    void theKnockQueueIsBoundedPerNetworkNotPerAddress() throws Exception {
+        // ARCHITECTURE.md §11.5: five pending knocks per address, counted per /64 in v6 like every
+        // other bound there. Counted per address it is five times as many addresses as a routed /64
+        // holds, and unlike the connection caps each knock is appended to the log and rewritten into
+        // every snapshot after it, so the overflow outlives the process.
+        Path dir = TestDirs.newRoot("knock");
+        try (Store s = new Store(dir)) {
+            for (int i = 1; i <= 5; i++) {
+                s.addPending("mkey:v6-" + i, "box" + i, "linux", "2001:db8:1:2::" + i, null);
+            }
+            assertEquals(5, s.pendingCountFrom("2001:db8:1:2::99"),
+                "a fresh address in a /64 that has knocked five times is the same caller");
+            assertEquals(0, s.pendingCountFrom("2001:db8:1:3::1"), "a different /64 is not");
+
+            // v4 is unchanged: there an address is what an attacker has to acquire.
+            s.addPending("mkey:v4", "box", "linux", "203.0.113.7", null);
+            assertEquals(1, s.pendingCountFrom("203.0.113.7"));
+            assertEquals(0, s.pendingCountFrom("203.0.113.8"));
+        }
+    }
+
+    @Test
     void anOrdinarySnapshotStillCompactsTheLog() throws Exception {
         // The truncation is what keeps the log from growing without bound, and a fix that made
         // replay idempotent by leaving the log alone would pass every test above and lose that.

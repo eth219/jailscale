@@ -282,9 +282,12 @@ final class PeerClient implements AutoCloseable {
                         // its own it is the joins and claims made here, and without this line the
                         // nodes holding them would find out by being strangers.
                         LOG.warn("{} is the primary and its state does not include what this host held: {}. "
-                            + "Those nodes have to join again and those names are free to claim; the state as it "
-                            + "stood is kept at {} until the next time this happens (ARCHITECTURE.md §13.5)",
-                            primaryHost(), lost, lost.kept());
+                            + "Those nodes have to join again and those names are free to claim; {} "
+                            + "(ARCHITECTURE.md §13.5)",
+                            primaryHost(), lost, lost.kept() == null
+                                ? "the state as it stood could not be written down, so this line is the whole record"
+                                : "the state as it stood is kept at " + lost.kept()
+                                    + " until the next time this happens");
                     }
                     LOG.info("in sync with {}: {} nodes, {} names", primaryHost(), hub.store().nodes().size(),
                         hub.store().names().size());

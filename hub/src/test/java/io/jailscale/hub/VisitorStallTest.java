@@ -53,7 +53,15 @@ class VisitorStallTest {
 
     private static final Path CERT = Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath();
     private static final Path KEY = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
-    private static final long DEADLINE_MS = 1_500;
+    /**
+     * Long enough that everything before the refusal assertion -- the ClientHello, the node's
+     * handshake with its signature round trip to the hub, and a second whole TLS connection --
+     * cannot run past it on a loaded runner. At 1,500 that was about 300 ms of budget locally and a
+     * five-times-slower window would have released the slot early, failing the assertion with a
+     * message about the bound rather than about the clock. The test costs roughly this much wall
+     * time, which is what it takes for the deadline itself to expire.
+     */
+    private static final long DEADLINE_MS = 8_000;
 
     private Path root;
     private Hub hub;

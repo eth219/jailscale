@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import io.jailscale.proto.json.Json;
+import io.jailscale.proto.net.NetKey;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Log;
 import java.io.FileOutputStream;
@@ -493,9 +494,17 @@ final class Store implements AutoCloseable {
     }
 
     synchronized int pendingCountFrom(String ip) {
+        if (ip == null) {
+            return 0;
+        }
+        // Per network, as the other bounds of §11.5 are: in v6 an address costs nothing, so counted
+        // per address this bound is five knocks times as many addresses as a /64 holds -- and a
+        // knock is the one of those bounds whose overflow is written to disk and outlives the
+        // process. The stored ip stays the address, which is what an operator is shown.
+        String key = NetKey.of(ip);
         int n = 0;
         for (PendingRec p : pending.values()) {
-            if (ip != null && ip.equals(p.ip())) {
+            if (p.ip() != null && key.equals(NetKey.of(p.ip()))) {
                 n++;
             }
         }
@@ -556,6 +565,8 @@ final class Store implements AutoCloseable {
      */
     record Superseded(List<String> nodes, List<String> names, List<String> domains, List<Integer> ports,
         int credentials, Path kept) {
+
+        /** Where the copy of what went is, or null when there is no copy: nothing was lost, or the write failed. */
 
         boolean any() {
             return !nodes.isEmpty() || !names.isEmpty() || !domains.isEmpty() || !ports.isEmpty() || credentials > 0;
@@ -653,19 +664,23 @@ final class Store implements AutoCloseable {
         for (String id : authKeys.keySet()) {
             credentials += theirs.authKeys.containsKey(id) ? 0 : 1;
         }
-        Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials,
-            dir.resolve("state.superseded.snapshot"));
-        if (lost.any()) {
-            try {
-                Files.writeString(lost.kept(), snapshotJson(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                // Best effort, for the reason syncDir() gives: this file exists to be read by a
-                // person, and a state directory that is full or read-only must not be able to stop
-                // a standby following its primary. The line below still names what went.
-                LOG.warn("could not keep the superseded state at {}: {}", lost.kept(), e.toString());
-            }
+        Path keptAt = dir.resolve("state.superseded.snapshot");
+        if (lostNodes.isEmpty() && lostNames.isEmpty() && lostDomains.isEmpty() && lostPorts.isEmpty()
+            && credentials == 0) {
+            return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
         }
-        return lost;
+        try {
+            Files.writeString(keptAt, snapshotJson(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            // Best effort, for the reason syncDir() gives: this file exists to be read by a person,
+            // and a state directory that is full or read-only must not be able to stop a standby
+            // following its primary. `kept` is null from here, because a path that was not written
+            // is worse than no path: a copy from an earlier hand-off may be sitting at it, and
+            // whoever the line below sends there would read another incident's losses as this one's.
+            LOG.warn("could not keep the superseded state at {}: {}", keptAt, e.toString());
+            return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
+        }
+        return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, keptAt);
     }
 
     /** An empty store with no directory behind it: somewhere to replay another's snapshot and compare. */

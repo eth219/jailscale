@@ -144,7 +144,11 @@ class StoreReplicationTest {
 
             Store.Superseded again = standby.replaceWith(primary.snapshotJson());
             assertFalse(again.any(), "a resync of the same state loses nothing: " + again);
-            assertFalse(Files.exists(again.kept()), "and writes no superseded copy");
+            // `kept` names a copy that exists or nothing at all, so there is no path here to
+            // check -- which is the point: nothing may send an operator to a file that was never
+            // written. The directory is asked directly instead.
+            assertNull(again.kept(), "nothing was lost, so there is no copy to name");
+            assertFalse(Files.exists(b.resolve("state.superseded.snapshot")), "and none was written");
         }
     }
 

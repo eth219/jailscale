@@ -1488,7 +1488,7 @@ The smallest thing anyone is *handed* in v6 is a /64, every ordinary VPS comes w
 it, and that is 18 quintillion source addresses at no cost. Counted per address, every row of the
 table above and the connection caps of §8.1 would read "so many per address, times as many
 addresses as you like", which is not a limit; so `proto.net.NetKey` gives v4 the address and v6 the
-/64, and the buckets and counters are kept against that. What remains is that a subscriber given a
+/64, and the buckets, the connection counters and the knock queue are all counted against that. What remains is that a subscriber given a
 /48 — a residential line, some hosting — holds 65,536 keys; /48 would close that and would also put
 a whole ISP customer or a campus behind one bucket, which is the worse trade for a limit whose job
 is to be invisible to honest callers. `ban` takes a v6 prefix and always has (§11.5, below), so an
