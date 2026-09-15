@@ -615,6 +615,14 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                     // would otherwise fill this log with the same line every day for ever.
                     LOG.warn("{}", r.line());
                 }
+                // Independent of what the check concluded: a pointer can name an upgrade and be
+                // about to expire, and the second is the one nobody else will notice. Once a day
+                // for the last fortnight is the cadence the certificate warning already uses, and
+                // for the same reason -- what has to happen is a person's (docs/update-freshness).
+                String soon = r.warning(System.currentTimeMillis());
+                if (soon != null) {
+                    LOG.warn("{}", soon);
+                }
                 lastUpdate = r;
                 Thread.sleep(UPDATE_CHECK_MS);
             }

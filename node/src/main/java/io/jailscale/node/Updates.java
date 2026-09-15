@@ -73,6 +73,12 @@ final class Updates {
     static final String INDEX_FORMAT = "jailscale-index 1";
     /** How far ahead of this clock an {@code issued} may be before it is read as wrong rather than new. */
     static final long CLOCK_SKEW_MS = 10 * 60_000L;
+    /**
+     * How long before a pointer expires a node starts saying so. Re-issuing it is a person at a
+     * laptop calling KMS (§9.4), so the warning has to arrive while there is still time to do it --
+     * and it arrives where the operator already looks, rather than in a command nobody runs.
+     */
+    static final long EXPIRY_WARNING_MS = 14L * 24 * 60 * 60 * 1000;
 
     /** The files a release carries beside the binaries (§14). */
     static final String SUMS = "SHA256SUMS.txt";
@@ -147,6 +153,24 @@ final class Updates {
          */
         boolean stale(long now) {
             return expiresAt != 0 && now >= expiresAt;
+        }
+
+        /**
+         * Whether the pointer is still good but running out. Not for a stale one: that has already
+         * stopped answering the question, and {@link #line()} says so instead.
+         */
+        boolean expiringSoon(long now) {
+            return expiresAt != 0 && !stale(now) && now >= expiresAt - EXPIRY_WARNING_MS;
+        }
+
+        /** The sentence for {@link #expiringSoon}, or null when there is nothing to say. */
+        String warning(long now) {
+            if (!expiringSoon(now)) {
+                return null;
+            }
+            return "the release index expires on "
+                + Instant.ofEpochMilli(expiresAt).truncatedTo(ChronoUnit.SECONDS)
+                + "; past that this node can no longer tell whether it is current.";
         }
 
         JsonObject.Builder json(long now) {
