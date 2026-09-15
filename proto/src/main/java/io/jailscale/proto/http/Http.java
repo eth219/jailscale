@@ -80,6 +80,23 @@ public final class Http {
 
     /** {@code headOnly}: the request was HEAD, so the response has headers but no body. */
     public static HttpResponse readResponse(InputStream in, int maxBody, boolean headOnly) throws IOException, HttpException {
+        HttpResponse resp = readResponseHead(in);
+        if (headOnly || !hasBody(resp.status())) {
+            return resp;
+        }
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        copyBody(in, resp.headers(), buf, maxBody);
+        return resp.body(buf.toByteArray());
+    }
+
+    /**
+     * Status line and headers, leaving the body on the stream for {@link #copyBody}. Split out
+     * because a release download is 25 MiB (ARCHITECTURE.md §9.4) and the node that runs it idles
+     * in 25 MB: a body that has to exist as a {@code byte[]} to be looked at is a body that cannot
+     * be one of these. Everything that wants the whole thing still goes through
+     * {@link #readResponse} and does not care.
+     */
+    public static HttpResponse readResponseHead(InputStream in) throws IOException, HttpException {
         String line = readLine(in, MAX_LINE, 502);
         if (line == null) {
             throw new EOFException("no response");
@@ -95,36 +112,92 @@ public final class Http {
             throw new HttpException(502, "bad status line");
         }
         HttpResponse resp = new HttpResponse(status);
-        Headers headers = readHeaders(in);
-        for (String[] h : headers.entries()) {
+        for (String[] h : readHeaders(in).entries()) {
             resp.header(h[0], h[1]);
-        }
-        if (status == 101 || status == 204 || status == 304 || headOnly) {
-            return resp;
-        }
-        String te = headers.get("Transfer-Encoding");
-        if (te != null && te.toLowerCase(Locale.ROOT).contains("chunked")) {
-            resp.body(readChunked(in, maxBody));
-        } else if (headers.contains("Content-Length")) {
-            resp.body(readBody(in, headers, maxBody));
-        } else {
-            ByteArrayOutputStream buf = new ByteArrayOutputStream();
-            byte[] tmp = new byte[4096];
-            int n;
-            while ((n = in.read(tmp)) > 0) {
-                if (buf.size() + n > maxBody) {
-                    throw new HttpException(502, "response too large");
-                }
-                buf.write(tmp, 0, n);
-            }
-            resp.body(buf.toByteArray());
         }
         return resp;
     }
 
+    /** Whether a response with this status carries a body at all. */
+    private static boolean hasBody(int status) {
+        return status != 101 && status != 204 && status != 304;
+    }
+
+    /**
+     * Streams a response body to {@code out} -- Content-Length, chunked, or until EOF -- and
+     * returns how many bytes it wrote. Nothing is buffered beyond one 8 KB block.
+     */
+    public static long copyBody(InputStream in, Headers headers, OutputStream out, long maxBody)
+        throws IOException, HttpException {
+        // The header is a list, in the order the codings were applied (RFC 9112 §6.1), and the
+        // only lists this decodes are [chunked] and [identity]. "gzip, chunked" is a legal way to
+        // say the de-chunked bytes are still compressed; taking the chunked branch on the
+        // substring would hash gzip output and call the download tampered with. Nothing here asks
+        // for a coding, so anything but plain chunked is refused rather than guessed at.
+        String coding = null;
+        for (String te : headers.all("Transfer-Encoding")) {
+            for (String c : te.split(",")) {
+                c = c.trim().toLowerCase(Locale.ROOT);
+                if (c.isEmpty() || c.equals("identity")) {
+                    continue;
+                }
+                if (coding != null || !c.equals("chunked")) {
+                    throw new HttpException(502, "unsupported Transfer-Encoding " + te);
+                }
+                coding = c;
+            }
+        }
+        if (coding != null) {
+            return copyChunked(in, out, maxBody);
+        }
+        long len = contentLength(headers, maxBody);
+        if (len >= 0) {
+            if (len > 0) {
+                copyExactly(in, out, len, new byte[(int) Math.min(8192, len)]);
+            }
+            return len;
+        }
+        long total = 0;
+        byte[] tmp = new byte[8192];
+        int n;
+        while ((n = in.read(tmp)) > 0) {
+            if (n > maxBody - total) { // as above; n is at most 8192 here, but the form should not differ
+                throw new HttpException(502, "response too large");
+            }
+            out.write(tmp, 0, n);
+            total += n;
+        }
+        return total;
+    }
+
+    /**
+     * The Content-Length, checked, or -1 when there is none. One reader for the request side and
+     * the response side, so what one accepts the other does too.
+     */
+    static long contentLength(Headers headers, long maxBody) throws HttpException {
+        String cl = headers.get("Content-Length");
+        if (cl == null) {
+            return -1;
+        }
+        long len;
+        try {
+            len = Long.parseLong(cl.trim());
+        } catch (NumberFormatException e) {
+            throw new HttpException(400, "bad Content-Length");
+        }
+        if (len < 0) {
+            throw new HttpException(400, "bad Content-Length");
+        }
+        if (len > maxBody) {
+            throw new HttpException(413, "body too large");
+        }
+        return len;
+    }
+
     /** Responses only (RFC 9112 §7.1): chunk-size [;ext] CRLF data CRLF ... 0 CRLF trailers CRLF. */
-    static byte[] readChunked(InputStream in, int maxBody) throws IOException, HttpException {
-        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+    static long copyChunked(InputStream in, OutputStream out, long maxBody) throws IOException, HttpException {
+        long total = 0;
+        byte[] tmp = new byte[8192]; // one for the whole body, not one per chunk
         while (true) {
             String line = readLine(in, MAX_LINE, 502);
             if (line == null) {
@@ -132,13 +205,17 @@ public final class Http {
             }
             int semi = line.indexOf(';');
             String hex = (semi >= 0 ? line.substring(0, semi) : line).trim();
-            int size;
+            long size;
             try {
-                size = Integer.parseInt(hex, 16);
+                size = Long.parseLong(hex, 16);
             } catch (NumberFormatException e) {
                 throw new HttpException(502, "bad chunk size");
             }
-            if (size < 0 || buf.size() + size > maxBody) {
+            // Written as a subtraction because the addition overflows: a chunk header of
+            // 7fffffffffffffff after any non-empty chunk makes `total + size` wrap negative, which
+            // is never greater than maxBody, and the cap is gone. The byte[] this used to allocate
+            // was an accidental backstop that streaming removed.
+            if (size < 0 || size > maxBody - total) {
                 throw new HttpException(502, "response too large");
             }
             if (size == 0) {
@@ -148,22 +225,27 @@ public final class Http {
                         break;
                     }
                 }
-                return buf.toByteArray();
+                return total;
             }
-            byte[] chunk = new byte[size];
-            int off = 0;
-            while (off < size) {
-                int n = in.read(chunk, off, size - off);
-                if (n < 0) {
-                    throw new EOFException("truncated chunk");
-                }
-                off += n;
-            }
-            buf.write(chunk, 0, size);
+            copyExactly(in, out, size, tmp);
+            total += size;
             String crlf = readLine(in, 2, 502);
             if (crlf == null || !crlf.isEmpty()) {
                 throw new HttpException(502, "bad chunk terminator");
             }
+        }
+    }
+
+    /** Copies exactly {@code len} bytes through {@code tmp}, or throws: a short read here is a truncated body. */
+    private static void copyExactly(InputStream in, OutputStream out, long len, byte[] tmp) throws IOException {
+        long left = len;
+        while (left > 0) {
+            int n = in.read(tmp, 0, (int) Math.min(tmp.length, left));
+            if (n < 0) {
+                throw new EOFException("truncated body");
+            }
+            out.write(tmp, 0, n);
+            left -= n;
         }
     }
 
@@ -202,30 +284,13 @@ public final class Http {
         if (te != null && !te.toLowerCase(Locale.ROOT).equals("identity")) {
             throw new HttpException(411, "chunked bodies not supported");
         }
-        String cl = headers.get("Content-Length");
-        if (cl == null) {
+        long len = contentLength(headers, maxBody);
+        if (len <= 0) {
             return new byte[0];
         }
-        long len;
-        try {
-            len = Long.parseLong(cl.trim());
-        } catch (NumberFormatException e) {
-            throw new HttpException(400, "bad Content-Length");
-        }
-        if (len < 0) {
-            throw new HttpException(400, "bad Content-Length");
-        }
-        if (len > maxBody) {
-            throw new HttpException(413, "body too large");
-        }
-        byte[] body = new byte[(int) len];
-        int off = 0;
-        while (off < body.length) {
-            int n = in.read(body, off, body.length - off);
-            if (n < 0) {
-                throw new EOFException("truncated body");
-            }
-            off += n;
+        byte[] body = in.readNBytes((int) len); // one allocation: this is the hub's public request path
+        if (body.length != len) {
+            throw new EOFException("truncated body");
         }
         return body;
     }

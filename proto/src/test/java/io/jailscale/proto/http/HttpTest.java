@@ -100,6 +100,30 @@ class HttpTest {
         assertEquals("Wikipedia in\r\n\r\nchunks.", chunked.bodyText());
         assertThrows(HttpException.class, () -> Http.readResponse(in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"), 1024));
         assertThrows(HttpException.class, () -> Http.readResponse(in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1000\r\n"), 16));
+        // A chunk size that makes the cap arithmetic overflow, which only happens once something
+        // has already been counted -- the case above starts at zero and would pass either way.
+        // Unchecked, this copies until the peer stops sending, with maxBody meaning nothing.
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n7fffffffffffffff\r\n" + "x".repeat(100)), 1024));
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\nffffffffffffffff\r\n" + "x".repeat(100)), 1024));
+
+        // A transfer coding this does not decode is refused, not read as if the bytes were the body:
+        // hashing gzip output and reporting "not what the release says it is" would blame tampering
+        // for a proxy's compression. The request side has the same rule (readBody's 411).
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\nContent-Length: 3\r\n\r\nabc"), 1024));
+        assertEquals("abc", Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: identity\r\nContent-Length: 3\r\n\r\nabc"), 1024).bodyText());
+        // The header is a list. "gzip, chunked" is the RFC's way to chunk a compressed body, and
+        // de-chunking it on the substring would hand back gzip bytes as the body; a list with
+        // chunked anywhere but alone is refused, as is chunked twice.
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"), 1024));
+        assertThrows(HttpException.class, () -> Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"), 1024));
+        assertEquals("abc", Http.readResponse(
+            in("HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"), 1024).bodyText());
 
         // HEAD: headers only, even with a Content-Length.
         HttpResponse head = Http.readResponse(in("HTTP/1.1 200 OK\r\nContent-Length: 99\r\nReplay-Nonce: n1\r\n\r\n"), 1024, true);

@@ -21,6 +21,11 @@ name: images
 # the release's: same distribution, same version, same options. That makes this the release binary
 # in the sense that matters, though not byte-identical, which native-image does not promise.
 
+# `:latest` is not set here on the tag push. release.yml leaves a draft that only becomes a release
+# once tools/sign-release.sh has signed and published it, and README says `:latest` follows
+# releases -- so it moves in published.yml, on `release: published`, after that workflow has
+# verified the signature, by re-tagging the version manifest this one built. A tag whose draft is
+# never published, or is deleted, never reaches `:latest`.
 on:
   push:
     tags: ['v*']
@@ -208,9 +213,10 @@ jobs:
           # pull on the other arch starts failing.
           count=$(echo $refs | wc -w)
           [ "$count" -eq 2 ] || { echo "expected 2 digests, found $count in /tmp/digests/${{ matrix.component }}"; exit 1; }
-          # A tag push gets both the version and latest; a main push only gets edge.
+          # A tag push gets the version and nothing else; a main push gets edge. :latest is
+          # published.yml's, on the release being published.
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            tags="${{ github.ref_name }} latest"
+            tags="${{ github.ref_name }}"
           else
             tags="edge"
           fi
@@ -223,3 +229,4 @@ jobs:
           # wrong, so run one of them: this runner is amd64 and takes that arch out of the list.
           first=$(echo $tags | cut -d' ' -f1)
           docker run --rm "${repo}:${first}" version
+

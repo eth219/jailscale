@@ -631,8 +631,13 @@ final class HubLink implements AutoCloseable {
     }
 
     static String osName() {
-        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
-        if (os.contains("mac")) {
+        return osName(System.getProperty("os.name", ""));
+    }
+
+    /** {@code macos}, {@code windows}, {@code linux}, or the lowercased name itself: one classification of {@code os.name}. */
+    static String osName(String osName) {
+        String os = osName.toLowerCase(java.util.Locale.ROOT);
+        if (os.contains("mac") || os.contains("darwin")) { // darwin before "win", which it also contains
             return "macos";
         }
         if (os.contains("win")) {
