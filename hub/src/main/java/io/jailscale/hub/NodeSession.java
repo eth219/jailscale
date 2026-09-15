@@ -122,16 +122,41 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             }
             socket.setSoTimeout(IDLE_TIMEOUT_MS);
             boolean[] rejected = new boolean[1];
+            String[] peerHost = new String[1];
             NoiseChannel ch = NoiseChannel.respond(in, out, hub.keys().responders(), (p1, hs) -> {
-                mkey = KeyText.format(KeyText.MACHINE, hs.remoteStatic());
                 Message m;
                 try {
                     m = Codec.decode(p1);
                 } catch (CodecException e) {
                     throw new NoiseException("bad Hello: " + e.getMessage());
                 }
+                // A caller whose static key is this hub's own holds hub.key: a standby hub, not a
+                // node (ARCHITECTURE.md §13.1). Decided by the key the handshake authenticated,
+                // not by what the message claims to be.
+                if (hub.keys().isOwn(hs.remoteStatic())) {
+                    if (!(m instanceof Message.PeerHello ph)) {
+                        throw new NoiseException("a peer's first message must be PeerHello, got " + m.type());
+                    }
+                    if (hub.isStandby()) {
+                        rejected[0] = true;
+                        return Codec.encode(new Message.Goodbye("standby", "this hub is itself a standby of "
+                            + hub.config().peer().getHost() + "; follow the primary"));
+                    }
+                    peerHost[0] = ph.host() == null ? remoteIp : ph.host();
+                    LOG.info("standby {} from {} (v{})", peerHost[0], remoteIp, ph.version());
+                    return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname()));
+                }
+                mkey = KeyText.format(KeyText.MACHINE, hs.remoteStatic());
                 if (!(m instanceof Message.Hello hello)) {
                     throw new NoiseException("first message must be Hello, got " + m.type());
+                }
+                if (hub.isStandby()) {
+                    // Told where to go rather than served: a standby holds no registration that a
+                    // node could act on, and the reason is not one the node stops retrying for, so
+                    // it keeps trying until DNS moves or this hub is promoted.
+                    rejected[0] = true;
+                    return Codec.encode(new Message.Goodbye("standby", "this hub is a standby of "
+                        + hub.config().peer().getHost() + " and takes no nodes until it is promoted"));
                 }
                 if (hello.proto() < MIN_PROTO) {
                     rejected[0] = true;
@@ -155,6 +180,10 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 return Codec.encode(new Message.HelloResponse(Message.PROTO, MIN_PROTO, Hub.version(), hub.config().dnsSuffix()));
             });
             if (rejected[0]) {
+                return;
+            }
+            if (peerHost[0] != null) {
+                hub.peers().new Session(remoteIp, peerHost[0]).run(ch);
                 return;
             }
             Metrics.NODE_SESSIONS.increment();

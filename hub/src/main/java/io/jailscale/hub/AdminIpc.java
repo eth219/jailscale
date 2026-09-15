@@ -28,21 +28,13 @@ final class AdminIpc implements Ipc.Handler {
         String cmd = req.string("cmd");
         Store store = hub.store();
         switch (cmd) {
-            case "status" -> reply.done(JsonObject.builder()
-                .put("ok", true)
-                .put("hostname", hub.config().hostname())
-                .put("hubKey", hub.keys().publicText())
-                .put("nextHubKey", hub.keys().nextPublicText())
-                .put("nodes", store.nodes().size())
-                .put("links", hub.links().all().size())
-                .put("certKeyId", hub.tls().isLoaded() ? hub.tls().keyId() : null)
-                .put("online", hub.registry().size())
-                .put("pending", store.pending().size())
-                .put("invites", store.invites().size())
-                .put("admins", new ArrayList<>(store.admins()))
-                .put("registration", store.setting(Store.SETTING_REGISTRATION, "invite"))
-                .put("invitePolicy", store.setting(Store.SETTING_INVITE_POLICY, "members"))
-                .put("knock", store.setting(Store.SETTING_KNOCK, "on")));
+            case "status" -> reply.done(statusReply(store));
+            case "promote" -> {
+                hub.promote();
+                reply.done(JsonObject.builder().put("ok", true).put("role", hub.role())
+                    .put("next", "point " + hub.config().hostname() + " at this host; restart the old primary with --peer https://"
+                        + hub.config().hostname()));
+            }
 
             case "node-list" -> {
                 List<Object> rows = new ArrayList<>();
@@ -242,6 +234,40 @@ final class AdminIpc implements Ipc.Handler {
             }
             default -> reply.error("unknown command " + cmd);
         }
+    }
+
+    private JsonObject.Builder statusReply(Store store) {
+        JsonObject.Builder b = JsonObject.builder()
+            .put("ok", true)
+            .put("hostname", hub.config().hostname())
+            .put("hubKey", hub.keys().publicText())
+            .put("nextHubKey", hub.keys().nextPublicText())
+            .put("nodes", store.nodes().size())
+            .put("links", hub.links().all().size())
+            .put("certKeyId", hub.tls().isLoaded() ? hub.tls().keyId() : null)
+            .put("online", hub.registry().size())
+            .put("pending", store.pending().size())
+            .put("invites", store.invites().size())
+            .put("admins", new ArrayList<>(store.admins()))
+            .put("registration", store.setting(Store.SETTING_REGISTRATION, "invite"))
+            .put("invitePolicy", store.setting(Store.SETTING_INVITE_POLICY, "members"))
+            .put("knock", store.setting(Store.SETTING_KNOCK, "on"))
+            .put("role", hub.role())
+            .put("standbys", standbys());
+        PeerClient pc = hub.peerClient();
+        if (pc != null) {
+            b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());
+        }
+        return b;
+    }
+
+    private List<Object> standbys() {
+        List<Object> rows = new ArrayList<>();
+        for (Peers.Session s : hub.peers().all()) {
+            rows.add(JsonObject.builder().put("host", s.name()).put("ip", s.remoteIp()).put("connectedAt", s.connectedAt())
+                .put("eventsSent", s.eventsSent()).build().asMap());
+        }
+        return rows;
     }
 
     /** Accepts a full mkey: text, a unique prefix of one, or a node id. */

@@ -56,6 +56,11 @@ public final class Hub implements AutoCloseable {
     private final AdminWeb adminWeb;
     private io.jailscale.hub.dns.DnsResponder dns;
     private AcmeManager acme;
+    private final Availability availability;
+    private final Peers peers = new Peers(this);
+    /** Set while this hub follows a primary (ARCHITECTURE.md §13.1); cleared by {@link #promote}. */
+    private volatile boolean standby;
+    private volatile PeerClient peerClient;
     private final FileChannel lockChannel;
     private final FileLock lock;
     private ServerSocket listener;
@@ -99,6 +104,16 @@ public final class Hub implements AutoCloseable {
             lockChannel.close();
             throw new IOException("another jailhub serve holds " + config.stateDir() + (takeover ? "" : " (use --takeover)"));
         }
+        this.standby = config.standby();
+        if (standby && !HubKeys.exists(config.stateDir())) {
+            // Generating one would make a hub that cannot authenticate to its primary and never
+            // says why: the handshake just fails. The missing file is the whole problem.
+            lock.release();
+            lockChannel.close();
+            throw new IOException("a standby needs the primary's hub key: copy " + config.peer().getHost()
+                + "'s hub.key into " + config.stateDir() + " and start again");
+        }
+        this.availability = new Availability(config.stateDir(), System.currentTimeMillis());
         this.store = new Store(config.stateDir());
         this.keys = new HubKeys(config.stateDir());
         this.bans = new Bans(store);
@@ -116,13 +131,14 @@ public final class Hub implements AutoCloseable {
         this.router = new SniRouter(this);
         this.adminWeb = new AdminWeb(this);
         // Flags seed the runtime settings once; afterwards /admin and `jailhub setting` own them.
-        if (!store.hasSetting(Store.SETTING_INVITE_POLICY)) {
+        // Not on a standby: its settings are the primary's, and arrive with the snapshot.
+        if (!standby && !store.hasSetting(Store.SETTING_INVITE_POLICY)) {
             store.setSetting(Store.SETTING_INVITE_POLICY, config.invitePolicy());
         }
-        if (!store.hasSetting(Store.SETTING_REGISTRATION)) {
+        if (!standby && !store.hasSetting(Store.SETTING_REGISTRATION)) {
             store.setSetting(Store.SETTING_REGISTRATION, config.registrationOpen() ? "open" : "invite");
         }
-        if (!store.hasSetting(Store.SETTING_KNOCK)) {
+        if (!standby && !store.hasSetting(Store.SETTING_KNOCK)) {
             store.setSetting(Store.SETTING_KNOCK, config.knock() ? "on" : "off");
         }
     }
@@ -138,23 +154,27 @@ public final class Hub implements AutoCloseable {
 
     public void start() throws IOException, GeneralSecurityException {
         promoteRotationIfDue();
-        if (config.acme()) {
-            dns = new io.jailscale.hub.dns.DnsResponder(config.hostname());
-            dns.start(config.dnsListenHost(), config.dnsListenPort());
-            acme = new AcmeManager(config, tls, dns, () -> {
-                for (NodeGroup g : registry.all()) {
-                    NodeSession p = g.primary();
-                    if (p != null) {
-                        p.certChanged();
-                    }
-                }
-            });
+        if (standby) {
+            // Own files if given, so 443 can open at once; otherwise the certificate is the
+            // primary's and arrives over the channel, and this blocks for it the way ACME does.
+            if (!config.acme()) {
+                tls.load(config.tlsCert(), config.tlsKey());
+            }
+            peerClient = new PeerClient(this, config.peer(), config.peerCa(), config.peerAddr());
+            peerClient.start();
+            if (!tls.isLoaded()) {
+                LOG.info("standby of {}: waiting for its certificate", config.peer().getHost());
+            }
             try {
-                acme.start(); // blocks until a certificate is installed
+                while (!tls.isLoaded()) {
+                    Thread.sleep(100);
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new IOException("interrupted while obtaining a certificate");
+                throw new IOException("interrupted while waiting for the primary's certificate");
             }
+        } else if (config.acme()) {
+            startAcme(); // blocks until a certificate is installed
         } else {
             tls.load(config.tlsCert(), config.tlsKey());
         }
@@ -163,20 +183,8 @@ public final class Hub implements AutoCloseable {
         listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 1024); // capped by somaxconn
         running = true;
         Thread.ofPlatform().name("accept").daemon(false).start(this::acceptLoop);
-        if (config.acme() && config.addressCheck()) {
-            // After the listener is up, or the one connection that proves the records reach this
-            // process would arrive with nothing to answer it. Off the startup path: the answer is a
-            // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied
-            // to --no-selfcheck: that flag exists because the dns-01 check holds issuance until it
-            // passes, and nothing here can hold anything.
-            Thread.ofVirtual().name("address-check").start(() -> Reachability.report(config, keys));
-        }
-        if (config.hasHttp()) {
-            try {
-                http = new HttpChallengeFront(this, config.httpListenHost(), config.httpListenPort());
-            } catch (IOException e) {
-                LOG.warn("port {} unavailable ({}); user domains are disabled until it is", config.httpListenPort(), e.getMessage());
-            }
+        if (!standby) {
+            startPrimaryFronts();
         }
         if (config.hasMetrics()) {
             // Warn and serve on, as port 80 does: a hub that cannot be scraped is still a hub that
@@ -195,10 +203,12 @@ public final class Hub implements AutoCloseable {
             return t;
         });
         timer.scheduleAtFixedRate(this::tick, KEEPALIVE_SECONDS, KEEPALIVE_SECONDS, TimeUnit.SECONDS);
+        timer.scheduleAtFixedRate(() -> availability.stamp(System.currentTimeMillis()),
+            Availability.STAMP_EVERY_MS, Availability.STAMP_EVERY_MS, TimeUnit.MILLISECONDS);
 
-        LOG.info("jailhub {} listening on {}:{} for {} (hub key {})", version(), config.listenHost(), port(),
-            config.hostname(), keys.publicText());
-        if (!store.hasAnyAdmin()) {
+        LOG.info("jailhub {} listening on {}:{} for {} (hub key {}){}", version(), config.listenHost(), port(),
+            config.hostname(), keys.publicText(), standby ? ", standby of " + config.peer().getHost() : "");
+        if (!standby && !store.hasAnyAdmin()) {
             Invites.Created c = invites.create(null, 1, 24 * 3600, "bootstrap", true);
             LOG.info("no admin yet. First invite (24h, 1 use); whoever joins with it becomes admin:");
             System.out.println();
@@ -206,6 +216,113 @@ public final class Hub implements AutoCloseable {
             System.out.println("  (or: jailscale up --hub " + config.hostname() + " --code " + c.code() + ", valid 10 minutes)");
             System.out.println();
         }
+    }
+
+    /** The DNS responder and ACME: blocks until a certificate is installed. Primary only. */
+    private void startAcme() throws IOException, GeneralSecurityException {
+        dns = new io.jailscale.hub.dns.DnsResponder(config.hostname());
+        dns.start(config.dnsListenHost(), config.dnsListenPort());
+        acme = new AcmeManager(config, tls, dns, () -> {
+            for (NodeGroup g : registry.all()) {
+                NodeSession p = g.primary();
+                if (p != null) {
+                    p.certChanged();
+                }
+            }
+            peers.certChanged();
+        });
+        try {
+            acme.start();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted while obtaining a certificate");
+        }
+    }
+
+    /**
+     * What only a primary serves besides 443: the address check, and port 80 for user domains.
+     * A standby has no nodes to relay challenges for and its address records are not the ones
+     * being checked.
+     */
+    private void startPrimaryFronts() {
+        if (config.acme() && config.addressCheck()) {
+            // After the listener is up, or the one connection that proves the records reach this
+            // process would arrive with nothing to answer it. Off the startup path: the answer is a
+            // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied
+            // to --no-selfcheck: that flag exists because the dns-01 check holds issuance until it
+            // passes, and nothing here can hold anything.
+            Thread.ofVirtual().name("address-check").start(() -> Reachability.report(config, keys));
+        }
+        if (config.hasHttp() && http == null) {
+            try {
+                http = new HttpChallengeFront(this, config.httpListenHost(), config.httpListenPort());
+            } catch (IOException e) {
+                LOG.warn("port {} unavailable ({}); user domains are disabled until it is", config.httpListenPort(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Makes this standby the primary (ARCHITECTURE.md §13.1): stops following, and starts what a
+     * primary runs and a standby does not -- issuance, the DNS responder, port 80. The operator
+     * points the apex at this host afterwards; nothing here can do that. One way: the old primary,
+     * if it comes back, has to be restarted with {@code --peer} pointing here.
+     */
+    synchronized void promote() throws IOException {
+        if (!standby) {
+            throw new IOException("this hub is already the primary");
+        }
+        String primary = config.peer().getHost();
+        boolean synced = peerClient != null && peerClient.isSynced();
+        standby = false;
+        if (peerClient != null) {
+            peerClient.close();
+            peerClient = null;
+        }
+        LOG.warn("promoted: this hub is now the primary{}. Point {} at this host, and restart {} with --peer if it returns",
+            synced ? "" : " (it was NOT in sync with " + primary + " at the time)", config.hostname(), primary);
+        Thread.ofVirtual().name("promote").start(() -> {
+            try {
+                if (config.acme()) {
+                    startAcme();
+                }
+                startPrimaryFronts();
+            } catch (IOException | GeneralSecurityException e) {
+                LOG.error("after promotion: {}", e.getMessage());
+            }
+        });
+    }
+
+    /** A standby installed a certificate from its primary: nodes on it, if any, get the public half. */
+    void certificateArrived() {
+        for (NodeGroup g : registry.all()) {
+            NodeSession p = g.primary();
+            if (p != null) {
+                p.certChanged();
+            }
+        }
+    }
+
+    /** "primary" or "standby" (ARCHITECTURE.md §13.1). */
+    String role() {
+        return standby ? "standby" : "primary";
+    }
+
+    boolean isStandby() {
+        return standby;
+    }
+
+    Peers peers() {
+        return peers;
+    }
+
+    /** Null unless this hub is a standby. */
+    PeerClient peerClient() {
+        return peerClient;
+    }
+
+    Availability availability() {
+        return availability;
     }
 
     /** Actual port, useful when configured with 0. */
@@ -250,14 +367,19 @@ public final class Hub implements AutoCloseable {
             }
         }
         LOG.info("hub key rotation announced to {} nodes, activates at {}", registry.size(), activatesAt);
+        peers.hubKeyChanged();
         return activatesAt;
     }
 
     synchronized void promoteRotationIfDue() throws IOException {
+        if (standby) {
+            return; // the primary completes it and sends the key (§13.1)
+        }
         long at = store.hubKeyActivatesAt();
         if (store.nextHubKey() != null && at > 0 && System.currentTimeMillis() >= at) {
             keys.completeRotation();
             store.clearHubKeyRotation();
+            peers.hubKeyChanged();
         }
     }
 
@@ -445,6 +567,10 @@ public final class Hub implements AutoCloseable {
         if (timer != null) {
             timer.shutdownNow();
         }
+        if (peerClient != null) {
+            peerClient.close();
+        }
+        peers.closeAll(); // they reconnect to the new process and start from its snapshot
         store.close();
         lock.release();
         lockChannel.close();
@@ -499,6 +625,10 @@ public final class Hub implements AutoCloseable {
             registry.closeAll(Message.Goodbye.SHUTDOWN);
             return;
         }
+        if (peerClient != null) {
+            peerClient.close();
+        }
+        peers.closeAll();
         if (acme != null) {
             acme.close();
         }

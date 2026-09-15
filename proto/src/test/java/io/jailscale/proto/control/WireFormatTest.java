@@ -58,7 +58,17 @@ class WireFormatTest {
         // array keeps its exact bytes and is now the old-node case as well: a node with no bound to
         // declare omits the field and puts the same wire out as a build from before it existed.
         // Appended here rather than next to the other Hello because three tests index this array.
-        "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.1\",\"os\":\"linux\",\"conn\":0,\"visitors\":450}"
+        "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.1\",\"os\":\"linux\",\"conn\":0,\"visitors\":450}",
+        // Hub to hub (§13.1), added after v0.1.2. Only ever exchanged between two hubs that both
+        // hold hub.key; a node never sees them, and a hub that does not know them answers with
+        // Error{unknown-type} like any other message it has no case for.
+        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub-b.example.com\"}",
+        "{\"t\":\"PeerHelloResponse\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\"}",
+        "{\"t\":\"PeerSnapshot\",\"json\":\"{\\\"v\\\":1,\\\"nextNodeId\\\":3,\\\"events\\\":[]}\"}",
+        "{\"t\":\"PeerEvent\",\"json\":\"{\\\"e\\\":\\\"admin-added\\\",\\\"user\\\":\\\"wq\\\"}\"}",
+        "{\"t\":\"PeerCert\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],"
+            + "\"keyPem\":\"-----BEGIN PRIVATE KEY-----\\nAA==\\n-----END PRIVATE KEY-----\",\"keyId\":\"sha256:ab\"}",
+        "{\"t\":\"PeerHubKey\",\"current\":\"hkeypriv:AAAA\",\"next\":\"hkeypriv:BBBB\"}"
     };
 
     @Test

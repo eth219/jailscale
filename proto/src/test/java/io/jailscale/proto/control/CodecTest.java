@@ -46,6 +46,14 @@ class CodecTest {
             new Message.SignResponse(40, null, "not-your-stream"),
             new Message.ChallengeSet("app.example.com", "tok", "tok.thumb"),
             new Message.ChallengeClear("tok"),
+            new Message.PeerHello(1, "0.2.0", "hub-b.example.com"),
+            new Message.PeerHelloResponse(1, "0.2.0", "hub.example.com"),
+            new Message.PeerSnapshot("{\"v\":1,\"nextNodeId\":3,\"events\":[]}"),
+            new Message.PeerEvent("{\"e\":\"admin-added\",\"user\":\"wq\"}"),
+            new Message.PeerCert(List.of("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----"),
+                "-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----", "sha256:ab"),
+            new Message.PeerHubKey("hkeypriv:AAAA", null),
+            new Message.PeerHubKey("hkeypriv:AAAA", "hkeypriv:BBBB"),
         };
         for (Message m : all) {
             byte[] enc = Codec.encode(m);

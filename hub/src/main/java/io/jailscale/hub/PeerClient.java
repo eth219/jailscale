@@ -1,0 +1,273 @@
+package io.jailscale.hub;
+
+import io.jailscale.crypto.NoiseException;
+import io.jailscale.crypto.NoiseIk;
+import io.jailscale.proto.acme.AcmeKeys;
+import io.jailscale.proto.control.Codec;
+import io.jailscale.proto.control.CodecException;
+import io.jailscale.proto.control.Message;
+import io.jailscale.proto.http.Headers;
+import io.jailscale.proto.http.Http;
+import io.jailscale.proto.http.HttpException;
+import io.jailscale.proto.http.HttpResponse;
+import io.jailscale.proto.json.Json;
+import io.jailscale.proto.mux.MuxSession;
+import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.mux.NoiseChannel;
+import io.jailscale.proto.tls.Pem;
+import io.jailscale.proto.tls.Tls;
+import io.jailscale.proto.util.Log;
+import java.io.IOException;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.GeneralSecurityException;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import java.util.List;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+
+/**
+ * A standby's side of the hub-to-hub channel (ARCHITECTURE.md §13.1): dials the primary the way a
+ * node does, authenticates with the hub key it was given a copy of, and applies what it is sent
+ * -- keys, certificate, a snapshot, then events -- so that its state directory is at every moment
+ * one the primary could be replaced with.
+ *
+ * <p>Reconnects with the node's backoff (1, 2, 4, 8, 16, 30 s). Every reconnect starts from a
+ * fresh snapshot rather than resuming a tail: the state is small, and a resumable log would need
+ * a position in it that survives the primary compacting the log underneath.
+ */
+final class PeerClient implements AutoCloseable {
+
+    private static final Log LOG = Log.get("peer");
+    private static final int CONNECT_TIMEOUT_MS = 10_000;
+    static final int IDLE_TIMEOUT_MS = 60_000;
+    private static final int[] BACKOFF_SECONDS = {1, 2, 4, 8, 16, 30};
+
+    private final Hub hub;
+    private final URI primary;
+    private final Path ca;
+    private final String addr;
+    private volatile boolean running;
+    private volatile boolean connected;
+    private volatile boolean synced;
+    private volatile String lastError;
+    private final java.util.concurrent.atomic.AtomicLong eventsApplied = new java.util.concurrent.atomic.AtomicLong();
+    private volatile long lastEventAt;
+    private volatile MuxSession mux;
+    private Thread thread;
+
+    PeerClient(Hub hub, URI primary, Path ca, String addr) {
+        this.hub = hub;
+        this.primary = primary;
+        this.ca = ca;
+        this.addr = addr;
+    }
+
+    String primaryHost() {
+        return primary.getHost();
+    }
+
+    private int primaryPort() {
+        return primary.getPort() > 0 ? primary.getPort() : 443;
+    }
+
+    boolean isConnected() {
+        return connected;
+    }
+
+    /** Whether a snapshot has been applied on the current connection: the store matches the primary's. */
+    boolean isSynced() {
+        return connected && synced;
+    }
+
+    String lastError() {
+        return lastError;
+    }
+
+    long eventsApplied() {
+        return eventsApplied.get();
+    }
+
+    long lastEventAt() {
+        return lastEventAt;
+    }
+
+    synchronized void start() {
+        if (running) {
+            return;
+        }
+        running = true;
+        thread = Thread.ofVirtual().name("peer-client").start(this::loop);
+    }
+
+    private void loop() {
+        int attempt = 0;
+        while (running) {
+            try {
+                connectAndRun();
+                attempt = 0;
+            } catch (IOException | NoiseException | GeneralSecurityException e) {
+                lastError = e.getMessage();
+                if (running) {
+                    LOG.warn("primary {} unreachable: {}", primaryHost(), e.getMessage());
+                }
+            }
+            if (!running) {
+                return;
+            }
+            int wait = BACKOFF_SECONDS[Math.min(attempt, BACKOFF_SECONDS.length - 1)];
+            attempt++;
+            try {
+                Thread.sleep(wait * 1000L);
+            } catch (InterruptedException e) {
+                return;
+            }
+        }
+    }
+
+    private void connectAndRun() throws IOException, NoiseException, GeneralSecurityException {
+        String host = primaryHost();
+        SSLContext ctx = Tls.clientContext(ca, false);
+        SSLSocket s = Tls.connect(ctx, host, addr, primaryPort(), true, CONNECT_TIMEOUT_MS);
+        NoiseChannel ch;
+        try {
+            Http.writeRequest(s.getOutputStream(), "POST", host, "/v1/noise",
+                new Headers().add("Connection", "Upgrade").add("Upgrade", HttpFront.UPGRADE_PROTOCOL), new byte[0]);
+            HttpResponse r = Http.readResponse(s.getInputStream(), 4096);
+            if (r.status() != 101) {
+                throw new IOException("primary refused upgrade: HTTP " + r.status() + " " + r.bodyText().strip());
+            }
+            // The hub key on both ends of the handshake: this side's static is the copy it was
+            // given, and the responder it expects is the same key. Completing IK proves the copy.
+            NoiseIk hs = NoiseIk.initiator(HubKeys.PROLOGUE, hub.keys().current(), hub.keys().current().publicKey());
+            byte[][] payload2 = new byte[1][];
+            Message hello = new Message.PeerHello(Message.PROTO, Hub.version(), hub.config().hostname());
+            ch = NoiseChannel.initiate(s.getInputStream(), s.getOutputStream(), hs, Codec.encode(hello), payload2);
+            Message m = Codec.decode(payload2[0]);
+            if (m instanceof Message.Goodbye g) {
+                ch.close();
+                throw new IOException("primary turned us away: " + g.reason() + (g.detail() == null ? "" : " (" + g.detail() + ")"));
+            }
+            if (!(m instanceof Message.PeerHelloResponse)) {
+                ch.close();
+                throw new IOException("expected PeerHelloResponse, got " + m.type());
+            }
+            s.setSoTimeout(IDLE_TIMEOUT_MS);
+        } catch (HttpException | CodecException e) {
+            s.close();
+            throw new IOException("bad response from primary: " + e.getMessage(), e);
+        } catch (IOException | NoiseException e) {
+            s.close();
+            throw e;
+        }
+        synced = false;
+        connected = true;
+        lastError = null;
+        hub.availability().peerUp(host, System.currentTimeMillis());
+        LOG.info("connected to primary {}", host);
+        MuxSession session = new MuxSession(ch, false, new Listener(), hub.flowBudget());
+        mux = session;
+        try {
+            session.run();
+        } finally {
+            mux = null;
+            connected = false;
+            synced = false;
+            hub.availability().peerDown(host, System.currentTimeMillis());
+            session.close();
+        }
+    }
+
+    private final class Listener implements MuxSession.Listener {
+        @Override
+        public void onControl(MuxSession session, byte[] json) throws IOException {
+            Message m;
+            try {
+                m = Codec.decode(json);
+            } catch (CodecException e) {
+                throw new IOException("bad control message: " + e.getMessage());
+            }
+            switch (m) {
+                case Message.PeerSnapshot ps -> {
+                    hub.store().replaceWith(ps.json());
+                    synced = true;
+                    lastEventAt = System.currentTimeMillis();
+                    LOG.info("in sync with {}: {} nodes, {} names", primaryHost(), hub.store().nodes().size(),
+                        hub.store().names().size());
+                }
+                case Message.PeerEvent pe -> {
+                    hub.store().applyReplicated(Json.parseObject(pe.json()));
+                    eventsApplied.incrementAndGet();
+                    lastEventAt = System.currentTimeMillis();
+                }
+                case Message.PeerCert pc -> installCert(pc);
+                case Message.PeerHubKey pk -> hub.keys().installFromPeer(pk.current(), pk.next());
+                case Message.Ping p -> session.control(Codec.encode(new Message.Pong(p.id())));
+                case Message.Goodbye g -> {
+                    LOG.info("primary said goodbye: {}", g.reason());
+                    session.close();
+                }
+                case Message.Unknown u -> LOG.info("ignoring {}, a message type this hub does not know", u.type());
+                default -> LOG.warn("unexpected {} from primary", m.type());
+            }
+        }
+
+        @Override
+        public void onOpen(MuxSession session, MuxStream stream) {
+            stream.reset(2);
+        }
+
+        @Override
+        public void onClosed(MuxSession session, Throwable cause) {
+            if (running) {
+                LOG.info("primary {} disconnected{}", primaryHost(), cause == null ? "" : ": " + cause.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Installs the primary's certificate and writes it where {@link AcmeManager} keeps its own, so
+     * a promoted standby restarts with it and renews it from there.
+     */
+    private void installCert(Message.PeerCert pc) throws IOException {
+        if (hub.tls().isLoaded() && hub.tls().keyId().equals(pc.keyId())) {
+            return;
+        }
+        try {
+            String pem = String.join("", pc.chainPem());
+            List<X509Certificate> chain = Pem.certificates(pem);
+            PrivateKey key = Pem.privateKey(pc.keyPem());
+            Path dir = hub.config().stateDir().resolve("tls");
+            Files.createDirectories(dir);
+            Path keyTmp = dir.resolve("wildcard.key.tmp");
+            AcmeKeys.writePrivate(keyTmp, pc.keyPem());
+            Path pemTmp = dir.resolve("wildcard.pem.tmp");
+            Files.writeString(pemTmp, pem, StandardCharsets.UTF_8);
+            if (Files.exists(dir.resolve("wildcard.key"))) {
+                Files.move(dir.resolve("wildcard.key"), dir.resolve("wildcard.key.prev"), StandardCopyOption.REPLACE_EXISTING);
+            }
+            Files.move(keyTmp, dir.resolve("wildcard.key"), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            Files.move(pemTmp, dir.resolve("wildcard.pem"), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            hub.tls().install(chain, key);
+            hub.certificateArrived();
+        } catch (GeneralSecurityException e) {
+            throw new IOException("certificate from primary unusable: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        running = false;
+        MuxSession m = mux;
+        if (m != null) {
+            m.close();
+        }
+        if (thread != null) {
+            thread.interrupt();
+        }
+    }
+}

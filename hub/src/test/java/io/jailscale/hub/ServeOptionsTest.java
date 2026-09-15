@@ -115,6 +115,21 @@ class ServeOptionsTest {
     }
 
     @Test
+    void aStandbyNamesItsPrimaryAndNotItself() {
+        assertFalse(serve().standby(), "no --peer means this hub is the primary");
+        HubConfig c = serve("--peer", "https://hub-b.example.com", "--peer-ca", "/tmp/ca.pem");
+        assertTrue(c.standby());
+        assertEquals("hub-b.example.com", c.peer().getHost());
+        assertEquals(Path.of("/tmp/ca.pem"), c.peerCa());
+        assertNull(serve("--peer", "https://hub-b.example.com").peerCa());
+        assertNull(serve("--peer", "https://hub-b.example.com").peerAddr(), "no --peer-addr means resolve the name");
+        assertEquals("10.0.0.2", serve("--peer", "https://hub-b.example.com", "--peer-addr", "10.0.0.2").peerAddr());
+        assertTrue(refused("--peer", "http://hub-b.example.com").contains("https"));
+        assertTrue(refused("--peer", "https://hub.example.com").contains("own base URL"),
+            "a hub following itself would wait for a snapshot from nobody");
+    }
+
+    @Test
     void anIpv6ListenerKeepsItsBrackets() {
         // The host is split on the LAST colon, or "[::]:443" would become host "[" port ":]:443".
         HubConfig c = serve("--listen", "[::]:443");

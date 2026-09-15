@@ -72,6 +72,16 @@ final class Metrics {
         gauge(b, "jailhub_node_visitor_capacity", "Visitors the online nodes together said they will hold.",
             hub.registry().visitorCapacity());
         gauge(b, "jailhub_uptime_seconds", "Seconds since this process started.", Resources.uptimeMillis() / 1000);
+        // §13.2. Millionths rather than a float: the gauge helper takes a long, and a ratio at that
+        // resolution is finer than a status page will ever show.
+        long now = System.currentTimeMillis();
+        for (Availability.Window w : Availability.WINDOWS) {
+            Double f = hub.availability().processFraction(w.millis(), now);
+            gauge(b, "jailhub_process_availability_" + w.label() + "_ppm",
+                "Parts per million of the last " + w.label() + " this process was running, by its own record.",
+                f == null ? 0 : Math.round(f * 1_000_000));
+        }
+        gauge(b, "jailhub_standbys_connected", "Standby hubs following this one right now.", hub.peers().count());
         // Where the time goes admitting a visitor (§6.3). The point of having all five is the
         // comparison: first_byte running ahead of peek+resolve+open+reply is time spent in no stage
         // at all -- scheduling, queueing or a pause -- which no single stage's timer can show.

@@ -265,6 +265,21 @@ The first run prints an invite. Whoever joins with it becomes the administrator.
 [deploy/](deploy/) has a systemd unit, container files, and the proxy
 configurations for putting the hub behind nginx or HAProxy.
 
+A second host can stand by for the first. Copy the first host's `hub.key` into
+the second's state directory and run
+
+```sh
+jailhub serve --base-url https://jailscale.example.com --acme-email you@example.com --peer https://jailscale.example.com
+```
+
+there. It follows the first: certificate, keys, and every change to the state
+as it happens, and its page says whether it is in sync. If the first host is
+lost, `jailhub promote` on the second and a change to the three DNS records
+make it the hub; nodes reconnect on their own, since the hub key they pinned is
+the same. The status page of either shows how much of the last day, week and
+month it was up, by its own record and as seen from the other
+([ARCHITECTURE.md §13.1](docs/ARCHITECTURE.md)).
+
 ## Resource usage
 
 Measured on main with the native binaries by `./measure.sh`, which CI runs as a
@@ -373,10 +388,13 @@ What a compromised hub can and cannot do is written out in
 
 - No production track record. The hub above is the only instance with any
   uptime behind it, and it serves one person's names.
-- The hub is a single process on a single host, with no standby and no state
-  replication. Losing the host means downtime. Replacing the binary without
-  dropping nodes works with `serve --takeover`, but not under a systemd unit,
-  where an upgrade is a restart.
+- The hub is a single process on a single host. A second host can follow it as
+  a standby, holding a current copy of everything the first would be replaced
+  with, but pointing the name at it is still a DNS change made by a person, and
+  visitors and nodes are down until that happens
+  ([ARCHITECTURE.md §13.1](docs/ARCHITECTURE.md)). Replacing the binary
+  without dropping nodes works with `serve --takeover`, but not under a
+  systemd unit, where an upgrade is a restart.
 - Upgrading stops one step short of automatic. `jailscale update --download`
   fetches a release and checks it against the signature; you run the one
   `install` command it prints. A binary built before the signing key existed
