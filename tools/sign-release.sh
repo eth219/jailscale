@@ -78,7 +78,7 @@ sha256 -c SHA256SUMS.txt
 assets | while IFS= read -r f; do
     # -F and a cut list rather than a regex: an asset named jailscale-linux-amd.4 would otherwise
     # match the line for jailscale-linux-amd64 and ride along uncovered.
-    sed 's/^[0-9a-fA-F]*[ *]*//' SHA256SUMS.txt | grep -qxF "$f" </dev/null \
+    sed 's/^[0-9a-fA-F]*[ *]*//' SHA256SUMS.txt | grep -qxF "$f" \
         || { echo "$f is published but not in SHA256SUMS.txt" >&2; exit 1; }
 done || exit 1 # the loop is a subshell, so its exit has to be carried out of the pipeline
 
