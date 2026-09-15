@@ -1351,6 +1351,21 @@ being added to it. A request that arrives within a tick of the last sweep is dro
 queued, so a link that flaps costs one pass and not one per flap, and a sweep cut short by the link
 going down again leaves the names it did not reach unmarked, for the ordinary ticks to pick up.
 
+**The tick is jittered, the order is not.** Up to a fifth is taken off each tick, never added, so
+the moment a name is looked at is not one anybody can name in advance and a pass still finishes
+inside its target. Shuffling the *order* was considered and rejected: it would make a name's
+position in the pass unpredictable as well, at the price of doubling the worst gap between two looks
+at the same name — last in one pass and first in the next is one pass, first and then last is nearly
+two — and the only attacker it buys anything against is one timing an interception around the
+schedule, who has a far easier way out already. The probe leaves this node's address; a hub that
+routes those connections honestly and nobody else's is not caught by any order or any interval. A
+bound that holds against the careless hub is worth more than unpredictability against the careful
+one, who is not caught either way.
+
+The sweep is spread over `Daemon.SWEEP_SPREAD_MS` for a different reason: a hub restarting brings
+every node back in the same second, and a sweep each would arrive as one burst of signing requests
+on the hub that has just come up, on top of the reopens reconnection already costs.
+
 The result of the last probe of each name
 rides in `status`, so the answer is visible without running anything, and a `TERMINATED ELSEWHERE`
 from the loop logs exactly as loudly as one the operator asked for. There is no switch to turn it

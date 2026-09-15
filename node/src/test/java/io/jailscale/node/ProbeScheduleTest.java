@@ -2,6 +2,7 @@ package io.jailscale.node;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.proto.control.Message;
 import java.util.ArrayList;
@@ -120,6 +121,21 @@ class ProbeScheduleTest {
 
         assertEquals(2, Daemon.probableNames(links("https", "tcp", "https", "udp")));
         assertEquals(0, Daemon.probableNames(links("tcp")));
+    }
+
+    @Test
+    void jitterOnlyEverShortensATick() {
+        // So the moment a name is looked at is not one anybody can name in advance, while a pass
+        // still finishes inside its target rather than drifting past it.
+        long tick = Daemon.probeTick(20);
+        boolean moved = false;
+        for (int i = 0; i < 1000; i++) {
+            long j = Daemon.jitter(tick);
+            assertTrue(j <= tick && j >= tick - tick / 5, "jittered to " + j + " from " + tick);
+            moved |= j != tick;
+        }
+        assertTrue(moved, "a jitter that never moves anything is not one");
+        assertEquals(0L, Daemon.jitter(0));   // a node with nothing to probe must not spin
     }
 
     @Test

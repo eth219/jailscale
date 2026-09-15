@@ -59,6 +59,12 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     /** And the shortest a tick may be, so that a pass target cannot turn into a burst of requests. */
     static final long PROBE_MIN_TICK_MS = 60_000L;
     /**
+     * How far a sweep is spread out after a hub connection comes up. A hub restarting brings every
+     * node back at once, and each of them would otherwise ask it to sign a handshake for every name
+     * it holds in the same instant, on top of the reopens that reconnection already costs.
+     */
+    static final long SWEEP_SPREAD_MS = 5_000L;
+    /**
      * What the self-probe waits on between ticks, so that a hub connection coming up can ask for a
      * pass now instead of at the end of one (ARCHITECTURE.md §11.3).
      */
@@ -827,7 +833,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         Set<String> pass = new HashSet<>();
         try {
             while (!closed) {
-                boolean sweep = awaitProbeTick(probeTick(probableNames(state.links)));
+                boolean sweep = awaitProbeTick(jitter(probeTick(probableNames(state.links))));
                 if (closed || !link.isConnected()) {
                     continue;
                 }
@@ -884,10 +890,19 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * next one rather than going round again. If the link goes down mid-sweep the rest are left
      * unmarked, so the ordinary ticks pick them up instead of the sweep pretending to have.
      */
-    private void sweepProbe(List<NodeState.LinkRec> links, Set<String> pass) {
+    private void sweepProbe(List<NodeState.LinkRec> links, Set<String> pass) throws InterruptedException {
         lastSweepAt = System.currentTimeMillis();
         pass.clear();
         List<NodeState.LinkRec> all = remaining(links, pass);
+        if (all.isEmpty()) {
+            return;
+        }
+        // A hub restart brings every node back at the same second; this is what keeps the sweeps
+        // that follow from arriving as one burst of signing requests on the hub that just came up.
+        Thread.sleep(ThreadLocalRandom.current().nextLong(SWEEP_SPREAD_MS));
+        if (!link.isConnected()) {
+            return;
+        }
         for (NodeState.LinkRec rec : all) {
             probeSafely(rec);
             pass.add(rec.name);
@@ -895,9 +910,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 break;
             }
         }
-        if (!all.isEmpty()) {
-            LOG.debug("self-probe: {} of {} name(s) checked on the hub link coming up", pass.size(), all.size());
-        }
+        LOG.debug("self-probe: {} of {} name(s) checked on the hub link coming up", pass.size(), all.size());
     }
 
     private void probeSafely(NodeState.LinkRec rec) {
@@ -967,6 +980,24 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      */
     static long probeTick(int names) {
         return Math.max(PROBE_MIN_TICK_MS, PROBE_PASS_MS / Math.max(1, names));
+    }
+
+    /**
+     * A tick with up to a fifth taken off it, never added, so that the moment a name is looked at is
+     * not one anybody can name in advance and a pass still finishes inside its target.
+     *
+     * <p>The order names are taken in is deliberately *not* shuffled with it. Random order would
+     * make a name's position in the pass unpredictable too, at the price of doubling the worst gap
+     * between two looks at the same name -- last in one pass, first in the next is one pass, but
+     * first and then last is nearly two -- and the attacker it would buy anything against is one
+     * timing an interception around the schedule, who has a far easier way out already: the probe
+     * leaves this node's address, so a hub that routes those connections honestly and nobody else's
+     * is not caught by any order or any interval (§15). Trading a bound that holds against the
+     * careless hub for unpredictability against the careful one, when the careful one is not caught
+     * either way, is the wrong side of that trade.
+     */
+    static long jitter(long tickMs) {
+        return tickMs - ThreadLocalRandom.current().nextLong(tickMs / 5 + 1);
     }
 
     /** How many names a pass has to cover. */
