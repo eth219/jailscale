@@ -216,12 +216,13 @@ TCP 443, SNI = hub.example.com
              └─ [2B len BE][Noise transport message]    <- one mux frame in each
 ```
 
-Both HTTP ends are hand-written (§3.1): the hub's front is about 300 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*` and a root page, the node's client about 40, and the socket
-read timeout is 60 s. WebSocket was rejected as the carrier because its 4-byte client-to-server
-masking would touch every visitor byte again, frame headers and close semantics come with it, and it
-would only help behind proxies passing `Upgrade: websocket` when SNI passthrough already rules out an
-HTTP proxy in front of the hub (§7.2). ALPN is pinned to `http/1.1`, because HTTP/2 has no Upgrade.
+Both HTTP ends are hand-written (§3.1): the hub's front is about 750 lines serving `/v1/key`,
+`/v1/noise`, `/join/<token>`, `/admin/*`, a root page and the link directory, the node's client
+about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier because its
+4-byte client-to-server masking would touch every visitor byte again, frame headers and close
+semantics come with it, and it would only help behind proxies passing `Upgrade: websocket` when SNI
+passthrough already rules out an HTTP proxy in front of the hub (§7.2). ALPN is pinned to
+`http/1.1`, because HTTP/2 has no Upgrade.
 
 **Noise parameters.** `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `jailscale-control-v1`. The
 version string is mixed into the handshake hash, so incompatible versions fail the handshake itself
@@ -496,6 +497,51 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
+**The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
+open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
+-- so the front page shows the first eight and points at the directory for the rest, and the pair
+are two real URLs with a nav between them rather than one page with scripted tabs, so either half
+can be sent to someone and neither needs a script to arrive at. The status went nowhere: the
+availability record is what tells a first visitor this hub is real, and it belongs where they land.
+
+Each row carries the address, the kind and how long the link has been open -- every one of them
+something the hub already holds for its own routing. **Nothing on the page is fetched from the
+link.** A thumbnail or a favicon would mean the hub connecting to a node's
+app as a visitor and republishing what came back on its own front page, which is the one thing that
+page tells people it does not do, and it would put whatever anyone who can join chooses to serve on
+the operator's name. **Nor how many visitors a link is serving**, though the hub has that number and
+this page carried it briefly: that a name is open was already public, that somebody is on it right
+now was not, and a page anyone can poll turns the second into a live activity feed for a machine
+belonging to somebody else. It is also the figure `AdminWeb` keeps for the operator in as many words
+-- "how close a particular node is to its bound ... is the operator's business and nobody else's" --
+and the one this section refuses on `/metrics`, which listens on loopback and so has a narrower
+audience than a page on 443. The reader loses little: someone deciding whether to click a link
+learns more by clicking it. "Open" is since the *link* opened, so
+a node that restarts or hands its name on starts the clock again -- it counts the current link, not
+the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
+list does. The directory renders at most 200 rows at a time, like every other unauthenticated
+answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
+reachable -- the sentence at the top counts every open link, so every one of them has to be. A
+row's address carries the port the hub answers on, the same `portSuffix` the node was told when the
+link opened, because a row is a link someone is meant to click. The cursor is a string a visitor
+sends, so it is treated as one: a query is percent-decoded per escape
+and a malformed one throws, which on a path where nothing but `IOException` is caught took the
+response down with it, so an unreadable cursor is simply no cursor; and one that sorts past the
+last row -- what a forwarded cursor becomes once the links it started from close -- says so rather
+than drawing an empty table under a sentence that has just counted the links. The key is built in
+`Locale.ROOT` and percent-encoded on the way out, because it is read back by machine and a JVM
+numbering in Arabic-Indic digits would otherwise mint a cursor no other hub can match; and the list
+it indexes is already sorted by it, so finding the start is a binary search, not a walk that rebuilt
+a key per row it passed. Behind all of it, `HttpFront.serve` now answers **500 for any unchecked
+throw** out of a handler: every one of these runs on the connection's own virtual thread and nothing
+above it caught more than `IOException`, so one bad cursor closed the socket with no response at all
+and killed the thread printing a stack trace outside `Log`. Catching it per handler is one fix per
+handler; catching it at the boundary is the one that holds for the next one. The
+order is the order the rows *read* in, not the links' internal names: a raw port is named
+`tcp/<port>` and drawn as `<hub>:<port>`, so sorting by the name put it among the names beginning
+with "t", at a position matching nothing on the page. Its port is zero-padded in the key so 9000
+sorts before 20000, which also makes every key distinct and lets it double as the paging cursor.
+
 The page is one column, 48rem. It was 40rem, and what was wrong there was not the margins but the
 measure: a 64-character binary hash ran to the edge of its cell and a two-word label wrapped onto two
 lines. Both fit on one line now, and the rows are full-width with a hairline between them rather than
@@ -547,14 +593,15 @@ lives in `Metrics`, six `LongAdder`s written from every visitor thread and read 
 the signature counter sits at the one point that decides, so a refusal added later cannot forget to
 be counted.
 
-It lists the open links as well -- the address a visitor would type and whether it is https, tcp or
-udp -- because a hub that serves nothing and a hub that is busy look identical without it. The count
-that used to sit in the status table is gone with it: the list is the count, and saying both invited
-them to disagree. Those
-addresses are public by construction: a visitor reaches one by typing it, and a DNS lookup finds it
-either way. What stays behind the admin session is the part that is nobody else's business -- who
-opened a name and which local port it reaches -- and the list stops at fifty rows and says how many
-are left, so a busy hub does not turn its front page into a directory dump.
+It shows the first of the open links as well -- the address a visitor would type and whether it is
+https, tcp or udp -- because a hub that serves nothing and a hub that is busy look identical without
+it, and points at `/links` for the rest. The count that used to sit in the status table is gone with
+it: the list is the count, and saying both invited them to disagree. Those addresses are public by
+construction: a visitor reaches one by typing it. (Not because "a DNS lookup finds it either way",
+which this document used to say and which `DnsResponder` makes false -- a held name and a name
+nobody holds are answered identically, so DNS neither confirms nor enumerates.) What stays behind
+the admin session is the part that is nobody else's business: who opened a name and which local port
+it reaches.
 
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's
@@ -629,7 +676,7 @@ root or `CAP_NET_BIND_SERVICE`, which the reference systemd unit grants to a ded
 
 **The address check.** The self-check above proves the `_acme-challenge` delegation reaches this
 process and says nothing about the address records every visitor actually follows, so a hub started
-with ACME, unless `--no-address-check` says otherwise, also asks once in the background: do public
+with ACME, unless `--no-address-check` says otherwise, also asks in the background: do public
 resolvers have an address (A or AAAA) for `hub.example.com` and for a name under
 `*.hub.example.com`, do those two share one, and does that address answer `/v1/key` on the base
 URL's port with **this process's** hub key? The last question needs no PKI — the hub key is what a
@@ -652,6 +699,26 @@ and never asked DNS), and a handshake that completed against the pinned hub key 
 node on the hub's own host or LAN may have the name from `/etc/hosts` or a split-horizon resolver,
 which says nothing about what the world is told — and only for its own name, compared against what
 it already knows rather than stored from the wire.
+
+**Where the answer goes.** The check runs once the hub knows what it answers for its own name, and
+again every hour, and the verdict it reaches is kept rather than written to the log and dropped:
+`jailhub status` carries it, `/admin` shows it above the node list, and `/metrics` exports
+`jailhub_address_check_fault` — 1 only for a fault an operator has to fix, so inconclusive never
+pages anyone — beside `jailhub_address_check{verdict="..."}` and `jailhub_address_check_age_seconds`.
+The log line is written when the verdict **changes**, not on every pass — for a fault, a change of
+problem under the same verdict counts, since a missing wildcard replaced by one pointing elsewhere is
+a new fault — so a broken deployment files one error rather than one an hour, and the verdict that
+stands is there to be asked for instead. `since` is when that finding was first reached **by this
+process**: nothing is written to disk, so a restart starts the clock over and a fault that predates
+it reads as beginning at boot. `jailhub address check` asks again now, which is what the operator
+who has just edited a record wants; it is refused on the terms the hourly pass waits on — off, a
+standby, a delegated hub that does not yet know its own address — so it never leaves a verdict the
+pass would not have reached. Runs do not overlap. A node's arrival is folded in as it happens rather
+than at the next pass, moving the verdict but not when the check last ran, and expires after a day:
+the handshake proves what the records said at that moment, and a record can be edited after it. A
+standby runs none of this — the records being checked are the primary's — and a hub promoted to
+primary starts the pass afresh. `--no-address-check` silences the repeat, the log and the command
+alike, and the age series is exported only while the pass is running.
 
 Two operational traps. SNI passthrough needs raw TCP 443, so **no TLS-terminating HTTP proxy can sit
 in front** (nginx `http`, Caddy, Cloudflare Proxied); a layer-4 proxy that only copies bytes is
@@ -1325,21 +1392,90 @@ The four signing conditions are enforced by **the hub**, so they stop a rogue *n
 about a rogue *hub*. The self-probe runs on **the node**. They do not overlap; they face opposite
 directions.
 
-**It also runs on its own, one name every half hour.** Waiting for someone to type `jailscale verify`
-means an interception is found when somebody happens to look, which for an unattended node is never.
-The objection to a schedule was that the period has to scale with the number of open names — short
-enough to matter for one name is a lot of self-traffic for twenty. It does not have to, if a tick
-probes **one** name and the next tick takes the next: the cost of a tick is then one request whatever
-the node holds, and what stretches is how long a full pass takes, from half an hour at one name to
-ten hours at the 20-link ceiling. Raw ports are stepped over within the same tick rather than
-spending it, since they carry no TLS of ours to compare. The result of the last probe of each name
+**It also runs on its own, and every name is looked at once every half hour.** Waiting for someone to
+type `jailscale verify` means an interception is found when somebody happens to look, which for an
+unattended node is never. A tick probes **one** name and the next tick takes the next, so a tick
+costs one request whatever the node holds; what scales with the number of names is the tick, which
+is `Daemon.PROBE_PASS_MS` divided by them — half an hour at one name, ninety seconds at the 20-link
+ceiling — with a floor of a minute underneath it, and sized again whenever a name is opened, so the
+tick in flight is one for the names held now rather than for the count the wait began with.
+
+**Holding the pass still rather than the tick is the other way round from where this started, and is
+the correction.** The first schedule fixed the tick at half an hour and let a pass stretch to ten
+hours at the ceiling, on the objection that a period short enough to matter for one name is a lot of
+self-traffic for twenty. But a name taken over just after its turn keeps until its next one, so the
+pass **is** the detection bound, and the earlier bargain held the quantity that costs nothing still
+while letting the one carrying the whole point of the feature float with however many names an
+operator happened to open. What the swap costs is the traffic the objection was about, and the
+answer to it is the ceiling: 20 links is the most a node has, so a pass costs 20 requests — a TLS
+handshake and a `GET /` each — which is 40 an hour, and 80 in an hour where a link comes back every
+half hour and every return pays for a sweep as well. All of it to its own names, through its own
+hub. A node holding 20 public names carries more visitor traffic than that by a wide margin. The floor is
+unreachable at that ceiling and exists so that raising the ceiling cannot quietly turn this into a
+request a second.
+
+**Whose turn it is, is the set of links already looked at, not a position in the list of them.**
+Links open and close while a pass runs, so an index into the list of an hour ago points at a
+different name now: closing one link shifts every later name up a place, and whichever name moves
+past the cursor loses its turn for the rest of the pass -- silently, in the loop that exists so that
+no name goes unlooked-at for long. Carrying the links already visited makes every direction right
+without a special case: one that goes away takes its turn with it, one opened mid-pass is due rather
+than waiting for the next, and a name closed and opened again -- which §11.4 says is the answer to a
+revocation warning -- is due as well, because it is a new link. Keyed by the name instead it would
+have inherited the turn the old one took, and `status` would sit blank for the one name the operator
+is watching until the pass ended. Raw ports are never candidates at all, since they carry no TLS of
+ours to compare, and a name with no verdict yet goes ahead of the rest -- until its first probe what
+`status` shows for it is an empty field rather than an answer. So does a name whose verdict is older
+than a pass, which is what stops a steady stream of newly opened names from taking every tick away
+from the names already waiting.
+
+**A link the hub is not routing here gets the verdict `link not open`, not one about who terminated
+the TLS.** The hub answers a name it does not route here with its own page under the wildcard
+certificate, and a name handed to another node is terminated by that node, so probing either would
+report `TERMINATED ELSEWHERE` for a name nobody took by stealth. Three ordinary things reach that:
+a link closed or revoked (§11.4) while a sweep is still working through the list it started from —
+and the connection a sweep runs on is the one that carries the stored notice; a reopen that timed
+out while the hub was restarting, which leaves the name in this node's list with nothing serving it;
+and `jailscale down` followed by `jailscale verify`, where nothing is open at all. The check
+therefore sits in the probe itself rather than in the loop, so the command this section sends
+operators to is covered by it as well. A false report of a compromised hub is the worst thing this
+feature can do, and `link not open` is what all three of those are.
+
+**A link coming up is a reason to look now, not at the end of a tick.** A tick spent disconnected
+does nothing -- the traffic has nowhere to go -- and the stretch a node spends offline is exactly
+when a name changes hands, because being offline is why someone else took it (§11.4). So every name
+is probed once as soon as a hub connection is up, which is one pass' worth of work, at most 20
+requests, spent on the case the schedule is worst at. That sweep counts as the pass rather than
+being added to it. A request that arrives within a pass of the last sweep is dropped rather than
+queued, so a link that flaps costs one pass and not one per flap, and a sweep cut short -- by the
+link going down again, or by a probe that could not reach the hub at all, which the next nineteen
+would not either -- leaves the names it did not reach unmarked, for the ordinary ticks to pick up.
+Only the control connection asks for a sweep: a relay coming up changes nothing about who owns a
+name, and its ask would spend the sweep that the control connection's own return is entitled to.
+
+**The tick is jittered, the order is not.** Up to a fifth is taken off each tick, never added, so
+the moment a name is looked at is not one anybody can name in advance and a pass still finishes
+inside its target. Shuffling the *order* was considered and rejected: it would make a name's
+position in the pass unpredictable as well, at the price of doubling the worst gap between two looks
+at the same name — last in one pass and first in the next is one pass, first and then last is nearly
+two — and the only attacker it buys anything against is one timing an interception around the
+schedule, who has a far easier way out already. The probe leaves this node's address; a hub that
+routes those connections honestly and nobody else's is not caught by any order or any interval. A
+bound that holds against the careless hub is worth more than unpredictability against the careful
+one, who is not caught either way.
+
+The sweep is spread over `Daemon.SWEEP_SPREAD_MS` for a different reason: a hub restarting brings
+every node back in the same second, and a sweep each would arrive as one burst of signing requests
+on the hub that has just come up, on top of the reopens reconnection already costs.
+
+The result of the last probe of each name
 rides in `status`, so the answer is visible without running anything, and a `TERMINATED ELSEWHERE`
 from the loop logs exactly as loudly as one the operator asked for. There is no switch to turn it
 off: the traffic goes to this node's own name through its own hub and reaches no third party.
 
 ### 11.4 Name revocation notices
 
-The self-probe finds a move after the fact, and a name's turn can be hours away (§11.3), so an
+The self-probe finds a move after the fact, and a name's turn can be most of an hour away (§11.3), so an
 **honest hub announces a name change in advance** with `LinkRevoked{linkId, name, reason, at}`, where
 `reason` is `reassigned` (another node opened the same name) or `released` (an operator took it
 back). A compromised hub simply does not send it: this is incident notification, not attack
@@ -2188,13 +2324,17 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
-- **The self-probe reaches one name every half hour** (§11.3), so at the 20-link ceiling a given name
-  is looked at about every ten hours, and a tick is skipped entirely while the node is not connected
-  to the hub. What bounds detection is that pass, not the tick.
-- **The address check runs once, at startup, and its answer is only a log line** (§7.2). Nothing
-  re-runs it and nothing keeps the verdict, so a record that changes afterwards -- a proxy switched
-  on in front of the name, an edited A record -- is never noticed, and an operator who missed the
-  line at boot has nowhere to look it up.
+- **The self-probe leaves this node's own address** (§11.3), so a hub that singles those connections
+  out and routes only them to the node that owns the name is not caught by it, however often it
+  runs. Doing that means discriminating between visitors, which is itself detectable, and the schedule
+  is not what bounds this one: a probe that came from somewhere else -- another node, checking a name
+  on its owner's behalf -- is what would, and nothing does that today.
+- **The address check is one vantage point, and an hour behind** (§7.2). It repeats hourly and the
+  verdict is kept, so a record edited after boot is noticed and can be looked up afterwards -- but
+  within an hour rather than at once, and only as far as two public resolvers and this host can see.
+  A resolver that answers something else to visitors in some other network is invisible to it, and
+  the outside view a node supplies expires after a day, so a hub whose nodes all stay connected
+  falls back to inconclusive rather than standing on an old handshake.
 - **Delegated signing depends on reconstructing JSSE's ServerHello and EncryptedExtensions** (§9.2).
   The binding of a signature to the visitor's handshake is only as good as the node's ability to
   say what JSSE wrote, which it derives from the ClientHello, a fixed configuration and the

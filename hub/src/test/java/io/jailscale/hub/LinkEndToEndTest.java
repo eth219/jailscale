@@ -11,6 +11,7 @@ import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
+import io.jailscale.proto.http.Headers;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
@@ -25,6 +26,8 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLEngine;
@@ -214,11 +217,139 @@ class LinkEndToEndTest {
         ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
 
         String after = visit("hub.test", "/").bodyText();
-        assertTrue(after.contains("<a href=\"https://myapp.hub.test\">myapp.hub.test</a>"), after);
+        // With the hub's own port, which is what `open` told the node. Without it every row on a
+        // hub that is not on 443 links to nothing.
+        assertTrue(after.contains("<a href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), after);
         assertFalse(after.contains("alice"), "the owner must not be on the public page: " + after);
         assertFalse(after.contains("127.0.0.1:" + localApp.getLocalPort()),
             "the local target must not be on the public page: " + after);
         assertFalse(after.contains("mkey:"), after);
+    }
+
+    /**
+     * The directory at {@code /links}, fetched the way a stranger fetches it. It has to name what
+     * the hub is serving and give away no more than that: not the owner, not the local target, and
+     * not how busy a link is at this moment.
+     */
+    @Test
+    void theDirectorySaysWhatIsServedWithoutSayingWhoseOrHowBusy() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+
+        String empty = visit("hub.test", "/links").bodyText();
+        assertTrue(empty.contains("None open right now"), empty);
+
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
+        waitFor(() -> hub.links().byName("myapp") != null);
+
+        String idle = visit("hub.test", "/links").bodyText();
+        assertTrue(idle.contains("<a href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), idle);
+        assertTrue(idle.contains("&middot; open "), "how long it has been open: " + idle);
+        assertFalse(idle.contains("alice"), "the owner must not be on the public page: " + idle);
+        assertFalse(idle.contains("127.0.0.1:" + localApp.getLocalPort()),
+            "the local target must not be on the public page: " + idle);
+        assertFalse(idle.contains("mkey:"), idle);
+
+        // That a name is open is public; that somebody is on it right now is not. The page carried
+        // a per-link count for a while, and a page anyone can poll turns that into a live activity
+        // feed for a machine belonging to somebody else. A visitor is held open across the fetch --
+        // one that finishes its handshake and then says nothing sits in the node's serve() -- so
+        // this is the moment a count would appear if the page still took one.
+        try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), "myapp.hub.test", "127.0.0.1", port, true, 10_000)) {
+            s.startHandshake();
+            waitFor(() -> hub.router().visitorsInFlight() == 1);
+            String busy = visit("hub.test", "/links").bodyText();
+            assertEquals(1, hub.router().visitorsInFlight(), "the visitor should still be held: " + busy);
+            assertFalse(busy.contains("visitor"), "how busy a link is is the operator's, not the page's: " + busy);
+            assertFalse(busy.matches("(?s).*&middot; [0-9]+ .*"), "no per-link figure at all: " + busy);
+            // The row itself is still there, so this is not passing because the page went blank.
+            assertTrue(busy.contains("<a href=\"https://myapp.hub.test:" + port + "\">"), busy);
+        }
+    }
+
+    /**
+     * Why the directory exists: the link list is the only part of the front page with no fixed
+     * length, so the front page keeps a few and the rest is one click away rather than something
+     * a visitor scrolls past to reach the limits.
+     */
+    @Test
+    void theFrontPageKeepsAFewLinksAndSendsTheRestToTheDirectory() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        for (int i = 0; i < 9; i++) {
+            ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "app" + i)));
+        }
+        waitFor(() -> hub.links().all().size() == 9);
+
+        String home = visit("hub.test", "/").bodyText();
+        // Both ends of the cut, not just the far one: asserting only that app0 is there and app8
+        // is not would hold just as well if the front page had kept a single row.
+        for (int i = 0; i < 8; i++) {
+            assertTrue(home.contains(">app" + i + ".hub.test"), "app" + i + " should be on the front page: " + home);
+        }
+        assertFalse(home.contains(">app8.hub.test"), "the ninth belongs on the directory: " + home);
+        assertTrue(home.contains("All 9 open links"), home);
+
+        String directory = visit("hub.test", "/links").bodyText();
+        for (int i = 0; i < 9; i++) {
+            assertTrue(directory.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + directory);
+        }
+
+        // A page of the directory is capped, and the cap counted rows the page then had no way to
+        // show: the sentence at the top says how many there are, so every one of them has to be
+        // reachable. The cursor is the row's own ordering key, and asking for one starts the list
+        // there. (The cap is 200, which is more links than a test wants to open, so the cursor is
+        // exercised here at a size the assertions can see; the "next" link that carries it appears
+        // only past the cap.)
+        String fromFive = visit("hub.test", "/links?from=app5.hub.test").bodyText();
+        for (int i = 5; i < 9; i++) {
+            assertTrue(fromFive.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + fromFive);
+        }
+        for (int i = 0; i < 5; i++) {
+            assertFalse(fromFive.contains("app" + i + ".hub.test"), "app" + i + " is before the cursor: " + fromFive);
+        }
+        // The count at the top is of everything open, not of this page, so it does not move.
+        assertTrue(fromFive.contains("9 links are being served"), fromFive);
+        // Nine, not the 200-row cap: the number has to be what the first page actually holds.
+        assertTrue(fromFive.contains("Back to the first 9<"), fromFive);
+
+        // A cursor is a string a visitor sends, so the page has to survive every string. A query
+        // is percent-decoded per escape and a malformed one makes query() throw; nothing between
+        // route() and the virtual thread catches anything but IOException, so this used to close
+        // the connection with no response at all and die printing a stack trace.
+        HttpResponse rubbish = visit("hub.test", "/links?from=%zz");
+        assertEquals(200, rubbish.status(), "a cursor nobody can read is no cursor, not no page");
+        assertTrue(rubbish.bodyText().contains("app0.hub.test"), rubbish.bodyText());
+
+        // And one that sorts after everything open -- what a bookmarked cursor becomes once the
+        // links it started from close -- says so rather than drawing an empty table under a
+        // sentence that has just counted nine links.
+        String past = visit("hub.test", "/links?from=zzzz").bodyText();
+        assertTrue(past.contains("Nothing is open at that point"), past);
+        assertFalse(past.contains("<table class=\"links\"></table>"), "an empty table instead of a reason: " + past);
+
+        // Past the cap, which is 200 in production and more links than a test wants to open, so
+        // the page size is given here instead. This is the block that carries the cursor a visitor
+        // never types: the "next" link the page generates for itself, and the round trip back.
+        String first = hub.front().directory(
+            new HttpRequest("GET", "/links", "HTTP/1.1", new Headers(), null), 4);
+        assertTrue(first.contains(">app0.hub.test") && first.contains(">app3.hub.test"), first);
+        // ">" so this matches a row's anchor text and not the cursor in the "next" href.
+        assertFalse(first.contains(">app4.hub.test"), "the page size was not honoured: " + first);
+        assertTrue(first.contains("The next 4 of 5 remaining"), first);
+        // The generated cursor has to be one the hub reads back, not just one it can print.
+        Matcher m = Pattern.compile("/links\\?from=([^\"]+)").matcher(first);
+        assertTrue(m.find(), first);
+        String second = hub.front().directory(
+            new HttpRequest("GET", "/links?from=" + m.group(1), "HTTP/1.1", new Headers(), null), 4);
+        assertTrue(second.contains(">app4.hub.test") && second.contains(">app7.hub.test"), second);
+        assertFalse(second.contains(">app3.hub.test"), "the cursor did not advance: " + second);
+        // And the way back names the page it returns to, not the constant.
+        assertTrue(second.contains("Back to the first 4"), second);
     }
 
     /**
@@ -383,6 +514,77 @@ class LinkEndToEndTest {
         byte[] certVerify = new byte[HubTls.CERT_VERIFY_CONTEXT.length + 32];
         System.arraycopy(HubTls.CERT_VERIFY_CONTEXT, 0, certVerify, 0, HubTls.CERT_VERIFY_CONTEXT.length);
         assertNotNull(hub.tls().sign(hub.tls().keyId(), certVerify));
+    }
+
+    /**
+     * ARCHITECTURE.md §11.3: nobody types `jailscale verify` on an unattended node and the periodic
+     * pass is half an hour from its next tick, so a node whose link has just come up checks every
+     * name it holds there and then. That moment is the one the schedule is worst at: a node that
+     * loses a name is usually offline when it happens, because being offline is why someone else
+     * took it (§11.4).
+     */
+    @Test
+    void aNodeComingBackChecksItsNamesWithoutBeingAsked() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "backagain")));
+
+        alice.close();
+        daemons.remove(alice);
+        waitFor(() -> hub.links().byName("backagain") == null);
+
+        // A verdict on the node that comes back can only be this process's work: the last probe of
+        // a name is not persisted, and the next ordinary tick is half an hour away.
+        Daemon back = node("alice");
+        waitFor(() -> back.hasCert(hub.tls().keyId()));
+        waitFor(() -> "terminated by this node".equals(probeVerdict("alice", "backagain")));
+    }
+
+    /**
+     * ARCHITECTURE.md §11.3: a link the hub is not routing here is not an interception, and the
+     * command this section sends operators to has to say so. `down` leaves the names in the node's
+     * list with nothing serving them, and the hub answers each with its own page under the wildcard
+     * certificate -- which is a session this node did not terminate, and would read as a compromised
+     * hub to anything comparing keying material without looking first.
+     */
+    @Test
+    void verifyCallsAClosedLinkNotOpenRatherThanAnInterception() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "goingdown")));
+        ok(cli("alice", JsonObject.builder().put("cmd", "down")));
+        waitFor(() -> hub.links().byName("goingdown") == null);
+
+        // `ok` is that the check ran; the CLI prints the rows on that and nothing else. What the
+        // rows concluded is `allOk`, which is what the exit status follows.
+        JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));
+        assertFalse(verified.optBool("allOk", true), verified.toString());
+        assertEquals(1, verified.integer("checked"), verified.toString());
+        for (Object o : verified.array("results")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            assertEquals("link not open", row.get("verdict"), row.toString());
+            // and named the way a probed row is named, so one answer does not carry two shapes
+            assertEquals("goingdown.hub.test", row.get("name"), row.toString());
+        }
+    }
+
+    /** What `status` says the last self-probe of one name concluded, or null when none has run. */
+    private String probeVerdict(String node, String name) throws IOException {
+        for (Object o : cli(node, JsonObject.builder().put("cmd", "status")).array("links")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            if (name.equals(row.get("name")) && row.get("probe") != null) {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> probe = (java.util.Map<String, Object>) row.get("probe");
+                return (String) probe.get("verdict");
+            }
+        }
+        return null;
     }
 
     private interface Check {

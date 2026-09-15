@@ -43,6 +43,10 @@ final class HubLink implements AutoCloseable {
     interface Events {
         void onConnected(HubLink link);
 
+        /** The session that {@link #onConnected} reopened everything on is gone; its link ids with it. */
+        default void onDisconnected(HubLink link) {
+        }
+
         /** The control connection was told which hosts serve this hub's names right now (§13.4). */
         default void onRelays(HubLink control, List<String> relays) {
         }
@@ -304,6 +308,7 @@ final class HubLink implements AutoCloseable {
                     primary = null;
                     p.close();
                     closeExtras();
+                    events.onDisconnected(this);
                 }
             }
             if (!running || stopReconnecting) {
@@ -492,6 +497,7 @@ final class HubLink implements AutoCloseable {
         }
         waiting.clear();
         primary = null;
+        events.onDisconnected(this);
         LOG.info("hub is handing off: keeping {} connection(s) for in-flight streams, reconnecting", all.size());
         if (p != null) {
             p.done.countDown(); // the loop reconnects immediately without closing p

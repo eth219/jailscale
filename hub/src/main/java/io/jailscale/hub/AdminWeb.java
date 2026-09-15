@@ -192,6 +192,22 @@ final class AdminWeb {
         return b.toString();
     }
 
+    /**
+     * Where the address check stands (ARCHITECTURE.md §7.2), which used to exist only as a line in
+     * the log at boot. Here and not on the public page: it names this deployment's own
+     * misconfiguration, and a fault is exactly the moment when saying it to everyone is worst.
+     */
+    private String addressCheck() {
+        Reachability.Status a = hub.addressStatus();
+        if (a == null) {
+            return "";
+        }
+        String when = "<span title=\"last run " + new java.util.Date(a.at()) + "\">since "
+            + new java.util.Date(a.since()) + "</span>";
+        return "<p class=" + (a.fault() ? "bad" : "note") + "><b>Address check: " + HttpFront.escape(a.verdict())
+            + "</b> " + when + " — " + HttpFront.escape(a.text(hub.config().hostname())) + "</p>";
+    }
+
     /** {@code __Host-} forbids a Domain attribute and requires Path=/ and Secure. */
     private static String cookie(String sid, long maxAgeSeconds) {
         return COOKIE + "=" + sid + "; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=" + maxAgeSeconds;
@@ -315,6 +331,7 @@ final class AdminWeb {
             .append(" · nodes ").append(store.nodes().size()).append(" · online ").append(hub.registry().size())
             .append(" · links ").append(hub.links().all().size()).append("</p>");
         String csrf = "<input type=hidden name=csrf value=\"" + s.csrf() + "\">";
+        b.append(addressCheck());
         b.append("<form method=post action=/admin/logout>").append(csrf).append("<button>Sign out</button></form>");
 
         b.append("<h2>Pending approval</h2>");
@@ -411,7 +428,8 @@ final class AdminWeb {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>" + HttpFront.escape(title) + "</title>"
             + "<style>body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #ddd}"
-            + "form{display:inline}form.row{display:block;margin:.25rem 0}.new{background:#eef;padding:.5rem}code{font-size:.9em}</style>"
+            + "form{display:inline}form.row{display:block;margin:.25rem 0}.new{background:#eef;padding:.5rem}"
+            + ".note{background:#f4f4f4;padding:.5rem}.bad{background:#fee;padding:.5rem}code{font-size:.9em}</style>"
             + "</head><body><h1>" + HttpFront.escape(title) + "</h1>" + body + "</body></html>";
     }
 
