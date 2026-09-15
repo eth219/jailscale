@@ -16,7 +16,9 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
 import javax.net.ssl.SSLContext;
@@ -48,7 +50,32 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     static final URI LETS_ENCRYPT = URI.create("https://acme-v02.api.letsencrypt.org/directory");
     static final long RENEW_CHECK_MS = 3600_000;
     static final long UPDATE_CHECK_MS = 24 * 3600_000L;
-    static final long PROBE_INTERVAL_MS = 30 * 60_000L;
+    /**
+     * How long a full pass of the self-probe takes: every name this node holds is looked at once
+     * within it, whatever the number of names (ARCHITECTURE.md §11.3). This, and not the interval
+     * between two ticks, is the number the detection bound is written in.
+     */
+    static final long PROBE_PASS_MS = 30 * 60_000L;
+    /** And the shortest a tick may be, so that a pass target cannot turn into a burst of requests. */
+    static final long PROBE_MIN_TICK_MS = 60_000L;
+    /**
+     * How far a sweep is spread out after a hub connection comes up. A hub restarting brings every
+     * node back at once, and each of them would otherwise ask it to sign a handshake for every name
+     * it holds in the same instant, on top of the reopens that reconnection already costs.
+     */
+    static final long SWEEP_SPREAD_MS = 5_000L;
+    /**
+     * What the self-probe waits on between ticks, so that a hub connection coming up can ask for a
+     * pass now instead of at the end of one (ARCHITECTURE.md §11.3).
+     */
+    private final Object probeWake = new Object();
+    private boolean sweepAsked;          // guarded by probeWake
+    private boolean namesChanged;        // guarded by probeWake: a name was opened, resize the tick
+    /**
+     * When the last sweep ran, on {@link System#nanoTime}: the probe thread's own, and monotonic
+     * because a clock that steps must not move the interval anything here is written in.
+     */
+    private long lastSweepNanos = System.nanoTime() - PROBE_PASS_MS * 1_000_000L;
     /** How close to its end a certificate has to be before anyone is told (ARCHITECTURE.md §15). */
     static final long CERT_WARN_MS = 14 * 86400_000L;
     private static final long CERT_WARN_REPEAT_MS = 86400_000L;
@@ -95,6 +122,58 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             } catch (IOException | TimeoutException e) {
                 LOG.warn("could not reopen link {}{}: {}", rec.name, l.isRelay() ? " on " + l.relayAddress() : "", e.getMessage());
             }
+        }
+        if (!l.isRelay()) {
+            // Only the control connection decides who owns a name. A relay coming up changes
+            // nothing the probe could see -- it connects through the hub's address either way --
+            // and its ask would spend the once-per-pass sweep on the wrong event, leaving none
+            // for the control connection's own return inside the same pass.
+            askProbeSweep();
+        }
+    }
+
+    /**
+     * {@code linkId} is per hub session (NodeState.LinkRec), so it goes when the session does --
+     * not when the next session fails to reopen the name, which is too late. From the moment a
+     * new connection is up, {@link HubLink#isConnected} is true, and the reopens that give this
+     * session its ids are answered one at a time after that; a link id left over from the last
+     * session would meanwhile say the name is open to everything that reads it. {@code status}
+     * would call it open, and the self-probe would connect to the name, be answered by the hub's
+     * own page under the wildcard certificate, and report a hub still starting up as an
+     * interception (§11.3) -- the false report that feature must never make.
+     */
+    @Override
+    public void onDisconnected(HubLink l) {
+        if (l.isRelay()) {
+            return;
+        }
+        for (NodeState.LinkRec rec : state.links) {
+            rec.linkId = null;
+        }
+    }
+
+    /**
+     * Ask the self-probe for a full pass now rather than at its own pace (ARCHITECTURE.md §11.3).
+     * A node that loses a name is usually offline when it happens -- being offline is why someone
+     * else took it (§11.4) -- so the moment the link is back is the moment worth looking, and the
+     * ticks spent disconnected went nowhere. The ask is a flag, not a queue: a link that flaps must
+     * cost one pass at most, and {@code lastSweepNanos} is what holds it to that.
+     */
+    private void askProbeSweep() {
+        synchronized (probeWake) {
+            sweepAsked = true;
+            probeWake.notifyAll();
+        }
+    }
+
+    /**
+     * A name was opened: the tick in flight was sized for one name fewer, and
+     * {@link #awaitProbeTick} sizes it again from the names held now.
+     */
+    private void wakeProbe() {
+        synchronized (probeWake) {
+            namesChanged = true;
+            probeWake.notifyAll();
         }
     }
 
@@ -356,7 +435,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                     reply.error("no link named " + name);
                     return;
                 }
-                if (rec.linkId != null && link.isConnected()) {
+                if (isOpen(rec)) {
                     link.send(new Message.LinkClose(rec.linkId));
                 }
                 for (HubLink rl : relays.values()) {
@@ -412,11 +491,20 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
     }
 
+    /**
+     * Whether the hub is routing this link here right now: it has an id on the current session,
+     * and there is a current session. The one definition, so that {@code status}, {@code close}
+     * and the self-probe cannot disagree about the same record.
+     */
+    private boolean isOpen(NodeState.LinkRec rec) {
+        return rec.linkId != null && link.isConnected();
+    }
+
     private List<Object> linkRows() {
         List<Object> rows = new ArrayList<>();
         for (NodeState.LinkRec l : state.links) {
             rows.add(JsonObject.builder().put("name", l.name).put("kind", l.kind).put("local", l.local())
-                .put("url", l.url).put("gate", l.gateHash != null).put("open", l.linkId != null && link.isConnected())
+                .put("url", l.url).put("gate", l.gateHash != null).put("open", isOpen(l))
                 .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
                 .put("probe", l.lastProbe == null ? null : l.lastProbe.json()).build().asMap());
         }
@@ -708,6 +796,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (fresh) {
             state.links.add(rec);
         }
+        wakeProbe();
         String visitUrl = null;
         if (req.optBool("gate", false)) {
             String token = Gate.newToken();
@@ -731,15 +820,46 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private void verify(Ipc.Reply reply) throws IOException {
         List<Object> rows = new ArrayList<>();
         boolean allOk = true;
+        SSLContext ctx = probeContext();
         for (NodeState.LinkRec rec : state.links) {
-            ProbeResult p = probe(rec);
+            ProbeResult p = probe(rec, ctx);
             if (p == null) {
                 continue; // raw ports carry no TLS of ours to compare
             }
             allOk &= p.ok();
             rows.add(p.json().asMap());
         }
-        reply.done(JsonObject.builder().put("ok", allOk).put("checked", rows.size()).put("results", rows));
+        // `ok` is whether the command ran; what each name concluded is its row. Folding the
+        // verdicts into `ok` made the CLI print `error: failed` and drop the rows, so the one
+        // answer this section sends operators to never reached them (§11.3).
+        reply.done(JsonObject.builder().put("ok", true).put("allOk", allOk).put("checked", rows.size()).put("results", rows));
+    }
+
+    /**
+     * The client context every probe of one pass can share: the CA file read and the trust store
+     * built once rather than once per name. Null when it cannot be built, in which case each probe
+     * tries for itself and its verdict says why.
+     */
+    private SSLContext probeContext() {
+        try {
+            return HubClient.clientContext(state);
+        } catch (IOException | GeneralSecurityException e) {
+            return null;
+        }
+    }
+
+    /**
+     * What a row of {@code verify} calls a link: the name out of its URL, and the URL itself when
+     * that will not parse. Every row in one answer has to be labelled the same way whatever its
+     * verdict, or a reader correlating them by name matches some links and not others.
+     */
+    private static String probeLabel(NodeState.LinkRec rec) {
+        try {
+            String host = URI.create(rec.url).getHost();
+            return host != null ? host : rec.url;
+        } catch (RuntimeException e) {
+            return rec.url;
+        }
     }
 
     /**
@@ -750,10 +870,27 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * <p>Nothing in here throws. The URL is the hub's word (§11.2), so parsing it is inside the
      * same net as connecting to it: a hub that sends a name Java's {@code URI} will not parse must
      * get a verdict saying so, not end the loop that exists to catch a dishonest hub.
+     *
+     * <p>A link the hub is not routing here is answered before any of that, because every verdict
+     * below is about who terminated the TLS and none of them would be true of it. The hub answers a
+     * name it does not route here with its own page under the wildcard certificate, and a node that
+     * took the name terminates its own TLS, so probing either would read as an interception. That
+     * is reachable without anything going wrong: `jailscale down` and then `jailscale verify`, or a
+     * reopen that timed out while the hub was restarting. The check sits here rather than in the
+     * loop so that the command §11.3 sends operators to is covered by it too -- a false report of
+     * a compromised hub is the worst thing this feature can do.
      */
-    private ProbeResult probe(NodeState.LinkRec rec) {
+    private ProbeResult probe(NodeState.LinkRec rec, SSLContext shared) {
         if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
             return null;
+        }
+        if (!state.links.contains(rec) || !isOpen(rec)) {
+            // Closed or revoked (§11.4), or not open on this hub session -- the same test `status`
+            // makes, plus whether the record is still in the list, which `status` only iterates.
+            // The verdict does not go on the record: `status` keeps the last real one beside
+            // `open: false` rather than losing it, and the name still counts as never probed if
+            // it never was.
+            return new ProbeResult(probeLabel(rec), false, "link not open", System.currentTimeMillis());
         }
         String host = rec.url;
         String verdict;
@@ -765,7 +902,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             }
             host = u.getHost();
             int port = u.getPort() > 0 ? u.getPort() : 443;
-            SSLContext ctx = Tls.clientContext(state.caFile == null ? null : Path.of(state.caFile), state.tlsInsecure);
+            SSLContext ctx = shared != null ? shared : HubClient.clientContext(state);
             try (SSLSocket s = Tls.connect(ctx, host, state.hubAddr, port, !state.tlsInsecure, VERIFY_TIMEOUT_MS)) {
                 Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
                 // Headers only. The node records the exporter on the first application byte of
@@ -790,58 +927,271 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     /**
      * ARCHITECTURE.md §11.3: run the self-probe without being asked, so an interception is found
-     * rather than waited for. **One name per tick, in turn**, which is what makes the interval
-     * independent of how many names this node holds: §15 objected that a period has to scale with
-     * the number of open names, and it does not if each tick costs one probe regardless. With the
-     * default tick a node with one name is checked every half hour and a node at the 20-link
-     * ceiling every ten hours, at the same cost to the hub either way.
+     * rather than waited for. **One name per tick, and the tick is what a pass costs divided by the
+     * number of names**, so every name is looked at once every {@code PROBE_PASS_MS} whether this
+     * node holds one or twenty. That is the number worth holding still: an interception lasts until
+     * the name's next turn, so the pass is the detection bound and the tick is only how it is paid
+     * for.
      *
      * <p>No switch to turn it off, deliberately. The traffic goes to this node's own public name
      * through its own hub and reaches no third party, so there is nothing here for an operator to
      * opt out of.
      */
     private void probeLoop() {
-        int next = 0;
-        while (!closed) {
-            try {
-                Thread.sleep(PROBE_INTERVAL_MS);
-            } catch (InterruptedException e) {
-                return;
+        Set<NodeState.LinkRec> pass = new HashSet<>();
+        try {
+            while (!closed) {
+                boolean sweep = awaitProbeTick();
+                if (closed || !link.isConnected()) {
+                    continue;
+                }
+                List<NodeState.LinkRec> links = new ArrayList<>(state.links);
+                if (sweep) {
+                    sweepProbe(links, pass);
+                    continue;
+                }
+                NodeState.LinkRec rec = dueProbe(links, pass);
+                if (rec != null) {
+                    probeSafely(rec, null);
+                }
             }
-            List<NodeState.LinkRec> links = new ArrayList<>(state.links);
-            if (!link.isConnected()) {
-                continue;
-            }
-            int i = nextProbeIndex(links, next);
-            if (i < 0) {
-                continue;
-            }
-            next = (i + 1) % links.size();
-            try {
-                probe(links.get(i));
-            } catch (RuntimeException e) {
-                // probe() is written not to throw; if it ever does, one bad tick must not be the
-                // last one. Say so, at the volume of a thing that should not happen.
-                LOG.error("self-probe of {} failed unexpectedly: {}", links.get(i).name, e.toString());
-            }
+        } catch (InterruptedException e) {
+            // exiting
         }
     }
 
     /**
-     * The link to probe on this tick: the first one at or after {@code from}, wrapping, that carries
-     * TLS this node terminates. -1 when none does, which is a node with only raw ports open.
-     * Separate from the probing so that the turn-taking -- the part that keeps the cost of a tick
-     * independent of how many names are open -- can be checked without opening a socket.
+     * Waits out one tick, or less when a hub connection comes up and a sweep is allowed. True when
+     * this tick is that sweep.
+     *
+     * <p>An ask that arrives inside a pass of the last sweep is dropped rather than queued, and the
+     * ordinary ticks carry on underneath it: a node whose link flaps every minute would otherwise
+     * turn every flap into a full pass, which is the one way this could become traffic worth
+     * noticing. What it is held to instead is a doubling of the steady rate, at worst.
+     *
+     * <p>The deadline is {@link System#nanoTime}, not the wall clock. The remaining wait is worked
+     * out again after every wakeup, so a clock stepped backwards -- NTP correcting a fast RTC, a VM
+     * resuming -- would otherwise push the next look at a name out by the size of the step, and the
+     * bound this loop exists to hold would be gone without anything saying so.
+     *
+     * <p>The tick itself is sized again on every wakeup too, from the names held now. {@code open}
+     * wakes this ({@link #wakeProbe}), so a name opened one minute into a half-hour tick shortens
+     * the tick in flight to what the new count calls for rather than waiting out the old one --
+     * without that, nineteen names opened behind a single one would sit unprobed for the rest of
+     * the half hour, which is the bound this loop exists to hold, spent before the first look.
      */
-    static int nextProbeIndex(List<NodeState.LinkRec> links, int from) {
-        for (int i = 0; i < links.size(); i++) {
-            int at = (from + i) % links.size();
-            NodeState.LinkRec rec = links.get(at);
-            if (Message.LinkOpen.HTTPS.equals(rec.kind) && rec.url != null) {
-                return at;
+    private boolean awaitProbeTick() throws InterruptedException {
+        long since = System.nanoTime();
+        long deadline = since;
+        synchronized (probeWake) {
+            namesChanged = true; // the first deadline is sized here too
+            while (!closed) {
+                if (sweepAsked) {
+                    sweepAsked = false;
+                    if (System.nanoTime() - lastSweepNanos >= PROBE_PASS_MS * 1_000_000L) {
+                        return true;
+                    }
+                }
+                if (namesChanged) {
+                    namesChanged = false;
+                    deadline = since + jitter(probeTick(probableNames(state.links))) * 1_000_000L;
+                }
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    return false;
+                }
+                probeWake.wait(Math.max(1, left / 1_000_000L));
             }
         }
-        return -1;
+        return false;
+    }
+
+    /**
+     * One pass in one go: every name this node holds, checked now. That is at most 20 requests
+     * (the link ceiling) and it is spent on the case the schedule is worst at -- a node that has
+     * just been away, which is exactly when a name changes hands.
+     *
+     * <p>It counts as the pass, so the names it covers are marked and the loop carries on into the
+     * next one rather than going round again. If the link goes down mid-sweep the rest are left
+     * unmarked, so the ordinary ticks pick them up instead of the sweep pretending to have.
+     *
+     * <p>Nothing is spent until it is about to probe: a sweep that turns back -- no names to look
+     * at, or the link gone again -- neither takes the pass in flight down with it nor holds the
+     * next sweep off for a pass. Both would cost the thing this exists to shorten. A node whose
+     * link blips mid-pass would lose the turns already taken and start over, so the names still
+     * waiting would wait nearly two passes rather than the one PROBE_PASS_MS bounds; and a sweep
+     * that made no requests at all has nothing to answer the cooldown for.
+     */
+    private void sweepProbe(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) throws InterruptedException {
+        List<NodeState.LinkRec> all = remaining(links, Set.of());
+        if (all.isEmpty()) {
+            return;
+        }
+        // A hub restart brings every node back at the same second; this is what keeps the sweeps
+        // that follow from arriving as one burst of signing requests on the hub that just came up.
+        awaitSpread(ThreadLocalRandom.current().nextLong(SWEEP_SPREAD_MS));
+        if (closed || !link.isConnected()) {
+            return;
+        }
+        lastSweepNanos = System.nanoTime();
+        pass.clear();
+        SSLContext ctx = probeContext();
+        for (NodeState.LinkRec rec : all) {
+            ProbeResult p = probeSafely(rec, ctx);
+            pass.add(rec);
+            if (closed || !link.isConnected()) {
+                break;
+            }
+            if (p != null && p.verdict().startsWith("unreachable")) {
+                // Every name is reached through the same hub address, so a path that swallowed
+                // this probe swallows the next nineteen too, at VERIFY_TIMEOUT_MS each: a hub
+                // whose control port is open but whose visitor port is not yet. The rest are left
+                // unmarked for the ordinary ticks, which pay for one name at a time.
+                LOG.debug("self-probe: sweep stopped at {} ({}); the ordinary ticks take the rest", rec.name, p.verdict());
+                break;
+            }
+        }
+        LOG.debug("self-probe: {} of {} name(s) checked on the hub link coming up", pass.size(), all.size());
+    }
+
+    /**
+     * Waits out the spread on the probe's own monitor rather than in {@link Thread#sleep}, so that
+     * {@link #close} -- which notifies that monitor for exactly this reason -- is noticed here as
+     * well and not only between ticks.
+     */
+    private void awaitSpread(long ms) throws InterruptedException {
+        long deadline = System.nanoTime() + ms * 1_000_000L;
+        synchronized (probeWake) {
+            for (long left = deadline - System.nanoTime(); !closed && left > 0; left = deadline - System.nanoTime()) {
+                probeWake.wait(Math.max(1, left / 1_000_000L));
+            }
+        }
+    }
+
+    private ProbeResult probeSafely(NodeState.LinkRec rec, SSLContext ctx) {
+        try {
+            return probe(rec, ctx);
+        } catch (RuntimeException e) {
+            // probe() is written not to throw; if it ever does, one bad tick must not be the
+            // last one. Say so, at the volume of a thing that should not happen.
+            LOG.error("self-probe of {} failed unexpectedly: {}", rec.name, e.toString());
+            return null;
+        }
+    }
+
+    /**
+     * The link to probe on this tick, or null when this node holds no name to probe. {@code pass}
+     * is the turn-taking: the names already looked at in the current pass, carried across ticks and
+     * cleared here once every name has had its turn, which is what makes a pass a pass.
+     *
+     * <p>It is a set of the link records themselves rather than a position, because a position is a
+     * claim about a list that does not hold still. Links are opened and closed while a pass runs,
+     * and an index into yesterday's list points at a different name in today's: closing one link
+     * used to shift every later name up a place, which skips the one that moved past the cursor --
+     * for a whole pass, silently, in the loop whose entire purpose is that no name goes
+     * unlooked-at for long. Holding the records makes every case right by construction: a link that
+     * goes away takes its turn with it, one that appears is due, and a name closed and opened again
+     * -- which §11.4 says is the answer to a revocation warning -- is due as well, because it is a
+     * new record. Keyed by name it would have inherited the turn the old one took, and `status`
+     * would sit blank for the one name the operator is watching until the pass ended.
+     *
+     * <p>A name with no verdict at all goes first. It is the one nothing is known about, and until
+     * its first probe the reassurance in {@code status} is an empty field rather than an answer.
+     * So does a name whose verdict is older than a pass, in list order, and that is what keeps the
+     * first rule honest: on its own it lets a steady stream of new names -- one opened per tick --
+     * take every tick from the names already waiting, and the bound this loop exists for would be
+     * broken by nothing more than churn. A name overdue by that measure is one the bound has
+     * already failed, and it goes before anything newer. That one comparison is on the wall
+     * clock, because {@code lastProbe.at} is; a stepped clock reorders a tick, it does not
+     * lengthen one.
+     *
+     * <p>Links that have gone are dropped from {@code pass} on the way in, or a pass that churn
+     * never lets finish would keep every record it ever saw.
+     *
+     * <p>Separate from the probing so that the turn-taking can be checked without opening a socket.
+     */
+    static NodeState.LinkRec dueProbe(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) {
+        pass.retainAll(new HashSet<>(links));
+        List<NodeState.LinkRec> due = remaining(links, pass);
+        if (due.isEmpty()) {
+            pass.clear();
+            due = remaining(links, pass);
+        }
+        if (due.isEmpty()) {
+            return null;
+        }
+        NodeState.LinkRec pick = due.get(0);
+        long overdue = System.currentTimeMillis() - PROBE_PASS_MS;
+        for (NodeState.LinkRec rec : due) {
+            ProbeResult last = rec.lastProbe;
+            if (last == null || last.at() < overdue) {
+                pick = rec;
+                break;
+            }
+        }
+        pass.add(pick);
+        return pick;
+    }
+
+    /**
+     * How long to wait before looking at the next name, so that a pass over all of them takes
+     * {@code PROBE_PASS_MS} whatever the number of names: half an hour at one name, ninety seconds
+     * at the 20-link ceiling.
+     *
+     * <p>This is the other way round from where this started, on purpose. Holding the tick at half
+     * an hour and letting the pass stretch to ten hours fixes the quantity that costs nothing and
+     * lets the one carrying the whole point of the feature float: a name taken over just after its
+     * turn keeps until its next one, so the pass **is** the detection bound. What the swap costs is
+     * that probe traffic now grows with the number of names, which is what the fixed tick was
+     * refusing -- but it grows to a ceiling, because 20 links is one: 20 requests a pass, so 40 an
+     * hour, and 80 in the hour where a link comes back every half hour and each return pays for a
+     * sweep as well. All of it to its own names, through its own hub, and a node holding 20 public
+     * names is carrying more visitor traffic than that by a wide margin.
+     *
+     * <p>The floor is not reachable at that ceiling; it is there so that raising the ceiling cannot
+     * turn this into a request a second by arithmetic nobody looked at again.
+     */
+    static long probeTick(int names) {
+        return Math.max(PROBE_MIN_TICK_MS, PROBE_PASS_MS / Math.max(1, names));
+    }
+
+    /**
+     * A tick with up to a fifth taken off it, never added, so that the moment a name is looked at is
+     * not one anybody can name in advance and a pass still finishes inside its target.
+     *
+     * <p>The order names are taken in is deliberately *not* shuffled with it. Random order would
+     * make a name's position in the pass unpredictable too, at the price of doubling the worst gap
+     * between two looks at the same name -- last in one pass, first in the next is one pass, but
+     * first and then last is nearly two -- and the attacker it would buy anything against is one
+     * timing an interception around the schedule, who has a far easier way out already: the probe
+     * leaves this node's address, so a hub that routes those connections honestly and nobody else's
+     * is not caught by any order or any interval (§15). Trading a bound that holds against the
+     * careless hub for unpredictability against the careful one, when the careful one is not caught
+     * either way, is the wrong side of that trade.
+     */
+    static long jitter(long tickMs) {
+        return tickMs - ThreadLocalRandom.current().nextLong(tickMs / 5 + 1);
+    }
+
+    /** How many names a pass has to cover. */
+    static int probableNames(List<NodeState.LinkRec> links) {
+        return remaining(new ArrayList<>(links), Set.of()).size();
+    }
+
+    /** The links carrying TLS this node terminates that have not had their turn in {@code pass}. */
+    private static List<NodeState.LinkRec> remaining(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) {
+        List<NodeState.LinkRec> due = new ArrayList<>();
+        for (NodeState.LinkRec rec : links) {
+            // Raw ports carry no TLS of ours to compare, and an https link the hub has not answered
+            // for yet has no URL to connect to. Neither is a name this can say anything about.
+            if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null || rec.name == null) {
+                continue;
+            }
+            if (!pass.contains(rec)) {
+                due.add(rec);
+            }
+        }
+        return due;
     }
 
     private static String visitUrl(NodeState.LinkRec rec, String token) {
@@ -970,7 +1320,12 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     @Override
     public void close() throws IOException {
-        closed = true;
+        // The flag is set under the self-probe's monitor because that is what the probe thread is
+        // waiting on: it would otherwise sleep out the rest of a tick before noticing.
+        synchronized (probeWake) {
+            closed = true;
+            probeWake.notifyAll();
+        }
         link.close();
         closeRelays();
         if (ipc != null) {

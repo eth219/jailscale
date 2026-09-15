@@ -233,9 +233,10 @@ What each side needs:
 The hub holds the wildcard private key. A compromised hub cannot read traffic to
 a healthy node, but it can move a name to a node of its own and sign for it. The
 node catches that afterwards from its own side: the daemon opens a session to
-one of its own public names every half hour, `jailscale verify` does all of them
-at once, and either way it compares RFC 5705 exported keying material against
-what it recorded, which a hub that terminated the TLS itself cannot match.
+each of its own public names once every half hour, one at a time, and
+`jailscale verify` does all of them at once; either way it compares RFC 5705
+exported keying material against what it recorded, which a hub that terminated
+the TLS itself cannot match.
 `status` keeps each name's last verdict, and an honest hub reports the move on
 its own. Names you bring yourself are not exposed this way: the key stays on the
 node and the hub only routes.
