@@ -124,6 +124,20 @@ final class Availability {
         }
     }
 
+    /** Starts the record over from {@code now}: no gaps, for this process or any peer, and {@code since} is now. */
+    synchronized void reset(long now) {
+        since = now;
+        lastStamp = now;
+        selfGaps.clear();
+        for (Observed o : peers.values()) {
+            o.gaps.clear();
+            if (o.downSince > 0) {
+                o.downSince = now;
+            }
+        }
+        write();
+    }
+
     /** When this record began; a window that reaches further back than this is reported over less. */
     synchronized long since() {
         return since;

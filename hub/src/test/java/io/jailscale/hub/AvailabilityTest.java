@@ -112,6 +112,27 @@ class AvailabilityTest {
     }
 
     @Test
+    void aResetForgetsEveryGapAndStartsTheRecordNow() throws Exception {
+        Path dir = TestDirs.newRoot("avail");
+        Availability first = new Availability(dir, T0);
+        first.stamp(T0 + H);
+        Availability a = new Availability(dir, T0 + 2 * H);
+        a.peerUp("b", T0 + 2 * H);
+        a.peerDown("b", T0 + 2 * H + 10);
+        assertEquals(0.5, a.processFraction(D, T0 + 2 * H), 1e-9);
+        a.reset(T0 + 3 * H);
+        assertEquals(T0 + 3 * H, a.since());
+        assertEquals(1.0, a.processFraction(30 * D, T0 + 4 * H), 1e-9);
+        // A peer that was down at the reset is down from the reset, not from before it.
+        assertEquals(0.0, a.peerFraction("b", D, T0 + 4 * H), 1e-9);
+        a.peerUp("b", T0 + 4 * H);
+        assertEquals(0.5, a.peerFraction("b", D, T0 + 5 * H), 1e-9);
+        // And it is persisted: a restart reads the reset record, not the old gaps.
+        Availability again = new Availability(dir, T0 + 5 * H);
+        assertEquals(T0 + 3 * H, again.since());
+    }
+
+    @Test
     void anUnreadableRecordStartsOverRatherThanRefusingToStart() throws Exception {
         Path dir = TestDirs.newRoot("avail");
         Files.writeString(dir.resolve("availability.json"), "{not json", StandardCharsets.UTF_8);
