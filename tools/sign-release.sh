@@ -248,13 +248,28 @@ if [ "$index_rc" = 3 ]; then
     echo "  tools/refresh-index.sh --first $tag"
     exit 0
 fi
+if [ "$index_rc" = 4 ]; then
+    # Not the same as never having had one, and not a reason to start a sequence: see index_fetch.
+    echo "$tag is out, but $INDEX_TAG exists and carries no pointer -- its assets may have been" >&2
+    echo "lost by an upload. Do not start a new sequence; see tools/refresh-index.sh." >&2
+    exit 1
+fi
 if [ "$index_rc" != 0 ]; then
     echo "$tag is out, but the current pointer could not be read, so it has not been moved." >&2
     echo "A sequence that restarts because a network was down is the rule it exists for, deleted." >&2
     echo "When you can reach GitHub again: tools/refresh-index.sh --tag $tag" >&2
     exit 1
 fi
-index_keys=$(release_keys_at "$root" "$(index_key_rev "$root" "$dir/index")")
+index_rev=$(index_key_rev "$root" "$dir/index")
+index_keys=$(release_keys_at "$root" "$index_rev")
+# The guard both sibling scripts carry. Without it an unreadable key list reaches index_verify,
+# which loops over nothing and returns 1, and the operator is told the published pointer does not
+# verify -- a reason to suspect tampering -- at the one moment the release is already out.
+[ -n "$index_keys" ] || {
+    echo "$tag is out, but there is no release key list in $RELEASE_KEYS_SRC at $index_rev," >&2
+    echo "so the published pointer cannot be checked and has not been moved." >&2
+    exit 1
+}
 index_line=$(index_verify "$dir/index" "$index_keys") || {
     echo "$tag is out, but the pointer that is published does not verify; find out why before" >&2
     echo "overwriting it. Nothing has been changed." >&2

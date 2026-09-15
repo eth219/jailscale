@@ -6,9 +6,15 @@ this design does not have". It changes what `jailscale update` believes, not wha
 three-link chain over a download ([§9.4](../ARCHITECTURE.md), and
 [docs/release-verification.md](../release-verification.md) for the same chain by hand) is untouched.
 
-**Step 1 of the five below is built**: the release tooling signs, publishes and re-issues the
-pointer. No client reads it, so nothing in the field behaves differently yet, and the first pointer
-is one command a person still has to run (`tools/refresh-index.sh --first`).
+**Steps 1 to 4 of the five below are built**: the release tooling signs, publishes and re-issues the
+pointer; `update` takes the announcement from it instead of from an unsigned release index; and a
+node refuses a pointer whose sequence is below the highest it has recorded. What is not built is the
+warnings (step 5).
+
+**Ordering, which matters once step 2 is in a binary.** A build that reads the pointer needs one to
+read: until `tools/refresh-index.sh --first` has been run against the repository, `jailscale update`
+in such a build reports that it could not check. So the first pointer has to be published *before* a
+release carrying this code goes out, not after.
 
 It is written first because the two ergonomic steps queued behind it -- `update --install` doing the
 replacement where the privilege is already there, and restarting the service after it -- each make
@@ -211,15 +217,88 @@ constant with a reason behind it.
 
 1. **Publish the pointer.** *(built)* `sign-release.sh` writes and uploads it; `refresh-index.sh`
    exists; `verify-release.sh --index` checks it. No client reads it. Nothing in the field changes.
-2. **Read it for the announcement.** `check` takes the tag from the pointer, `--download` is
-   untouched. `status` carries `issued`/`expires` and whether the pointer is stale.
-3. **The sequence floor.** `update.json`, the refusal, and the loud message.
-4. **Retire the API index** and the `LATEST` constant with it.
+2. **Read it for the announcement.** *(built)* `check` takes the tag from the pointer, `--download`
+   is untouched. `status` carries `expiresAt` and whether the pointer is stale.
+3. **The sequence floor.** *(built)* `update.json`, the refusal, and the loud message.
+4. **Retire the API index** and the `LATEST` constant with it. *(built, with step 2: once the
+   pointer is what `check` reads, leaving the unsigned call in place would be dead code that a
+   later edit could make load-bearing again -- and the design's own rule is that there is no
+   falling back to it.)*
 5. **Warnings**: fourteen days out in `update`, once a day in the daemon's log, and the stale line in
    `status`.
 
 Steps 1 and 2 are what make the withholding attack visible; 3 is what makes it un-repeatable against
 a node that has already seen better. Neither 4 nor 5 is required for either property.
+
+## What building step 3 settled
+
+- **A node that has never seen a higher sequence can still be given an old pointer.** The floor is
+  built from what this node has been told, so first contact has nothing to compare with: a fresh
+  install can be handed any genuinely signed, unexpired pointer, and what bounds that is the expiry
+  and never-below-running, not the sequence. The floor makes withholding *un-repeatable against a
+  node that has already seen better*, which is a different claim from making it impossible.
+- **A floor that cannot be read rebuilds itself.** Whoever can corrupt `update.json` is already on
+  the machine as that user; refusing to check for updates ever again would be a worse answer than
+  taking the next pointer that verifies. An unwritable home is the same story: the check succeeds,
+  the floor does not advance, and nothing is raised.
+- **The write re-reads first.** The daemon's daily check and a `jailscale update` in a terminal are
+  two processes on one file, and the later writer must not carry an older read back over a higher
+  number.
+- **A refused pointer is not one this node has seen.** The floor is written only after every check
+  above it has passed, so a pointer nobody accepted cannot raise the bar for the ones that follow.
+- **A sequence starts at 1, in both readers.** A stored zero means "no floor at all", so a pointer
+  at zero would be one a node accepted and then remembered as never having seen; `Index.parse` and
+  `index_verify` both refuse it rather than leaving the two of them to disagree.
+- **A floor that is missing is silent and a floor that is unusable is not.** The first check a node
+  ever makes has no file to read, which is normal; a file that is there and cannot be read or
+  written is the protection off or frozen, and that is a warning, because nobody would otherwise
+  find out. The daemon says a refusal out loud once a day for the same reason -- `status` carries it,
+  but nobody runs `status` daily.
+
+## What a review of the whole of it changed
+
+- **A check answers with an outcome, not with two nullable fields.** `Result` carries one of
+  current / newer / stale / cannot-tell / refused / unreachable, because both consumers were
+  inferring the category and both got it wrong: the daemon read "a sequence went backwards" out of
+  `seq > 0` and so warned daily about a `dev` build's "cannot compare", while never saying anything
+  about an expired pointer — the one thing the expiry exists to surface. The CLI derived its stream
+  and exit status the same way and exited 1 while announcing an upgrade.
+- **A clock that disagrees says "cannot tell".** Both documents promised that and the code did the
+  opposite: a slow clock produced a hard error. It is the same answer an expiry gives, and the
+  upgrade the pointer names is still offered — a clock is not evidence about a release.
+- **A release-index that exists and carries no pointer is its own state.** `gh release upload
+  --clobber` deletes an asset before it uploads the replacement and loses it if the upload fails, so
+  "no assets at all" is a state the publishing step can produce — and reading it as "there is no
+  pointer" is what would let `--first` restart the sequence over a fleet that has seen higher. Only
+  a release that does not exist authorises a first sequence now; the recovery for the other state is
+  to re-issue above what the fleet has seen, or to delete the release on purpose.
+- **A pointer needs a key on both lists.** Signing a release is checked against the list the
+  *previous* release compiled in, because only older binaries verify it. A pointer is read by nodes
+  at every version, including the one it names, so a key only the older list carries publishes a
+  pointer every node on the named release refuses. Both lists are checked now, and the fallback for
+  a previous release that predates signing — which sign-release.sh always had — is here too.
+- **A sequence has one spelling.** `09` is nine to both readers and then kills the next `$(( ))` in
+  the shell, after the release it was signing is already out. Both readers refuse it instead.
+- **Something runs the expiry check.** The fourteen-day warning was reachable only by a human typing
+  a command nobody had a reason to type, which for a scheme whose whole cost is a recurring manual
+  act is the wrong place to keep the reminder. The nightly CI run checks the published pointer and
+  goes red two weeks out.
+
+## What building step 2 settled
+
+- **An expired pointer is reported on stderr and exits 1 when there is nothing newer**, so a script
+  can tell "up to date" from "could not tell" the way §9.4 already promises for a check that failed.
+  With something newer to fetch, `--download` runs and the caveat rides along on stderr: the exit
+  status follows the work that was asked for, not the freshness of the pointer that named it.
+- **A future `issued` is an error, not a stale pointer.** Both end in "cannot tell", but they are
+  different facts and the message says which one happened -- a clock that is wrong is the node's
+  problem to fix, and an expiry that has passed is the maintainer's.
+- **`Index.parse` takes the last of a repeated field**, matching `Manifest.parse` and the shell
+  tooling, and `UpdateIndexTest` pins both parsers to that in one test. A tool and a node reading
+  one signed document differently is the failure worth ruling out.
+- **The tag rule is written once.** `Updates.tagOk` is what refuses a tag before it is pasted into a
+  URL, and the pointer's tag goes through it too: a name refused in one place and used in the other
+  is the gap worth not having.
 
 ## What building step 1 settled that the design above did not
 

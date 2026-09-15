@@ -74,7 +74,7 @@ public final class Main {
         try {
             switch (cmd) {
                 case "version" -> System.out.println("jailscale " + Version.string());
-                case "update" -> update(a);
+                case "update" -> update(cfg, a);
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
@@ -148,13 +148,28 @@ public final class Main {
      * for having checked nothing. What it deliberately leaves is the step that needs a privilege
      * this process does not have.
      */
-    private static void update(Args a) throws Exception {
-        Updates.Result r = Updates.check(Version.string());
-        if (r.error() != null) {
+    private static void update(NodeConfig cfg, Args a) throws Exception {
+        // The config directory is where the highest release-index sequence this node has seen is
+        // kept (docs/update-freshness). It is passed even though this command talks to no daemon:
+        // the floor belongs to the node, not to whichever process happened to ask.
+        Updates.Result r = Updates.check(Version.string(), cfg.updateFile());
+        if (!r.cannotTell() && r.error() != null) {
             throw new IOException(r.line()); // like every other command: stderr, exit 1
         }
-        System.out.println(r.line());
+        // One table, rather than a policy per outcome. A node that cannot say whether what it runs
+        // is current -- an expired pointer, a clock that disagrees -- has not answered the question,
+        // so the line goes to stderr; but it has not failed at anything either, so the exit status
+        // follows the work that was asked for. Nothing to do and no answer is the one case a script
+        // has to be able to tell from "up to date", and that is the one that exits 1.
+        //
+        // Staleness is deliberately not a reason to refuse a download: the signature, the tag
+        // binding and never-below-running all still hold over a stale pointer, so refusing would
+        // forbid a genuine upgrade to avert a risk the refusal does not reduce (docs/update-freshness).
+        (r.cannotTell() ? System.err : System.out).println(r.line());
         if (!a.flag("download") || !r.newer()) {
+            if (r.cannotTell() && !r.newer()) {
+                System.exit(1);
+            }
             return; // nothing to fetch: there is no newer release, or nobody asked for it
         }
         boolean temp = !a.has("dir");

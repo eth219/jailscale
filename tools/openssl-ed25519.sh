@@ -58,8 +58,13 @@ verify_with_keys() {
         "$OPENSSL" pkey -pubin -inform DER -in "$_v/key.der" -out "$_v/key.pem" 2>/dev/null || continue
         if "$OPENSSL" pkeyutl -verify -pubin -inkey "$_v/key.pem" -rawin \
             -in "$1" -sigfile "$2" >/dev/null 2>&1; then
-            spki_fingerprint "$_v/key.pem"
+            # The fingerprint is the return value, so an empty one is a failure and not a success
+            # with nothing to say: callers split this output into fixed fields, and a missing last
+            # field turns into an unbound variable rather than a diagnosis.
+            _fp=$(spki_fingerprint "$_v/key.pem")
             rm -rf "$_v"
+            [ -n "$_fp" ] || return 1
+            printf '%s\n' "$_fp"
             return 0
         fi
     done

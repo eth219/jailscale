@@ -556,7 +556,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("links", linkRows())
             .put("revoked", revokedRows())
             .put("lastError", link.lastError())
-            .put("update", lastUpdate == null ? null : lastUpdate.json().build());
+            .put("update", lastUpdate == null ? null : lastUpdate.json(System.currentTimeMillis()).build());
         Message.RegisterResponse r = link.lastRegister();
         if (r != null) {
             b.put("registration", r.status());
@@ -603,9 +603,17 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         try {
             Thread.sleep(ThreadLocalRandom.current().nextLong(60_000, 300_000));
             while (!closed) {
-                Updates.Result r = Updates.check(Version.string());
+                Updates.Result r = Updates.check(Version.string(), config.updateFile());
                 if (r.newer()) {
                     LOG.info("{}", r.line());
+                } else if (r.outcome() == Updates.Outcome.REFUSED || r.outcome() == Updates.Outcome.STALE) {
+                    // The two a node has to say on its own, because nobody runs `status` daily: a
+                    // pointer that was refused (a sequence that went backwards, a signature no key
+                    // here accepts), and one that has expired -- which is what a withheld upgrade
+                    // looks like from inside. Everything else stays quiet: a node with no route to
+                    // the internet, a clock that disagrees and a `dev` build are all conditions that
+                    // would otherwise fill this log with the same line every day for ever.
+                    LOG.warn("{}", r.line());
                 }
                 lastUpdate = r;
                 Thread.sleep(UPDATE_CHECK_MS);

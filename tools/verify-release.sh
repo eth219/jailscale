@@ -40,7 +40,10 @@ else
 fi
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+# The status is carried out of the trap by hand: a bare `trap ... EXIT` in bash makes the cleanup's
+# own status the script's, so an abort halfway through -- `set -u` on a field that was not there --
+# reported success. A check that gave up is not a check that passed.
+trap 'rc=$?; rm -rf "$tmp"; exit $rc' EXIT
 
 if [ "$tag" = "--index" ]; then
     if [ -z "$dir" ]; then
@@ -52,6 +55,9 @@ if [ "$tag" = "--index" ]; then
         case $rc in
             0) ;;
             3) echo "$repo has no $INDEX_TAG pointer yet; tools/refresh-index.sh --first vX.Y.Z makes the first one." >&2
+               exit 1 ;;
+            4) echo "$INDEX_TAG exists and carries no pointer; its assets may have been lost by an" >&2
+               echo "upload. This is not a release that never had one -- see tools/refresh-index.sh." >&2
                exit 1 ;;
             *) echo "could not read the $INDEX_TAG pointer." >&2; exit 1 ;;
         esac
@@ -68,6 +74,7 @@ if [ "$tag" = "--index" ]; then
     line=$(index_verify "$dir" "$keys") || exit 1
     # shellcheck disable=SC2086 # five known fields, deliberately split
     set -- $line
+    [ $# -eq 5 ] || { echo "the check of $INDEX_FILE did not answer with what it verified." >&2; exit 1; }
     seq=$1; itag=$2; issued=$3; expires=$4; fp=$5
     echo "$INDEX_TAG: seq $seq names $itag, verified by release key $fp (the list at $rev)."
     echo "  issued $issued, expires $expires"
@@ -100,9 +107,13 @@ done
 # genuine signature over the wrong thing, which is the replay the tag line exists to stop.
 head -n 1 "$dir/RELEASE.txt" | grep -qx 'jailscale-release 1' \
     || { echo "RELEASE.txt is not in a format this reads: $(head -n 1 "$dir/RELEASE.txt")" >&2; exit 1; }
-said=$(sed -n 's/^tag:[[:space:]]*//p' "$dir/RELEASE.txt" | head -n 1)
+# tail, not head: Manifest.parse assigns in a loop and never breaks, so a repeated field is the
+# LAST one to a node. This reader taking the first would let a RELEASE.txt with two sha256sums lines
+# pass the published-release gate against one digest while every node refuses the download against
+# the other -- a release that verifies here and installs nowhere.
+said=$(sed -n 's/^tag:[[:space:]]*//p' "$dir/RELEASE.txt" | sed 's/[[:space:]]*$//' | tail -n 1)
 [ "$said" = "$tag" ] || { echo "RELEASE.txt says it belongs to '$said', not $tag." >&2; exit 1; }
-want=$(sed -n 's/^sha256sums:[[:space:]]*//p' "$dir/RELEASE.txt" | head -n 1 | tr 'A-F' 'a-f')
+want=$(sed -n 's/^sha256sums:[[:space:]]*//p' "$dir/RELEASE.txt" | sed 's/[[:space:]]*$//' | tail -n 1 | tr 'A-F' 'a-f')
 have=$(sha256 "$dir/SHA256SUMS.txt" | cut -d' ' -f1)
 [ "$want" = "$have" ] || { echo "SHA256SUMS.txt hashes to $have; the signed RELEASE.txt says $want." >&2; exit 1; }
 
