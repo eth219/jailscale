@@ -166,6 +166,75 @@ class MuxSessionTest {
         p.node().close();
     }
 
+    /**
+     * {@link MuxStream#readDeadlineIn}: the bound the node puts on a visitor that has not spoken yet
+     * (ARCHITECTURE.md §9.3). Three properties, because the deadline is only useful if it gives up
+     * when it should, does not give up on bytes that did arrive, and can be taken off again.
+     */
+    @Test
+    void aReadDeadlineEndsAWaitAndNothingElse() throws Exception {
+        Pair p = pair();
+        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
+        assertNotNull(ns);
+
+        // Nothing sent: the read gives up, near the deadline rather than at once or much later.
+        ns.readDeadlineIn(300);
+        long before = System.currentTimeMillis();
+        assertThrows(MuxTimeoutException.class, () -> ns.in().read());
+        long waited = System.currentTimeMillis() - before;
+        assertTrue(waited >= 250, "gave up after only " + waited + " ms");
+        assertTrue(waited < 5_000, "took " + waited + " ms to give up");
+
+        // The stream is left as it was rather than reset, and bytes already queued are read out
+        // even though the deadline is behind us: only a *wait* is bounded, never data that arrived.
+        // That is the visitor whose first byte lands in the last millisecond, and it has to be
+        // served rather than cut. Queued first and read after, because a deadline in the past turns
+        // any wait into a throw, and this is about the path that does not wait.
+        hs.out().write("in time".getBytes());
+        long queuedBy = System.currentTimeMillis() + 5_000;
+        while (ns.queuedBytes() == 0 && System.currentTimeMillis() < queuedBy) {
+            Thread.sleep(10);
+        }
+        assertEquals(7, ns.queuedBytes(), "the peer's bytes should be queued before the read");
+        assertEquals("in time", new String(ns.in().readNBytes(7)));
+        // ...and once that queue is empty the next read is over the deadline again.
+        assertThrows(MuxTimeoutException.class, () -> ns.in().read());
+
+        // Cleared, the stream is an ordinary one again: this read waits with no clock on it, which
+        // is what an established visitor needs -- an SSE stream may say nothing for hours.
+        ns.noReadDeadline();
+        Thread late = Thread.ofVirtual().start(() -> {
+            try {
+                Thread.sleep(400);
+                hs.out().write("later".getBytes());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        assertEquals("later", new String(ns.in().readNBytes(5)));
+        late.join();
+
+        p.hub().close();
+        p.node().close();
+    }
+
+    /** A deadline far in the future must not wrap into one already past (ARCHITECTURE.md §9.3). */
+    @Test
+    void anEnormousDeadlineIsNotADeadlineAlreadyPassed() throws Exception {
+        Pair p = pair();
+        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
+        assertNotNull(ns);
+        // Long.MAX_VALUE is how a caller says "effectively never"; added to a clock reading it used
+        // to overflow negative, so every read gave up at once and the node served nobody.
+        ns.readDeadlineIn(Long.MAX_VALUE);
+        hs.out().write("fine".getBytes());
+        assertEquals("fine", new String(ns.in().readNBytes(4)));
+        p.hub().close();
+        p.node().close();
+    }
+
     @Test
     void largeTransferRespectsFlowControl() throws Exception {
         Pair p = pair();

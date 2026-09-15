@@ -1,6 +1,7 @@
 package io.jailscale.proto.mux;
 
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Clock;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -62,6 +63,14 @@ public final class MuxStream {
      * thing meant to protect it. Written only under {@code lock}, so it is never a torn value.
      */
     private volatile int queued;
+    /**
+     * When an inbound wait gives up, on {@link Clock}'s scale, meaningful
+     * only while {@link #hasDeadline}. A separate flag rather than a sentinel value: the moment is
+     * a sum involving a clock with no defined origin, so every long is a value it might legitimately
+     * take, and picking one to mean "no deadline" means a stream that lands on it waits for ever.
+     */
+    private volatile long readDeadline;
+    private volatile boolean hasDeadline;
 
     private final InputStream in = new InputStream() {
         @Override
@@ -82,12 +91,7 @@ public final class MuxStream {
             int refill = 0;
             synchronized (lock) {
                 while (current == null && inbound.isEmpty() && !remoteClosed && error == null) {
-                    try {
-                        lock.wait();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new IOException("interrupted");
-                    }
+                    awaitInbound();
                 }
                 if (current == null) {
                     if (!inbound.isEmpty()) {
@@ -163,12 +167,7 @@ public final class MuxStream {
         int n;
         synchronized (lock) {
             while (current == null && inbound.isEmpty() && !remoteClosed && error == null) {
-                try {
-                    lock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("interrupted");
-                }
+                awaitInbound();
             }
             if (current == null) {
                 if (!inbound.isEmpty()) {
@@ -312,18 +311,77 @@ public final class MuxStream {
         return out;
     }
 
+    /**
+     * Bounds the next {@code millis} of reads on this stream: past that moment a read throws
+     * {@link MuxTimeoutException} and leaves the stream as it was, so what to do about it stays
+     * with the caller, which is normally to reset it. There is no deadline until this is called and
+     * {@link #noReadDeadline()} takes it off again.
+     *
+     * <p><b>A duration in, a moment inside.</b> The bound is absolute once set -- that is the whole
+     * point, below -- but taking the moment from the caller meant taking a bare {@code long} that
+     * had to come from the right clock, and a value from the wrong one does not fail, it waits for
+     * twenty-five thousand years. This has no such argument to get wrong: the moment is computed
+     * here, from {@link Clock}, which is monotonic because a wall clock that
+     * steps forwards would expire every deadline in flight at once.
+     *
+     * <p><b>A deadline and not a {@code setSoTimeout}</b>, which is the shape of every other timeout
+     * around this and the wrong one here. An idle timeout restarts on each byte, so a peer that
+     * sends one byte just inside it holds the stream for ever: the bound buys nothing against
+     * exactly the caller it would be set for. The phases anyone has wanted to bound -- a visitor's
+     * TLS handshake, its first request (ARCHITECTURE.md §9.3) -- are each finished by some moment or
+     * not at all, and a moment is what this takes.
+     *
+     * <p><b>Reads only.</b> A blocked write is waiting on the peer's flow-control credit, and
+     * whether to cut that off is {@link FlowBudget}'s question: it can see what the wait is costing
+     * in queued bytes, which is what makes a victim choosable there and not here.
+     *
+     * <p>Nothing sets one unless it means to bound a phase, and no stream carries one for its whole
+     * life: a link that is idle by design -- a websocket, an SSE stream, a database session over a
+     * raw port -- is a stream nobody may put a clock on.
+     */
+    public void readDeadlineIn(long millis) {
+        long now = Clock.millis();
+        long at = now + Math.max(1, millis);
+        // Saturating, because the sum is the caller's number plus a clock reading: a caller passing
+        // Long.MAX_VALUE to mean "effectively never" would otherwise wrap to a moment already past
+        // and every read on the stream would give up at once.
+        readDeadline = at < now ? Long.MAX_VALUE : at;
+        hasDeadline = true;                 // after the moment, so a reader never sees a stale one
+    }
+
+    /** Takes the deadline off: reads wait for the peer for as long as it likes again. */
+    public void noReadDeadline() {
+        hasDeadline = false;
+    }
+
+    /**
+     * One inbound wait, bounded by {@link #readDeadlineIn}. The caller holds {@code lock}, which is
+     * what makes the {@code wait} here the same wait it replaced; with no deadline set the argument
+     * is 0, which is {@code Object.wait}'s own "for ever", so that path is unchanged.
+     */
+    private void awaitInbound() throws IOException {
+        long left = 0;
+        if (hasDeadline) {
+            left = readDeadline - Clock.millis();
+            if (left <= 0) {
+                throw new MuxTimeoutException("stream " + id + ": nothing arrived by its read deadline");
+            }
+        }
+        try {
+            lock.wait(left);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted");
+        }
+    }
+
     /** Datagram streams: the next whole datagram, or null when the peer closed. */
     public byte[] receive() throws IOException {
         byte[] d;
         int refill = 0;
         synchronized (lock) {
             while (inbound.isEmpty() && !remoteClosed && error == null) {
-                try {
-                    lock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("interrupted");
-                }
+                awaitInbound();
             }
             if (inbound.isEmpty()) {
                 if (error != null) {

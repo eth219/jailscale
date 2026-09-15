@@ -448,6 +448,24 @@ An append-only JSON Lines event log plus in-memory state, replayed at startup. E
 snapshots are renamed into place. `jailhub serve` is the only writer; admin commands ask the running
 server over IPC.
 
+**A snapshot cannot install itself and empty the log in one step, so replay is made idempotent
+instead.** `snapshot()` renames the new file into place and then truncates the log it has just
+folded in; between those the directory holds both, and nothing forces the truncation to disk, so a
+machine that loses power inside the filesystem's commit interval comes back to that pair rather than
+to a state that merely passed through it. Most events survive being replayed twice because they are
+`put`s landing on the value already there. Three do not: `invite-used` and `authkey-used` subtract,
+`notice-added` appends. Replayed twice, an invite quietly spends a use nobody spent, a two-use
+auth-key with one use to go is **deleted** — `authkey-used` removes the record at zero, so the CI
+runner holding it is locked out with nothing in any log to say why — and a node is told twice about
+one revoked name. So every appended event carries a sequence number `s`, each snapshot records the
+last it folded in as `seq`, and a line at or below that is skipped on load. The numbering is local
+to one log and carries on across a restart; a standby stamps its own rather than the primary's,
+since the number means a place in a particular file. Between the rename and the truncation the
+directory entry is fsynced, which is what keeps the *other* order — a durably emptied log beside a
+snapshot that never landed — from losing the events in between; that one is best effort, because a
+directory cannot be opened as a file on Windows. `StoreCrashTest` holds both directions: the three
+arithmetic events replayed, and an event after a restart not mistaken for one the snapshot holds.
+
 ```
 $JAILHUB_STATE/            (default /var/lib/jailhub, else ~/.local/share/jailhub)
 ├── hub.key                hub static private key (0600); hub.key.next during a rotation
@@ -456,6 +474,7 @@ $JAILHUB_STATE/            (default /var/lib/jailhub, else ~/.local/share/jailhu
 ├── jailhub.lock           process lock; a second `jailhub serve` fails immediately
 ├── jailhub.sock           admin IPC socket (§6.3)
 ├── availability.json      the process's own uptime record and what it saw of its peers (§13.2)
+├── state.superseded.snapshot   only after a hand-off took something away: the state as it stood (§13.5)
 └── tls/                   account.key, wildcard.key, wildcard.pem, wildcard.key.prev (0600)
 ```
 
@@ -465,8 +484,12 @@ On a standby (§13.1) the same directory is the primary's, kept current over the
 The snapshot carries a format version `v`, and the hub **refuses to start** when it is higher than
 the version it understands. Adding fields or events within a version is compatible both ways and
 unknown events are skipped with a warning, so a rollback is safe in that range; `v` is bumped only
-for changes that would make an older binary *misread existing data*. A hub that cannot read its state
-should stop rather than come up holding part of it. In memory the state is plain maps (nodes, names,
+for changes that would make an older binary *misread existing data*. `s` and `seq` above were added
+under that rule and not with a bump: an older binary ignores them and replays the whole log, which is
+what it does with its own state anyway, so a rollback gets the old defect back rather than a new
+misreading — and a state written before they existed reads a missing `seq` as zero, skips nothing,
+and behaves exactly as it used to until the first snapshot the newer binary writes. A hub that cannot
+read its state should stop rather than come up holding part of it. In memory the state is plain maps (nodes, names,
 domains, ports, credential hashes, admins, the pending queue, undelivered notices), which is the
 simplest thing that works up to thousands of names.
 
@@ -977,8 +1000,11 @@ ceiling, linear above it — so raising the ceiling with `-XX:MaxHeapSize=` thro
 `JAILSCALE_DAEMON_OPTS` (§14) buys visitors rather than leaving a node with a number that suited a
 smaller heap. Over the bound the stream is reset with `RST_NO_CAPACITY` before the handshake, since
 what is being conserved is the state the handshake would create; the node logs at most one line a
-minute saying it is at its ceiling, and `jailscale status` reports `visitorCeiling` and
-`visitorsRefused` beside `visitorsInFlight`.
+minute saying it is at its ceiling, and `jailscale status` reports `visitorCeiling`,
+`visitorsRefused` and `visitorsStalled` beside `visitorsInFlight`. The last of those is the
+first-byte deadline below, counted the same way and reported for the same reason the others are:
+refusals alone cannot tell a node full of visitors being served from one held open by visitors that
+are not there.
 
 **450 was measured, not chosen, and the alternative it is measured against is not a healthy node.**
 Against an unbounded node on darwin-arm64 at the shipped ceiling: 400, 450, 500 and 550 stalled
@@ -996,11 +1022,43 @@ ordinary visitor in 1 to 36 ms.
 the one being fixed.** Someone who holds `MAX_IN_FLIGHT` connections open keeps everyone else out.
 The hub avoids that by reclaiming instead — it can pick a stream that has provably not consumed a
 byte in `STALL_MS`, so it frees memory from a connection that is not using it. Nothing on the node
-is idle in that sense: a visitor's TLS state is live for as long as the visitor is, so reclaiming
-here means choosing a victim among connections that are all making progress. Refusing the
-thousand-and-first visitor costs that visitor; not refusing it costs all of them and the hub link
+is idle in that sense **once a visitor is established**: its TLS state is live for as long as it is,
+so reclaiming there means choosing a victim among connections that are all making progress. Refusing
+the thousand-and-first visitor costs that visitor; not refusing it costs all of them and the hub link
 besides, which is what the measurements above are of. The hub already caps a name at
 `SniRouter.MAX_PER_NAME` = 1,024 on the same reasoning.
+
+**Before a visitor is established there is no victim to choose, and that phase is bounded.** A
+visitor has `Visitors.FIRST_BYTE_MS` = 30 s from the moment its stream arrives to finish the
+handshake and send its first application byte; past it the stream is reset and the slot goes back.
+This closes a hole the paragraph above used to leave open. The reads underneath a visitor wait for
+ever — `MuxStream` parks on its lock with no clock on it — so a ClientHello good enough for the SNI
+router to route, followed by silence, kept a slot and its tens of kilobytes of TLS state until the
+process restarted. At `MAX_PER_IP` = 64 that is **eight addresses to take a 450-visitor node dark on
+every one of its links**, for eight TCP connections, no registration and no traffic: cheaper than
+anything §11.5 meters, and worse than the starvation of §15 because it needs no busy neighbour.
+
+The mechanism is `MuxStream.readDeadline`, an absolute moment rather than a `setSoTimeout`. An idle
+timeout restarts on every byte, so a peer that sends one byte just inside it holds the stream for
+ever and the bound buys nothing against exactly the caller it is set for; the phases worth bounding
+are each finished by some moment or not at all. It bounds a *wait* and never data: bytes already
+queued are read out even past the deadline, so a visitor whose first byte lands in the last
+millisecond is served rather than cut. It comes off at that first byte and never goes back on,
+because everything after it is the established connection the paragraph above is about — an SSE
+stream or a websocket may say nothing for hours, and a raw tcp or udp link (§8.4) never carries one
+at all, since there the server may legitimately speak first. A gated link keeps it a moment longer,
+through the request head the gate has to read.
+
+30 s because the slow part of an honest handshake here is not the network but the hub: the node
+waits at most `RemoteSigning.SIGN_TIMEOUT_MS` = 10 s for its signature, so a handshake that will
+succeed at all has already failed by then, and three times that leaves room for a visitor's round
+trips either side without cutting anything the signing timeout would not. It is tighter than a
+general-purpose server's — nginx's `client_header_timeout` is 60 s — and the reason is the budget it
+defends: nginx has tens of thousands of slots to spend on connections that may yet say something,
+and this node has 450. A browser's speculative preconnect is the one honest visitor that loses a
+connection to it, and it loses a cache it rebuilds on the next handshake. `VisitorStallTest` holds a
+node whose ceiling is one: a stalled ClientHello takes the slot, the next visitor is refused while it
+is held, the stalled one is dropped, and the node serves again.
 
 **The node tells the hub this number, and the hub admits against it.** It rides on `Hello`
 (§5.4), and `SniRouter` checks it beside its own two caps, so a visitor a full node cannot take is
@@ -1544,6 +1602,66 @@ operator's job. Unauthenticated work is metered with per-source token buckets:
 | Credential presentation (invite token, code, auth-key) | 20 | 0.2/s | `rejected{reason: rate-limited}` |
 | Registration under `--registration open` | 5 | 1 per 12 min | `rejected{reason: rate-limited}` |
 | Knock queue | 5 entries per address | n/a | `rejected{reason: too-many-pending}` |
+| DNS answer on UDP 53, per /24 or /64 | 50 | 20/s | dropped; one in two answered `TC=1` |
+| DNS answers on UDP 53, all sources together | 500 | 200/s | as above |
+
+**The DNS row is the one that protects somebody else.** Every other line above meters work a stranger
+makes the hub do. A query's source address is a claim rather than a fact, so an attacker puts a
+victim's address on one and the hub sends the answer there. What that is worth is a number and now a
+gated one: the largest answer this zone can hold is **287 bytes** and the worst ratio of answer to
+query is **5.3**, both measured by `DnsAmplificationTest` against the largest zone this design allows
+— two hosts serving, both name servers delegated, and an issuance in flight so both challenge values
+are present. That is a poor amplifier next to the 50-to-70 this class of server has been used at, and
+a poor amplifier answering without limit is still a free one. A name outside the zone is REFUSED in
+twelve bytes, a third of what asking cost, so the query anyone can send for any name reflects
+nothing.
+
+The limit is keyed on the network and not the address, because a reflection attack names a victim and
+a victim is a network: per address, an attacker walks the /24 it is aiming at and gets the rate again
+for each, and against anyone holding a routed /64 a per-address bound means nothing at all. It is a
+fixed table of 2,048 buckets rather than a map, which is the opposite of `RateLimiter` next door and
+for the reason that made a map right there: those callers have already done work to be tracked, where
+this one has sent one unverified packet, so the map would be an attacker's to grow and the scan that
+trimmed it would land on the thread reading the socket, once per packet, under exactly the flood it
+exists for. Two networks that hash together share a budget, which limits more rather than less, and
+the key is deliberately not stored to tell them apart — a table that evicted the loser of a collision
+would let an attacker clear a victim's bucket by choosing addresses that land on it.
+
+**What the limit is doing is a number on `/metrics`.** `jailhub_dns_answers_total` is what :53
+actually answers, and `jailhub_dns_dropped_total`, `jailhub_dns_truncated_total` and
+`jailhub_dns_refused_global_total` are what the two budgets refused -- the last one split out
+because one network over its share and the table-wide budget binding mean opposite things: somebody
+noisy, against this zone outgrowing the number or a reflection aimed at a prefix. These exist
+because the rates below were chosen and shipped with nothing counting the traffic they bound, so
+neither an operator nor anyone picking the numbers could say what headroom a real zone has, and the
+limit biting would have surfaced only as a log line. An operator deciding whether 200 a second fits
+their zone reads the first counter over an interval; nothing else here can tell them.
+
+**The per-network limit bounds a bucket; a victim owns a prefix.** An attacker forging sources
+across a victim's /48 walks 65,536 distinct /64 keys against a table of 2,048 buckets and collects
+every bucket's budget at once, so the per-network figure is not what a victim receives: the ceiling
+is the table size times the per-bucket rate, which was 2,048 x 20 = about 41,000 answers a second,
+11.7 MB/s. A second budget for the whole table -- 500 at once, 200 a second -- is what makes the
+total a number rather than a function of how many source networks an attacker can be bothered to
+forge, and puts a victim at about 57 KB/s. The hub's own `_jailhub-self` probe (§13.3) is exempt
+from both, because it leaves from a public address and metering it handed an attacker a way to stop
+a hub identifying itself; its answer is the lowest-ratio one the zone has.
+
+One over-limit query in two is answered `TC=1` instead of being dropped, which is the difference
+between a limit and a way to take the zone down: a resolver behind a forged address, or sharing a
+bucket, is told to ask again over TCP, which this server also answers and where an address is proved
+by a handshake. A truncated answer is the question echoed and no records, so it is never larger than
+what asked for it. **Loopback is exempt**, as it is for the visitor caps of §8.1 and for the same
+reason — a forwarder on this host would fold every resolver in the world into one bucket — and it is
+where the hub's own dns-01 self-check asks from. A proxy in front of :53 that is *not* loopback would
+have the same effect and there is no PROXY protocol for DNS; none of the deployments in `deploy/`
+puts one there.
+
+Separately, and not about amplification: a UDP answer is never longer than **512 bytes**, which is
+what a resolver that has not offered EDNS may be sent. Past it the answer is the header with `TC` set.
+Nothing here reaches that today at 287 bytes, but nothing enforced it either, and an oversized
+datagram is not an error a resolver reports — it is one it discards, which under `_acme-challenge`
+is a certificate that stops renewing and says so nowhere.
 
 A node the hub already knows returns before the credential check, so reconnections never touch the
 bucket. The bursts are generous because a node opens up to four connections and a NAT can hide many
@@ -1554,6 +1672,44 @@ domain. To stop an attacker inflating the map by rotating addresses, once more t
 tracked the full buckets are dropped: a full bucket is indistinguishable from one that never
 existed, so nothing is lost. The same rotation is why the per-address connection counters of §8.1
 are dropped once the last connection using one is gone, rather than left behind at zero.
+
+**That scan runs at most once a second, where it used to run on every call.** It is over every
+tracked key, and between two consecutive calls there is nothing new for it to find. Measured on the
+shipped handshake numbers with the map full of buckets none of which are prunable — at 1/s a bucket
+is not full again until 30 s after its last use, which is exactly what address rotation leaves
+behind — one `allow` cost **36.4 µs against 0.044 µs** with a map of one. That is 825 times, all of
+it the scan, and it was **not** the denial of service it looks like: reaching this needs a completed
+TLS handshake, and a Noise handshake costs the hub about 875 µs of its own CPU (§14), so the scan
+was four percent on top of the expensive thing. What makes it worth removing is that it is pure
+loss, that refused requests paid it too when they should cost nothing, and that it grows with the
+10,000 if anyone raises it. A second between scans bounds the map to one second's worth of new
+addresses that have each completed a TLS handshake, at 48 bytes apiece.
+
+**A limit "per address" is counted per /64 in IPv6, and that is not a refinement.** The hub serves
+both stacks wherever its listener is bound to `::`, which is what `--listen [::]:443` does and which
+needs no code — a visitor over v6 is routed, terminated and relayed today exactly as one over v4.
+The smallest thing anyone is *handed* in v6 is a /64, every ordinary VPS comes with one routed to
+it, and that is 18 quintillion source addresses at no cost. Counted per address, every row of the
+table above and the connection caps of §8.1 would read "so many per address, times as many
+addresses as you like", which is not a limit; so `proto.net.NetKey` gives v4 the address and v6 the
+/64, and the buckets, the connection counters and the knock queue are all counted against that. What remains is that a subscriber given a
+/48 — a residential line, some hosting — holds 65,536 keys; /48 would close that and would also put
+a whole ISP customer or a campus behind one bucket, which is the worse trade for a limit whose job
+is to be invisible to honest callers. `ban` takes a v6 prefix and always has (§11.5, below), so an
+operator can still bar a /48 by hand.
+
+**Both limiters measure elapsed time with a monotonic clock, not the time of day.** A token bucket
+refills by how long it has been, and `currentTimeMillis` is the time of day, which steps: NTP
+corrects a host whose clock was wrong at boot, and a virtual machine resumed from a snapshot wakes
+in the past. A step backwards stops the refill for as long as the step was — an hour's correction is
+an hour in which no node can reconnect — and a step forwards refills every bucket at once. The rule
+is what the value is for: a time that is written down and has to mean the same instant after a
+restart or on the other host (an invite's expiry, a join date, the availability record) is the time
+of day; a time that is only ever subtracted from another (a bucket's refill, the visitor deadline of
+§9.3) comes from `proto.util.Clock`. `FlowBudget`'s stall timestamps are the one elapsed-time value
+still on the time of day, because its "never consumed" sentinel is zero and zero is a plausible
+reading from a monotonic clock early in a process; changing it needs a different sentinel rather
+than a different clock.
 
 **`/admin` sessions.** The login link is one-shot and lives 60 seconds, the session cookie lasts 12
 hours, and every POST carries a CSRF token. On top of that, **admin status is rechecked on every
@@ -1827,7 +1983,9 @@ with a 30-second TTL, the apex and every name under it -- any label, at any dept
 hosts serving right now**: a primary answers itself, a standby answers the primary while its
 channel to it is up, and nothing otherwise. Whether a name is open is the SNI router's question,
 not DNS's. AAAA, MX and the rest are NODATA with the apex SOA; names outside the zone are REFUSED;
-recursion is never offered; nothing answered is large enough to amplify with.
+recursion is never offered; and what is answered is small enough to be a poor amplifier — 287 bytes
+at the largest, 5.3 times the query at the worst, measured and gated rather than asserted, and
+metered per network on UDP because poor is not the same as harmless (§11.5).
 
 **Liveness is the channel.** A host leaves the other's answer when the hub-to-hub channel drops,
 which the idle timeout bounds at a minute, and resolvers skip a dead name server on their own. In
@@ -1949,11 +2107,34 @@ decision where it was; and a returning primary standing down by epoch.
 
 **What this is and is not.** A lease with fencing and an epoch, not a replicated log with
 consensus. The writes it protects are rare -- names claimed, nodes joined -- and the worst outcome
-of a wrong promotion is two primaries until the link heals, at which point the epoch settles it and
-the writes made in between merge, the later epoch winning. Visitors notice nothing throughout. What
-a hostile node can do with this is make that merge happen, on an open-registration hub, at an hour
-when it is the only node; the default above and the rate limit are what make that worthless. What a
-node can do outside this vote is what §11.1 already bounds.
+of a wrong promotion is two primaries until the link heals, at which point the epoch settles which
+one it was.
+
+**The loser's writes do not merge into the winner's. They are discarded, and this said otherwise
+until it was read against the code.** `Store.replaceWith` clears everything this host holds and
+replaces it with the primary's snapshot, which is the whole of the reconciliation: a node that
+joined the losing hub during the partition, a name claimed there, a domain, a raw port, an invite
+created there, all cease to exist when the link heals. A merge is not a small thing left undone
+either -- the two stores share no lineage a write can be placed in, so nothing can distinguish a
+name this host holds and has never told anyone about from one the winner deliberately released, and
+guessing wrong resurrects a name an operator took away. Whole-state replacement is what a lease with
+an epoch buys, and the whole of what it buys.
+
+So the loss is **reported and kept** rather than silent. On replacing its state a hub compares the
+two and logs, at warning, the nodes, names, domains, ports and unused credentials it held and the
+primary does not, saying that those nodes have to join again and those names are free to claim; and
+it writes its state as it stood to `state.superseded.snapshot` in the state directory, which is a
+snapshot a `jailhub` can read, so an operator can see exactly what was there. The file is written
+only when something is actually dropped and is overwritten by the next such event: it is a recovery
+for the incident just logged, not an archive. An ordinary standby resync takes nothing away -- its
+state came from this same primary -- and leaves no file and no warning. `StoreReplicationTest`
+holds both cases. Without a person reading that line, the first anyone knows is a node discovering
+it is an unknown machine key.
+
+Visitors notice nothing throughout. What a hostile node can do with this is force that replacement,
+on an open-registration hub, at an hour when it is the only node; the default above and the rate
+limit are what make that worthless. What a node can do outside this vote is what §11.1 already
+bounds.
 
 ---
 
@@ -2423,6 +2604,25 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   to the standby waits for a person (§13.5).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.
+- **IPv6 works for visitors and not for the hub's own DNS.** A hub bound to `::` (`--listen
+  [::]:443`) serves v6 visitors today — routed by SNI, relayed to the node, counted and limited per
+  /64 (§11.5) like any other caller — and an operator running the three-record setup publishes the
+  AAAA records for that at their own DNS provider, alongside the A records §7.1 asks for. What is
+  **not** implemented is the hub answering AAAA itself: `DnsResponder` returns NODATA for it, the
+  zone view carries v4 addresses only, and `ns1`/`ns2` glue is A. That is exactly the setup where
+  the operator cannot make up the difference — in the delegated mode of §13.3 the hub *is* the
+  authoritative server for the subdomain, so there is nowhere else to put an AAAA record. So: v6
+  ingress on the operator's own records, no v6 under delegation, and nothing in either direction for
+  the raw ports of §8.4, whose addresses come from the same zone view.
+- **Writes made on the losing side of a partition are discarded when it heals, not merged** (§13.5).
+  Both hubs serve throughout, so a node that reaches only the hub that turns out to have the lower
+  epoch can join, claim a name, bring a domain or take a raw port, and every one of those is gone
+  when the epochs settle -- the winner's state replaces the loser's entire. The node finds out by
+  being an unknown machine key. What bounds it is that the window is a partition long enough to
+  promote (30 s plus the witness window) and that these writes are rare; what makes it survivable is
+  that the hub says what it dropped and keeps a readable copy of the state it dropped it from. A
+  real merge needs a lineage the two stores do not share, which is the piece of a replicated log
+  this design does not have and does not claim to.
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
   loses events when one socket is parked for read and for write together (JDK-8334574), so one side
   of each of those sockets is kept off the poller there. Measured at about 60 KB per concurrent
@@ -2473,9 +2673,14 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 - **At its bound a node refuses well-behaved visitors and abusive ones alike**, because the hub
   cannot tell them apart before admitting them. That is the cost `FlowBudget` names in its argument
-  for reclaiming rather than refusing (§5.3), and the node cannot take that way out: a visitor's TLS
-  state is live for as long as the visitor is, so there is no stalled connection to pick. **The
-  denial is also quieter than what it replaced.** Filling a node used to end in an
+  for reclaiming rather than refusing (§5.3), and the node cannot take that way out for an
+  established visitor: its TLS state is live for as long as it is, so there is no stalled connection
+  to pick. **What it can pick is a visitor that never arrived at all**, and since `FIRST_BYTE_MS`
+  (§9.3) that is what it does: 30 s to finish the handshake and say something, or the slot goes
+  back. So filling a node now costs holding live connections rather than opening silent ones — the
+  entry above still describes what a determined attacker gets, but it costs traffic now, where
+  before it cost eight TCP connections and a wait. **The denial is also quieter than what it
+  replaced.** Filling a node used to end in an
   `OutOfMemoryError`, a dropped hub connection and a reconnect — an outage, but a loud one. Now the
   node sits full, logs one line a minute, and turns everyone away. What it costs an attacker is
   bounded by `MAX_PER_IP` = 64, so filling a 450-visitor node takes eight addresses; that per-address

@@ -3,6 +3,7 @@ package io.jailscale.hub;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.mux.FlowBudget;
+import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -794,7 +795,11 @@ public final class Hub implements AutoCloseable {
             return;
         }
         PeerClient pc = peerClient;
-        long now = System.currentTimeMillis();
+        // Monotonic: these two windows are pure differences of local readings, and the misfire this
+        // avoids is a split brain. A wall clock stepped back by an NTP correction freezes
+        // `now - primaryLostAt` for the width of the step and delays promotion past the availability
+        // budget; stepped forward it satisfies both windows at once and fires a witness round early.
+        long now = Clock.millis();
         if (pc != null && pc.isConnected()) {
             primaryLostAt = 0;
             probeNonces.clear();
@@ -851,11 +856,11 @@ public final class Hub implements AutoCloseable {
             }
             if (primaryProven) {
                 LOG.warn("primary unreachable from here but reachable from a node: a partition, not a death; not promoting");
-                primaryLostAt = System.currentTimeMillis();
+                primaryLostAt = Clock.millis();
                 return;
             }
             try {
-                lastAutoPromoteAt = System.currentTimeMillis();
+                lastAutoPromoteAt = Clock.millis();
                 promote("automatically: " + asked + " witness(es) asked, none could reach the primary");
             } catch (IOException e) {
                 LOG.error("automatic promotion failed: {}", e.getMessage());

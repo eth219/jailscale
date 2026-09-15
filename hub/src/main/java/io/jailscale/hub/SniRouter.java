@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.net.NetKey;
 import io.jailscale.proto.tls.Sni;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
@@ -63,12 +64,31 @@ final class SniRouter {
         return held[0];
     }
 
+    /**
+     * Takes a visitor slot for {@code ip} on behalf of a listener that is not 443 -- the raw tcp
+     * ports of §8.4, which accept on their own sockets and so never reached the cap above. False
+     * when that network is already at {@link #MAX_PER_IP}, and then nothing was taken.
+     */
+    boolean takeSlot(String ip) {
+        String key = NetKey.of(ip);
+        if (acquire(perIp, key) > MAX_PER_IP) {
+            release(perIp, key);
+            return false;
+        }
+        return true;
+    }
+
+    /** Gives back what {@link #takeSlot} took. */
+    void giveSlot(String ip) {
+        release(perIp, NetKey.of(ip));
+    }
+
     /** Gives a slot back, dropping the entry when it was the last one. */
     private static void release(Map<String, AtomicInteger> counts, String key) {
         counts.computeIfPresent(key, (k, c) -> c.decrementAndGet() == 0 ? null : c);
     }
 
-    /** Visitor addresses with at least one connection open. Zero when nothing is in flight. */
+    /** Visitor networks (NetKey: a v4 address, a v6 /64) with at least one connection open. */
     int trackedAddresses() {
         return perIp.size();
     }
@@ -91,26 +111,42 @@ final class SniRouter {
         long acceptedAt = System.nanoTime();
         String ip = socket.getInetAddress().getHostAddress();
         int visitorPort = socket.getPort();
+        boolean attributed = false;
         try {
             socket.setSoTimeout(HELLO_TIMEOUT_MS);
             io.jailscale.proto.net.ProxyProtocol.Header ph = hub.readProxyHeader(socket);
             if (ph != null && ph.known()) {
                 ip = ph.srcIp();
                 visitorPort = ph.srcPort();
+                attributed = true;
             }
         } catch (IOException e) {
             LOG.debug("{}: {}", ip, e.getMessage());
             Relay.closeQuietly(socket);
             return;
         }
-        // Loopback is exempt: a local proxy without PROXY protocol would otherwise fold every visitor into one address.
-        if (acquire(perIp, ip) > MAX_PER_IP && !socket.getInetAddress().isLoopbackAddress()) {
-            release(perIp, ip);
+        // Counted against the network and not the address (NetKey): in v4 those are the same thing,
+        // and in v6 they are not -- a routed /64 is free and standard, so a per-address cap of 64
+        // would be "64 per address, times eighteen quintillion". `ip` itself is unchanged, since it
+        // is what gets logged, banned and handed to the node as the visitor's address.
+        // From the bytes the socket holds unless a PROXY header replaced the address, rather than
+        // formatting that address to text and parsing it straight back once per connection.
+        String ipKey = attributed ? NetKey.of(ip) : NetKey.of(socket.getInetAddress());
+        // The exemption is for visitors this hub cannot tell apart, not for a peer that happens to
+        // be local: a proxy on loopback WITHOUT the PROXY protocol folds everyone into one address,
+        // and capping that would cap the world. Once a header has attributed the connection the cap
+        // applies again -- testing the socket's peer instead meant that every hub behind nginx on
+        // localhost, which is the deployment deploy/nginx-stream.conf documents, had no per-address
+        // cap at all and one client could exhaust MAX_PER_NAME and the node's ceiling.
+        boolean unattributedLocal = !attributed && socket.getInetAddress().isLoopbackAddress();
+        if (acquire(perIp, ipKey) > MAX_PER_IP && !unattributedLocal) {
+            release(perIp, ipKey);
             Metrics.VISITORS_REFUSED.increment();
             Relay.closeQuietly(socket);
             return;
         }
         String name = null;
+        boolean held = true;
         try {
             socket.setTcpNoDelay(true);
             socket.setSoTimeout(HELLO_TIMEOUT_MS);
@@ -125,6 +161,14 @@ final class SniRouter {
                 return;
             }
             if (sni.equals(hub.config().hostname())) {
+                // The hub's own name: a node's control connection, the admin pages, /v1/key. Not a
+                // visitor, and HttpFront runs a NodeSession here for the whole life of the link, so
+                // leaving the slot held counted every node against the visitor cap until it dropped
+                // -- and since that cap is now per /64, sixteen nodes sharing one subnet or office
+                // LAN, at the four connections each the design expects, refused the seventeenth node
+                // and every visitor from that network with it.
+                release(perIp, ipKey);
+                held = false;
                 hub.front().serve(layer(socket, peek.consumed(), hub.tls().context().getSocketFactory()), ip);
                 return;
             }
@@ -192,7 +236,9 @@ final class SniRouter {
             LOG.debug("{}: {}", ip, e.getMessage());
             Relay.closeQuietly(socket);
         } finally {
-            release(perIp, ip);
+            if (held) {
+                release(perIp, ipKey);
+            }
         }
     }
 

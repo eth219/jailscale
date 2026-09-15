@@ -3,10 +3,13 @@ package io.jailscale.node;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.mux.MuxTimeoutException;
 import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.net.ProxyProtocol;
 import io.jailscale.proto.tls.Pem;
+import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
+import io.jailscale.proto.util.Throttle;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,9 +55,45 @@ final class Visitors {
     private final Map<String, SSLContext> domainContexts = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger inFlight = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicLong refused = new java.util.concurrent.atomic.AtomicLong();
-    private volatile long lastRefusalLog;
+    private final Throttle refusalLog = new Throttle(LOG_EVERY_MS);
+    /** Visitors dropped at {@link #FIRST_BYTE_MS} since this daemon started. */
+    private final java.util.concurrent.atomic.AtomicLong stalledOut = new java.util.concurrent.atomic.AtomicLong();
+    private final Throttle stallLog = new Throttle(LOG_EVERY_MS);
     /** A visitor handshake slower than this is worth a line; healthy is single-digit milliseconds. */
     private static final long SLOW_HANDSHAKE_MS = 1_000;
+
+    /**
+     * How long a visitor has, from the moment its stream arrives, to finish the TLS handshake and
+     * say its first word (ARCHITECTURE.md §9.3). Past it the stream is reset and the slot goes back.
+     *
+     * <p><b>Why there has to be one.</b> {@link #maxInFlight} bounds how many visitors this node
+     * holds, and until this existed nothing bounded how long one could hold a slot without doing
+     * anything at all: the reads under {@link io.jailscale.proto.mux.MuxStream} wait for ever, so a
+     * visitor that sent a ClientHello good enough to route at the hub and then stopped kept its slot
+     * and its tens of kilobytes of TLS state until the process restarted. At {@code SniRouter}'s
+     * {@code MAX_PER_IP} = 64 that is eight addresses to fill a node of 450 and take every one of
+     * its links dark, for the cost of eight TCP connections and no registration.
+     *
+     * <p><b>Why it is not the reclaim this class argues against below.</b> That argument is about
+     * connections that are all making progress, where there is no defensible victim. A handshake
+     * that has not completed is not a hard choice: the visitor has produced nothing, holds nothing
+     * anyone is waiting on, and cannot be told from a machine that went away. The argument stands
+     * for everything after the first byte, which is why the deadline is dropped there and never
+     * comes back -- a link that is idle by design, an SSE stream or a websocket, is past it long
+     * before it goes quiet.
+     *
+     * <p><b>Why 30 seconds.</b> It has to clear the slowest honest handshake, and the slow part of
+     * one here is not the network but the hub: the node asks for a signature and waits up to
+     * {@link RemoteSigning#SIGN_TIMEOUT_MS}, so a handshake that is going to succeed at all has
+     * already failed by 10 s. Three times that leaves room for a visitor's round trips on a bad
+     * link either side of it and still cuts nothing the signing timeout would not. It is tighter
+     * than what a general-purpose server uses -- nginx's {@code client_header_timeout} is 60 s --
+     * and the reason is the budget it defends: nginx has tens of thousands of slots to spend on
+     * connections that may yet say something, and this node has 450. A browser's speculative
+     * preconnect is the one honest visitor that can lose a connection to this, and it loses a cache
+     * it rebuilds on the next handshake.
+     */
+    static final long FIRST_BYTE_MS = 30_000;
 
     /**
      * What the shipped 64 MiB ceiling was measured to hold, and the unit the bound scales in.
@@ -104,10 +143,20 @@ final class Visitors {
      * <p><b>Refusing, where the hub reclaims, and the asymmetry is real rather than an
      * inconsistency.</b> The hub can pick a provably stalled stream -- one that has not consumed a
      * byte in {@code STALL_MS} -- so it frees memory from a connection that is not using it.
-     * Nothing on the node is idle in that sense: a visitor's TLS state is live for as long as the
-     * visitor is, so reclaiming here means choosing a victim among connections that are all making
-     * progress. FlowBudget's argument against refusing still stands and is the cost of this: an
-     * attacker who holds the bound's worth of connections open keeps everyone else out. What that
+     * Nothing on the node is idle in that sense once a visitor is established: its TLS state is live
+     * for as long as it is, so reclaiming there means choosing a victim among connections that are
+     * all making progress.
+     *
+     * <p><b>Before it is established is the exception, and it is not a judgement call.</b> A visitor
+     * that has not finished its handshake has produced nothing and is holding nothing anyone is
+     * waiting on, so {@link #FIRST_BYTE_MS} bounds that phase and that phase only. This paragraph
+     * used to read as though no bound of any kind were available here, and the gap it left was
+     * exact: a stream that sent a routable ClientHello and then stopped held its slot for the life
+     * of the process, which made 450 of them the whole node.
+     *
+     * <p>FlowBudget's argument against refusing still stands for everything past that first byte,
+     * and is the cost of this: an attacker who holds the bound's worth of <em>live</em> connections
+     * open keeps everyone else out, and now has to keep talking to do it. What that
      * is measured against is not a healthy node, it is the node as it behaves today -- at a
      * thousand stalled readers it exhausts its heap, and the OutOfMemoryError lands on whichever
      * thread allocates next, which in the measured runs took `mux-reader` and `mux-writer` with it
@@ -134,6 +183,9 @@ final class Visitors {
      */
     private final int maxInFlight;
 
+    /** This instance's {@link #FIRST_BYTE_MS}; settable for the same reason the bound above is. */
+    private final long firstByteMs;
+
     /**
      * The arithmetic on its own, so the numbers above can be held against something. A heap of
      * {@link Long#MAX_VALUE} means no ceiling was set, which is a JVM run and not a shipped binary:
@@ -146,16 +198,16 @@ final class Visitors {
         return (int) Math.max(64, Math.min(Integer.MAX_VALUE, n));
     }
 
-    Visitors(NodeState state) {
-        this(state, defaultCeiling());
-    }
-
-    Visitors(NodeState state, int maxInFlight) {
+    Visitors(NodeState state, int maxInFlight, long firstByteMs) {
         if (maxInFlight <= 0) {
             throw new IllegalArgumentException("the visitor bound must be positive: " + maxInFlight);
         }
+        if (firstByteMs <= 0) {
+            throw new IllegalArgumentException("the first-byte deadline must be positive: " + firstByteMs);
+        }
         this.state = state;
         this.maxInFlight = maxInFlight;
+        this.firstByteMs = firstByteMs;
         RemoteSigning.install();
     }
 
@@ -244,16 +296,33 @@ final class Visitors {
         stream.reset(Frame.RST_NO_CAPACITY);
         // One line a minute. A node at its ceiling refuses continuously, and a log that says so on
         // every stream buries the reason among its own symptoms.
-        long now = System.currentTimeMillis();
-        if (now - lastRefusalLog >= REFUSAL_LOG_MS) {
-            lastRefusalLog = now;
+        if (refusalLog.ready()) {
             LOG.warn("at the visitor ceiling ({}), refusing new visitors; {} refused so far. "
                 + "Raise it with -XX:MaxHeapSize= in JAILSCALE_DAEMON_OPTS (ARCHITECTURE.md §9.3)",
                 maxInFlight, n);
         }
     }
 
-    private static final long REFUSAL_LOG_MS = 60_000;
+    /** How often a condition that is true of every request may say so ({@link Throttle}). */
+    private static final long LOG_EVERY_MS = 60_000;
+
+    /**
+     * One visitor dropped at {@link #FIRST_BYTE_MS}, reported the way a refusal is: at most a line a
+     * minute, with the total. Per drop it would be a line per connection under exactly the load that
+     * makes the deadline matter, which is the shape of log that buries its own reason -- the same
+     * argument {@link #refuse} makes, and this is the same kind of event.
+     *
+     * <p>Not debug, though: a node that is dropping visitors before they speak is either sitting
+     * behind a bad network or being held open on purpose, and both are things its operator wants to
+     * find without having been told in advance to go looking.
+     */
+    private void stalled(String sni) {
+        long n = stalledOut.incrementAndGet();
+        if (stallLog.ready()) {
+            LOG.info("visitor for {} never finished its handshake; dropped after {} ms and the slot released "
+                + "({} so far, ARCHITECTURE.md §9.3)", sni, firstByteMs, n);
+        }
+    }
 
     /** Visitor streams being served right now, TLS and raw alike. */
     int inFlight() {
@@ -263,6 +332,16 @@ final class Visitors {
     /** Visitors turned away at {@link #maxInFlight} since this daemon started. */
     long refused() {
         return refused.get();
+    }
+
+    /**
+     * Visitors dropped at {@link #FIRST_BYTE_MS} since this daemon started, having taken a slot and
+     * never spoken. Beside {@code refused} because the two say different things about a full node:
+     * refusals alone cannot tell one full of visitors being served from one held open by visitors
+     * that are not there.
+     */
+    long stalled() {
+        return stalledOut.get();
     }
 
     private void serveVisitor(HubLink link, HubLink.Session session, MuxStream stream) {
@@ -283,7 +362,18 @@ final class Visitors {
             stream.reset(4);
             return;
         }
-        long tEnter = System.currentTimeMillis();
+        long tEnter = Clock.millis();
+        // The slot this visitor took in serve() is held from here; §9.3's deadline is what stops a
+        // visitor that never speaks from holding it for the life of the process. Armed before the
+        // endpoint exists, because the handshake is the first thing that can wait.
+        // The gate this visitor is held to, filled in below once the handshake is over. `gateHash`
+        // is volatile and an operator arms or clears a gate while handshakes are in flight, so a
+        // value sampled here and tested after the handshake is a gate armed in between that this
+        // visitor never meets -- and the window is the whole of firstByteMs. Read once, used for
+        // the branch, for Gate.decide and by the callback, which cannot run before it is set: it
+        // fires on the first application bytes, and those are read after the handshake returns.
+        String[] gate = new String[1];
+        stream.readDeadlineIn(firstByteMs);
         TlsEndpoint tls = new TlsEndpoint(ctx, stream.in(), stream.out());
         try {
             // Remember that this node, and not the hub or another node, terminated it (§11.3).
@@ -291,13 +381,26 @@ final class Visitors {
             // until the peer's Finished has been processed, and that has not necessarily happened
             // when the handshake loop returns. Recording nothing would later read as a compromised
             // hub, so this waits for the first application bytes instead.
-            tls.onFirstApplicationRead(() -> probe.record(SelfProbe.material(tls.session())));
+            tls.onFirstApplicationRead(() -> {
+                probe.record(SelfProbe.material(tls.session()));
+                // The visitor has spoken, so the deadline has done its work and a connection that
+                // is idle by design must not meet it again. A gated link keeps it a moment longer:
+                // this fires on the first byte of the request head, and the gate has the rest of
+                // that head to read before anything is relayed.
+                if (gate[0] == null) {
+                    stream.noReadDeadline();
+                }
+            });
             RemoteSigning.enter(new RemoteSigning.Context(link, session, HubLink.fullStreamId(conn, stream.id()), keyId, tls));
             try {
                 tls.handshake();
             } finally {
                 RemoteSigning.exit();
             }
+        } catch (MuxTimeoutException e) {
+            stalled(sni);
+            stream.reset(5);
+            return;
         } catch (IOException e) {
             LOG.debug("TLS handshake for {} failed: {}", sni, e.getMessage());
             stream.reset(5);
@@ -307,13 +410,14 @@ final class Visitors {
         // cannot see which side spent them: its own timing ends at the node's first byte. If the
         // handshake here is fast and the hub still saw a long wait, the time went before this
         // method ran.
-        long handshakeMs = System.currentTimeMillis() - tEnter;
+        long handshakeMs = Clock.millis() - tEnter;
         if (handshakeMs >= SLOW_HANDSHAKE_MS) {
             LOG.warn("visitor handshake for {} took {} ms inside the node", sni, handshakeMs);
         }
         byte[] replay = null;
         InputStream plain = tls.plainIn();
-        if (target.gateHash != null) {
+        gate[0] = target.gateHash;
+        if (gate[0] != null) {
             // The gate reads the request head a byte at a time looking for the blank line, and
             // every one of those single-byte reads allocates and takes the engine's lock. Buffer
             // it -- but the buffer has to be the same object the relay then reads from, because a
@@ -322,9 +426,12 @@ final class Visitors {
             plain = new BufferedInputStream(plain, GATE_BUFFER);
             try {
                 boolean expired = target.gateExpiresAt > 0 && System.currentTimeMillis() > target.gateExpiresAt;
-                Gate.Decision d = Gate.decide(plain, target.gateHash, expired);
+                Gate.Decision d = Gate.decide(plain, gate[0], expired);
                 switch (d) {
-                    case Gate.Decision.Pass p -> replay = p.head();
+                    case Gate.Decision.Pass p -> {
+                        replay = p.head();
+                        stream.noReadDeadline(); // the head is in; from here it is an ordinary relay
+                    }
                     case Gate.Decision.SetCookie sc -> {
                         HttpResponse.redirect(sc.location())
                             .header("Set-Cookie", Gate.COOKIE + "=" + sc.token() + "; Path=/; Secure; HttpOnly; SameSite=Lax")
@@ -341,6 +448,10 @@ final class Visitors {
                         return;
                     }
                 }
+            } catch (MuxTimeoutException e) {
+                stalled(sni);
+                stream.reset(6);
+                return;
             } catch (IOException e) {
                 stream.reset(6);
                 return;
@@ -533,7 +644,7 @@ final class Visitors {
      * (§9.3) already read the request head from a buffered view of it -- in which case it is that
      * view, holding whatever the gate read past the head.
      */
-    private static void relay(String sni, TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream,
+    private void relay(String sni, TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream,
         byte[] replay) {
         Thread toLocal = DuplexThread.start("visitor-in", () -> {
             try {
@@ -551,6 +662,14 @@ final class Visitors {
                     drain(tls, local.getOutputStream());
                 }
                 local.shutdownOutput();
+            } catch (MuxTimeoutException e) {
+                // The ungated case, and the common one: nothing cleared the deadline because the
+                // visitor never said its first word, so it expires here rather than in the handshake
+                // or the gate. Counted and reported like the other two, or `visitorsStalled` reads
+                // zero for the default configuration -- the one number that tells a node full of
+                // visitors from a node held open by visitors that are not there.
+                stalled(sni);
+                closeQuietly(local);
             } catch (IOException e) {
                 // Deliberately silent, unlike its opposite number below. An ordinary visit ends with
                 // the relay thread closing `local` in its finally while this one is still in drain,

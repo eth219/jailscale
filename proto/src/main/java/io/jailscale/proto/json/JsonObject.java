@@ -28,6 +28,16 @@ public final class JsonObject {
         return map.containsKey(key) && map.get(key) != null;
     }
 
+    /**
+     * Wraps a map that is already parsed. The alternative callers reached for was
+     * {@code Json.parseObject(Json.write(map))}, which is a StringBuilder, a String, a full
+     * tokenize and a second map for a value that was in hand -- about twenty objects an event, on
+     * every snapshot replay including the one at startup.
+     */
+    public static JsonObject of(Map<String, Object> map) {
+        return new JsonObject(map);
+    }
+
     public Map<String, Object> asMap() {
         return Collections.unmodifiableMap(map);
     }

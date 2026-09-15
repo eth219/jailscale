@@ -272,9 +272,23 @@ final class PeerClient implements AutoCloseable {
             }
             switch (m) {
                 case Message.PeerSnapshot ps -> {
-                    hub.store().replaceWith(ps.json());
+                    Store.Superseded lost = hub.store().replaceWith(ps.json());
                     synced = true;
                     lastEventAt = System.currentTimeMillis();
+                    if (lost.any()) {
+                        // The primary's state wins entire (§13.5), so this is the one moment anyone
+                        // can be told what that cost. Normally nothing: a standby's state came from
+                        // this same primary. After a partition in which this host was a primary of
+                        // its own it is the joins and claims made here, and without this line the
+                        // nodes holding them would find out by being strangers.
+                        LOG.warn("{} is the primary and its state does not include what this host held: {}. "
+                            + "Those nodes have to join again and those names are free to claim; {} "
+                            + "(ARCHITECTURE.md §13.5)",
+                            primaryHost(), lost, lost.kept() == null
+                                ? "the state as it stood could not be written down, so this line is the whole record"
+                                : "the state as it stood is kept at " + lost.kept()
+                                    + " until the next time this happens");
+                    }
                     LOG.info("in sync with {}: {} nodes, {} names", primaryHost(), hub.store().nodes().size(),
                         hub.store().names().size());
                 }

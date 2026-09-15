@@ -1,14 +1,17 @@
 package io.jailscale.hub;
 
 import io.jailscale.proto.json.Json;
+import io.jailscale.proto.net.NetKey;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Log;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -90,6 +93,21 @@ final class Store implements AutoCloseable {
     static final String SETTING_AUTO_PROMOTE = "autoPromote";
     private String nextHubKey; // hkey: text of the next public key during rotation, or null
     private long hubKeyActivatesAt;
+
+    /**
+     * This store's position in its own log: every appended event carries the next one as {@code s},
+     * and a snapshot records the last it folded in as {@code seq}. What it is for is that
+     * {@link #snapshot} cannot install the snapshot and empty the log in one step, so a crash
+     * between them leaves both — and replaying a log the snapshot already counts has to be a no-op.
+     * Most events are {@code put}s and are; the arithmetic ones ({@code invite-used},
+     * {@code authkey-used}, {@code notice-added}) are not, and this is what makes them so
+     * ({@code StoreCrashTest}).
+     *
+     * <p>Local and monotonic. A standby stamps its own rather than the primary's, because the number
+     * means a place in a particular file; adopting a lower one from elsewhere would let a later
+     * append land under a line already written.
+     */
+    private long lastSeq;
 
     Store(Path dir) throws IOException {
         this.dir = dir;
@@ -476,9 +494,21 @@ final class Store implements AutoCloseable {
     }
 
     synchronized int pendingCountFrom(String ip) {
+        if (ip == null) {
+            return 0;
+        }
+        // Per network, as the other bounds of §11.5 are: in v6 an address costs nothing, so counted
+        // per address this bound is five knocks times as many addresses as a /64 holds -- and a
+        // knock is the one of those bounds whose overflow is written to disk and outlives the
+        // process. The stored ip stays the address, which is what an operator is shown.
+        String key = NetKey.of(ip);
         int n = 0;
         for (PendingRec p : pending.values()) {
-            if (ip != null && ip.equals(p.ip())) {
+            // The cheap test first: for a v4 record the key IS the address, so the whole v4 case
+            // never parses anything. Without it every knock re-parsed every stored address inside
+            // this monitor -- the scan-on-every-call shape RateLimiter had just been cured of, on a
+            // map an unauthenticated caller grows and nothing prunes.
+            if (p.ip() != null && (key.equals(p.ip()) || key.equals(NetKey.of(p.ip())))) {
                 n++;
             }
         }
@@ -492,7 +522,12 @@ final class Store implements AutoCloseable {
     }
 
     private void append(JsonObject ev) throws IOException {
-        byte[] line = Json.writeUtf8(ev.asMap());
+        // Stamped as it goes to disk and not before, so the event the listeners forward to a
+        // standby (§13.1) is the same bytes it has always been: a sequence number is this store's
+        // position in this store's log, and the standby stamps its own when it appends it there.
+        Map<String, Object> stamped = new LinkedHashMap<>(ev.asMap());
+        stamped.put("s", ++lastSeq);
+        byte[] line = Json.writeUtf8(stamped);
         log.write(line);
         log.write('\n');
         log.flush();
@@ -529,14 +564,76 @@ final class Store implements AutoCloseable {
     }
 
     /**
+     * What this store held that the primary's state does not, and is about to lose
+     * (ARCHITECTURE.md §13.5). Counts for everything, names for the things a person holds.
+     */
+    record Superseded(List<String> nodes, List<String> names, List<String> domains, List<Integer> ports,
+        int credentials, Path kept) {
+        // `kept`: where the copy of what went is, or null when there is no copy -- nothing was lost,
+        // or the write failed. Nothing may send an operator to a path that was not written.
+
+        boolean any() {
+            return !nodes.isEmpty() || !names.isEmpty() || !domains.isEmpty() || !ports.isEmpty() || credentials > 0;
+        }
+
+        /** How many of each are named before the line gives up and quotes a count instead. */
+        private static final int SHOWN = 20;
+
+        /**
+         * Only what there is, and never more than {@link #SHOWN} of it: this is written on the one
+         * path taken while a hub is recovering from a partition, and a host whose state has fully
+         * diverged would otherwise put every name it holds into a single line -- thousands of them,
+         * built inside the store's monitor. What is cut is not lost; {@link #kept} names the file
+         * that has all of it.
+         */
+        @Override
+        public String toString() {
+            StringBuilder b = new StringBuilder();
+            append(b, "nodes", nodes);
+            append(b, "names", names);
+            append(b, "domains", domains);
+            append(b, "ports", ports);
+            if (credentials > 0) {
+                b.append(b.length() == 0 ? "" : ", ").append(credentials).append(" unused invites or auth-keys");
+            }
+            return b.length() == 0 ? "nothing" : b.toString();
+        }
+
+        private static void append(StringBuilder b, String what, List<?> items) {
+            if (items.isEmpty()) {
+                return;
+            }
+            b.append(b.length() == 0 ? "" : ", ").append(what).append(' ')
+                .append(items.size() <= SHOWN ? items.toString()
+                    : items.subList(0, SHOWN) + " and " + (items.size() - SHOWN) + " more");
+        }
+    }
+
+    /**
      * Throws away everything held and replaces it with {@code snapshotJson} from the primary,
      * persisting it as this store's own snapshot and truncating the log. The version check is the
      * one {@link #load} makes: a standby running an older binary than its primary must stop rather
      * than replay state it cannot read.
+     *
+     * <p><b>Whatever this host held and the primary does not is gone, and that is the whole of the
+     * reconciliation (§13.5).</b> There is no merge here and there cannot be a cheap one: the two
+     * stores share no lineage a write can be placed in, so nothing can say whether a name this host
+     * holds is one the other has never seen or one it deliberately released. The primary's state
+     * wins entire, which is what a lease with an epoch buys and the whole of what it buys.
+     *
+     * <p>What that costs is normally nothing -- a standby's state came from this same primary -- and
+     * it is not nothing after a partition in which this host was itself a primary: a node that joined
+     * here, or a name claimed here, exists nowhere afterwards, and the node finds out by being an
+     * unknown machine key the next time it connects. So it is <b>reported and kept</b> rather than
+     * silently dropped: the returned record names what went, and the state as it stood is written to
+     * {@code state.superseded.snapshot} beside the live one, from which an operator can read the
+     * records back. That file is overwritten by the next one, so it is a recovery for the event that
+     * has just been logged and not an archive.
      */
-    synchronized void replaceWith(String snapshotJson) throws IOException {
+    synchronized Superseded replaceWith(String snapshotJson) throws IOException {
         JsonObject s = Json.parseObject(snapshotJson);
         checkVersion(s, "the primary's state");
+        Superseded lost = supersededBy(s);
         nodesByKey.clear();
         invites.clear();
         authKeys.clear();
@@ -553,6 +650,123 @@ final class Store implements AutoCloseable {
         nextNodeId = 1;
         loadSnapshot(s);
         snapshot();
+        return lost;
+    }
+
+    /**
+     * What the incoming state does not have, worked out before anything is cleared. The copy is
+     * written first, so a hub that dies during the replacement has still kept what it was about to
+     * drop; when nothing would be dropped, nothing is written and no file is left to mislead.
+     */
+    private Superseded supersededBy(JsonObject incoming) {
+        Store theirs = new Store();
+        theirs.loadSnapshot(incoming);
+        // By record and not by key. A key comparison only sees what vanished, so a name released
+        // here and re-claimed by somebody else, a port reassigned, a domain taken over or a node
+        // re-approved under another user all came out as "nothing lost" -- the record changed
+        // owner, and the owner is the whole of what these hold.
+        // By owner, not by whole record and not by key alone. A key comparison sees only what
+        // vanished, so a name released here and re-claimed by somebody else -- or a port reassigned,
+        // a domain taken over, a node re-approved under another user -- read as "nothing lost", and
+        // the owner is the whole of what these records hold. Whole-record equality is the other
+        // error: NodeRec carries an id counted per store and every one of these carries a local
+        // timestamp, so two stores that agree completely would differ in all of them.
+        List<String> lostNodes = new ArrayList<>();
+        for (NodeRec n : nodesByKey.values()) {
+            NodeRec t = theirs.nodesByKey.get(n.mkey());
+            if (t == null || !t.user().equals(n.user())) {
+                lostNodes.add(n.user() + "/" + n.hostname());
+            }
+        }
+        List<String> lostNames = new ArrayList<>();
+        for (NameRec r : names.values()) {
+            NameRec t = theirs.names.get(r.name());
+            if (t == null || !t.user().equals(r.user())) {
+                lostNames.add(r.name());
+            }
+        }
+        List<String> lostDomains = new ArrayList<>();
+        for (DomainRec r : domains.values()) {
+            DomainRec t = theirs.domains.get(r.domain());
+            if (t == null || !t.user().equals(r.user())) {
+                lostDomains.add(r.domain());
+            }
+        }
+        List<Integer> lostPorts = new ArrayList<>();
+        for (PortRec r : ports.values()) {
+            PortRec t = theirs.ports.get(r.port());
+            if (t == null || !t.user().equals(r.user())) {
+                lostPorts.add(r.port());
+            }
+        }
+        int credentials = 0;
+        for (String id : invites.keySet()) {
+            credentials += theirs.invites.containsKey(id) ? 0 : 1;
+        }
+        for (String id : authKeys.keySet()) {
+            credentials += theirs.authKeys.containsKey(id) ? 0 : 1;
+        }
+        // And the collections replaceWith clears that nothing compared: an admin added and a CIDR
+        // banned on the losing side of a partition are rights granted and rights taken away, which
+        // is the last thing that should go without a word.
+        List<String> lostAdmins = new ArrayList<>(admins);
+        lostAdmins.removeAll(theirs.admins);
+        for (String a : lostAdmins) {
+            lostNodes.add("admin " + a);
+        }
+        for (BanRec b : bans.values()) {
+            if (!theirs.bans.containsKey(b.cidr())) {
+                lostNames.add("ban " + b.cidr());
+            }
+        }
+        for (Map.Entry<String, String> e : settings.entrySet()) {
+            if (!e.getValue().equals(theirs.settings.get(e.getKey()))) {
+                lostNames.add("setting " + e.getKey());
+            }
+        }
+        if (nextHubKey != null && !nextHubKey.equals(theirs.nextHubKey())) {
+            lostNames.add("hub-key rotation");
+        }
+        Path keptAt = dir.resolve("state.superseded.snapshot");
+        Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
+        if (!lost.any()) {
+            // Nothing to keep, so nothing may be left lying at that path: a copy from an earlier
+            // hand-off beside a fresh state.snapshot reads as "what this host just lost".
+            try {
+                Files.deleteIfExists(keptAt);
+            } catch (IOException e) {
+                LOG.debug("could not remove a stale {}: {}", keptAt, e.toString());
+            }
+            return lost;
+        }
+        try {
+            // Through a temporary and renamed, as snapshot() does and for the same reason: written
+            // in place, a kill part-way leaves a truncated file where the previous incident's good
+            // copy used to be, so the crash this exists to survive is the crash that destroys it.
+            Path tmp = dir.resolve("state.superseded.tmp");
+            Files.writeString(tmp, snapshotJson(), StandardCharsets.UTF_8);
+            try (FileOutputStream fo = new FileOutputStream(tmp.toFile(), true)) {
+                fo.getFD().sync();
+            }
+            Files.move(tmp, keptAt, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            syncDir();
+        } catch (IOException e) {
+            // Best effort, for the reason syncDir() gives: this file exists to be read by a person,
+            // and a state directory that is full or read-only must not be able to stop a standby
+            // following its primary. `kept` is null from here, because a path that was not written
+            // is worse than no path: a copy from an earlier hand-off may be sitting at it, and
+            // whoever the line below sends there would read another incident's losses as this one's.
+            LOG.warn("could not keep the superseded state at {}: {}", keptAt, e.toString());
+            return lost;
+        }
+        return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, keptAt);
+    }
+
+    /** An empty store with no directory behind it: somewhere to replay another's snapshot and compare. */
+    private Store() {
+        this.dir = null;
+        this.logPath = null;
+        this.snapshotPath = null;
     }
 
     private void checkVersion(JsonObject s, String what) throws IOException {
@@ -568,7 +782,7 @@ final class Store implements AutoCloseable {
         for (Object o : s.array("events")) {
             @SuppressWarnings("unchecked")
             Map<String, Object> m = (Map<String, Object>) o;
-            apply(Json.parseObject(Json.write(m)));
+            apply(JsonObject.of(m));
         }
     }
 
@@ -668,29 +882,65 @@ final class Store implements AutoCloseable {
      * <p>Adding a field or a new event within a version stays compatible in both directions --
      * {@link #apply} already ignores an unknown event with a warning. Bump this only when an old
      * binary would get the meaning of existing data wrong.
+     *
+     * <p><b>{@link #lastSeq}'s {@code s} and {@code seq} were added without a bump, and the rule
+     * above is why.</b> An older binary ignores both and replays the whole log, which is what it
+     * does with its own state today: it re-applies events a snapshot already holds in the window
+     * this exists to close. That is the defect being fixed, not a new misreading of these bytes, so
+     * a rollback is no worse off than it was -- and it is only reachable in the same crash window.
+     * The other direction is a state written before the fields existed, where a missing {@code seq}
+     * reads as zero, nothing is skipped, and the behaviour is exactly the old one until the first
+     * snapshot this binary writes.
      */
     static final long STATE_VERSION = 1;
 
     private void load() throws IOException {
+        long foldedThrough = 0;
         if (Files.exists(snapshotPath)) {
             JsonObject s = Json.parseObject(Files.readString(snapshotPath, StandardCharsets.UTF_8));
             checkVersion(s, snapshotPath.toString());
             loadSnapshot(s);
+            foldedThrough = s.has("seq") ? s.lng("seq") : 0;
+            // And carry on from there rather than from zero. Read here and not in loadSnapshot,
+            // which a standby shares (§13.1): the number is a place in *this* log, so a standby
+            // adopting the primary's would start writing lines under ones it has already written.
+            lastSeq = foldedThrough;
         }
         if (Files.exists(logPath)) {
             int n = 0;
+            int folded = 0;
             for (String line : Files.readAllLines(logPath, StandardCharsets.UTF_8)) {
                 if (line.isBlank()) {
                     continue;
                 }
                 try {
-                    apply(Json.parseObject(line));
+                    JsonObject ev = Json.parseObject(line);
+                    // Already in the snapshot above: the truncation that should have removed this
+                    // line did not reach the disk, and applying it a second time would spend an
+                    // invite use or repeat a notice. Zero is a line written before this field
+                    // existed, or a snapshot from then, and both mean the old behaviour -- replay
+                    // everything -- which is what those bytes were written expecting.
+                    long seq = ev.has("s") ? ev.lng("s") : 0;
+                    if (seq != 0 && seq <= foldedThrough) {
+                        folded++;
+                        continue;
+                    }
+                    apply(ev);
+                    lastSeq = Math.max(lastSeq, seq);
                     n++;
                 } catch (RuntimeException e) {
                     LOG.warn("skipping corrupt event line: {}", e.getMessage());
                 }
             }
-            eventsSinceSnapshot = n;
+            // Skipped lines count too: they are still in the file, so the next snapshot has to be
+            // scheduled by them or the dead prefix survives until a thousand fresh events arrive and
+            // every restart until then re-reads it and re-reports a crash that is long over.
+            eventsSinceSnapshot = n + folded;
+            if (folded > 0) {
+                // Worth a line: it says the last run did not shut down between its snapshot and the
+                // truncation that follows it, which is a crash and not a stop.
+                LOG.info("{} log events were already in the snapshot and were not replayed", folded);
+            }
         }
         LOG.info("loaded {} nodes, {} names, {} invites, {} auth-keys, {} admins, {} pending",
             nodesByKey.size(), names.size(), invites.size(), authKeys.size(), admins.size(), pending.size());
@@ -708,10 +958,31 @@ final class Store implements AutoCloseable {
             fo.getFD().sync();
         }
         Files.move(tmp, snapshotPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        syncDir();
         log.close();
         log = new FileOutputStream(logPath.toFile(), false); // truncate
         eventsSinceSnapshot = 0;
         LOG.debug("snapshot written");
+    }
+
+    /**
+     * Forces the directory entry, so that the rename above is on disk before the truncation below
+     * can be. Without it the two are independent and the filesystem may commit them in either
+     * order: a machine that lost power having durably emptied the log but not durably installed the
+     * snapshot would come back missing every event since the one before. {@link #lastSeq} makes the
+     * other order harmless; this is what keeps this one from happening.
+     *
+     * <p>Best effort, and it has to be. A directory cannot be opened as a file on Windows, which
+     * throws here, and there the ordering is left to the filesystem — as it was everywhere until
+     * this existed. Failing a snapshot over it would be the worse trade: the state it has just
+     * written is good, and refusing to go on would take the hub down over a durability hint.
+     */
+    private void syncDir() {
+        try (FileChannel c = FileChannel.open(dir, StandardOpenOption.READ)) {
+            c.force(true);
+        } catch (IOException | UnsupportedOperationException e) {
+            LOG.debug("cannot fsync the state directory: {}", e.toString());
+        }
     }
 
     /** The whole state as the snapshot file's JSON: a version, the next node id, and replayable events. */
@@ -765,7 +1036,10 @@ final class Store implements AutoCloseable {
         if (nextHubKey != null) {
             events.add(JsonObject.builder().put("e", "hubkey-rotation").put("next", nextHubKey).put("activatesAt", hubKeyActivatesAt).build().asMap());
         }
-        return JsonObject.builder().put("v", STATE_VERSION).put("nextNodeId", nextNodeId).put("events", events).toJson();
+        // `seq` is how far into the log this snapshot reaches, so a log that outlives its own
+        // truncation can be replayed without counting anything twice (see lastSeq).
+        return JsonObject.builder().put("v", STATE_VERSION).put("nextNodeId", nextNodeId)
+            .put("seq", lastSeq).put("events", events).toJson();
     }
 
     @Override

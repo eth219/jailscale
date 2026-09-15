@@ -149,8 +149,35 @@ class SniRouterCountersTest {
         assertEquals(0, hub.router().trackedAddresses());
     }
 
+    /**
+     * A whole IPv6 /64 is one entry, which is what makes {@link SniRouter#MAX_PER_IP} a limit at all
+     * once the listener is bound to {@code ::} -- one flag and an AAAA record away for any operator,
+     * and the hub serves both stacks there today. Every ordinary VPS is handed a routed /64, so a
+     * cap counted per address would read "64 connections, times eighteen quintillion".
+     */
+    @Test
+    void oneIpv6NetworkIsOneEntryHoweverManyAddressesItUses() throws Exception {
+        startHub();
+        try (Socket a = new Socket("127.0.0.1", port); Socket b = new Socket("127.0.0.1", port);
+            Socket c = new Socket("127.0.0.1", port)) {
+            announce6(a, "2001:db8:1:2::1");
+            announce6(b, "2001:db8:1:2:ffff:ffff:ffff:ffff");
+            assertTrue(awaitAddresses(1), "two addresses in one /64 are one counted network");
+            // And a different /64 is somebody else, so the bound is still per party.
+            announce6(c, "2001:db8:1:3::1");
+            assertTrue(awaitAddresses(2), "a different /64 is counted apart");
+        }
+        awaitNoAddresses();
+        assertEquals(0, hub.router().trackedAddresses());
+    }
+
     private void announce(Socket s, String srcIp) throws IOException {
         s.getOutputStream().write(("PROXY TCP4 " + srcIp + " 127.0.0.1 51234 443\r\n").getBytes(StandardCharsets.US_ASCII));
+        s.getOutputStream().flush();
+    }
+
+    private void announce6(Socket s, String srcIp) throws IOException {
+        s.getOutputStream().write(("PROXY TCP6 " + srcIp + " ::1 51234 443\r\n").getBytes(StandardCharsets.US_ASCII));
         s.getOutputStream().flush();
     }
 
