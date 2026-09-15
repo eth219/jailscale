@@ -35,10 +35,14 @@ class ProbeScheduleTest {
         return out;
     }
 
-    /** A link that has already been probed at some point, so it is not the never-looked-at one. */
+    /** A link probed within the current pass, so it is neither the never-looked-at one nor overdue. */
     private static NodeState.LinkRec probed(String name) {
+        return probed(name, System.currentTimeMillis());
+    }
+
+    private static NodeState.LinkRec probed(String name, long at) {
         NodeState.LinkRec r = link(Message.LinkOpen.HTTPS, name);
-        r.lastProbe = new ProbeResult(name, true, "terminated by this node", 1);
+        r.lastProbe = new ProbeResult(name, true, "terminated by this node", at);
         return r;
     }
 
@@ -116,8 +120,31 @@ class ProbeScheduleTest {
         l.set(0, link(Message.LinkOpen.HTTPS, "a"));        // "a" closed and opened again
         assertEquals("a", Daemon.dueProbe(l, pass).name);
         // Keyed by name the pass would have read as complete and started over, handing b and c a
-        // second turn each before the new record got its first. Keyed by the record, only it is due.
-        assertEquals(4, pass.size());
+        // second turn each before the new record got its first. Keyed by the record, only it is
+        // due -- and the record that went is not kept: the pass holds the three links that exist.
+        assertEquals(3, pass.size());
+        assertTrue(pass.containsAll(l));
+    }
+
+    @Test
+    void aStreamOfNewNamesCannotStarveANameAlreadyWaiting() {
+        // One fresh https name per tick, each with no verdict, would take every tick under the
+        // no-verdict-first rule alone, and b and c -- looked at once, long ago -- would never come
+        // round again. A verdict older than a pass is overdue, and an overdue name goes before
+        // anything newer; a closed link leaves the pass with it rather than being remembered.
+        long longAgo = System.currentTimeMillis() - Daemon.PROBE_PASS_MS - 1;
+        List<NodeState.LinkRec> l = new ArrayList<>(List.of(probed("a", longAgo), probed("b", longAgo), probed("c", longAgo)));
+        Set<NodeState.LinkRec> pass = new HashSet<>();
+        Set<String> seen = new HashSet<>();
+        for (int tick = 0; tick < 12; tick++) {
+            NodeState.LinkRec pick = Daemon.dueProbe(l, pass);
+            seen.add(pick.name);
+            pick.lastProbe = new ProbeResult(pick.name, true, "terminated by this node", System.currentTimeMillis());
+            l.remove(pick);
+            l.add(link(Message.LinkOpen.HTTPS, "fresh" + tick));
+        }
+        assertTrue(seen.containsAll(List.of("a", "b", "c")), "picked only " + seen);
+        assertTrue(pass.size() <= l.size(), "pass keeps " + pass.size() + " records for " + l.size() + " links");
     }
 
     @Test

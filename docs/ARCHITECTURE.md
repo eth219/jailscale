@@ -1317,7 +1317,8 @@ type `jailscale verify` means an interception is found when somebody happens to 
 unattended node is never. A tick probes **one** name and the next tick takes the next, so a tick
 costs one request whatever the node holds; what scales with the number of names is the tick, which
 is `Daemon.PROBE_PASS_MS` divided by them — half an hour at one name, ninety seconds at the 20-link
-ceiling — with a floor of a minute underneath it.
+ceiling — with a floor of a minute underneath it, and sized again whenever a name is opened, so the
+tick in flight is one for the names held now rather than for the count the wait began with.
 
 **Holding the pass still rather than the tick is the other way round from where this started, and is
 the correction.** The first schedule fixed the tick at half an hour and let a pass stretch to ten
@@ -1344,7 +1345,9 @@ revocation warning -- is due as well, because it is a new link. Keyed by the nam
 have inherited the turn the old one took, and `status` would sit blank for the one name the operator
 is watching until the pass ended. Raw ports are never candidates at all, since they carry no TLS of
 ours to compare, and a name with no verdict yet goes ahead of the rest -- until its first probe what
-`status` shows for it is an empty field rather than an answer.
+`status` shows for it is an empty field rather than an answer. So does a name whose verdict is older
+than a pass, which is what stops a steady stream of newly opened names from taking every tick away
+from the names already waiting.
 
 **A link the hub is not routing here gets the verdict `link not open`, not one about who terminated
 the TLS.** The hub answers a name it does not route here with its own page under the wildcard
@@ -1363,9 +1366,12 @@ does nothing -- the traffic has nowhere to go -- and the stretch a node spends o
 when a name changes hands, because being offline is why someone else took it (§11.4). So every name
 is probed once as soon as a hub connection is up, which is one pass' worth of work, at most 20
 requests, spent on the case the schedule is worst at. That sweep counts as the pass rather than
-being added to it. A request that arrives within a tick of the last sweep is dropped rather than
-queued, so a link that flaps costs one pass and not one per flap, and a sweep cut short by the link
-going down again leaves the names it did not reach unmarked, for the ordinary ticks to pick up.
+being added to it. A request that arrives within a pass of the last sweep is dropped rather than
+queued, so a link that flaps costs one pass and not one per flap, and a sweep cut short -- by the
+link going down again, or by a probe that could not reach the hub at all, which the next nineteen
+would not either -- leaves the names it did not reach unmarked, for the ordinary ticks to pick up.
+Only the control connection asks for a sweep: a relay coming up changes nothing about who owns a
+name, and its ask would spend the sweep that the control connection's own return is entitled to.
 
 **The tick is jittered, the order is not.** Up to a fifth is taken off each tick, never added, so
 the moment a name is looked at is not one anybody can name in advance and a pass still finishes

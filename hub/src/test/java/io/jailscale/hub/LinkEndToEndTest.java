@@ -428,7 +428,10 @@ class LinkEndToEndTest {
         ok(cli("alice", JsonObject.builder().put("cmd", "down")));
         waitFor(() -> hub.links().byName("goingdown") == null);
 
-        JsonObject verified = cli("alice", JsonObject.builder().put("cmd", "verify"));
+        // `ok` is that the check ran; the CLI prints the rows on that and nothing else. What the
+        // rows concluded is `allOk`, which is what the exit status follows.
+        JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));
+        assertFalse(verified.optBool("allOk", true), verified.toString());
         assertEquals(1, verified.integer("checked"), verified.toString());
         for (Object o : verified.array("results")) {
             @SuppressWarnings("unchecked")
