@@ -1,6 +1,7 @@
 package io.jailscale.proto.mux;
 
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Clock;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -63,7 +64,7 @@ public final class MuxStream {
      */
     private volatile int queued;
     /**
-     * When an inbound wait gives up, on {@link io.jailscale.proto.util.Clock}'s scale, meaningful
+     * When an inbound wait gives up, on {@link Clock}'s scale, meaningful
      * only while {@link #hasDeadline}. A separate flag rather than a sentinel value: the moment is
      * a sum involving a clock with no defined origin, so every long is a value it might legitimately
      * take, and picking one to mean "no deadline" means a stream that lands on it waits for ever.
@@ -320,7 +321,7 @@ public final class MuxStream {
      * point, below -- but taking the moment from the caller meant taking a bare {@code long} that
      * had to come from the right clock, and a value from the wrong one does not fail, it waits for
      * twenty-five thousand years. This has no such argument to get wrong: the moment is computed
-     * here, from {@link io.jailscale.proto.util.Clock}, which is monotonic because a wall clock that
+     * here, from {@link Clock}, which is monotonic because a wall clock that
      * steps forwards would expire every deadline in flight at once.
      *
      * <p><b>A deadline and not a {@code setSoTimeout}</b>, which is the shape of every other timeout
@@ -339,7 +340,7 @@ public final class MuxStream {
      * raw port -- is a stream nobody may put a clock on.
      */
     public void readDeadlineIn(long millis) {
-        long now = io.jailscale.proto.util.Clock.millis();
+        long now = Clock.millis();
         long at = now + Math.max(1, millis);
         // Saturating, because the sum is the caller's number plus a clock reading: a caller passing
         // Long.MAX_VALUE to mean "effectively never" would otherwise wrap to a moment already past
@@ -361,7 +362,7 @@ public final class MuxStream {
     private void awaitInbound() throws IOException {
         long left = 0;
         if (hasDeadline) {
-            left = readDeadline - io.jailscale.proto.util.Clock.millis();
+            left = readDeadline - Clock.millis();
             if (left <= 0) {
                 throw new MuxTimeoutException("stream " + id + ": nothing arrived by its read deadline");
             }

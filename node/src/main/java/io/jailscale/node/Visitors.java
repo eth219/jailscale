@@ -197,14 +197,6 @@ final class Visitors {
         return (int) Math.max(64, Math.min(Integer.MAX_VALUE, n));
     }
 
-    Visitors(NodeState state) {
-        this(state, defaultCeiling());
-    }
-
-    Visitors(NodeState state, int maxInFlight) {
-        this(state, maxInFlight, FIRST_BYTE_MS);
-    }
-
     Visitors(NodeState state, int maxInFlight, long firstByteMs) {
         if (maxInFlight <= 0) {
             throw new IllegalArgumentException("the visitor bound must be positive: " + maxInFlight);

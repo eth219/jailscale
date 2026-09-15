@@ -41,7 +41,6 @@ class ResponseRateTest {
                 case ANSWER -> answered++;
                 case TRUNCATE -> truncated++;
                 case DROP -> dropped++;
-                default -> { }
             }
         }
         assertEquals(ResponseRate.BURST, answered, "the burst, and then nothing more");
@@ -158,7 +157,7 @@ class ResponseRateTest {
             }
         });
         InetAddress far = InetAddress.getByName("198.51.100.7");
-        byte[] q = DnsAmplificationTest.queryFor("myapp.hub.test", 1);
+        byte[] q = DnsFuzzTest.query("myapp.hub.test", 1);
         long now = 1_000_000;
 
         byte[] first = d.answerForUdp(q, far, now);
@@ -191,6 +190,11 @@ class ResponseRateTest {
             check(r, "10." + (i >> 16 & 0xff) + "." + (i >> 8 & 0xff) + "." + (i & 0xff), now);
         }
         long ms = (System.nanoTime() - started) / 1_000_000;
-        assertTrue(ms < 10_000, "100,000 distinct networks took " + ms + " ms");
+        // Not a timing assertion -- an O(1) table cannot be slow enough to fail one, and a bound
+        // nothing can breach is not a test. What is asserted is the property: after a hundred
+        // thousand networks the table still answers an ordinary caller, which a map that had grown
+        // (and a scan that trimmed it) is exactly what this shape exists to avoid.
+        assertSame(ResponseRate.Verdict.ANSWER, check(r, "198.51.100.7", now + 10_000),
+            "after " + ms + " ms and 100,000 networks a fresh caller is still answered");
     }
 }

@@ -569,14 +569,23 @@ final class Store implements AutoCloseable {
      */
     record Superseded(List<String> nodes, List<String> names, List<String> domains, List<Integer> ports,
         int credentials, Path kept) {
-
-        /** Where the copy of what went is, or null when there is no copy: nothing was lost, or the write failed. */
+        // `kept`: where the copy of what went is, or null when there is no copy -- nothing was lost,
+        // or the write failed. Nothing may send an operator to a path that was not written.
 
         boolean any() {
             return !nodes.isEmpty() || !names.isEmpty() || !domains.isEmpty() || !ports.isEmpty() || credentials > 0;
         }
 
-        /** Only what there is: an operator reading this at two in the morning is owed a short line. */
+        /** How many of each are named before the line gives up and quotes a count instead. */
+        private static final int SHOWN = 20;
+
+        /**
+         * Only what there is, and never more than {@link #SHOWN} of it: this is written on the one
+         * path taken while a hub is recovering from a partition, and a host whose state has fully
+         * diverged would otherwise put every name it holds into a single line -- thousands of them,
+         * built inside the store's monitor. What is cut is not lost; {@link #kept} names the file
+         * that has all of it.
+         */
         @Override
         public String toString() {
             StringBuilder b = new StringBuilder();
@@ -585,15 +594,18 @@ final class Store implements AutoCloseable {
             append(b, "domains", domains);
             append(b, "ports", ports);
             if (credentials > 0) {
-                append(b, "unused invites or auth-keys", List.of(credentials));
+                b.append(b.length() == 0 ? "" : ", ").append(credentials).append(" unused invites or auth-keys");
             }
             return b.length() == 0 ? "nothing" : b.toString();
         }
 
         private static void append(StringBuilder b, String what, List<?> items) {
-            if (!items.isEmpty()) {
-                b.append(b.length() == 0 ? "" : ", ").append(what).append(' ').append(items);
+            if (items.isEmpty()) {
+                return;
             }
+            b.append(b.length() == 0 ? "" : ", ").append(what).append(' ')
+                .append(items.size() <= SHOWN ? items.toString()
+                    : items.subList(0, SHOWN) + " and " + (items.size() - SHOWN) + " more");
         }
     }
 
@@ -716,8 +728,8 @@ final class Store implements AutoCloseable {
             lostNames.add("hub-key rotation");
         }
         Path keptAt = dir.resolve("state.superseded.snapshot");
-        if (lostNodes.isEmpty() && lostNames.isEmpty() && lostDomains.isEmpty() && lostPorts.isEmpty()
-            && credentials == 0) {
+        Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
+        if (!lost.any()) {
             // Nothing to keep, so nothing may be left lying at that path: a copy from an earlier
             // hand-off beside a fresh state.snapshot reads as "what this host just lost".
             try {
@@ -725,7 +737,7 @@ final class Store implements AutoCloseable {
             } catch (IOException e) {
                 LOG.debug("could not remove a stale {}: {}", keptAt, e.toString());
             }
-            return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
+            return lost;
         }
         try {
             // Through a temporary and renamed, as snapshot() does and for the same reason: written
@@ -745,7 +757,7 @@ final class Store implements AutoCloseable {
             // is worse than no path: a copy from an earlier hand-off may be sitting at it, and
             // whoever the line below sends there would read another incident's losses as this one's.
             LOG.warn("could not keep the superseded state at {}: {}", keptAt, e.toString());
-            return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
+            return lost;
         }
         return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, keptAt);
     }
@@ -770,7 +782,7 @@ final class Store implements AutoCloseable {
         for (Object o : s.array("events")) {
             @SuppressWarnings("unchecked")
             Map<String, Object> m = (Map<String, Object>) o;
-            apply(Json.parseObject(Json.write(m)));
+            apply(JsonObject.of(m));
         }
     }
 

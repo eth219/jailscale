@@ -258,19 +258,12 @@ public final class DnsResponder implements AutoCloseable {
         if (isSelfProbe(query)) {
             return r.length > MAX_UDP ? truncate(r) : r;
         }
-        switch (rate.check(source, now)) {
-            case DROP -> {
-                logRate(now);
-                return null;
-            }
-            case TRUNCATE -> {
-                logRate(now);
-                return truncate(r);
-            }
-            default -> {
-                return r.length > MAX_UDP ? truncate(r) : r;
-            }
+        ResponseRate.Verdict v = rate.check(source, now);
+        if (v != ResponseRate.Verdict.ANSWER) {
+            logRate(now);
+            return v == ResponseRate.Verdict.DROP ? null : truncate(r);
         }
+        return r.length > MAX_UDP ? truncate(r) : r;
     }
 
     /**

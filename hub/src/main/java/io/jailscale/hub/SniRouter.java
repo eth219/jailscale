@@ -129,7 +129,9 @@ final class SniRouter {
         // and in v6 they are not -- a routed /64 is free and standard, so a per-address cap of 64
         // would be "64 per address, times eighteen quintillion". `ip` itself is unchanged, since it
         // is what gets logged, banned and handed to the node as the visitor's address.
-        String ipKey = NetKey.of(ip);
+        // From the bytes the socket holds unless a PROXY header replaced the address, rather than
+        // formatting that address to text and parsing it straight back once per connection.
+        String ipKey = attributed ? NetKey.of(ip) : NetKey.of(socket.getInetAddress());
         // The exemption is for visitors this hub cannot tell apart, not for a peer that happens to
         // be local: a proxy on loopback WITHOUT the PROXY protocol folds everyone into one address,
         // and capping that would cap the world. Once a header has attributed the connection the cap

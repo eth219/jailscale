@@ -3,8 +3,6 @@ package io.jailscale.hub.dns;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -56,7 +54,7 @@ class DnsAmplificationTest {
             DnsResponder d = fullest(hub);
             for (String name : names(hub)) {
                 for (int type : new int[] {1, 2, 6, 16, 28, 255, 99}) {
-                    byte[] q = query(name, type);
+                    byte[] q = DnsFuzzTest.query(name, type);
                     byte[] r = d.respond(q);
                     if (r == null) {
                         continue;
@@ -85,7 +83,7 @@ class DnsAmplificationTest {
         // one that reflects nothing. Worth pinning: it is the cheapest thing to get wrong by
         // starting to echo the question back.
         DnsResponder d = fullest();
-        byte[] q = query("some.other.example.com", 255);
+        byte[] q = DnsFuzzTest.query("some.other.example.com", 255);
         byte[] r = d.respond(q);
         assertEquals(12, r.length, "REFUSED should be a header and nothing else");
         assertTrue(r.length < q.length, "a refusal should be smaller than the question");
@@ -112,7 +110,7 @@ class DnsAmplificationTest {
                 return Map.of();
             }
         });
-        byte[] q = query("myapp." + HUB, 1);
+        byte[] q = DnsFuzzTest.query("myapp." + HUB, 1);
 
         byte[] whole = d.respond(q);
         assertTrue(whole.length > DnsResponder.MAX_UDP,
@@ -130,7 +128,7 @@ class DnsAmplificationTest {
         // Nothing this zone holds reaches 512 today, so the path is driven with a response built by
         // hand: the point is that the bound exists and produces a well-formed TC answer, not that
         // some name currently trips it.
-        byte[] question = query("myapp." + HUB, 1);
+        byte[] question = DnsFuzzTest.query("myapp." + HUB, 1);
         byte[] oversized = new byte[600];
         System.arraycopy(question, 0, oversized, 0, question.length);
         oversized[2] = (byte) 0x84;                       // QR, AA
@@ -173,31 +171,4 @@ class DnsAmplificationTest {
             "ns1." + hub, "ns2." + hub, DnsResponder.SELF_LABEL + "." + hub, "other.example.com");
     }
 
-    static byte[] queryFor(String name, int type) {
-        return query(name, type);
-    }
-
-    private static byte[] query(String name, int type) {
-        ByteArrayOutputStream o = new ByteArrayOutputStream();
-        o.write(0x12);
-        o.write(0x34);
-        o.write(0x01);
-        o.write(0x00);
-        o.write(0);
-        o.write(1);
-        for (int i = 0; i < 6; i++) {
-            o.write(0);
-        }
-        for (String label : name.split("\\.")) {
-            byte[] b = label.getBytes(StandardCharsets.US_ASCII);
-            o.write(b.length);
-            o.writeBytes(b);
-        }
-        o.write(0);
-        o.write(type >> 8);
-        o.write(type & 0xff);
-        o.write(0);
-        o.write(1);
-        return o.toByteArray();
-    }
 }

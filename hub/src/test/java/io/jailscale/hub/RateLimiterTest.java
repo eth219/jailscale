@@ -44,27 +44,6 @@ class RateLimiterTest {
     }
 
     @Test
-    void prunesRefilledBucketsSoRotatingAddressesCannotGrowIt() throws Exception {
-        // What the scan drops, with its interval out of the way -- that it is throttled at all is
-        // the two tests below. Without this the whole fill lands inside one interval and nothing
-        // has been asked to scan yet, which says nothing about what a scan does.
-        long was = RateLimiter.pruneIntervalMs;
-        RateLimiter.pruneIntervalMs = 0;
-        try {
-            RateLimiter r = new RateLimiter(1, 1000); // refills in 1 ms
-            for (int i = 0; i < RateLimiter.MAX_KEYS + 200; i++) {
-                r.allow("10.1." + (i / 256) + "." + (i % 256));
-            }
-            Thread.sleep(50); // every bucket is now back at full strength
-            r.allow("10.9.9.9");
-            assertTrue(r.size() <= RateLimiter.MAX_KEYS,
-                "expected pruning below " + RateLimiter.MAX_KEYS + ", got " + r.size());
-        } finally {
-            RateLimiter.pruneIntervalMs = was;
-        }
-    }
-
-    @Test
     void anIpv6NetworkDoesNotGetALimitPerAddress() {
         // §11.5 is a bound per caller, and in v6 a caller is not an address: a routed /64 comes with
         // every ordinary VPS, so counted per address every limit in that table would be free to
@@ -100,7 +79,9 @@ class RateLimiterTest {
     @Test
     void theScanStillRunsWhenTheIntervalHasPassed() throws Exception {
         // The other half: throttled is not disabled. Memory is what the scan bounds, and a map that
-        // only ever grew would be the trade going the wrong way.
+        // only ever grew would be the trade going the wrong way. This is also what says the scan
+        // drops the full buckets at all -- the test that used to say it separately did so with the
+        // interval set to zero, which is the one setting that turns off the thing under test.
         long was = RateLimiter.pruneIntervalMs;
         RateLimiter.pruneIntervalMs = 10;
         try {
