@@ -5,10 +5,12 @@ import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Log;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -90,6 +92,21 @@ final class Store implements AutoCloseable {
     static final String SETTING_AUTO_PROMOTE = "autoPromote";
     private String nextHubKey; // hkey: text of the next public key during rotation, or null
     private long hubKeyActivatesAt;
+
+    /**
+     * This store's position in its own log: every appended event carries the next one as {@code s},
+     * and a snapshot records the last it folded in as {@code seq}. What it is for is that
+     * {@link #snapshot} cannot install the snapshot and empty the log in one step, so a crash
+     * between them leaves both — and replaying a log the snapshot already counts has to be a no-op.
+     * Most events are {@code put}s and are; the arithmetic ones ({@code invite-used},
+     * {@code authkey-used}, {@code notice-added}) are not, and this is what makes them so
+     * ({@code StoreCrashTest}).
+     *
+     * <p>Local and monotonic. A standby stamps its own rather than the primary's, because the number
+     * means a place in a particular file; adopting a lower one from elsewhere would let a later
+     * append land under a line already written.
+     */
+    private long lastSeq;
 
     Store(Path dir) throws IOException {
         this.dir = dir;
@@ -492,7 +509,12 @@ final class Store implements AutoCloseable {
     }
 
     private void append(JsonObject ev) throws IOException {
-        byte[] line = Json.writeUtf8(ev.asMap());
+        // Stamped as it goes to disk and not before, so the event the listeners forward to a
+        // standby (§13.1) is the same bytes it has always been: a sequence number is this store's
+        // position in this store's log, and the standby stamps its own when it appends it there.
+        Map<String, Object> stamped = new LinkedHashMap<>(ev.asMap());
+        stamped.put("s", ++lastSeq);
+        byte[] line = Json.writeUtf8(stamped);
         log.write(line);
         log.write('\n');
         log.flush();
@@ -668,29 +690,62 @@ final class Store implements AutoCloseable {
      * <p>Adding a field or a new event within a version stays compatible in both directions --
      * {@link #apply} already ignores an unknown event with a warning. Bump this only when an old
      * binary would get the meaning of existing data wrong.
+     *
+     * <p><b>{@link #lastSeq}'s {@code s} and {@code seq} were added without a bump, and the rule
+     * above is why.</b> An older binary ignores both and replays the whole log, which is what it
+     * does with its own state today: it re-applies events a snapshot already holds in the window
+     * this exists to close. That is the defect being fixed, not a new misreading of these bytes, so
+     * a rollback is no worse off than it was -- and it is only reachable in the same crash window.
+     * The other direction is a state written before the fields existed, where a missing {@code seq}
+     * reads as zero, nothing is skipped, and the behaviour is exactly the old one until the first
+     * snapshot this binary writes.
      */
     static final long STATE_VERSION = 1;
 
     private void load() throws IOException {
+        long foldedThrough = 0;
         if (Files.exists(snapshotPath)) {
             JsonObject s = Json.parseObject(Files.readString(snapshotPath, StandardCharsets.UTF_8));
             checkVersion(s, snapshotPath.toString());
             loadSnapshot(s);
+            foldedThrough = s.has("seq") ? s.lng("seq") : 0;
+            // And carry on from there rather than from zero. Read here and not in loadSnapshot,
+            // which a standby shares (§13.1): the number is a place in *this* log, so a standby
+            // adopting the primary's would start writing lines under ones it has already written.
+            lastSeq = foldedThrough;
         }
         if (Files.exists(logPath)) {
             int n = 0;
+            int folded = 0;
             for (String line : Files.readAllLines(logPath, StandardCharsets.UTF_8)) {
                 if (line.isBlank()) {
                     continue;
                 }
                 try {
-                    apply(Json.parseObject(line));
+                    JsonObject ev = Json.parseObject(line);
+                    // Already in the snapshot above: the truncation that should have removed this
+                    // line did not reach the disk, and applying it a second time would spend an
+                    // invite use or repeat a notice. Zero is a line written before this field
+                    // existed, or a snapshot from then, and both mean the old behaviour -- replay
+                    // everything -- which is what those bytes were written expecting.
+                    long seq = ev.has("s") ? ev.lng("s") : 0;
+                    if (seq != 0 && seq <= foldedThrough) {
+                        folded++;
+                        continue;
+                    }
+                    apply(ev);
+                    lastSeq = Math.max(lastSeq, seq);
                     n++;
                 } catch (RuntimeException e) {
                     LOG.warn("skipping corrupt event line: {}", e.getMessage());
                 }
             }
             eventsSinceSnapshot = n;
+            if (folded > 0) {
+                // Worth a line: it says the last run did not shut down between its snapshot and the
+                // truncation that follows it, which is a crash and not a stop.
+                LOG.info("{} log events were already in the snapshot and were not replayed", folded);
+            }
         }
         LOG.info("loaded {} nodes, {} names, {} invites, {} auth-keys, {} admins, {} pending",
             nodesByKey.size(), names.size(), invites.size(), authKeys.size(), admins.size(), pending.size());
@@ -708,10 +763,31 @@ final class Store implements AutoCloseable {
             fo.getFD().sync();
         }
         Files.move(tmp, snapshotPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        syncDir();
         log.close();
         log = new FileOutputStream(logPath.toFile(), false); // truncate
         eventsSinceSnapshot = 0;
         LOG.debug("snapshot written");
+    }
+
+    /**
+     * Forces the directory entry, so that the rename above is on disk before the truncation below
+     * can be. Without it the two are independent and the filesystem may commit them in either
+     * order: a machine that lost power having durably emptied the log but not durably installed the
+     * snapshot would come back missing every event since the one before. {@link #lastSeq} makes the
+     * other order harmless; this is what keeps this one from happening.
+     *
+     * <p>Best effort, and it has to be. A directory cannot be opened as a file on Windows, which
+     * throws here, and there the ordering is left to the filesystem — as it was everywhere until
+     * this existed. Failing a snapshot over it would be the worse trade: the state it has just
+     * written is good, and refusing to go on would take the hub down over a durability hint.
+     */
+    private void syncDir() {
+        try (FileChannel c = FileChannel.open(dir, StandardOpenOption.READ)) {
+            c.force(true);
+        } catch (IOException | UnsupportedOperationException e) {
+            LOG.debug("cannot fsync the state directory: {}", e.toString());
+        }
     }
 
     /** The whole state as the snapshot file's JSON: a version, the next node id, and replayable events. */
@@ -765,7 +841,10 @@ final class Store implements AutoCloseable {
         if (nextHubKey != null) {
             events.add(JsonObject.builder().put("e", "hubkey-rotation").put("next", nextHubKey).put("activatesAt", hubKeyActivatesAt).build().asMap());
         }
-        return JsonObject.builder().put("v", STATE_VERSION).put("nextNodeId", nextNodeId).put("events", events).toJson();
+        // `seq` is how far into the log this snapshot reaches, so a log that outlives its own
+        // truncation can be replayed without counting anything twice (see lastSeq).
+        return JsonObject.builder().put("v", STATE_VERSION).put("nextNodeId", nextNodeId)
+            .put("seq", lastSeq).put("events", events).toJson();
     }
 
     @Override

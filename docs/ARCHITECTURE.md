@@ -447,6 +447,24 @@ An append-only JSON Lines event log plus in-memory state, replayed at startup. E
 snapshots are renamed into place. `jailhub serve` is the only writer; admin commands ask the running
 server over IPC.
 
+**A snapshot cannot install itself and empty the log in one step, so replay is made idempotent
+instead.** `snapshot()` renames the new file into place and then truncates the log it has just
+folded in; between those the directory holds both, and nothing forces the truncation to disk, so a
+machine that loses power inside the filesystem's commit interval comes back to that pair rather than
+to a state that merely passed through it. Most events survive being replayed twice because they are
+`put`s landing on the value already there. Three do not: `invite-used` and `authkey-used` subtract,
+`notice-added` appends. Replayed twice, an invite quietly spends a use nobody spent, a two-use
+auth-key with one use to go is **deleted** — `authkey-used` removes the record at zero, so the CI
+runner holding it is locked out with nothing in any log to say why — and a node is told twice about
+one revoked name. So every appended event carries a sequence number `s`, each snapshot records the
+last it folded in as `seq`, and a line at or below that is skipped on load. The numbering is local
+to one log and carries on across a restart; a standby stamps its own rather than the primary's,
+since the number means a place in a particular file. Between the rename and the truncation the
+directory entry is fsynced, which is what keeps the *other* order — a durably emptied log beside a
+snapshot that never landed — from losing the events in between; that one is best effort, because a
+directory cannot be opened as a file on Windows. `StoreCrashTest` holds both directions: the three
+arithmetic events replayed, and an event after a restart not mistaken for one the snapshot holds.
+
 ```
 $JAILHUB_STATE/            (default /var/lib/jailhub, else ~/.local/share/jailhub)
 ├── hub.key                hub static private key (0600); hub.key.next during a rotation
@@ -464,8 +482,12 @@ On a standby (§13.1) the same directory is the primary's, kept current over the
 The snapshot carries a format version `v`, and the hub **refuses to start** when it is higher than
 the version it understands. Adding fields or events within a version is compatible both ways and
 unknown events are skipped with a warning, so a rollback is safe in that range; `v` is bumped only
-for changes that would make an older binary *misread existing data*. A hub that cannot read its state
-should stop rather than come up holding part of it. In memory the state is plain maps (nodes, names,
+for changes that would make an older binary *misread existing data*. `s` and `seq` above were added
+under that rule and not with a bump: an older binary ignores them and replays the whole log, which is
+what it does with its own state anyway, so a rollback gets the old defect back rather than a new
+misreading — and a state written before they existed reads a missing `seq` as zero, skips nothing,
+and behaves exactly as it used to until the first snapshot the newer binary writes. A hub that cannot
+read its state should stop rather than come up holding part of it. In memory the state is plain maps (nodes, names,
 domains, ports, credential hashes, admins, the pending queue, undelivered notices), which is the
 simplest thing that works up to thousands of names.
 
