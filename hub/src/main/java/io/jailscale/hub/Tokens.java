@@ -1,8 +1,6 @@
 package io.jailscale.hub;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import io.jailscale.proto.util.Sha256;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -61,12 +59,7 @@ final class Tokens {
     }
 
     static String hash(String secret) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(secret.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
+        return Sha256.hex(secret);
     }
 
     static String id(String prefix) {

@@ -5,16 +5,15 @@ import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.tls.Tls13;
 import io.jailscale.proto.util.Log;
+import io.jailscale.proto.util.Sha256;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
-import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -153,7 +152,6 @@ final class HubTls {
     }
 
     static String keyId(X509Certificate leaf) throws GeneralSecurityException {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        return "sha256:" + HexFormat.of().formatHex(md.digest(leaf.getEncoded())).substring(0, 16);
+        return "sha256:" + Sha256.hex(leaf.getEncoded()).substring(0, 16);
     }
 }
