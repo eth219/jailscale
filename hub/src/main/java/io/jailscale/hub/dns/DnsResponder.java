@@ -60,11 +60,21 @@ public final class DnsResponder implements AutoCloseable {
      * addresses serving, and the name servers the parent delegates to.
      */
     public interface Zone {
-        /** IPv4 addresses answered for the apex and every name under it, in order. Empty: NODATA. */
+        /** IPv4 addresses answered for a name whose node is nowhere in particular, in order. Empty: NODATA. */
         List<String> serving();
 
         /** Name-server label (e.g. {@code ns1}) to IPv4 address, as delegated at the parent; empty when not. */
         Map<String, String> nameServers();
+
+        /** The apex: where the control channel, joining and the admin pages are (§13.4). Defaults to the serving set. */
+        default List<String> control() {
+            return serving();
+        }
+
+        /** One label under the apex: the hosts that node is on (§13.4). Defaults to the serving set. */
+        default List<String> forName(String label) {
+            return serving();
+        }
     }
 
     private static final Zone NOTHING = new Zone() {
@@ -302,7 +312,7 @@ public final class DnsResponder implements AutoCloseable {
         List<byte[]> answers = new ArrayList<>();
         List<byte[]> additional = new ArrayList<>();
         if (qtype == TYPE_A) {
-            for (String a : z.serving()) {
+            for (String a : z.control()) {
                 byte[] rd = ipv4(a);
                 if (rd != null) {
                     answers.add(rr(TYPE_A, TTL_ADDRESS, rd));
@@ -346,9 +356,10 @@ public final class DnsResponder implements AutoCloseable {
                 }
             }
         } else if (qtype == TYPE_A) {
-            // The wildcard: every published name, and any label at all, is served by the hosts
-            // serving right now. Whether the name is open is the SNI router's question, not DNS's.
-            for (String a : z.serving()) {
+            // A single label is a published name, answered with the hosts its node is on; anything
+            // deeper, or a name nobody holds, gets the hosts serving right now, where the "not open"
+            // page is. Whether the name is open is the SNI router's question, not DNS's.
+            for (String a : label.indexOf('.') < 0 ? z.forName(label) : z.serving()) {
                 byte[] rd = ipv4(a);
                 if (rd != null) {
                     answers.add(rr(TYPE_A, TTL_ADDRESS, rd));

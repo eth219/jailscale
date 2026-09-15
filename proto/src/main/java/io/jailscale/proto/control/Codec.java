@@ -21,13 +21,21 @@ public final class Codec {
     public static String encodeToString(Message m) {
         JsonObject.Builder b = JsonObject.builder().put("t", m.type());
         switch (m) {
-            case Message.Hello x -> b.put("proto", x.proto()).put("version", x.version()).put("os", x.os())
-                .put("conn", x.conn()).put("host", x.host())
-                // Omitted when the node does not advertise one, so a node with no bound to declare
-                // puts the same bytes on the wire as a build from before the field existed.
-                .put("visitors", x.visitors() > 0 ? Integer.valueOf(x.visitors()) : null);
+            case Message.Hello x -> {
+                b.put("proto", x.proto()).put("version", x.version()).put("os", x.os())
+                    .put("conn", x.conn()).put("host", x.host())
+                    // Omitted when the node does not advertise one, so a node with no bound to declare
+                    // puts the same bytes on the wire as a build from before the field existed.
+                    .put("visitors", x.visitors() > 0 ? Integer.valueOf(x.visitors()) : null);
+                if (x.relay()) {
+                    b.put("relay", true); // same rule: a control connection's Hello is the wire it always was
+                }
+            }
             case Message.HelloResponse x -> b.put("proto", x.proto()).put("minProto", x.minProto())
-                .put("version", x.version()).put("dnsSuffix", x.dnsSuffix());
+                .put("version", x.version()).put("dnsSuffix", x.dnsSuffix())
+                .put("relays", x.relays() == null || x.relays().isEmpty() ? null : x.relays());
+            case Message.RelaysChanged x -> b.put("relays", x.relays());
+            case Message.PeerNodes x -> b.put("mkeys", x.mkeys());
             case Message.Goodbye x -> b.put("reason", x.reason()).put("detail", x.detail());
             case Message.Ping x -> b.put("id", x.id());
             case Message.Pong x -> b.put("id", x.id());
@@ -58,9 +66,9 @@ public final class Codec {
             case Message.ChallengeClear x -> b.put("token", x.token());
             case Message.Ack x -> b.put("inReplyTo", x.inReplyTo());
             case Message.PeerHello x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host())
-                .put("address", x.address());
+                .put("address", x.address()).put("endpoint", x.endpoint());
             case Message.PeerHelloResponse x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host())
-                .put("address", x.address());
+                .put("address", x.address()).put("endpoint", x.endpoint());
             case Message.PeerChallenge x -> b.put("txt", x.txt());
             case Message.PeerSnapshot x -> b.put("json", x.json());
             case Message.PeerEvent x -> b.put("json", x.json());
@@ -83,9 +91,9 @@ public final class Codec {
             String t = o.string("t");
             return switch (t) {
                 case "Hello" -> new Message.Hello(o.integer("proto"), o.string("version"), o.optString("os", ""),
-                    o.optInt("conn", 0), o.optString("host", null), o.optInt("visitors", 0));
+                    o.optInt("conn", 0), o.optString("host", null), o.optInt("visitors", 0), o.optBool("relay", false));
                 case "HelloResponse" -> new Message.HelloResponse(o.integer("proto"), o.integer("minProto"),
-                    o.string("version"), o.optString("dnsSuffix", null));
+                    o.string("version"), o.optString("dnsSuffix", null), o.has("relays") ? o.stringArray("relays") : null);
                 case "Goodbye" -> new Message.Goodbye(o.string("reason"), o.optString("detail", null));
                 case "Ping" -> new Message.Ping(o.lng("id"));
                 case "Pong" -> new Message.Pong(o.lng("id"));
@@ -116,14 +124,16 @@ public final class Codec {
                 case "ChallengeClear" -> new Message.ChallengeClear(o.string("token"));
                 case "Ack" -> new Message.Ack(o.optString("inReplyTo", null));
                 case "PeerHello" -> new Message.PeerHello(o.integer("proto"), o.string("version"), o.optString("host", null),
-                    o.optString("address", null));
+                    o.optString("address", null), o.optString("endpoint", null));
                 case "PeerHelloResponse" -> new Message.PeerHelloResponse(o.integer("proto"), o.string("version"),
-                    o.optString("host", null), o.optString("address", null));
+                    o.optString("host", null), o.optString("address", null), o.optString("endpoint", null));
                 case "PeerChallenge" -> new Message.PeerChallenge(o.has("txt") ? o.stringArray("txt") : List.of());
                 case "PeerSnapshot" -> new Message.PeerSnapshot(o.string("json"));
                 case "PeerEvent" -> new Message.PeerEvent(o.string("json"));
                 case "PeerCert" -> new Message.PeerCert(o.stringArray("chainPem"), o.string("keyPem"), o.string("keyId"));
                 case "PeerHubKey" -> new Message.PeerHubKey(o.string("current"), o.optString("next", null));
+                case "RelaysChanged" -> new Message.RelaysChanged(o.has("relays") ? o.stringArray("relays") : List.of());
+                case "PeerNodes" -> new Message.PeerNodes(o.has("mkeys") ? o.stringArray("mkeys") : List.of());
                 // Not an error (ARCHITECTURE.md §5.4): a peer speaking a newer protocol may add
                 // message types, and this build has to stay on the channel when it does. The type
                 // is truncated because it reaches a log line and comes off the wire.

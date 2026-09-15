@@ -51,6 +51,12 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private String mkey;
     private int conn;
     /**
+     * A relay connection (ARCHITECTURE.md §13.4): opened by a node that has its control
+     * connection elsewhere, to serve visitors who reach this host. It registers nothing and asks
+     * for nothing that writes; it opens the links its node already holds, and it signs.
+     */
+    private boolean relay;
+    /**
      * What the node said it will hold (ARCHITECTURE.md §9.3), or 0 from a node that does not say --
      * every build before the field existed, and any build that chose not to. 0 means "no bound the
      * hub knows of" and puts admission back where it was: the hub's own caps and the node's reset.
@@ -81,6 +87,10 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     int conn() {
         return conn;
+    }
+
+    boolean isRelay() {
+        return relay;
     }
 
     Store.NodeRec node() {
@@ -124,6 +134,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             boolean[] rejected = new boolean[1];
             String[] peerHost = new String[1];
             String[] peerAddress = new String[1];
+            String[] peerEndpoint = new String[1];
             NoiseChannel ch = NoiseChannel.respond(in, out, hub.keys().responders(), (p1, hs) -> {
                 Message m;
                 try {
@@ -145,19 +156,22 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                     }
                     peerHost[0] = ph.host() == null ? remoteIp : ph.host();
                     peerAddress[0] = ph.address();
+                    peerEndpoint[0] = ph.endpoint();
                     LOG.info("standby {} from {} (v{}{})", peerHost[0], remoteIp, ph.version(),
                         ph.address() == null ? "" : ", advertises " + ph.address());
                     return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
-                        hub.advertisedAddress()));
+                        hub.advertisedAddress(), hub.relayEndpoint()));
                 }
                 mkey = KeyText.format(KeyText.MACHINE, hs.remoteStatic());
                 if (!(m instanceof Message.Hello hello)) {
                     throw new NoiseException("first message must be Hello, got " + m.type());
                 }
-                if (hub.isStandby()) {
+                relay = hello.relay();
+                if (hub.isStandby() && !relay) {
                     // Told where to go rather than served: a standby holds no registration that a
                     // node could act on, and the reason is not one the node stops retrying for, so
-                    // it keeps trying until DNS moves or this hub is promoted.
+                    // it keeps trying until DNS moves or this hub is promoted. A relay connection
+                    // is the exception (§13.4): it wants nothing written, only its links served.
                     rejected[0] = true;
                     return Codec.encode(new Message.Goodbye("standby", "this hub is a standby of "
                         + hub.config().peer().getHost() + " and takes no nodes until it is promoted"));
@@ -175,19 +189,22 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 }
                 conn = hello.conn();
                 visitorCeiling = hello.visitors();
-                if (conn < 0 || conn >= MAX_CONNECTIONS || (conn > 0 && hub.store().node(mkey) == null)) {
+                if (conn < 0 || conn >= MAX_CONNECTIONS || ((conn > 0 || relay) && hub.store().node(mkey) == null)) {
                     rejected[0] = true;
                     return Codec.encode(new Message.Goodbye("bad-connection-index"));
                 }
-                LOG.info("node {} conn {} from {} (v{}, {})", mkey, conn, remoteIp, hello.version(), hello.os());
-                hub.reachedBy(hello.host(), remoteIp);
-                return Codec.encode(new Message.HelloResponse(Message.PROTO, MIN_PROTO, Hub.version(), hub.config().dnsSuffix()));
+                LOG.info("node {} conn {}{} from {} (v{}, {})", mkey, conn, relay ? " (relay)" : "", remoteIp, hello.version(), hello.os());
+                if (!relay) {
+                    hub.reachedBy(hello.host(), remoteIp);
+                }
+                return Codec.encode(new Message.HelloResponse(Message.PROTO, MIN_PROTO, Hub.version(), hub.config().dnsSuffix(),
+                    relay ? null : hub.relaysForNodes()));
             });
             if (rejected[0]) {
                 return;
             }
             if (peerHost[0] != null) {
-                hub.peers().new Session(remoteIp, peerHost[0], peerAddress[0]).run(ch);
+                hub.peers().new Session(remoteIp, peerHost[0], peerAddress[0], peerEndpoint[0]).run(ch);
                 return;
             }
             Metrics.NODE_SESSIONS.increment();
@@ -199,10 +216,10 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             node = hub.store().node(mkey);
             mux = new MuxSession(ch, true, this, hub.flowBudget());
             group = hub.registry().attach(this);
-            if (conn == 0 && node != null && hub.tls().isLoaded()) {
+            if ((conn == 0 || relay) && node != null && hub.tls().isLoaded()) {
                 send(hub.tls().certUpdate());
             }
-            if (conn == 0 && node != null) {
+            if (conn == 0 && node != null && !hub.isStandby()) {
                 deliverNotices();
             }
             mux.run();
@@ -269,10 +286,19 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 send(new Message.Error(u.type(), "unknown-type"));
             }
             default -> {
-                if (conn != 0) {
+                if (conn != 0 && !relay) {
                     LOG.warn("node {} conn {}: {} is only valid on the control connection", mkey, conn, m.type());
                     send(new Message.Error(m.type(), "control-connection-only"));
                     return true;
+                }
+                if (relay || hub.isStandby()) {
+                    // What a relay connection, or any connection to a standby, may ask for: its
+                    // links opened (from the replicated store, no write) and closed. Everything
+                    // else changes state, and only the primary's control connection does that.
+                    if (!(m instanceof Message.LinkOpen) && !(m instanceof Message.LinkClose)) {
+                        send(new Message.Error(m.type(), "primary-only"));
+                        return true;
+                    }
                 }
                 return handleControl(m);
             }
@@ -439,7 +465,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     /** Pushes a certificate change to a registered node. */
     void certChanged() {
-        if (node != null && conn == 0) {
+        if (node != null && (conn == 0 || relay)) {
             try {
                 sendCert();
             } catch (IOException e) {

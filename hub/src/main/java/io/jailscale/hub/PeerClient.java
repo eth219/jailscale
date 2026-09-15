@@ -59,6 +59,10 @@ final class PeerClient implements AutoCloseable {
     private volatile long lastEventAt;
     /** The address the primary advertises for itself (§13.3), from its hello; null until told. */
     private volatile String primaryAddress;
+    /** The nodes attached to the primary, as it last said (§13.4). */
+    private volatile java.util.Set<String> primaryNodes = java.util.Set.of();
+    /** What a node dials to reach the primary (§13.4), from its hello. */
+    private volatile String primaryEndpoint;
     private volatile MuxSession mux;
     private Thread thread;
 
@@ -101,6 +105,26 @@ final class PeerClient implements AutoCloseable {
     /** What the primary said its public address is, or null. */
     String primaryAddress() {
         return primaryAddress;
+    }
+
+    java.util.Set<String> primaryNodes() {
+        return primaryNodes;
+    }
+
+    String primaryEndpoint() {
+        return primaryEndpoint != null ? primaryEndpoint : primaryAddress;
+    }
+
+    /** Sends {@code m} to the primary, if connected; a standby has one thing to say, which nodes it holds. */
+    void send(Message m) {
+        MuxSession s = mux;
+        if (s != null && !s.isClosed()) {
+            try {
+                s.control(Codec.encode(m));
+            } catch (IOException e) {
+                LOG.debug("could not send {} to the primary: {}", m.type(), e.getMessage());
+            }
+        }
     }
 
     synchronized void start() {
@@ -152,7 +176,8 @@ final class PeerClient implements AutoCloseable {
             // given, and the responder it expects is the same key. Completing IK proves the copy.
             NoiseIk hs = NoiseIk.initiator(HubKeys.PROLOGUE, hub.keys().current(), hub.keys().current().publicKey());
             byte[][] payload2 = new byte[1][];
-            Message hello = new Message.PeerHello(Message.PROTO, Hub.version(), hub.config().hostname(), hub.advertisedAddress());
+            Message hello = new Message.PeerHello(Message.PROTO, Hub.version(), hub.config().hostname(), hub.advertisedAddress(),
+                hub.relayEndpoint());
             ch = NoiseChannel.initiate(s.getInputStream(), s.getOutputStream(), hs, Codec.encode(hello), payload2);
             Message m = Codec.decode(payload2[0]);
             if (m instanceof Message.Goodbye g) {
@@ -166,6 +191,7 @@ final class PeerClient implements AutoCloseable {
             if (hr.address() != null) {
                 primaryAddress = hr.address();
             }
+            primaryEndpoint = hr.endpoint();
             s.setSoTimeout(IDLE_TIMEOUT_MS);
         } catch (HttpException | CodecException e) {
             s.close();
@@ -182,13 +208,18 @@ final class PeerClient implements AutoCloseable {
         MuxSession session = new MuxSession(ch, false, new Listener(), hub.flowBudget());
         mux = session;
         try {
+            // Queued before the session runs: the writer takes it as its first frame after the hello.
+            send(new Message.PeerNodes(hub.registry().machineKeys()));
+            hub.relaysChanged();
             session.run();
         } finally {
             mux = null;
             connected = false;
             synced = false;
+            primaryNodes = java.util.Set.of();
             hub.availability().peerDown(host, System.currentTimeMillis());
             session.close();
+            hub.relaysChanged();
         }
     }
 
@@ -217,6 +248,7 @@ final class PeerClient implements AutoCloseable {
                 case Message.PeerCert pc -> installCert(pc);
                 case Message.PeerHubKey pk -> hub.keys().installFromPeer(pk.current(), pk.next());
                 case Message.PeerChallenge pc -> hub.challengeFromPrimary(pc.txt());
+                case Message.PeerNodes pn -> primaryNodes = java.util.Set.copyOf(pn.mkeys());
                 case Message.Ping p -> session.control(Codec.encode(new Message.Pong(p.id())));
                 case Message.Goodbye g -> {
                     LOG.info("primary said goodbye: {}", g.reason());

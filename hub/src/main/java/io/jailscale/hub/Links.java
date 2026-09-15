@@ -86,11 +86,21 @@ final class Links {
         return name.contains(".") ? null : name;
     }
 
+    private volatile java.util.function.BooleanSupplier standby = () -> false;
+
+    /** Whether this hub is a standby (§13.4), which decides what {@link #open} may write: nothing. */
+    void standby(java.util.function.BooleanSupplier standby) {
+        this.standby = standby;
+    }
+
     /** Handles LinkOpen from a registered node. */
     synchronized Message open(NodeSession s, Message.LinkOpen req) throws IOException {
         Store.NodeRec node = s.node();
         if (node == null) {
             return new Message.LinkOpened(null, null, null, null, "not-registered");
+        }
+        if (standby.getAsBoolean() || s.isRelay()) {
+            return reopen(s, node, req);
         }
         if (TCP.equals(req.kind()) || UDP.equals(req.kind())) {
             return openRaw(s, node, req);
@@ -150,6 +160,57 @@ final class Links {
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
+        return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null, null);
+    }
+
+    /**
+     * A link opened on a host that must not write (ARCHITECTURE.md §13.4): a standby, or any host
+     * reached by a relay connection. The name or domain has to be one the replicated store already
+     * gives this node -- the primary assigned it, and the assignment arrived over the hub-to-hub
+     * channel -- so nothing here claims, reassigns, notifies or allocates. A name this node does
+     * not hold, a random name it has not been given yet, and every raw port are the primary's to
+     * answer, and are refused with {@code primary-only} so the node asks there.
+     */
+    private Message reopen(NodeSession s, Store.NodeRec node, Message.LinkOpen req) {
+        if (!Message.LinkOpen.HTTPS.equals(req.kind())) {
+            return new Message.LinkOpened(null, null, null, null, "primary-only");
+        }
+        if (req.domain() != null) {
+            String domain = req.domain().toLowerCase(Locale.ROOT);
+            Store.DomainRec rec = store.domain(domain);
+            if (rec == null || !rec.mkey().equals(node.mkey())) {
+                return new Message.LinkOpened(null, null, null, null, "primary-only");
+            }
+            String problem = domains.verify(domain, req.chainPem(), s.handshakeHash(), req.domainProof());
+            if (problem != null) {
+                return new Message.LinkOpened(null, null, null, null, problem);
+            }
+            Link existing = byDomain.get(domain);
+            if (existing != null && existing.group() != s.group()) {
+                byId.remove(existing.linkId());
+            }
+            Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
+            byDomain.put(domain, link);
+            byId.put(link.linkId(), link);
+            LOG.info("domain {} reopened here by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
+            return new Message.LinkOpened(link.linkId(), domain, "https://" + domain + portSuffix(), null, null);
+        }
+        if (req.name() == null) {
+            return new Message.LinkOpened(null, null, null, null, "primary-only");
+        }
+        String name = req.name().toLowerCase(Locale.ROOT);
+        Store.NameRec rec = store.name(name);
+        if (rec == null || !node.mkey().equals(rec.mkey())) {
+            return new Message.LinkOpened(null, null, null, null, "primary-only");
+        }
+        Link existing = byName.get(name);
+        if (existing != null && existing.group() != s.group()) {
+            byId.remove(existing.linkId());
+        }
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
+        byName.put(name, link);
+        byId.put(link.linkId(), link);
+        LOG.info("link {} reopened here by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
         return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null, null);
     }
 
