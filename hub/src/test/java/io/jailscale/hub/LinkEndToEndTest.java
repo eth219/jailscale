@@ -222,6 +222,73 @@ class LinkEndToEndTest {
     }
 
     /**
+     * The directory at {@code /links}, fetched the way a stranger fetches it. It has to name what
+     * the hub is serving and say how busy each one is, and it has to give away no more than the
+     * front page did: the owner and the local target are still the admin's business. The visitor
+     * count is held open deliberately -- a visitor that finishes its handshake and then says
+     * nothing sits in the node's serve(), which is what makes the number deterministic here.
+     */
+    @Test
+    void theDirectorySaysWhatIsServedAndHowManyAreOnItWithoutSayingWhose() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+
+        String empty = visit("hub.test", "/links").bodyText();
+        assertTrue(empty.contains("None open right now"), empty);
+
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
+        waitFor(() -> hub.links().byName("myapp") != null);
+
+        String idle = visit("hub.test", "/links").bodyText();
+        assertTrue(idle.contains("<a href=\"https://myapp.hub.test\">myapp.hub.test</a>"), idle);
+        assertTrue(idle.contains("&middot; open "), "how long it has been open: " + idle);
+        assertFalse(idle.contains("&middot; 1 visitor"), "nothing is connected, so no count is claimed: " + idle);
+        assertFalse(idle.contains("alice"), "the owner must not be on the public page: " + idle);
+        assertFalse(idle.contains("127.0.0.1:" + localApp.getLocalPort()),
+            "the local target must not be on the public page: " + idle);
+        assertFalse(idle.contains("mkey:"), idle);
+
+        try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), "myapp.hub.test", "127.0.0.1", port, true, 10_000)) {
+            s.startHandshake(); // and then nothing, so the visitor is still there when the page is built
+            waitFor(() -> hub.router().visitorsFor("myapp") == 1);
+            String busy = visit("hub.test", "/links").bodyText();
+            assertTrue(busy.contains("&middot; 1 visitor &middot;"), busy);
+        }
+        waitFor(() -> hub.router().visitorsFor("myapp") == 0);
+        assertFalse(visit("hub.test", "/links").bodyText().contains("&middot; 1 visitor"),
+            "the count is what is open now, not a total");
+    }
+
+    /**
+     * Why the directory exists: the link list is the only part of the front page with no fixed
+     * length, so the front page keeps a few and the rest is one click away rather than something
+     * a visitor scrolls past to reach the limits.
+     */
+    @Test
+    void theFrontPageKeepsAFewLinksAndSendsTheRestToTheDirectory() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        for (int i = 0; i < 9; i++) {
+            ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "app" + i)));
+        }
+        waitFor(() -> hub.links().all().size() == 9);
+
+        String home = visit("hub.test", "/").bodyText();
+        assertTrue(home.contains("app0.hub.test"), home);
+        assertFalse(home.contains("app8.hub.test"), "the ninth belongs on the directory: " + home);
+        assertTrue(home.contains("All 9 open links"), home);
+
+        String directory = visit("hub.test", "/links").bodyText();
+        for (int i = 0; i < 9; i++) {
+            assertTrue(directory.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + directory);
+        }
+    }
+
+    /**
      * The node's half of the hub's in-flight gauge (ARCHITECTURE.md §14). What a node holds per
      * visitor is tens of kilobytes of TLS state, and RSS was the only way to see how many it held --
      * a number that cannot tell visitors from a leak or from the heap expanding into its ceiling.

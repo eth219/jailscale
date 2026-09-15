@@ -86,6 +86,16 @@ final class SniRouter {
         return current.get();
     }
 
+    /**
+     * Visitors being relayed for one name right now, read from the same map the per-name cap is
+     * enforced in. Only names and domains pass through here, so a raw port reads 0 and the links
+     * page prints nothing for one rather than a zero it did not measure.
+     */
+    int visitorsFor(String name) {
+        AtomicInteger c = perName.get(name);
+        return c == null ? 0 : c.get();
+    }
+
     /** Serves one accepted raw connection to completion. */
     void serve(Socket socket) {
         long acceptedAt = System.nanoTime();

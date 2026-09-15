@@ -36,8 +36,15 @@ final class HttpFront {
     static final double HANDSHAKE_PER_SECOND = 1.0;
     /** Where the page sends someone who does not have the binary yet. */
     private static final String REPO = "https://github.com/eth219/jailscale";
-    /** How many open links the page lists before it stops and says how many are left. */
-    private static final int LINKS_SHOWN = 50;
+    /** How many open links the front page shows before it hands over to the directory at /links. */
+    private static final int LINKS_ON_HOME = 8;
+    /**
+     * How many the directory itself lists before it stops and says how many are left. Of everything
+     * these pages print this is the only part with no fixed length -- twenty links per node
+     * (ARCHITECTURE.md §8.2) and no bound on nodes -- and it is answered without a session to
+     * anyone who asks, so it has a ceiling like every other unauthenticated answer here.
+     */
+    private static final int LINKS_SHOWN = 200;
 
     private final Hub hub;
     private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
@@ -131,6 +138,9 @@ final class HttpFront {
         }
         if (path.equals("/")) {
             return HttpResponse.html(200, page("jailscale hub", home(req))).header("Cache-Control", "no-store");
+        }
+        if (path.equals("/links")) {
+            return HttpResponse.html(200, page("Open links", directory())).header("Cache-Control", "no-store");
         }
         return HttpResponse.text(404, "not found");
     }
@@ -299,7 +309,7 @@ final class HttpFront {
      * controls over it appear only for a signed-in admin, since that is who and where.
      */
     private String home(HttpRequest req) {
-        StringBuilder b = new StringBuilder();
+        StringBuilder b = new StringBuilder(nav("/"));
         String host = escape(hub.config().hostname());
         b.append("<p><code>").append(host).append("</code> is a jailscale hub. It publishes a port on your")
             .append(" machine over HTTPS without opening an inbound port: the hub relays the bytes and your")
@@ -418,23 +428,19 @@ final class HttpFront {
             .append(" what this hub says about itself, so they tell you an operator is running what they think they")
             .append(" are; a dishonest hub prints whatever it likes here.</small></p>");
 
-        // What this hub is actually serving. The addresses are public by construction -- a visitor
-        // reaches one by typing it -- so listing them tells nobody anything a DNS lookup would not.
-        // Who owns a name and which local port it reaches are a different matter and stay behind the
-        // admin session, as the node list does.
+        // A taste of what this hub is serving, and the directory for the rest. The whole list used
+        // to be here, which made the one section that grows without bound the one a visitor
+        // scrolled through to reach the limits: every other section on this page has a fixed
+        // length. The rows are the directory's rows, so the two pages are one list and not two
+        // designs; what /links adds is the rest of them and what they mean.
         b.append("<h2>Open links</h2>");
-        List<Links.Link> links = new ArrayList<>(hub.links().all());
-        links.sort(Comparator.comparing(Links.Link::name));
+        List<Links.Link> links = sortedLinks();
         if (links.isEmpty()) {
             b.append("<p>None open right now.</p>");
         } else {
-            b.append("<table>");
-            for (Links.Link l : links.subList(0, Math.min(links.size(), LINKS_SHOWN))) {
-                row(b, address(l), l.kind());
-            }
-            b.append("</table>");
-            if (links.size() > LINKS_SHOWN) {
-                b.append("<p>and ").append(links.size() - LINKS_SHOWN).append(" more.</p>");
+            linkRows(b, links, LINKS_ON_HOME);
+            if (links.size() > LINKS_ON_HOME) {
+                b.append("<p><a href=\"/links\">All ").append(links.size()).append(" open links &rarr;</a></p>");
             }
         }
 
@@ -471,6 +477,87 @@ final class HttpFront {
                 "<input type=hidden name=csrf value=\"" + escape(s.csrf()) + "\">", "/"));
         }
         return b.toString();
+    }
+
+    /**
+     * The directory: everything this hub is serving, on a URL of its own so that it is something
+     * one person can send another. Splitting it off rather than folding the page into scripted
+     * tabs keeps both halves linkable and keeps the no-script bargain the rest of this front end
+     * makes.
+     *
+     * <p>Three facts per link, and every one of them is something the hub already holds for its
+     * own routing: the address, which is public by construction because a visitor reaches it by
+     * typing it; how many visitors are being relayed to it at this instant; and how long it has
+     * been open. Nothing here is fetched from the link itself. A thumbnail or a favicon would mean
+     * the hub connecting to a node's app as a visitor and republishing what came back on its own
+     * front page -- which is the one thing the front page tells people it does not do -- and would
+     * put whatever anyone who can join chooses to serve on the operator's page. Who owns a name and
+     * which local port it reaches stay behind the admin session, as the node list does.
+     */
+    private String directory() {
+        StringBuilder b = new StringBuilder(nav("/links"));
+        List<Links.Link> links = sortedLinks();
+        if (links.isEmpty()) {
+            b.append("<p>None open right now. <a href=\"/\">What this hub is</a>.</p>");
+            return b.toString();
+        }
+        b.append("<p>").append(links.size()).append(links.size() == 1 ? " link is" : " links are")
+            .append(" being served through <code>").append(escape(hub.config().hostname()))
+            .append("</code> right now. Each is somebody's own machine; the hub relays the bytes and")
+            .append(" does not terminate the TLS, so what is behind one of these is between you and it.</p>");
+        linkRows(b, links, LINKS_SHOWN);
+        if (links.size() > LINKS_SHOWN) {
+            b.append("<p>and ").append(links.size() - LINKS_SHOWN).append(" more.</p>");
+        }
+        b.append("<p><small>A visitor count is the connections open at the moment this page was")
+            .append(" built, not a total, and a link with none says nothing rather than zero. \"Open\"")
+            .append(" is since the link was opened: a node that restarts or hands its name to another")
+            .append(" machine opens a new one, so this counts the current one, not the name.</small></p>");
+        return b.toString();
+    }
+
+    /**
+     * One row per link, up to {@code limit}: the address, and beside it the three things the hub
+     * already knows for its own routing. Nothing here is fetched from the link itself.
+     */
+    private void linkRows(StringBuilder b, List<Links.Link> links, int limit) {
+        long now = System.currentTimeMillis();
+        b.append("<table class=\"links\">");
+        for (Links.Link l : links.subList(0, Math.min(links.size(), limit))) {
+            StringBuilder facts = new StringBuilder(escape(l.kind()));
+            // Only names and domains are counted per name, so a raw port says nothing here rather
+            // than a zero that would read as "nobody is connected" when it means "not measured".
+            if (!l.raw()) {
+                int v = hub.router().visitorsFor(l.name());
+                if (v > 0) {
+                    facts.append(" &middot; ").append(v).append(v == 1 ? " visitor" : " visitors");
+                }
+            }
+            facts.append(" &middot; open ").append(Resources.humanDuration(now - l.openedAt()));
+            row(b, address(l), facts.toString());
+        }
+        b.append("</table>");
+    }
+
+    /** Every live link, in the order a directory wants them. */
+    private List<Links.Link> sortedLinks() {
+        List<Links.Link> links = new ArrayList<>(hub.links().all());
+        links.sort(Comparator.comparing(Links.Link::name));
+        return links;
+    }
+
+    /**
+     * The two public pages, as links and not as tabs a script swaps: each keeps its own URL, so
+     * either can be handed to someone, and neither needs a script to arrive at. The page you are
+     * on is not a link to itself.
+     */
+    private static String nav(String here) {
+        return "<nav>" + tab("/", "Hub", here) + tab("/links", "Links", here) + "</nav>";
+    }
+
+    private static String tab(String path, String label, String here) {
+        return path.equals(here) ? "<span aria-current=\"page\">" + label + "</span>"
+            : "<a href=\"" + path + "\">" + label + "</a>";
     }
 
     /**
@@ -525,6 +612,8 @@ final class HttpFront {
             + "h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);"
             + "font-weight:600;margin:2.75rem 0 .5rem}"
             + "p{margin:.75rem 0}a{color:var(--link)}"
+            + "nav{display:flex;gap:1.25rem;margin:-.25rem 0 2rem;font-size:.9rem}"
+            + "nav [aria-current]{color:var(--ink);font-weight:600}"
             + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%;margin:.25rem 0}"
             + "svg.avail{display:block;margin:.5rem 0 0;max-width:100%}td small{margin:.2rem 0 0}"
@@ -533,6 +622,9 @@ final class HttpFront {
             + "td{padding:.5rem 0;text-align:left;border-top:1px solid var(--rule);vertical-align:baseline}"
             + "tr:first-child td{border-top:0}"
             + "td:first-child{width:11rem;color:var(--dim);padding-right:1rem}"
+            // The directory is a list, not label-and-value: its first column is the address and
+            // carries the weight, so it takes the width it needs and the facts beside it recede.
+            + "table.links td:first-child{width:auto;color:inherit}table.links td+td{color:var(--dim)}"
             + "td code{word-break:break-all}"
             + "small{color:var(--dim);font-size:.85rem;line-height:1.55;display:block;margin:.75rem 0}"
             + "@media(max-width:30rem){td,td:first-child{display:block;width:auto;padding:0}"

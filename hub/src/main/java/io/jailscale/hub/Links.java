@@ -25,7 +25,19 @@ final class Links {
 
     /** An active link: a name served by a node (all of its connections). */
     record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port,
-        String domain) {
+        String domain, long openedAt) {
+
+        /**
+         * Every link is opened now, so the clock is read here rather than at each of the five
+         * places that build one. {@code openedAt} is when this link opened, not when the name was
+         * claimed: a node that reconnects or hands a name over opens a new link and the clock
+         * starts again, which is what the directory means by "open for".
+         */
+        Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port,
+            String domain) {
+            this(linkId, name, kind, user, mkey, group, local, port, domain, System.currentTimeMillis());
+        }
+
         boolean raw() {
             return port > 0;
         }

@@ -217,11 +217,12 @@ TCP 443, SNI = hub.example.com
 ```
 
 Both HTTP ends are hand-written (§3.1): the hub's front is about 300 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*` and a root page, the node's client about 40, and the socket
-read timeout is 60 s. WebSocket was rejected as the carrier because its 4-byte client-to-server
-masking would touch every visitor byte again, frame headers and close semantics come with it, and it
-would only help behind proxies passing `Upgrade: websocket` when SNI passthrough already rules out an
-HTTP proxy in front of the hub (§7.2). ALPN is pinned to `http/1.1`, because HTTP/2 has no Upgrade.
+`/v1/noise`, `/join/<token>`, `/admin/*`, a root page and the link directory, the node's client
+about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier because its
+4-byte client-to-server masking would touch every visitor byte again, frame headers and close
+semantics come with it, and it would only help behind proxies passing `Upgrade: websocket` when SNI
+passthrough already rules out an HTTP proxy in front of the hub (§7.2). ALPN is pinned to
+`http/1.1`, because HTTP/2 has no Upgrade.
 
 **Noise parameters.** `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `jailscale-control-v1`. The
 version string is mixed into the handshake hash, so incompatible versions fail the handshake itself
@@ -495,6 +496,25 @@ request carries a current admin session, and the rights are re-checked on that r
 trusted from the cookie. Resident set size is read from `/proc/self/status` where it exists and
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
+
+**The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
+open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
+-- so the front page shows the first eight and points at the directory for the rest, and the pair
+are two real URLs with a nav between them rather than one page with scripted tabs, so either half
+can be sent to someone and neither needs a script to arrive at. The status went nowhere: the
+availability record is what tells a first visitor this hub is real, and it belongs where they land.
+
+Each row carries the address, the kind, how many visitors are being relayed to it at that instant,
+and how long the link has been open -- every one of them something the hub already holds for its own
+routing, read from the same per-name map the admission cap is enforced in (§9.3). **Nothing on the
+page is fetched from the link.** A thumbnail or a favicon would mean the hub connecting to a node's
+app as a visitor and republishing what came back on its own front page, which is the one thing that
+page tells people it does not do, and it would put whatever anyone who can join chooses to serve on
+the operator's name. A raw port prints no visitor count rather than a zero, because raw ports do not
+pass through the SNI router and the number was never measured. "Open" is since the *link* opened, so
+a node that restarts or hands its name on starts the clock again -- it counts the current link, not
+the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
+list does, and the directory has a ceiling of 200 rows like every other unauthenticated answer here.
 
 The page is one column, 48rem. It was 40rem, and what was wrong there was not the margins but the
 measure: a 64-character binary hash ran to the edge of its cell and a two-word label wrapped onto two
