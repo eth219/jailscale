@@ -34,6 +34,20 @@ public final class Hub implements AutoCloseable {
     private final HubKeys keys;
     /** When a node from a public address last arrived by this hub's own name; 0 until one has. */
     private volatile long reachedFromOutsideAt;
+    /** The address of that node, so the verdict can say who answered the question from outside. */
+    private volatile String reachedFromOutsideIp;
+    /** What the address check concluded, folded with the outside view (§7.2); null until it has run. */
+    private volatile Reachability.Status addressStatus;
+    /** The last run on its own, kept so a node's arrival can be folded in without dialling anything. */
+    private volatile Reachability.Result addressResult;
+    private volatile Thread addressCheckThread;
+    /** How often the address check is asked again (§7.2). */
+    private static final long ADDRESS_CHECK_EVERY_MS = 3600_000;
+    /**
+     * What one run of the address check answers. Replaceable so a test can drive the verdict, the
+     * clock and every surface that carries them without dialling a public resolver from a build.
+     */
+    volatile java.util.function.Supplier<Reachability.Result> addressProbe;
     private final Registry registry = new Registry(this);
     /**
      * One receive budget for every node session at once (§5.3). Shared and not per session: the
@@ -483,14 +497,7 @@ public final class Hub implements AutoCloseable {
                             config.hostname(), glue.isEmpty() ? "no ns1/ns2 glue" : "glue " + glue + ", none answering with our token");
                     }
                     if (me != null) {
-                        boolean first = advertised == null;
                         advertised = me;
-                        if (first && !standby && config.acme()) {
-                            // The address check asks the world what the hub's name resolves to,
-                            // and with the hubs answering their own DNS that is this hub's own
-                            // answer: run it once this hub knows what to answer, not before.
-                            Thread.ofVirtual().name("address-check").start(() -> Reachability.report(config, keys));
-                        }
                     }
                 }
                 Thread.sleep(3600_000);
@@ -505,6 +512,81 @@ public final class Hub implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /**
+     * Asks the address question again on a cadence, for as long as this hub is the primary (§7.2).
+     * Once at startup was one answer about a world that changes afterwards -- a proxy switched on
+     * in front of the name, an edited A record -- and the log line it wrote was gone by the time
+     * anyone wanted it. What it costs to repeat is a handful of DNS queries and, where this host
+     * can reach its own public address at all, one TLS handshake an hour.
+     */
+    private void addressCheckLoop() {
+        while (!stopped) {
+            try {
+                if (standby) {
+                    // Stood down since the loop started (§13.5): the records being checked are the
+                    // primary's now, and a standby that kept checking would find the new primary's
+                    // key at the shared address and file that as a fault every hour. Parked rather
+                    // than ended, so a promotion (§13.1) picks it up again on the same thread.
+                    Thread.sleep(60_000);
+                    continue;
+                }
+                if (dnsUp && advertised == null) {
+                    // The check asks the world what this hub's name resolves to, and with the hubs
+                    // answering their own DNS that is this hub's own answer: wait until it knows
+                    // what to answer, not before. With the three records at the parent (§7.1) there
+                    // is nothing to wait for, which is what dnsUp being false means here.
+                    Thread.sleep(60_000);
+                    continue;
+                }
+                checkAddress();
+                Thread.sleep(ADDRESS_CHECK_EVERY_MS);
+            } catch (InterruptedException e) {
+                return;
+            } catch (RuntimeException e) {
+                LOG.warn("address check: {}", e.toString());
+                try {
+                    Thread.sleep(60_000);
+                } catch (InterruptedException ie) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * Runs the check now and records what it found. The hourly pass and {@code jailhub address
+     * check} both come here, so an operator who has just edited a record gets the same verdict the
+     * page and the metrics will carry rather than a second opinion printed on a terminal.
+     */
+    Reachability.Status checkAddress() {
+        java.util.function.Supplier<Reachability.Result> probe = addressProbe;
+        return recordAddressCheck(probe == null ? Reachability.check(config, keys) : probe.get());
+    }
+
+    /** Folds one run into the kept verdict and says so when it moved. */
+    private synchronized Reachability.Status recordAddressCheck(Reachability.Result r) {
+        Reachability.Status previous = addressStatus;
+        Reachability.Status now = Reachability.fold(previous, r, reachedFromOutsideAt, reachedFromOutsideIp,
+            System.currentTimeMillis());
+        if (standby) {
+            // Stood down while this run was in flight, which takes long enough to be overtaken: a
+            // resolver that does not answer costs five seconds and the dial another. The flag is
+            // read here, under the monitor demote() holds, because the loop's own test of it
+            // happened before the run started. The answer is a primary's about records that are no
+            // longer this hub's, so it goes back to whoever asked and is kept nowhere.
+            return now;
+        }
+        addressResult = r;
+        addressStatus = now;
+        Reachability.report(config.hostname(), previous, now);
+        return now;
+    }
+
+    /** What the address check concluded (§7.2), or null where it has not run or is turned off. */
+    Reachability.Status addressStatus() {
+        return addressStatus;
     }
 
     /** ACME on the DNS responder already running: blocks until a certificate is installed. Primary only. */
@@ -535,13 +617,14 @@ public final class Hub implements AutoCloseable {
      * being checked.
      */
     private void startPrimaryFronts() {
-        if (config.acme() && config.addressCheck() && (advertised != null || !dnsUp)) {
+        if (config.acme() && config.addressCheck() && addressCheckThread == null) {
             // After the listener is up, or the one connection that proves the records reach this
             // process would arrive with nothing to answer it. Off the startup path: the answer is a
             // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied
             // to --no-selfcheck: that flag exists because the dns-01 check holds issuance until it
-            // passes, and nothing here can hold anything.
-            Thread.ofVirtual().name("address-check").start(() -> Reachability.report(config, keys));
+            // passes, and nothing here can hold anything. Promotion comes back through here (§13.1),
+            // hence the null check: a hub that was a standby starts the loop when it takes over.
+            addressCheckThread = Thread.ofVirtual().name("address-check").start(this::addressCheckLoop);
         }
         if (config.hasHttp() && http == null) {
             try {
@@ -608,6 +691,10 @@ public final class Hub implements AutoCloseable {
         }
         roleFile.demote(theirEpoch);
         standby = true;
+        // Along with acme and port 80 below: the address check is a primary's (§7.2), and the
+        // verdict this hub reached as one stops being about anything the moment it stands down.
+        addressStatus = null;
+        addressResult = null;
         primaryLostAt = 0;
         LOG.warn("standing down: {} is the primary at epoch {}, this hub was one at a lower epoch and is now its standby",
             theirHost, theirEpoch);
@@ -863,10 +950,20 @@ public final class Hub implements AutoCloseable {
             return;
         }
         boolean first = reachedFromOutsideAt == 0;
+        // The address first: the timestamp is what makes the pair visible to the check's own
+        // thread, and between the two writes it would read a fresh arrival with no address.
+        reachedFromOutsideIp = remoteIp;
         reachedFromOutsideAt = System.currentTimeMillis();
         if (first) {
             LOG.info("a node at {} resolved {} and arrived here: from where it stands, the address record points"
                 + " at this hub", remoteIp, config.hostname());
+        }
+        // Fold it into the standing verdict now rather than at the next pass: this is the view that
+        // answers the case a host behind a translated address cannot answer about itself, and an
+        // operator watching an inconclusive verdict is watching for exactly this to arrive.
+        Reachability.Result r = addressResult;
+        if (r != null && !standby) {
+            recordAddressCheck(r);
         }
     }
 
@@ -1007,6 +1104,9 @@ public final class Hub implements AutoCloseable {
         if (advertiseThread != null) {
             advertiseThread.interrupt();
         }
+        if (addressCheckThread != null) {
+            addressCheckThread.interrupt();
+        }
         LOG.info("hand-off requested: releasing listener and state");
         if (listener != null) {
             listener.close();
@@ -1086,6 +1186,9 @@ public final class Hub implements AutoCloseable {
         stopped = true;
         if (advertiseThread != null) {
             advertiseThread.interrupt();
+        }
+        if (addressCheckThread != null) {
+            addressCheckThread.interrupt();
         }
         if (timer != null) {
             timer.shutdownNow();

@@ -84,6 +84,13 @@ public record HubConfig(
             httpListenPort, metricsListenHost, metricsListenPort, userDomainCa, proxyProtocol, trustedProxies, primary, ca, addr, advertise);
     }
 
+    /** ARCHITECTURE.md §7.2: whether the address check runs at all. Off in the test constructor below. */
+    public HubConfig withAddressCheck(boolean on) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, on, portRangeLo, portRangeHi, httpListenHost,
+            httpListenPort, metricsListenHost, metricsListenPort, userDomainCa, proxyProtocol, trustedProxies, peer, peerCa, peerAddr, advertise);
+    }
+
     /** ARCHITECTURE.md §13.3: answer this address for the hub's own name instead of finding it from the glue. */
     public HubConfig withAdvertise(String address) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,

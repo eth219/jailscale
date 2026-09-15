@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
@@ -103,6 +104,10 @@ class EndToEndTest {
         assertEquals(0, hub.reachedFromOutsideAt());
         hub.reachedBy("LOCALHOST", "203.0.113.5");
         assertTrue(hub.reachedFromOutsideAt() > 0);
+        // An arrival folds into the verdict the check reached, and does not invent one: with the
+        // check never run here, there is nothing to report and "outside" alone would be a verdict
+        // about records nobody has looked at.
+        assertNull(hub.addressStatus(), "a node's arrival is a second view, not a check of its own");
     }
 
     @Test

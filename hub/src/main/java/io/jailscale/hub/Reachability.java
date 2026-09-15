@@ -46,6 +46,11 @@ import javax.net.ssl.SSLSocket;
  * finds something that is not a hub is the opposite: that is the TLS-terminating proxy §7.2 says
  * cannot sit in front, and it is reported as the fault it is. A node arriving from a public address
  * (§10) answers question 3 from outside, where the translated-address failure mode does not exist.
+ *
+ * <p>The answer is kept and re-asked rather than logged once at startup ({@link Status}), because a
+ * record is not a thing that is set right once: a proxy switched on in front of the name, an A
+ * record edited, a hub moved to another address are all changes after boot, and a verdict that
+ * exists only as a line in yesterday's log is one the operator who needs it cannot read.
  */
 final class Reachability {
 
@@ -62,6 +67,66 @@ final class Reachability {
     static final String ELSEWHERE = "elsewhere";
     static final String INCONCLUSIVE = "inconclusive";
     static final String MISCONFIGURED = "misconfigured";
+    /** Nothing this host could see, and a node's arrival saying the records are right from outside. */
+    static final String OUTSIDE = "outside";
+
+    /**
+     * How long a node's arrival still speaks for the address records. The handshake proves what
+     * they said at that moment and nothing about what they say now, so the proof ages out: a day,
+     * which any node that reconnects renews, and after which the verdict falls back to what this
+     * host can see for itself rather than standing on a statement about a record that may have
+     * been edited since.
+     */
+    static final long OUTSIDE_FRESH_MS = 86_400_000L;
+
+    /**
+     * The check as it stands, for an operator who was not at the console when it ran: the verdict,
+     * when the run behind it happened, when that verdict was first reached, and the outside view
+     * folded in. {@code since} is when the verdict last changed rather than when it was last
+     * confirmed, so "misconfigured since 09:14" says how long this has been true -- of this
+     * process: nothing here is written to disk, and a restart starts that clock over.
+     */
+    record Status(String verdict, String problem, List<String> addresses, long at, long since,
+        long outsideAt, String outsideIp) {
+
+        /** The records point here, whether this host proved it or a node did. */
+        boolean ok() {
+            return PROVEN.equals(verdict) || OUTSIDE.equals(verdict);
+        }
+
+        /** The two verdicts that name something only the operator can fix; inconclusive is not one. */
+        boolean fault() {
+            return ELSEWHERE.equals(verdict) || MISCONFIGURED.equals(verdict);
+        }
+
+        /** One line, the same sentence on a log, a page and an admin reply. */
+        String text(String host) {
+            return switch (verdict) {
+                case PROVEN -> host + " and *." + host + " resolve to " + addresses + " and that is this hub";
+                case OUTSIDE -> "this host cannot reach its own public address, and a node at " + outsideIp
+                    + " resolved " + host + " and arrived here: from where that node stands, the record"
+                    + " points at this hub";
+                case INCONCLUSIVE -> "inconclusive: " + problem + " A node arriving from a public address"
+                    + " answers it from outside, where this failure mode does not exist.";
+                default -> problem;
+            };
+        }
+
+        JsonObject json() {
+            Long outside = outsideAt > 0 ? outsideAt / 1000 : null;
+            return JsonObject.builder()
+                .put("verdict", verdict)
+                .put("ok", ok())
+                .put("fault", fault())
+                .put("problem", problem)
+                .put("addresses", addresses)
+                .put("at", at / 1000)
+                .put("since", since / 1000)
+                .put("outsideAt", outside)
+                .put("outsideIp", outsideIp)
+                .build();
+        }
+    }
 
     /** Where the names point, so a test can answer without a network. */
     interface Resolver {
@@ -107,7 +172,7 @@ final class Reachability {
             apex = resolver.resolve(host);
             wildcard = resolver.resolve(underWildcard);
         } catch (IOException e) {
-            return new Result(INCONCLUSIVE, "no resolver answered for " + host + ": " + e.getMessage(), List.of());
+            return new Result(INCONCLUSIVE, "no resolver answered for " + host + ": " + e.getMessage() + ".", List.of());
         }
         if (apex.isEmpty()) {
             return new Result(MISCONFIGURED, "no address record for " + host
@@ -215,16 +280,45 @@ final class Reachability {
         }
     }
 
-    /** Runs the check and says what it found, at the volume the verdict deserves. */
-    static void report(HubConfig config, HubKeys keys) {
-        Result r = check(config, keys);
-        switch (r.verdict()) {
-            case PROVEN -> LOG.info("{} and *.{} resolve to {} and that is this hub", config.hostname(),
-                config.hostname(), r.addresses());
-            case ELSEWHERE -> LOG.error("address check FAILED: {}", r.problem());
-            case MISCONFIGURED -> LOG.error("address check failed: {}", r.problem());
-            default -> LOG.info("address check inconclusive: {}. A node arriving from a public address answers"
-                + " it from outside, where this failure mode does not exist.", r.problem());
+    /**
+     * One run, the outside view and what was already believed, into the status to report.
+     *
+     * <p>Only {@link #INCONCLUSIVE} is upgraded by a node's arrival, and deliberately: what the
+     * node proves is that this hub's own name led it here from a public resolver, which is exactly
+     * the question a host behind a translated address cannot answer about itself. It says nothing
+     * about the wildcard, so it cannot clear {@link #MISCONFIGURED}, and a different hub answering
+     * at the shared address ({@link #ELSEWHERE}) is a conflict to report rather than one to
+     * average away.
+     */
+    static Status fold(Status previous, Result r, long outsideAt, String outsideIp, long now) {
+        String verdict = r.verdict();
+        String problem = r.problem();
+        if (INCONCLUSIVE.equals(verdict) && outsideAt > 0 && now - outsideAt <= OUTSIDE_FRESH_MS) {
+            verdict = OUTSIDE;
+            problem = null;
+        }
+        long since = previous != null && previous.verdict().equals(verdict) ? previous.since() : now;
+        return new Status(verdict, problem, r.addresses(), now, since, outsideAt, outsideIp);
+    }
+
+    /**
+     * Says what the check found, at the volume the verdict deserves, and only when it changed.
+     * The check repeats (§7.2), so a hub whose records are wrong would otherwise file the same
+     * error every hour and a healthy one the same line, which is how a log stops being read. The
+     * verdict that stands is still there to be asked for -- {@code jailhub address check},
+     * {@code /admin}, {@code /metrics} -- which is the point of keeping it.
+     */
+    static void report(String host, Status previous, Status current) {
+        if (previous != null && previous.verdict().equals(current.verdict())) {
+            LOG.debug("address check unchanged ({}): {}", current.verdict(), current.text(host));
+            return;
+        }
+        String was = previous == null ? "" : " (was " + previous.verdict() + ")";
+        if (current.fault()) {
+            LOG.error("address check {}: {}{}", ELSEWHERE.equals(current.verdict()) ? "FAILED" : "failed",
+                current.text(host), was);
+        } else {
+            LOG.info("address check {}: {}{}", current.verdict(), current.text(host), was);
         }
     }
 }
