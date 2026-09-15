@@ -3,6 +3,7 @@ package io.jailscale.hub;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -383,6 +384,47 @@ class LinkEndToEndTest {
         byte[] certVerify = new byte[HubTls.CERT_VERIFY_CONTEXT.length + 32];
         System.arraycopy(HubTls.CERT_VERIFY_CONTEXT, 0, certVerify, 0, HubTls.CERT_VERIFY_CONTEXT.length);
         assertNotNull(hub.tls().sign(hub.tls().keyId(), certVerify));
+    }
+
+    /**
+     * ARCHITECTURE.md §11.3: nobody types `jailscale verify` on an unattended node and the periodic
+     * pass is half an hour from its next tick, so a node whose link has just come up checks every
+     * name it holds there and then. That moment is the one the schedule is worst at: a node that
+     * loses a name is usually offline when it happens, because being offline is why someone else
+     * took it (§11.4).
+     */
+    @Test
+    void aNodeComingBackChecksItsNamesWithoutBeingAsked() throws Exception {
+        Daemon alice = node("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "backagain")));
+        // The sweep on this node's first connection happened before the name existed, and the next
+        // tick is half an hour away, so nothing has looked at it yet.
+        assertNull(probeVerdict("alice", "backagain"));
+
+        alice.close();
+        daemons.remove(alice);
+        waitFor(() -> hub.links().byName("backagain") == null);
+
+        Daemon back = node("alice");
+        waitFor(() -> back.hasCert(hub.tls().keyId()));
+        waitFor(() -> "terminated by this node".equals(probeVerdict("alice", "backagain")));
+    }
+
+    /** What `status` says the last self-probe of one name concluded, or null when none has run. */
+    private String probeVerdict(String node, String name) throws IOException {
+        for (Object o : cli(node, JsonObject.builder().put("cmd", "status")).array("links")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            if (name.equals(row.get("name")) && row.get("probe") != null) {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> probe = (java.util.Map<String, Object>) row.get("probe");
+                return (String) probe.get("verdict");
+            }
+        }
+        return null;
     }
 
     private interface Check {

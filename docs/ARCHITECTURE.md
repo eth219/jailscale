@@ -1330,6 +1330,15 @@ one opened mid-pass is due rather than waiting for the next. Raw ports are never
 since they carry no TLS of ours to compare, and a name with no verdict yet goes ahead of the rest --
 until its first probe what `status` shows for it is an empty field rather than an answer.
 
+**A link coming up is a reason to look now, not at the end of a tick.** A tick spent disconnected
+does nothing -- the traffic has nowhere to go -- and the stretch a node spends offline is exactly
+when a name changes hands, because being offline is why someone else took it (§11.4). So every name
+is probed once as soon as a hub connection is up, which is one pass' worth of work, at most 20
+requests, spent on the case the schedule is worst at. That sweep counts as the pass rather than
+being added to it. A request that arrives within a tick of the last sweep is dropped rather than
+queued, so a link that flaps costs one pass and not one per flap, and a sweep cut short by the link
+going down again leaves the names it did not reach unmarked, for the ordinary ticks to pick up.
+
 The result of the last probe of each name
 rides in `status`, so the answer is visible without running anything, and a `TERMINATED ELSEWHERE`
 from the loop logs exactly as loudly as one the operator asked for. There is no switch to turn it

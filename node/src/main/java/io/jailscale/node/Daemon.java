@@ -51,6 +51,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     static final long RENEW_CHECK_MS = 3600_000;
     static final long UPDATE_CHECK_MS = 24 * 3600_000L;
     static final long PROBE_INTERVAL_MS = 30 * 60_000L;
+    /**
+     * What the self-probe waits on between ticks, so that a hub connection coming up can ask for a
+     * pass now instead of at the end of one (ARCHITECTURE.md §11.3).
+     */
+    private final Object probeWake = new Object();
+    private boolean sweepAsked;          // guarded by probeWake
+    private long lastSweepAt;            // the probe thread's own
     /** How close to its end a certificate has to be before anyone is told (ARCHITECTURE.md §15). */
     static final long CERT_WARN_MS = 14 * 86400_000L;
     private static final long CERT_WARN_REPEAT_MS = 86400_000L;
@@ -97,6 +104,21 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             } catch (IOException | TimeoutException e) {
                 LOG.warn("could not reopen link {}{}: {}", rec.name, l.isRelay() ? " on " + l.relayAddress() : "", e.getMessage());
             }
+        }
+        askProbeSweep();
+    }
+
+    /**
+     * Ask the self-probe for a full pass now rather than at its own pace (ARCHITECTURE.md §11.3).
+     * A node that loses a name is usually offline when it happens -- being offline is why someone
+     * else took it (§11.4) -- so the moment the link is back is the moment worth looking, and the
+     * ticks spent disconnected went nowhere. The ask is a flag, not a queue: a link that flaps must
+     * cost one pass at most, and {@code lastSweepAt} is what holds it to that.
+     */
+    private void askProbeSweep() {
+        synchronized (probeWake) {
+            sweepAsked = true;
+            probeWake.notifyAll();
         }
     }
 
@@ -796,26 +818,87 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      */
     private void probeLoop() {
         Set<String> pass = new HashSet<>();
-        while (!closed) {
-            try {
-                Thread.sleep(PROBE_INTERVAL_MS);
-            } catch (InterruptedException e) {
-                return;
+        try {
+            while (!closed) {
+                boolean sweep = awaitProbeTick(PROBE_INTERVAL_MS);
+                if (closed || !link.isConnected()) {
+                    continue;
+                }
+                List<NodeState.LinkRec> links = new ArrayList<>(state.links);
+                if (sweep) {
+                    sweepProbe(links, pass);
+                    continue;
+                }
+                NodeState.LinkRec rec = dueProbe(links, pass);
+                if (rec != null) {
+                    probeSafely(rec);
+                }
             }
+        } catch (InterruptedException e) {
+            // exiting
+        }
+    }
+
+    /**
+     * Waits out one tick, or less when a hub connection comes up and a sweep is allowed. True when
+     * this tick is that sweep.
+     *
+     * <p>An ask that arrives inside the cooldown is dropped rather than queued, and the ordinary
+     * ticks carry on underneath it: a node whose link flaps every minute would otherwise turn every
+     * flap into a full pass, which is the one way this could become traffic worth noticing.
+     */
+    private boolean awaitProbeTick(long tickMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + tickMs;
+        synchronized (probeWake) {
+            while (!closed) {
+                if (sweepAsked) {
+                    sweepAsked = false;
+                    if (System.currentTimeMillis() - lastSweepAt >= PROBE_INTERVAL_MS) {
+                        return true;
+                    }
+                }
+                long left = deadline - System.currentTimeMillis();
+                if (left <= 0) {
+                    return false;
+                }
+                probeWake.wait(left);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * One pass in one go: every name this node holds, checked now. That is at most 20 requests
+     * (the link ceiling) and it is spent on the case the schedule is worst at -- a node that has
+     * just been away, which is exactly when a name changes hands.
+     *
+     * <p>It counts as the pass, so the names it covers are marked and the loop carries on into the
+     * next one rather than going round again. If the link goes down mid-sweep the rest are left
+     * unmarked, so the ordinary ticks pick them up instead of the sweep pretending to have.
+     */
+    private void sweepProbe(List<NodeState.LinkRec> links, Set<String> pass) {
+        lastSweepAt = System.currentTimeMillis();
+        pass.clear();
+        List<NodeState.LinkRec> all = remaining(links, pass);
+        for (NodeState.LinkRec rec : all) {
+            probeSafely(rec);
+            pass.add(rec.name);
             if (!link.isConnected()) {
-                continue;
+                break;
             }
-            NodeState.LinkRec rec = dueProbe(new ArrayList<>(state.links), pass);
-            if (rec == null) {
-                continue;
-            }
-            try {
-                probe(rec);
-            } catch (RuntimeException e) {
-                // probe() is written not to throw; if it ever does, one bad tick must not be the
-                // last one. Say so, at the volume of a thing that should not happen.
-                LOG.error("self-probe of {} failed unexpectedly: {}", rec.name, e.toString());
-            }
+        }
+        if (!all.isEmpty()) {
+            LOG.debug("self-probe: {} of {} name(s) checked on the hub link coming up", pass.size(), all.size());
+        }
+    }
+
+    private void probeSafely(NodeState.LinkRec rec) {
+        try {
+            probe(rec);
+        } catch (RuntimeException e) {
+            // probe() is written not to throw; if it ever does, one bad tick must not be the
+            // last one. Say so, at the volume of a thing that should not happen.
+            LOG.error("self-probe of {} failed unexpectedly: {}", rec.name, e.toString());
         }
     }
 
@@ -998,6 +1081,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     @Override
     public void close() throws IOException {
         closed = true;
+        synchronized (probeWake) {
+            probeWake.notifyAll();   // the self-probe is asleep for up to a tick otherwise
+        }
         link.close();
         closeRelays();
         if (ipc != null) {
