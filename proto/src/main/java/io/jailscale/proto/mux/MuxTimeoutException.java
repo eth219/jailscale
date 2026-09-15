@@ -3,7 +3,7 @@ package io.jailscale.proto.mux;
 import java.io.IOException;
 
 /**
- * A read on a {@link MuxStream} that passed the deadline set with {@link MuxStream#readDeadline}.
+ * A read on a {@link MuxStream} that passed the deadline set with {@link MuxStream#readDeadlineIn}.
  *
  * <p>An {@link IOException}, unlike {@link MuxException}, because it surfaces out of
  * {@code in().read()} and the callers of that are relays which already treat an

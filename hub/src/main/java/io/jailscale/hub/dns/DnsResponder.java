@@ -1,5 +1,6 @@
 package io.jailscale.hub.dns;
 
+import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -207,7 +208,7 @@ public final class DnsResponder implements AutoCloseable {
             try {
                 udp.receive(p);
                 byte[] q = java.util.Arrays.copyOf(p.getData(), p.getLength());
-                byte[] r = answerForUdp(q, p.getAddress(), System.currentTimeMillis());
+                byte[] r = answerForUdp(q, p.getAddress(), Clock.millis());
                 if (r != null) {
                     udp.send(new DatagramPacket(r, r.length, p.getSocketAddress()));
                 }

@@ -1469,6 +1469,31 @@ tracked the full buckets are dropped: a full bucket is indistinguishable from on
 existed, so nothing is lost. The same rotation is why the per-address connection counters of §8.1
 are dropped once the last connection using one is gone, rather than left behind at zero.
 
+**That scan runs at most once a second, where it used to run on every call.** It is over every
+tracked key, and between two consecutive calls there is nothing new for it to find. Measured on the
+shipped handshake numbers with the map full of buckets none of which are prunable — at 1/s a bucket
+is not full again until 30 s after its last use, which is exactly what address rotation leaves
+behind — one `allow` cost **36.4 µs against 0.044 µs** with a map of one. That is 825 times, all of
+it the scan, and it was **not** the denial of service it looks like: reaching this needs a completed
+TLS handshake, and a Noise handshake costs the hub about 875 µs of its own CPU (§14), so the scan
+was four percent on top of the expensive thing. What makes it worth removing is that it is pure
+loss, that refused requests paid it too when they should cost nothing, and that it grows with the
+10,000 if anyone raises it. A second between scans bounds the map to one second's worth of new
+addresses that have each completed a TLS handshake, at 48 bytes apiece.
+
+**Both limiters measure elapsed time with a monotonic clock, not the time of day.** A token bucket
+refills by how long it has been, and `currentTimeMillis` is the time of day, which steps: NTP
+corrects a host whose clock was wrong at boot, and a virtual machine resumed from a snapshot wakes
+in the past. A step backwards stops the refill for as long as the step was — an hour's correction is
+an hour in which no node can reconnect — and a step forwards refills every bucket at once. The rule
+is what the value is for: a time that is written down and has to mean the same instant after a
+restart or on the other host (an invite's expiry, a join date, the availability record) is the time
+of day; a time that is only ever subtracted from another (a bucket's refill, the visitor deadline of
+§9.3) comes from `proto.util.Clock`. `FlowBudget`'s stall timestamps are the one elapsed-time value
+still on the time of day, because its "never consumed" sentinel is zero and zero is a plausible
+reading from a monotonic clock early in a process; changing it needs a different sentinel rather
+than a different clock.
+
 **`/admin` sessions.** The login link is one-shot and lives 60 seconds, the session cookie lasts 12
 hours, and every POST carries a CSRF token. On top of that, **admin status is rechecked on every
 request**, because checking only at issuance would leave `admin remove` ineffective for 12 hours; a

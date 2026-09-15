@@ -1,7 +1,9 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.util.Clock;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A per-key token bucket for the work an unauthenticated caller can make the hub do
@@ -11,17 +13,47 @@ import java.util.concurrent.ConcurrentHashMap;
  * who rotates addresses. Once it passes {@link #MAX_KEYS} the refilled buckets are dropped; a
  * bucket back at full strength is indistinguishable from one that never existed, so nothing is
  * lost by forgetting it.
+ *
+ * <p><b>A map here, where {@code dns.ResponseRate} has a fixed table, and the difference is what it
+ * costs to be tracked.</b> Every caller here has completed a TLS handshake to reach this, which is
+ * the expensive thing in the path; a bucket is 48 bytes beside it, and giving each address its own
+ * means a flood from ten thousand of them does not touch the bucket of a node trying to reconnect.
+ * On :53 the caller has sent one unverified datagram, so a map would be an attacker's to grow and
+ * the isolation is not worth having on those terms.
  */
 final class RateLimiter {
 
     /** Above this many tracked keys, refilled buckets are dropped (~48 bytes each). */
     static final int MAX_KEYS = 10_000;
 
+    /**
+     * How often the scan that does that may run. It used to run on every call once the map was
+     * over {@link #MAX_KEYS}, which is where it costs the most and buys the least: the scan is over
+     * every tracked key, and between two consecutive calls there is nothing new for it to find.
+     * Measured on the shipped numbers (burst 30, 1/s, 10,500 keys, none of them prunable because a
+     * bucket is not full again until 30 s after its last use), one {@code allow} cost <b>36.4 µs
+     * against 0.044 µs</b> with a map of one -- 825 times, all of it the scan.
+     *
+     * <p><b>That is waste and it was not the denial of service it looked like.</b> A caller must
+     * complete a TLS handshake to reach this, and the hub spends about 875 µs of its own CPU on a
+     * Noise handshake (§14), so the scan was four percent on top of a request that was already the
+     * expensive thing. What makes it worth removing is that it is pure loss, that it is paid by
+     * refused requests which should cost nothing, and that it grows with {@code MAX_KEYS} if anyone
+     * ever raises that.
+     *
+     * <p>A second a scan is plenty: what the scan bounds is memory, and the map can only grow by
+     * one second's worth of <em>new addresses that have each completed a TLS handshake</em>, which
+     * is a few thousand entries at the very most and 48 bytes each.
+     */
+    static long pruneIntervalMs = 1_000;
+
     private record Bucket(double tokens, long at) {}
 
     private final int burst;
     private final double perSecond;
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
+    private final AtomicLong prunes = new AtomicLong();
+    private volatile long lastPrune;
 
     RateLimiter(int burst, double perSecond) {
         this.burst = burst;
@@ -30,8 +62,13 @@ final class RateLimiter {
 
     /** Takes one token for {@code key}; false when that key is over its limit. */
     boolean allow(String key) {
-        long now = System.currentTimeMillis();
-        if (buckets.size() > MAX_KEYS) {
+        // Monotonic: a bucket refills by elapsed time, and the time of day is not that (Clock).
+        long now = Clock.millis();
+        if (buckets.size() > MAX_KEYS && now - lastPrune >= pruneIntervalMs) {
+            // Set first, so two threads arriving together scan once between them rather than twice.
+            // Both scanning is harmless if it happens -- the scan is idempotent -- and this is not
+            // worth a lock to make impossible.
+            lastPrune = now;
             prune(now);
         }
         boolean[] allowed = new boolean[1];
@@ -48,11 +85,17 @@ final class RateLimiter {
         return buckets.size();
     }
 
+    /** How many times the scan has run. Only the test that it is not run per call needs this. */
+    long prunes() {
+        return prunes.get();
+    }
+
     private double refilled(Bucket b, long now) {
         return Math.min(burst, b.tokens() + Math.max(0, now - b.at()) * perSecond / 1000.0);
     }
 
     private void prune(long now) {
+        prunes.incrementAndGet();
         buckets.entrySet().removeIf(e -> refilled(e.getValue(), now) >= burst);
     }
 }

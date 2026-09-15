@@ -62,7 +62,7 @@ public final class MuxStream {
      * thing meant to protect it. Written only under {@code lock}, so it is never a torn value.
      */
     private volatile int queued;
-    /** When an inbound wait gives up, as an epoch millisecond, or 0 for never ({@link #readDeadline}). */
+    /** When an inbound wait gives up, on {@link io.jailscale.proto.util.Clock}'s scale, or 0 for never. */
     private volatile long readDeadline;
 
     private final InputStream in = new InputStream() {
@@ -305,10 +305,17 @@ public final class MuxStream {
     }
 
     /**
-     * Bounds how long reads on this stream wait for the peer's next frame. An epoch millisecond, or
-     * 0 -- the default -- to wait for ever. Past it a read throws {@link MuxTimeoutException} and
-     * leaves the stream as it was, so what to do about it stays with the caller, which is normally
-     * to reset it.
+     * Bounds the next {@code millis} of reads on this stream: past that moment a read throws
+     * {@link MuxTimeoutException} and leaves the stream as it was, so what to do about it stays
+     * with the caller, which is normally to reset it. There is no deadline until this is called and
+     * {@link #noReadDeadline()} takes it off again.
+     *
+     * <p><b>A duration in, a moment inside.</b> The bound is absolute once set -- that is the whole
+     * point, below -- but taking the moment from the caller meant taking a bare {@code long} that
+     * had to come from the right clock, and a value from the wrong one does not fail, it waits for
+     * twenty-five thousand years. This has no such argument to get wrong: the moment is computed
+     * here, from {@link io.jailscale.proto.util.Clock}, which is monotonic because a wall clock that
+     * steps forwards would expire every deadline in flight at once.
      *
      * <p><b>A deadline and not a {@code setSoTimeout}</b>, which is the shape of every other timeout
      * around this and the wrong one here. An idle timeout restarts on each byte, so a peer that
@@ -325,12 +332,17 @@ public final class MuxStream {
      * life: a link that is idle by design -- a websocket, an SSE stream, a database session over a
      * raw port -- is a stream nobody may put a clock on.
      */
-    public void readDeadline(long atEpochMillis) {
-        readDeadline = atEpochMillis;
+    public void readDeadlineIn(long millis) {
+        readDeadline = io.jailscale.proto.util.Clock.millis() + Math.max(1, millis);
+    }
+
+    /** Takes the deadline off: reads wait for the peer for as long as it likes again. */
+    public void noReadDeadline() {
+        readDeadline = 0;
     }
 
     /**
-     * One inbound wait, bounded by {@link #readDeadline}. The caller holds {@code lock}, which is
+     * One inbound wait, bounded by {@link #readDeadlineIn}. The caller holds {@code lock}, which is
      * what makes the {@code wait} here the same wait it replaced; with no deadline set the argument
      * is 0, which is {@code Object.wait}'s own "for ever", so that path is unchanged.
      */
@@ -338,7 +350,7 @@ public final class MuxStream {
         long at = readDeadline;
         long left = 0;
         if (at != 0) {
-            left = at - System.currentTimeMillis();
+            left = at - io.jailscale.proto.util.Clock.millis();
             if (left <= 0) {
                 throw new MuxTimeoutException("stream " + id + ": nothing arrived by its read deadline");
             }

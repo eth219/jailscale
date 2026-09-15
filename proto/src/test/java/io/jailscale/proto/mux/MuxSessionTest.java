@@ -167,7 +167,7 @@ class MuxSessionTest {
     }
 
     /**
-     * {@link MuxStream#readDeadline}: the bound the node puts on a visitor that has not spoken yet
+     * {@link MuxStream#readDeadlineIn}: the bound the node puts on a visitor that has not spoken yet
      * (ARCHITECTURE.md §9.3). Three properties, because the deadline is only useful if it gives up
      * when it should, does not give up on bytes that did arrive, and can be taken off again.
      */
@@ -179,8 +179,7 @@ class MuxSessionTest {
         assertNotNull(ns);
 
         // Nothing sent: the read gives up, near the deadline rather than at once or much later.
-        long at = System.currentTimeMillis() + 300;
-        ns.readDeadline(at);
+        ns.readDeadlineIn(300);
         long before = System.currentTimeMillis();
         assertThrows(MuxTimeoutException.class, () -> ns.in().read());
         long waited = System.currentTimeMillis() - before;
@@ -204,7 +203,7 @@ class MuxSessionTest {
 
         // Cleared, the stream is an ordinary one again: this read waits with no clock on it, which
         // is what an established visitor needs -- an SSE stream may say nothing for hours.
-        ns.readDeadline(0);
+        ns.noReadDeadline();
         Thread late = Thread.ofVirtual().start(() -> {
             try {
                 Thread.sleep(400);

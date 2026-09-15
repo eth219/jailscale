@@ -7,6 +7,7 @@ import io.jailscale.proto.mux.MuxTimeoutException;
 import io.jailscale.proto.net.DuplexThread;
 import io.jailscale.proto.net.ProxyProtocol;
 import io.jailscale.proto.tls.Pem;
+import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -371,12 +372,12 @@ final class Visitors {
             stream.reset(4);
             return;
         }
-        long tEnter = System.currentTimeMillis();
+        long tEnter = Clock.millis();
         // The slot this visitor took in serve() is held from here; §9.3's deadline is what stops a
         // visitor that never speaks from holding it for the life of the process. Armed before the
         // endpoint exists, because the handshake is the first thing that can wait.
         boolean gated = target.gateHash != null;
-        stream.readDeadline(tEnter + firstByteMs);
+        stream.readDeadlineIn(firstByteMs);
         TlsEndpoint tls = new TlsEndpoint(ctx, stream.in(), stream.out());
         try {
             // Remember that this node, and not the hub or another node, terminated it (§11.3).
@@ -391,7 +392,7 @@ final class Visitors {
                 // this fires on the first byte of the request head, and the gate has the rest of
                 // that head to read before anything is relayed.
                 if (!gated) {
-                    stream.readDeadline(0);
+                    stream.noReadDeadline();
                 }
             });
             RemoteSigning.enter(new RemoteSigning.Context(link, session, HubLink.fullStreamId(conn, stream.id()), keyId, tls));
@@ -413,7 +414,7 @@ final class Visitors {
         // cannot see which side spent them: its own timing ends at the node's first byte. If the
         // handshake here is fast and the hub still saw a long wait, the time went before this
         // method ran.
-        long handshakeMs = System.currentTimeMillis() - tEnter;
+        long handshakeMs = Clock.millis() - tEnter;
         if (handshakeMs >= SLOW_HANDSHAKE_MS) {
             LOG.warn("visitor handshake for {} took {} ms inside the node", sni, handshakeMs);
         }
@@ -432,7 +433,7 @@ final class Visitors {
                 switch (d) {
                     case Gate.Decision.Pass p -> {
                         replay = p.head();
-                        stream.readDeadline(0); // the head is in; from here it is an ordinary relay
+                        stream.noReadDeadline(); // the head is in; from here it is an ordinary relay
                     }
                     case Gate.Decision.SetCookie sc -> {
                         HttpResponse.redirect(sc.location())
