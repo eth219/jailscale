@@ -86,6 +86,16 @@ async def send_bytes(writer, n):
 
 
 def query_int(query, key, default, lo, hi):
+    """The value of ?key=, clamped to [lo, hi] -- and so is the default.
+
+    The clamp used to sit on the parse branch alone, so --max-bytes was a cap on
+    callers who asked for a size and on nobody else: with --max-bytes 0, GET
+    /bytes with no query, or with one that does not parse, still served the full
+    8 MB default while /stats reported maxBytes 0. That cap is the only bound on
+    egress for a link that is public -- the hub has none of its own -- so it has
+    to hold on every path out of here, not just the interesting one.
+    """
+    default = max(lo, min(hi, default))
     for part in query.split("&"):
         name, _, value = part.partition("=")
         if name == key:
