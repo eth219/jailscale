@@ -207,6 +207,53 @@ public sealed interface Message {
         @Override public String type() { return "Ack"; }
     }
 
+    // --- hub to hub (ARCHITECTURE.md §13.1) --------------------------------------------------
+
+    /**
+     * First Noise payload from a standby hub. What makes it a peer rather than a node is not this
+     * message but the static key the handshake authenticated: it is the hub's own, which only a
+     * host given a copy of {@code hub.key} can complete the handshake with. A node's
+     * MachineKey can never be that key, so the two kinds of caller cannot be confused.
+     */
+    record PeerHello(int proto, String version, String host) implements Message {
+        @Override public String type() { return "PeerHello"; }
+    }
+
+    record PeerHelloResponse(int proto, String version, String host) implements Message {
+        @Override public String type() { return "PeerHelloResponse"; }
+    }
+
+    /**
+     * The primary's whole state as the same replayable event list its snapshot file holds. Sent
+     * once after the handshake, and again only if the primary has to start the tail over; every
+     * event after it arrives as a {@link PeerEvent}.
+     */
+    record PeerSnapshot(String json) implements Message {
+        @Override public String type() { return "PeerSnapshot"; }
+    }
+
+    /** One event line from the primary's log, in the order it was appended. */
+    record PeerEvent(String json) implements Message {
+        @Override public String type() { return "PeerEvent"; }
+    }
+
+    /**
+     * The wildcard chain and its private key. {@link CertUpdate} gives nodes the public half; a
+     * standby is the one party that has to be able to sign after a promotion, so it gets both.
+     */
+    record PeerCert(List<String> chainPem, String keyPem, String keyId) implements Message {
+        @Override public String type() { return "PeerCert"; }
+    }
+
+    /**
+     * The hub's Noise static private key, and the next one during a rotation (§5.2). A standby
+     * arrives holding the current key already -- that is how it authenticated -- but a rotation
+     * begun on the primary would otherwise leave it with a key nodes are about to stop pinning.
+     */
+    record PeerHubKey(String current, String next) implements Message {
+        @Override public String type() { return "PeerHubKey"; }
+    }
+
     /**
      * A message type this build does not know (ARCHITECTURE.md §5.4). Decoding one is deliberately
      * not an error: the peer is authenticated, so this is a newer jailscale sending something this

@@ -56,6 +56,12 @@ public final class Codec {
             case Message.ChallengeSet x -> b.put("domain", x.domain()).put("token", x.token()).put("keyAuthorization", x.keyAuthorization());
             case Message.ChallengeClear x -> b.put("token", x.token());
             case Message.Ack x -> b.put("inReplyTo", x.inReplyTo());
+            case Message.PeerHello x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host());
+            case Message.PeerHelloResponse x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host());
+            case Message.PeerSnapshot x -> b.put("json", x.json());
+            case Message.PeerEvent x -> b.put("json", x.json());
+            case Message.PeerCert x -> b.put("chainPem", x.chainPem()).put("keyPem", x.keyPem()).put("keyId", x.keyId());
+            case Message.PeerHubKey x -> b.put("current", x.current()).put("next", x.next());
             // Unknown exists only on the receiving side (Message §5.4). Encoding one would mean
             // relaying a message whose fields this build never parsed.
             case Message.Unknown x -> throw new IllegalArgumentException("cannot encode an unknown message type '" + x.type() + "'");
@@ -105,6 +111,12 @@ public final class Codec {
                 case "ChallengeSet" -> new Message.ChallengeSet(o.optString("domain", null), o.string("token"), o.string("keyAuthorization"));
                 case "ChallengeClear" -> new Message.ChallengeClear(o.string("token"));
                 case "Ack" -> new Message.Ack(o.optString("inReplyTo", null));
+                case "PeerHello" -> new Message.PeerHello(o.integer("proto"), o.string("version"), o.optString("host", null));
+                case "PeerHelloResponse" -> new Message.PeerHelloResponse(o.integer("proto"), o.string("version"), o.optString("host", null));
+                case "PeerSnapshot" -> new Message.PeerSnapshot(o.string("json"));
+                case "PeerEvent" -> new Message.PeerEvent(o.string("json"));
+                case "PeerCert" -> new Message.PeerCert(o.stringArray("chainPem"), o.string("keyPem"), o.string("keyId"));
+                case "PeerHubKey" -> new Message.PeerHubKey(o.string("current"), o.optString("next", null));
                 // Not an error (ARCHITECTURE.md §5.4): a peer speaking a newer protocol may add
                 // message types, and this build has to stay on the channel when it does. The type
                 // is truncated because it reaches a log line and comes off the wire.

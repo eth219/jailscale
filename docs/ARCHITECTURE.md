@@ -441,8 +441,12 @@ $JAILHUB_STATE/            (default /var/lib/jailhub, else ~/.local/share/jailhu
 ├── state.snapshot         periodic snapshot (log compaction)
 ├── jailhub.lock           process lock; a second `jailhub serve` fails immediately
 ├── jailhub.sock           admin IPC socket (§6.3)
+├── availability.json      the process's own uptime record and what it saw of its peers (§13.2)
 └── tls/                   account.key, wildcard.key, wildcard.pem, wildcard.key.prev (0600)
 ```
+
+On a standby (§13.1) the same directory is the primary's, kept current over the hub-to-hub channel:
+`hub.key` is the copy the operator made, and the rest arrives.
 
 The snapshot carries a format version `v`, and the hub **refuses to start** when it is higher than
 the version it understands. Adding fields or events within a version is compatible both ways and
@@ -495,7 +499,9 @@ place. **`GET /v1/status`** is liveness on the hub's own name: `ok`, the hostnam
 uptime, and when the certificate expires -- the last being the one that takes every name down at
 once and the one worth alerting on. That is the whole list, and it is public because an uptime check
 has no credential to offer and a name that has stopped answering was never a secret. Fields may be
-added, so a monitor that reads the ones it knows keeps working (§5.4).
+added, so a monitor that reads the ones it knows keeps working (§5.4); the ones added since are
+`role` (`primary` or `standby`, with `primary` and `inSync` on a standby, §13.1) and `availability`
+(§13.2).
 
 **`GET /metrics`** is the Prometheus text format, which needs no library to produce, and it is **not
 on 443 at all**. It has a listener of its own -- plain HTTP, `--metrics-listen 127.0.0.1:9090` by
@@ -1471,7 +1477,7 @@ and sign. What remains is availability, and the answer is fast recovery.
 | Hub process restart | Under 5 s including state replay. Nodes reconnect with 1, 2, 4, 8, 16, 30 s backoff |
 | What a visitor sees | Connections refused during the restart; streams in flight are cut |
 | Backup unit | The `$JAILHUB_STATE` directory. `hub.key`, `tls/` and `state.*` are all of it |
-| Host replacement | Copy the directory and change DNS. Nodes notice nothing, since the hub key and wildcard key are unchanged |
+| Host replacement | Copy the directory and change DNS. Nodes notice nothing, since the hub key and wildcard key are unchanged. A standby (§13.1) keeps that copy current on its own |
 
 **Hand-off.** Updating the binary does not need a restart. `jailhub serve --takeover` starts a new
 process that asks the old one to hand off over the IPC socket. The old process closes the 443
@@ -1512,6 +1518,71 @@ cannot attribute to a unit and drops, and `systemd-notify` waiting for it to be 
 feature (Ubuntu 20.04 has 245, RHEL 8 has 239). The exit status is 0 either way, so a hub cannot
 detect it; the unit just never leaves `activating`. `deploy/jailhub.service` lists the three lines
 and what each is for. None of it makes the hand-off compose with a unit.
+
+### 13.1 A standby hub
+
+The table's last row, done by the hub rather than by hand. `jailhub serve --peer https://hub.example.com`
+on a second host makes that process a **standby**: it dials the primary the way a node does -- TLS to
+the primary's name, the `/v1/noise` upgrade, Noise IK -- and from then on is fed rather than served.
+What it is fed is everything the primary would be replaced with: the hub key and, during a rotation,
+the next one (`PeerHubKey`); the wildcard chain **with its private key** (`PeerCert`), which is what
+`CertUpdate` deliberately leaves out for nodes; the store as one snapshot (`PeerSnapshot`); then every
+event as it is appended, in order (`PeerEvent`). The snapshot is taken and the subscription registered
+under one lock, so the standby sees exactly the sequence the primary's own log holds, and every
+reconnect starts again from a fresh snapshot rather than resuming a tail, because the state is small
+and a resumable position would have to survive the primary compacting its log underneath it.
+
+**What makes it a peer is the key, not the message.** The standby's Noise static is the primary's own
+`hub.key`, which the operator copies over once, and that copy is the whole provisioning act. Noise IK
+authenticates the initiator's static, so a caller whose static is the hub's own key holds the private
+half; a node's MachineKey can never be that key, and the primary decides which kind of caller it has
+from the handshake rather than from what the first message claims to be. A standby started without
+the file refuses to start and names it, since generating one would produce a hub that cannot
+authenticate and never says why.
+
+**What a standby does and does not do.** It writes nothing of its own: settings, names and
+registrations are the primary's and arrive with the snapshot, and its `serve` flags do not seed them.
+It opens 443 once the certificate has arrived -- blocking for it the way a first boot blocks for ACME
+-- and serves its own page and `/v1/status`, which say what it is and whether it is in sync. A node
+that reaches it is told `Goodbye{standby}` with the primary's name, a reason the node does not stop
+retrying for, so it keeps trying until DNS moves or the standby is promoted. It runs no ACME, no
+DNS responder, no port 80, no address check. It does hold the wildcard key, and the count of hosts
+that hold it is the count of control hosts, two, whatever else is added later
+([docs/ha-design](ha-design/README.md)).
+
+**Promotion** is `jailhub promote` on the standby, over the admin socket. It stops following, starts
+what a primary runs and a standby does not -- issuance and the DNS responder when the hub obtains its
+own certificate, port 80 -- and takes nodes. The certificate it has is already in `tls/` where
+`AcmeManager` looks, so a restart afterwards finds it and renews from there. The operator points the
+apex at the new host; nothing here can change a DNS record. Promotion is one way and says so in the
+log: an old primary that returns is not told anything, because nothing is connected to it, and has
+to be restarted with `--peer` pointing at the new one. Promoting a hub that was not in sync at the
+time is allowed and logged as such, since a stale copy is still the best copy there is when the
+primary is gone.
+
+**Bounds.** A standby that stops reading is dropped once 10,000 events are queued for it
+(`Peers.MAX_QUEUED`), because the store appends under its own lock and must not wait on a socket;
+it reconnects and starts from a snapshot. The hub-to-hub channel rides 443 under the hub's own
+name, so a standby needs no port opened that a node does not already use.
+
+### 13.2 Availability as a number
+
+A process cannot measure the time it was not running, so the status page shows two figures and never
+adds them. The first is the process's own record: a timestamp rewritten to `availability.json` once
+a minute, and on start the gap between the last stamp and now counted as down. It counts a hub whose
+port is firewalled as up, and the page says so beside it. It is not in the event log, where 1,440
+events a day would ride the fsync path and trip the snapshot cadence (§6.2). The second is what this
+hub saw of a peer: the intervals the hub-to-hub channel was down *while this process was running*,
+which is reachability as a status page means the word, and which exists only once there is a peer. A
+peer interval that was open when this process last stamped is closed at that stamp and reopened at
+the restart, so the two records never overlap and the peer figure is divided by the time there was
+someone here to look.
+
+Both are reported over 24 hours, 7 days and 30 days, on `/` and in `/v1/status` under
+`availability` (with `since`, because a window that reaches further back than the record is
+reported over less), and the process figure on `/metrics` as `jailhub_process_availability_<window>_ppm`.
+Public for the reason `/v1/status` is public (§6.3). Anyone scraping `/metrics` already computes
+availability from `up`; this is for the operator with no scraper.
 
 ---
 
@@ -1956,6 +2027,9 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   has next to every issuance failure and on its status page, and `ls` marks the link. None of that
   helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
   nobody hears from, and its domain goes dark when the certificate runs out.
+- **A standby fails over the visitor path only after DNS moves** (§13.1). What it keeps current is
+  the copy; pointing the name at it is the operator's act, and until then the standby's 443 is a
+  page saying what it is. Nodes on the old primary are down for the DNS change plus their backoff.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
   is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
   calls the unit started; the listening sockets are still rebound rather than handed over.

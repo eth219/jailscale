@@ -15,6 +15,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 /**
  * Hub state (ARCHITECTURE.md §6.2): in-memory maps, an append-only JSON Lines event log with fsync,
@@ -63,6 +65,8 @@ final class Store implements AutoCloseable {
     private final Path snapshotPath;
     private FileOutputStream log;
     private int eventsSinceSnapshot;
+    /** Who is told about every event as it is appended: the sessions replicating this store (§13.1). */
+    private final List<Consumer<JsonObject>> listeners = new CopyOnWriteArrayList<>();
 
     private long nextNodeId = 1;
     private final Map<String, NodeRec> nodesByKey = new LinkedHashMap<>();
@@ -482,15 +486,87 @@ final class Store implements AutoCloseable {
     // --- persistence -------------------------------------------------------------------------
 
     private void append(JsonObject.Builder b) throws IOException {
-        JsonObject ev = b.build();
+        append(b.build());
+    }
+
+    private void append(JsonObject ev) throws IOException {
         byte[] line = Json.writeUtf8(ev.asMap());
         log.write(line);
         log.write('\n');
         log.flush();
         log.getFD().sync();
         apply(ev);
+        for (Consumer<JsonObject> l : listeners) {
+            l.accept(ev);
+        }
         if (++eventsSinceSnapshot >= SNAPSHOT_EVERY) {
             snapshot();
+        }
+    }
+
+    // --- replication (ARCHITECTURE.md §13.1) ---------------------------------------------------
+
+    /**
+     * Starts telling {@code listener} about every event from here on and returns the state as it
+     * stands at that moment, as snapshot JSON. The two happen under one lock so that nothing is
+     * appended between the snapshot being taken and the listener being registered: a standby that
+     * replays the snapshot and then the events sees exactly what this store saw.
+     */
+    synchronized String subscribe(Consumer<JsonObject> listener) {
+        listeners.add(listener);
+        return snapshotJson();
+    }
+
+    synchronized void unsubscribe(Consumer<JsonObject> listener) {
+        listeners.remove(listener);
+    }
+
+    /** An event replicated from the primary: written to this log and applied, as if appended here. */
+    synchronized void applyReplicated(JsonObject ev) throws IOException {
+        append(ev);
+    }
+
+    /**
+     * Throws away everything held and replaces it with {@code snapshotJson} from the primary,
+     * persisting it as this store's own snapshot and truncating the log. The version check is the
+     * one {@link #load} makes: a standby running an older binary than its primary must stop rather
+     * than replay state it cannot read.
+     */
+    synchronized void replaceWith(String snapshotJson) throws IOException {
+        JsonObject s = Json.parseObject(snapshotJson);
+        checkVersion(s, "the primary's state");
+        nodesByKey.clear();
+        invites.clear();
+        authKeys.clear();
+        admins.clear();
+        pending.clear();
+        names.clear();
+        settings.clear();
+        ports.clear();
+        domains.clear();
+        notices.clear();
+        bans.clear();
+        nextHubKey = null;
+        hubKeyActivatesAt = 0;
+        nextNodeId = 1;
+        loadSnapshot(s);
+        snapshot();
+    }
+
+    private void checkVersion(JsonObject s, String what) throws IOException {
+        long v = s.has("v") ? s.lng("v") : STATE_VERSION;
+        if (v > STATE_VERSION) {
+            throw new IOException(what + " is state version " + v + ", this jailhub understands "
+                + STATE_VERSION + ". Run a newer jailhub, or restore the state directory from before the upgrade.");
+        }
+    }
+
+    private void loadSnapshot(JsonObject s) {
+        nextNodeId = s.lng("nextNodeId");
+        for (Object o : s.array("events")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> m = (Map<String, Object>) o;
+            apply(Json.parseObject(Json.write(m)));
         }
     }
 
@@ -596,17 +672,8 @@ final class Store implements AutoCloseable {
     private void load() throws IOException {
         if (Files.exists(snapshotPath)) {
             JsonObject s = Json.parseObject(Files.readString(snapshotPath, StandardCharsets.UTF_8));
-            long v = s.has("v") ? s.lng("v") : STATE_VERSION;
-            if (v > STATE_VERSION) {
-                throw new IOException(snapshotPath + " is state version " + v + ", this jailhub understands "
-                    + STATE_VERSION + ". Run a newer jailhub, or restore the state directory from before the upgrade.");
-            }
-            nextNodeId = s.lng("nextNodeId");
-            for (Object o : s.array("events")) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> m = (Map<String, Object>) o;
-                apply(Json.parseObject(Json.write(m)));
-            }
+            checkVersion(s, snapshotPath.toString());
+            loadSnapshot(s);
         }
         if (Files.exists(logPath)) {
             int n = 0;
@@ -632,6 +699,21 @@ final class Store implements AutoCloseable {
      * then truncates the log.
      */
     synchronized void snapshot() throws IOException {
+        String json = snapshotJson();
+        Path tmp = dir.resolve("state.snapshot.tmp");
+        Files.writeString(tmp, json, StandardCharsets.UTF_8);
+        try (FileOutputStream fo = new FileOutputStream(tmp.toFile(), true)) {
+            fo.getFD().sync();
+        }
+        Files.move(tmp, snapshotPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        log.close();
+        log = new FileOutputStream(logPath.toFile(), false); // truncate
+        eventsSinceSnapshot = 0;
+        LOG.debug("snapshot written");
+    }
+
+    /** The whole state as the snapshot file's JSON: a version, the next node id, and replayable events. */
+    synchronized String snapshotJson() {
         List<Object> events = new ArrayList<>();
         for (NodeRec n : nodesByKey.values()) {
             events.add(JsonObject.builder().put("e", "node-registered").put("id", n.id()).put("mkey", n.mkey())
@@ -681,17 +763,7 @@ final class Store implements AutoCloseable {
         if (nextHubKey != null) {
             events.add(JsonObject.builder().put("e", "hubkey-rotation").put("next", nextHubKey).put("activatesAt", hubKeyActivatesAt).build().asMap());
         }
-        String json = JsonObject.builder().put("v", STATE_VERSION).put("nextNodeId", nextNodeId).put("events", events).toJson();
-        Path tmp = dir.resolve("state.snapshot.tmp");
-        Files.writeString(tmp, json, StandardCharsets.UTF_8);
-        try (FileOutputStream fo = new FileOutputStream(tmp.toFile(), true)) {
-            fo.getFD().sync();
-        }
-        Files.move(tmp, snapshotPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        log.close();
-        log = new FileOutputStream(logPath.toFile(), false); // truncate
-        eventsSinceSnapshot = 0;
-        LOG.debug("snapshot written ({} events)", events.size());
+        return JsonObject.builder().put("v", STATE_VERSION).put("nextNodeId", nextNodeId).put("events", events).toJson();
     }
 
     @Override

@@ -68,6 +68,7 @@ class AdminCommandTest {
             new Route("admin-login-link", "admin", "login-link"),
             new Route("key-rotate", "key", "rotate"),
             new Route("setting", "setting", "knock", "off"),
+            new Route("promote", "promote"),
             new Route("handoff", "handoff"));
     }
 

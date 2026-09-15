@@ -35,13 +35,16 @@ public record HubConfig(
     int metricsListenPort,
     Path userDomainCa,
     boolean proxyProtocol,
-    List<String> trustedProxies) {
+    List<String> trustedProxies,
+    URI peer,       // the primary this hub follows as a standby, or null when it is the primary (§13.1)
+    Path peerCa,    // tests and private CAs: trust this PEM when dialling the primary
+    String peerAddr) {  // dial this address instead of resolving the primary's name (tests, split horizon)
 
     /** ARCHITECTURE.md §8.5: behind nginx stream / HAProxy sending PROXY headers. */
     public HubConfig withProxyProtocol(boolean on, List<String> trusted) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, metricsListenHost, metricsListenPort, userDomainCa, on, trusted);
+            httpListenPort, metricsListenHost, metricsListenPort, userDomainCa, on, trusted, peer, peerCa, peerAddr);
     }
 
     /** True when port 80 is served, the precondition for user domains (ARCHITECTURE.md §8.3). */
@@ -52,7 +55,7 @@ public record HubConfig(
     public HubConfig withHttp(String host, int port) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, host, port, metricsListenHost, metricsListenPort, userDomainCa,
-            proxyProtocol, trustedProxies);
+            proxyProtocol, trustedProxies, peer, peerCa, peerAddr);
     }
 
     /** True when {@code /metrics} is served at all (ARCHITECTURE.md §6.3). */
@@ -63,14 +66,26 @@ public record HubConfig(
     public HubConfig withMetrics(String host, int port) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi,
-            httpListenHost, httpListenPort, host, port, userDomainCa, proxyProtocol, trustedProxies);
+            httpListenHost, httpListenPort, host, port, userDomainCa, proxyProtocol, trustedProxies, peer, peerCa, peerAddr);
     }
 
     /** Tests and private CAs: trust this PEM instead of the platform roots when verifying user-domain certificates. */
     public HubConfig withUserDomainCa(Path caPem) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, metricsListenHost, metricsListenPort, caPem, proxyProtocol, trustedProxies);
+            httpListenPort, metricsListenHost, metricsListenPort, caPem, proxyProtocol, trustedProxies, peer, peerCa, peerAddr);
+    }
+
+    /** ARCHITECTURE.md §13.1: follow {@code primary} as a standby, trusting {@code ca} for its TLS (null: platform roots). */
+    public HubConfig withPeer(URI primary, Path ca, String addr) {
+        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
+            httpListenPort, metricsListenHost, metricsListenPort, userDomainCa, proxyProtocol, trustedProxies, primary, ca, addr);
+    }
+
+    /** True when this hub follows a primary rather than being one (ARCHITECTURE.md §13.1). */
+    public boolean standby() {
+        return peer != null;
     }
 
     public static final int DEFAULT_PORT_LO = 10000;
@@ -84,7 +99,7 @@ public record HubConfig(
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, lo, hi, httpListenHost, httpListenPort, metricsListenHost, metricsListenPort, userDomainCa,
-            proxyProtocol, trustedProxies);
+            proxyProtocol, trustedProxies, peer, peerCa, peerAddr);
     }
 
     public static final String POLICY_MEMBERS = "members";
@@ -101,7 +116,7 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, -1, null, false, List.of());
+            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, -1, null, false, List.of(), null, null, null);
     }
 
     public String hostname() {
@@ -206,6 +221,16 @@ public record HubConfig(
         if (dc < 0) {
             throw new IllegalArgumentException("--dns-listen must be host:port");
         }
+        URI peer = null;
+        if (a.has("peer")) {
+            peer = URI.create(a.get("peer"));
+            if (peer.getHost() == null || !"https".equals(peer.getScheme())) {
+                throw new IllegalArgumentException("--peer must be https://<host> (the primary's base URL)");
+            }
+            if (peer.getHost().equalsIgnoreCase(base.getHost()) && (peer.getPort() < 0 ? 443 : peer.getPort()) == (base.getPort() < 0 ? 443 : base.getPort())) {
+                throw new IllegalArgumentException("--peer names this hub's own base URL; a standby follows a different host");
+            }
+        }
         return new HubConfig(
             base,
             stateDir(a.get("state")),
@@ -231,7 +256,10 @@ public record HubConfig(
             metricsPort,
             null,
             proxyProtocol,
-            List.copyOf(trusted));
+            List.copyOf(trusted),
+            peer,
+            a.has("peer-ca") ? Path.of(a.get("peer-ca")) : null,
+            a.get("peer-addr"));
     }
 
     /** {@code --state}, else {@code $JAILHUB_STATE}, else /var/lib/jailhub if writable, else ~/.local/share/jailhub. */

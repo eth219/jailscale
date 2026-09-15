@@ -145,13 +145,64 @@ final class HttpFront {
      * monitor that reads the ones it knows keeps working (§5.4).
      */
     private JsonObject status() {
-        return JsonObject.builder()
+        JsonObject.Builder b = JsonObject.builder()
             .put("ok", true)
             .put("hostname", hub.config().hostname())
             .put("version", Hub.version())
             .put("uptimeSeconds", Resources.uptimeMillis() / 1000)
             .put("certificateNotAfter", hub.tls().isLoaded() ? hub.tls().leaf().getNotAfter().getTime() / 1000 : null)
-            .build();
+            .put("role", hub.role())
+            .put("availability", availability());
+        PeerClient pc = hub.peerClient();
+        if (pc != null) {
+            b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());
+        }
+        return b.build();
+    }
+
+    /**
+     * §13.2: the fraction of each window this process was running, by its own record, and what it
+     * saw of each peer while it was. Two quantities, kept apart. {@code since} says how far back
+     * the record goes, because a window that reaches further than that is reported over less.
+     */
+    private JsonObject availability() {
+        long now = System.currentTimeMillis();
+        Availability a = hub.availability();
+        JsonObject.Builder process = JsonObject.builder().put("since", a.since() / 1000);
+        for (Availability.Window w : Availability.WINDOWS) {
+            Double f = a.processFraction(w.millis(), now);
+            if (f != null) {
+                process.put(w.label(), Math.round(f * 10_000) / 10_000.0 + "");
+            }
+        }
+        JsonObject.Builder peers = JsonObject.builder();
+        for (String name : a.peerNames()) {
+            JsonObject.Builder p = JsonObject.builder();
+            for (Availability.Window w : Availability.WINDOWS) {
+                Double f = a.peerFraction(name, w.millis(), now);
+                if (f != null) {
+                    p.put(w.label(), Math.round(f * 10_000) / 10_000.0 + "");
+                }
+            }
+            peers.put(name, p.build());
+        }
+        return JsonObject.builder().put("process", process.build()).put("peers", peers.build()).build();
+    }
+
+    /** "100% 24h · 99.98% 7d · 99.9% 30d", or what the record's age allows. */
+    private static String availabilityText(java.util.function.Function<Long, Double> fraction) {
+        StringBuilder t = new StringBuilder();
+        for (Availability.Window w : Availability.WINDOWS) {
+            Double f = fraction.apply(w.millis());
+            if (f == null) {
+                continue;
+            }
+            if (t.length() > 0) {
+                t.append(" · ");
+            }
+            t.append(Availability.percent(f)).append(' ').append(w.label());
+        }
+        return t.length() == 0 ? "no record yet" : t.toString();
     }
 
     /**
@@ -221,6 +272,36 @@ final class HttpFront {
             row(b, "Next hub key", "<code>" + escape(nextKey) + "</code>");
         }
         row(b, "Uptime", Resources.humanDuration(Resources.uptimeMillis()));
+        // Two availability figures and never one (§13.2): the process's own record counts a hub
+        // whose port is firewalled as up, and what a peer saw is reachability but only exists
+        // once there is a peer. Each is labelled with what it measures.
+        long now = System.currentTimeMillis();
+        Availability avail = hub.availability();
+        String sinceNote = now - avail.since() < Availability.WINDOWS.get(Availability.WINDOWS.size() - 1).millis()
+            ? " (record since " + escape(java.time.Instant.ofEpochMilli(avail.since()).toString().substring(0, 10)) + ")" : "";
+        row(b, "Availability", availabilityText(w -> avail.processFraction(w, now)) + ", by this process's own record" + sinceNote);
+        for (String peer : avail.peerNames()) {
+            row(b, "Seen from here", "<code>" + escape(peer) + "</code> " + availabilityText(w -> avail.peerFraction(peer, w, now)));
+        }
+        PeerClient pc = hub.peerClient();
+        if (pc != null) {
+            row(b, "Role", "standby of <code>" + escape(pc.primaryHost()) + "</code>, "
+                + (pc.isSynced() ? "in sync" : pc.isConnected() ? "connected, not yet in sync" : "not connected"
+                    + (pc.lastError() == null ? "" : " (" + escape(pc.lastError()) + ")")));
+        } else {
+            List<Peers.Session> standbys = hub.peers().all();
+            StringBuilder r = new StringBuilder("primary");
+            if (standbys.isEmpty()) {
+                r.append(", no standby connected");
+            } else {
+                r.append(", standby");
+                for (Peers.Session ps : standbys) {
+                    r.append(" <code>").append(escape(ps.name())).append("</code>");
+                }
+                r.append(" in sync");
+            }
+            row(b, "Role", r.toString());
+        }
         row(b, "Nodes", online + " online of " + hub.store().nodes().size() + " registered");
         row(b, "Certificate", certificateRow());
         // Heap is a small part of what a native image occupies, so where RSS is unavailable say

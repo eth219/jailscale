@@ -71,7 +71,7 @@ own. Neither has a runtime dependency and neither needs root to run.
 
 ### A binary
 
-v0.1.2 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
+v0.1.3 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
 `darwin-arm64` and `windows-amd64.exe`. There is no `darwin-amd64`, because
 GraalVM CE 25.3 does not build one ([ARCHITECTURE.md
 §3.2](docs/ARCHITECTURE.md)); Intel Macs get [the JAR](#anything-else-with-a-jvm-25).
@@ -80,7 +80,7 @@ The two targets the budget measures are 25.3 to 26.4 MiB
 describes; the other two carry no measured figure.
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.1.2
+base=https://github.com/eth219/jailscale/releases/download/v0.1.3
 target=darwin-arm64   # pick yours
 
 curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
@@ -153,7 +153,7 @@ jailscale` — and Windows SmartScreen warns for the same reason.
 
 For linux/amd64 and linux/arm64, built by the same workflow, toolchain and
 options as the binaries above, so [Resource usage](#resource-usage) describes
-them too. `:v0.1.2` pins that tag, `:latest` follows releases (it moves when
+them too. `:v0.1.3` pins that tag, `:latest` follows releases (it moves when
 one is published and its signature has been checked, not when a tag is pushed),
 `:edge` follows
 main.
@@ -164,8 +164,8 @@ directory` instead of starting, and `:latest` pointed at one of them until this
 release.
 
 ```
-docker pull ghcr.io/eth219/jailhub:v0.1.2
-docker pull ghcr.io/eth219/jailscale:v0.1.2
+docker pull ghcr.io/eth219/jailhub:v0.1.3
+docker pull ghcr.io/eth219/jailscale:v0.1.3
 ```
 
 Both images are distroless and run as a non-root user: the binary, glibc and
@@ -180,7 +180,7 @@ The container runs the daemon, and the CLI is `exec`ed into it:
 ```sh
 docker network create demo   # the app joins this too, see below
 docker run -d --name jailscale --network demo \
-    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.2
+    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.3
 docker exec jailscale /jailscale up --hub jailscale.sinabro.io
 docker exec jailscale /jailscale open 3000 --host myapp --name myapp
 ```
@@ -265,6 +265,21 @@ The first run prints an invite. Whoever joins with it becomes the administrator.
 [deploy/](deploy/) has a systemd unit, container files, and the proxy
 configurations for putting the hub behind nginx or HAProxy.
 
+A second host can stand by for the first. Copy the first host's `hub.key` into
+the second's state directory and run
+
+```sh
+jailhub serve --base-url https://jailscale.example.com --acme-email you@example.com --peer https://jailscale.example.com
+```
+
+there. It follows the first: certificate, keys, and every change to the state
+as it happens, and its page says whether it is in sync. If the first host is
+lost, `jailhub promote` on the second and a change to the three DNS records
+make it the hub; nodes reconnect on their own, since the hub key they pinned is
+the same. The status page of either shows how much of the last day, week and
+month it was up, by its own record and as seen from the other
+([ARCHITECTURE.md §13.1](docs/ARCHITECTURE.md)).
+
 ## Resource usage
 
 Measured on main with the native binaries by `./measure.sh`, which CI runs as a
@@ -272,9 +287,11 @@ budget on every push there. Two platforms, because an amd64 binary is bigger
 than an arm64 one and Linux counts the binary's own mapped pages in RSS where
 macOS largely does not.
 
-This describes v0.1.2, the release [Install](#a-binary) downloads: the budget
-builds with the toolchain and options the release workflow uses, so the gate
-measures what ships. v0.1.0 did not — it was tagged a day before that pin landed
+The figures are v0.1.2's; the release [Install](#a-binary) downloads is v0.1.3,
+which changed the hub's control plane (a standby, the availability record) and
+no path a visitor's bytes or an idle process take, and the same gate held on
+its release commit. The budget builds with the toolchain and options the
+release workflow uses, so the gate measures what ships. v0.1.0 did not — it was tagged a day before that pin landed
 and was built with Liberica NIK 25.0.4, which cost it about 5 MiB per binary,
 5 to 6 MB of idle RSS on linux-amd64 and 2.3 ms of CLI start.
 [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) measures both toolchains side by
@@ -373,10 +390,13 @@ What a compromised hub can and cannot do is written out in
 
 - No production track record. The hub above is the only instance with any
   uptime behind it, and it serves one person's names.
-- The hub is a single process on a single host, with no standby and no state
-  replication. Losing the host means downtime. Replacing the binary without
-  dropping nodes works with `serve --takeover`, but not under a systemd unit,
-  where an upgrade is a restart.
+- The hub is a single process on a single host. A second host can follow it as
+  a standby, holding a current copy of everything the first would be replaced
+  with, but pointing the name at it is still a DNS change made by a person, and
+  visitors and nodes are down until that happens
+  ([ARCHITECTURE.md §13.1](docs/ARCHITECTURE.md)). Replacing the binary
+  without dropping nodes works with `serve --takeover`, but not under a
+  systemd unit, where an upgrade is a restart.
 - Upgrading stops one step short of automatic. `jailscale update --download`
   fetches a release and checks it against the signature; you run the one
   `install` command it prints. A binary built before the signing key existed
@@ -394,10 +414,12 @@ What a compromised hub can and cannot do is written out in
   clean pages, evictable — and standing up the TLS client writes 139 KB. The
   number is real and the explanation for it was not.
 - Upgrades have been exercised once each way they have been tried, on one hub
-  and one node. v0.1.2 is the third tagged release, and each step added one
-  optional `Hello` field — `host` before v0.1.1, `visitors` before v0.1.2 —
-  which is the additive case [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)
-  permits, pinned in `WireFormatTest` against v0.1.0's own `Hello` line. Both
+  and one node. v0.1.3 is the fourth tagged release. The two before it each
+  added one optional `Hello` field — `host` before v0.1.1, `visitors` before
+  v0.1.2 — which is the additive case
+  [ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md) permits, pinned in
+  `WireFormatTest` against v0.1.0's own `Hello` line; v0.1.3 adds message
+  types only two hubs exchange, which a node never sees. Both
   steps have also run mismatched on the hub above: a released v0.1.0 node
   against a hub that reads `host`, and the hub on v0.1.2 for half an hour while
   its node was not, the capacity row reading `not advertised` throughout. So a
