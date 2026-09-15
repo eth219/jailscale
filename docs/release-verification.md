@@ -23,14 +23,35 @@ compiled into the binary, so a build that carries no key refuses to download
 rather than trusting the checksum file alone. The release workflow leaves a
 draft; publishing is the signing script's job, and the `published` workflow
 runs `tools/verify-release.sh` the moment a release goes public and puts one
-back into draft if the signature does not hold. So a release that
-`releases/latest` shows is one that has been signed.
+back into draft if the signature does not hold. So a release that is published
+is one that has been signed.
+
+## What says which release is current
+
+A release's `RELEASE.txt` says which release it *is*. Which one is *current* is
+a second signed document, `latest.txt`, under the fixed `release-index`
+pre-release: a sequence number, the tag, and an expiry, signed with the same
+key (`docs/update-freshness`). That is what `jailscale update` reads — not
+`releases/latest`, which nothing signs — and a node refuses a pointer whose
+sequence is below the highest it has seen, so an old one cannot be put back up
+in front of it. Past the expiry a node says it cannot tell whether it is
+current rather than that it is up to date.
+
+```sh
+base=https://github.com/eth219/jailscale/releases/download/release-index
+curl -fsSL -O "$base/latest.txt" -O "$base/latest.txt.sig"
+openssl pkeyutl -verify -pubin -inkey release-key.pem -rawin \
+  -in latest.txt -sigfile latest.txt.sig
+cat latest.txt        # the tag it names is the release to install
+```
 
 ## From a clone
 
 ```sh
 tools/verify-release.sh v0.2.0          # downloads the three files with gh
 tools/verify-release.sh v0.2.0 ./dir    # checks files already downloaded
+tools/verify-release.sh --index         # the signed pointer, and how long it has left
+tools/verify-release.sh --index ./dir
 ```
 
 It checks a release the way the node does, against the key list that tag's own

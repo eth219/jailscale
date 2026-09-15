@@ -60,17 +60,27 @@ index_before() {
 }
 
 # One field of the document, or empty. Last occurrence wins, which is what `Updates.Manifest.parse`
-# does with a repeated field -- it assigns in a loop and never breaks. A document with two `tag:`
-# lines is malformed whichever end you read it from; what must not happen is this tool reading one
-# of them and a node reading the other, both reporting success over the same signed bytes.
+# does with a repeated field -- it assigns in a loop and never breaks -- and the value is trimmed at
+# both ends, which is what `Index.parse` does with it. A document with two `tag:` lines, or a stray
+# space after a value, is malformed whichever end you read it from; what must not happen is this
+# tool reading one of them and a node reading the other, both reporting success over the same signed
+# bytes. (The name has to start the line here, and `Index.parse` skips an indented one for the same
+# reason.)
 index_field() {
-    sed -n "s/^$2:[[:space:]]*//p" "$1" | tail -n 1
+    sed -n "s/^$2:[[:space:]]*//p" "$1" | sed 's/[[:space:]]*$//' | tail -n 1
 }
 
-# Downloads the current pointer into $2. 0: it is there. 3: there is none -- either the release
-# does not exist or it carries no pointer at all, which are the same thing to every caller. 1:
-# anything else, which is emphatically not the same thing, because a sequence that restarts because
-# a network was down is the sequence rule deleted. Half a pointer is a 1 for that reason too.
+# Downloads the current pointer into $2, and answers with what it found:
+#
+#   0  it is there
+#   3  the release itself does not exist -- the only state a sequence may start from
+#   4  the release is there and carries no pointer, which is NOT the same thing: `gh release upload
+#      --clobber` deletes an asset before it uploads it and loses it if the upload fails, so this is
+#      also what "the assets were lost" looks like, and a sequence must not restart over them
+#   1  anything else -- a network that was not there, a draft, half a pointer
+#
+# The 3-versus-4 distinction is the whole of the guard: 3 is what authorises --first, and a fetch
+# that merely failed, or a release whose assets went missing, must never reach it.
 index_fetch() {
     _repo=$1
     _dir=$2
@@ -107,7 +117,7 @@ index_fetch() {
     if ! _err=$(gh release download -R "$_repo" "$INDEX_TAG" --dir "$_dir" \
         --pattern "$INDEX_FILE" --pattern "$INDEX_SIG" --clobber 2>&1 >/dev/null </dev/null); then
         case $_err in
-            *"no assets match"*) return 3 ;;
+            *"no assets match"*) return 4 ;;
             *) printf '%s\n' "$_err" >&2; return 1 ;;
         esac
     fi
@@ -115,7 +125,7 @@ index_fetch() {
         return 0
     fi
     if [ ! -e "$_dir/$INDEX_FILE" ] && [ ! -e "$_dir/$INDEX_SIG" ]; then
-        return 3 # the release is there and carries no pointer at all
+        return 4 # there, and carrying nothing -- see the table above for why that is not a 3
     fi
     # One half of a pair: an upload that did not finish, or an asset somebody removed. Never 3 --
     # a sequence must not restart over a document that is still published.
@@ -151,6 +161,14 @@ index_verify() {
         echo "$INDEX_FILE has a seq below 1: '$_seq'" >&2
         return 1
     }
+    # One spelling per number, which is also what Index.parse requires. `09` is nine to this test
+    # and to Java, and then kills the next `$(( ))` in refresh-index.sh with "value too great for
+    # base" -- after the release it was signing is already out.
+    case $_seq in
+        0?*)
+            echo "$INDEX_FILE writes its seq with a leading zero: '$_seq'" >&2
+            return 1 ;;
+    esac
     release_tag_ok "$_tag" || {
         echo "$INDEX_FILE names '$_tag', which is not a release tag." >&2
         return 1
@@ -215,11 +233,12 @@ signed with the release key, is in [docs/update-freshness](../blob/main/docs/upd
 
 A pre-release on purpose: \`releases/latest\` must never point here." >/dev/null
     fi
-    # Uploaded until what is published is what was signed. gh sends the two assets one at a time, so
-    # a failure between them leaves a new document beside the old signature -- a pointer that
-    # verifies for nobody, and one that both scripts here refuse to overwrite, so the state is worst
-    # exactly where a person is least able to fix it. Re-uploading the same pair is idempotent,
-    # which makes retrying here, while the bytes are still on disk, the whole remedy.
+    # Uploaded until what is published is what was signed. `--clobber` deletes each existing asset
+    # before it uploads the replacement and, gh's own help says, loses it if the upload fails -- so
+    # an interrupted upload leaves the release with one asset or with none, and either way what is
+    # published verifies for nobody. Re-uploading the same pair is idempotent, which makes retrying
+    # here, while the bytes are still on disk, the whole remedy; index_fetch's 4 is what stops the
+    # none-at-all case from being mistaken afterwards for a release that never had a pointer.
     _try=1
     _back=$_work/back
     while :; do
@@ -236,7 +255,7 @@ A pre-release on purpose: \`releases/latest\` must never point here." >/dev/null
             _keep=$(mktemp -d)
             cp "$_out/$INDEX_FILE" "$_out/$INDEX_SIG" "$_keep/"
             echo "$INDEX_TAG does not carry what was just signed, after $_try attempts to upload it." >&2
-            echo "It may now hold one of the two assets, which verifies for nobody, and this is the" >&2
+            echo "It may now hold one of the two assets, or neither -- and either way this is the" >&2
             echo "one state the checks here will not overwrite. Finish it by hand:" >&2
             echo "  gh release upload -R $_repo $INDEX_TAG $_keep/$INDEX_FILE $_keep/$INDEX_SIG --clobber" >&2
             return 1

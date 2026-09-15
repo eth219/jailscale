@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
+import java.time.Instant;
 import java.security.KeyPair;
 import java.util.HashMap;
 import java.util.List;
@@ -115,7 +116,7 @@ class UpdateIndexTest {
             Updates.Result r = check(p, ss);
             assertNull(r.error(), r.line());
             assertTrue(r.newer());
-            assertFalse(r.stale());
+            assertEquals(Updates.Outcome.NEWER, r.outcome());
             assertEquals("0.2.0", r.latest());
             assertTrue(r.line().contains("0.2.0 is out"), r.line());
         }
@@ -131,6 +132,8 @@ class UpdateIndexTest {
             Updates.Result r = check(p, ss);
             assertNotNull(r.error());
             assertFalse(r.newer());
+            // Bytes arrived and were rejected: the one a node says out loud, unlike a failed fetch.
+            assertEquals(Updates.Outcome.REFUSED, r.outcome());
             assertTrue(r.error().contains("matches none of the keys"), r.error());
         }
     }
@@ -145,7 +148,7 @@ class UpdateIndexTest {
             Updates.Result r = check(p, ss);
             assertNull(r.error(), r.line());
             assertFalse(r.newer());
-            assertTrue(r.stale());
+            assertEquals(Updates.Outcome.STALE, r.outcome());
             assertFalse(r.line().contains("is the latest release"), r.line());
             assertTrue(r.line().startsWith("cannot tell"), r.line());
         }
@@ -161,19 +164,40 @@ class UpdateIndexTest {
             Updates.Result r = check(p, ss);
             assertNull(r.error(), r.line());
             assertTrue(r.newer());
-            assertTrue(r.stale());
+            assertEquals(Updates.Outcome.STALE, r.outcome());
             assertTrue(r.line().contains("there may be something newer still"), r.line());
         }
     }
 
     @Test
-    void aPointerIssuedInTheFutureIsWrongRatherThanNew() throws Exception {
+    void aClockThatDisagreesCannotTellRatherThanFailing() throws Exception {
+        // A VM with no NTP is the ordinary cause, and both documents promise it reports "cannot
+        // tell" -- so this is the same answer an expiry gives, not the error a refusal gives, and
+        // the upgrade the pointer names is still offered rather than withheld over a clock.
         Published p = publish(document(7, "v0.2.0", "2026-06-01T00:00:00Z", "2026-09-01T00:00:00Z"));
         try (ServerSocket ss = serve(p.files())) {
             Updates.Result r = check(p, ss);
+            assertEquals(Updates.Outcome.CANNOT_TELL, r.outcome());
+            assertTrue(r.cannotTell());
+            assertTrue(r.newer(), "an upgrade is still an upgrade when the clock is wrong");
             assertNotNull(r.error());
-            assertFalse(r.newer());
             assertTrue(r.error().contains("ahead of this clock"), r.error());
+        }
+    }
+
+    @Test
+    void theSkewAllowanceIsWhatDecidesIt() throws Exception {
+        // Pins the boundary rather than a value five months out, so setting CLOCK_SKEW_MS to zero
+        // fails here instead of leaving the suite green.
+        long issued = NOW + Updates.CLOCK_SKEW_MS - 60_000;
+        Published inside = publish(document(7, "v0.2.0", Instant.ofEpochMilli(issued).toString(), FAR));
+        try (ServerSocket ss = serve(inside.files())) {
+            assertEquals(Updates.Outcome.NEWER, Updates.check(RUNNING, at(ss, inside), NOW, null).outcome());
+        }
+        Published outside = publish(document(7, "v0.2.0",
+            Instant.ofEpochMilli(issued + 120_000).toString(), FAR));
+        try (ServerSocket ss = serve(outside.files())) {
+            assertEquals(Updates.Outcome.CANNOT_TELL, Updates.check(RUNNING, at(ss, outside), NOW, null).outcome());
         }
     }
 
@@ -198,7 +222,9 @@ class UpdateIndexTest {
             Updates.Result r = check(p, ss);
             assertNotNull(r.error());
             assertFalse(r.newer());
-            assertFalse(r.stale());
+            // Nothing arrived to judge, which is a node without a network -- not a pointer this
+            // node looked at and refused. The daemon logs one of those and not the other.
+            assertEquals(Updates.Outcome.UNREACHABLE, r.outcome());
         }
     }
 
@@ -209,8 +235,8 @@ class UpdateIndexTest {
         Updates.Index i = Updates.Index.parse(document(7, "v0.2.0", ISSUED, FAR));
         assertEquals(7, i.seq());
         assertEquals("v0.2.0", i.tag());
-        assertEquals(java.time.Instant.parse(ISSUED).toEpochMilli(), i.issued());
-        assertEquals(java.time.Instant.parse(FAR).toEpochMilli(), i.expires());
+        assertEquals(Instant.parse(ISSUED).toEpochMilli(), i.issued());
+        assertEquals(Instant.parse(FAR).toEpochMilli(), i.expires());
     }
 
     @Test
@@ -255,6 +281,39 @@ class UpdateIndexTest {
         assertThrows(IOException.class, () -> Updates.Index.parse(document(7, "v0.2.0", FAR, ISSUED)));
     }
 
+    @Test
+    void aSequenceHasOneSpelling() throws Exception {
+        // `09` is nine to Long.parseLong and nine to the shell's guards, and then kills the shell on
+        // the next arithmetic expansion; `+9` is nine here and nothing there. Either way the tooling
+        // and the fleet would be holding different sequences over identical signed bytes, so a
+        // sequence that cannot be spelled the same way twice is refused instead.
+        assertTrue(assertThrows(IOException.class, () -> Updates.Index.parse(
+            Updates.INDEX_FORMAT + "\nseq: 09\ntag: v0.2.0\nissued: " + ISSUED + "\nexpires: " + FAR + "\n"))
+            .getMessage().contains("one spelling"));
+        assertThrows(IOException.class, () -> Updates.Index.parse(
+            Updates.INDEX_FORMAT + "\nseq: +9\ntag: v0.2.0\nissued: " + ISSUED + "\nexpires: " + FAR + "\n"));
+        assertEquals(9, Updates.Index.parse(document(9, "v0.2.0", ISSUED, FAR)).seq());
+    }
+
+    @Test
+    void anIndentedFieldIsNotAFieldHereEither() throws Exception {
+        // The shell reader anchors the name at the start of the line. A line this accepted and that
+        // one did not would be the two of them reading one signed document differently -- which is
+        // the whole failure the last-one-wins rule above exists to rule out.
+        Updates.Index i = Updates.Index.parse(document(5, "v0.2.0", ISSUED, FAR) + " seq: 99\n");
+        assertEquals(5, i.seq());
+    }
+
+    @Test
+    void anInstantTooLargeToHoldIsRefusedRatherThanThrown() {
+        // Instant.parse accepts instants either side of what a long of milliseconds can hold, and
+        // toEpochMilli then throws ArithmeticException -- which used to escape a method declaring
+        // IOException and reach the operator as "could not check for updates: long overflow".
+        assertTrue(assertThrows(IOException.class, () -> Updates.Index.parse(
+            document(7, "v0.2.0", ISSUED, "+999999999-12-31T23:59:59.999999999Z")))
+            .getMessage().contains("cannot read"));
+    }
+
     // --- the floor: what stops an older signed pointer being put back up ---------------------------
 
     @Test
@@ -276,6 +335,7 @@ class UpdateIndexTest {
             Updates.Result r = check(replayed, ss, floor);
             assertNotNull(r.error());
             assertFalse(r.newer());
+            assertEquals(Updates.Outcome.REFUSED, r.outcome());
             assertTrue(r.error().contains("went backwards"), r.error());
             assertTrue(r.error().contains("9"), r.error()); // what it has seen, so the operator can tell
         }

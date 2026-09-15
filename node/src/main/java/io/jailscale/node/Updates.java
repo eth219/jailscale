@@ -12,10 +12,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.security.DigestOutputStream;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -93,23 +95,65 @@ final class Updates {
     private Updates() {}
 
     /**
+     * What a check concluded, as one value rather than as something every consumer re-derives.
+     *
+     * <p>The daemon logs on {@link #REFUSED} and {@link #STALE} and stays quiet on the rest; the CLI
+     * picks a stream and an exit status from the same table. Both used to infer the category from
+     * whether {@code error} was null and whether {@code seq} happened to be set, which was wrong in
+     * both directions: it made a source build's "cannot compare" look like an attack, and it made an
+     * expired pointer -- the one thing the expiry exists to surface -- look like nothing at all.
+     */
+    enum Outcome {
+        /** The pointer verified and names what this node runs. */
+        CURRENT,
+        /** The pointer verified and names something above what this node runs. */
+        NEWER,
+        /** It verified, and it has expired: whether something newer exists cannot be told from it. */
+        STALE,
+        /** It verified, and something about this node stops it answering -- a clock, a `dev` build. */
+        CANNOT_TELL,
+        /** Bytes arrived and were rejected: a signature that does not verify, or a sequence that went
+         * backwards. Not a mistake anybody makes by accident. */
+        REFUSED,
+        /** Nothing arrived to judge -- no network, no key to judge it with. */
+        UNREACHABLE
+    }
+
+    /**
      * The outcome of one check. {@code newer} is true only when a release was read and is above the
-     * running version; {@code error} explains every other case rather than leaving it as "no".
-     * {@code tag} is the release's own tag, which is what names a download; {@link #latest()} is
-     * the version inside it, which is what compares and what a human is told.
+     * running version; {@code error} explains every case that is not an answer rather than leaving
+     * it as "no". {@code tag} is the release's own tag, which is what names a download;
+     * {@link #latest()} is the version inside it, which is what compares and what a human is told.
      */
     record Result(String running, String tag, boolean newer, long checkedAt, String error, long expiresAt,
-        boolean stale, long seq) {
+        long seq, Outcome outcome) {
 
         /** The version the tag names. */
         String latest() {
             return tag == null ? null : version(tag);
         }
 
-        JsonObject.Builder json() {
+        /** Whether this node could say what the current release is, or only what it last heard. */
+        boolean cannotTell() {
+            return outcome == Outcome.STALE || outcome == Outcome.CANNOT_TELL;
+        }
+
+        /**
+         * Whether the pointer this answer came from has expired <b>by {@code now}</b>, rather than
+         * by the clock at the moment it was fetched. The daemon holds one of these for a day, and a
+         * pointer that had an hour left when it was read is not fresh for the rest of that day --
+         * reporting it as fresh would be the "you are the latest release" sentence this design says
+         * must never be produced, just arriving late.
+         */
+        boolean stale(long now) {
+            return expiresAt != 0 && now >= expiresAt;
+        }
+
+        JsonObject.Builder json(long now) {
             return JsonObject.builder().put("running", running).put("latest", latest())
                 .put("newer", newer).put("checkedAt", checkedAt / 1000).put("error", error)
-                .put("expiresAt", expiresAt == 0 ? null : expiresAt / 1000).put("stale", stale)
+                .put("expiresAt", expiresAt == 0 ? null : expiresAt / 1000).put("stale", stale(now))
+                .put("outcome", outcome.name().toLowerCase(Locale.ROOT))
                 .put("seq", seq == 0 ? null : Long.valueOf(seq));
         }
 
@@ -128,13 +172,14 @@ final class Updates {
             }
             String until = expiresAt == 0 ? "" : Instant.ofEpochMilli(expiresAt).truncatedTo(ChronoUnit.SECONDS).toString();
             if (!newer) {
-                return stale
+                return outcome == Outcome.STALE
                     ? "cannot tell whether jailscale " + running + " is current: the release index expired on "
                         + until + ". " + PAGE
                     : "jailscale " + running + " is the latest release.";
             }
             return "jailscale " + latest() + " is out; this is " + running + ". " + PAGE
-                + (stale ? " (the release index expired on " + until + ", so there may be something newer still.)" : "");
+                + (outcome == Outcome.STALE
+                    ? " (the release index expired on " + until + ", so there may be something newer still.)" : "");
         }
     }
 
@@ -164,17 +209,22 @@ final class Updates {
         if (source.keys().isEmpty()) {
             // The same rule --download applies, applied one step earlier: this build cannot check
             // a signature, so it cannot tell which release is current either, and an unsigned
-            // answer is not a smaller version of that -- it is the check skipped by default.
+            // answer is not a smaller version of that -- it is the check skipped by default. Not a
+            // refusal: nothing was rejected, this build simply has nothing to judge with.
             return new Result(running, null, false, now,
                 "this build carries no release signing key, so it cannot tell which release is current; see " + PAGE,
-                0, false, 0);
+                0, 0, Outcome.CANNOT_TELL);
         }
         try {
             Index i = index(source);
             if (i.issued() > now + CLOCK_SKEW_MS) {
-                return new Result(running, i.tag(), false, now,
-                    "the release index says it was issued at " + Instant.ofEpochMilli(i.issued())
-                        + ", which is ahead of this clock", i.expires(), false, i.seq());
+                // The node's clock, not the pointer: a VM with no NTP is the ordinary cause, so this
+                // is "cannot tell" like an expiry and not an error like a refusal. It reads on
+                // stderr and exits 1 with nothing to fetch, and an upgrade it names is still offered.
+                return new Result(running, i.tag(), newer(running, i), now,
+                    "cannot tell whether jailscale " + running + " is current: the release index says it"
+                        + " was issued at " + Instant.ofEpochMilli(i.issued()).truncatedTo(ChronoUnit.SECONDS)
+                        + ", which is ahead of this clock", i.expires(), i.seq(), Outcome.CANNOT_TELL);
             }
             // The floor, and the reason it is worth a file of its own: an expiry makes withholding
             // visible, and this is what makes it un-repeatable. Without it, whoever can publish can
@@ -186,20 +236,53 @@ final class Updates {
                 return new Result(running, i.tag(), false, now,
                     "the release index went backwards: it says sequence " + i.seq() + " (" + i.tag()
                         + "), and this node has already seen " + seen.seq() + " (" + seen.tag()
-                        + "). Refusing it; see " + PAGE, i.expires(), false, i.seq());
+                        + "). Refusing it; see " + PAGE, i.expires(), i.seq(), Outcome.REFUSED);
             }
             Integer cmp = compare(running, i.tag());
             if (cmp == null) {
+                // A source build reports "dev" and has nothing to compare with. Ordinary, permanent,
+                // and nobody's fault: "cannot tell", not a refusal the daemon repeats every day.
                 return new Result(running, i.tag(), false, now,
-                    "cannot compare this build (" + running + ") with " + i.tag(), i.expires(), false, i.seq());
+                    "cannot compare this build (" + running + ") with " + i.tag(), i.expires(), i.seq(),
+                    Outcome.CANNOT_TELL);
             }
             // Recorded only once everything above has passed: a sequence this node refused is not
             // one it has seen.
-            Seen.record(floor, i, now);
-            return new Result(running, i.tag(), cmp < 0, now, null, i.expires(), now >= i.expires(), i.seq());
-        } catch (IOException | HttpException | GeneralSecurityException | RuntimeException e) {
+            Seen.record(floor, i, now, seen);
+            Outcome out = now >= i.expires() ? Outcome.STALE : cmp < 0 ? Outcome.NEWER : Outcome.CURRENT;
+            return new Result(running, i.tag(), cmp < 0, now, null, i.expires(), i.seq(), out);
+        } catch (Rejected e) {
+            // Bytes arrived and were rejected -- a signature that matches no key this build accepts,
+            // a document it cannot read. Told apart from "nothing arrived" because the first is
+            // worth waking someone for and the second is a node without a network.
             return new Result(running, null, false, now,
-                e.getMessage() == null ? e.toString() : e.getMessage(), 0, false, 0);
+                e.getMessage() == null ? e.toString() : e.getMessage(), 0, 0, Outcome.REFUSED);
+        } catch (IOException | HttpException | RuntimeException e) {
+            return new Result(running, null, false, now,
+                e.getMessage() == null ? e.toString() : e.getMessage(), 0, 0, Outcome.UNREACHABLE);
+        }
+    }
+
+    /** Whether {@code i} names something above {@code running}, with "cannot tell" reading as no. */
+    private static boolean newer(String running, Index i) {
+        Integer cmp = compare(running, i.tag());
+        return cmp != null && cmp < 0;
+    }
+
+    /**
+     * A pointer that arrived and was refused, as against one that never arrived. The difference is
+     * the only thing telling a node with no route to the internet from a node being served bytes its
+     * keys reject, and the daemon logs one and not the other.
+     */
+    static final class Rejected extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        Rejected(String message) {
+            super(message);
+        }
+
+        Rejected(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -210,10 +293,12 @@ final class Updates {
      * publish could hold a node on an older -- genuinely signed -- release for as long as they kept
      * the index naming it.
      *
-     * @throws GeneralSecurityException the signature is not one this build accepts, which is fatal
-     *     here rather than a reason to fall back on the unsigned index that used to answer this
+     * @throws Rejected the signature is not one this build accepts, or the document is not one it
+     *     can read -- fatal here rather than a reason to fall back on the unsigned index that used
+     *     to answer this, and told apart from a fetch that failed because only one of the two is
+     *     worth waking somebody for
      */
-    static Index index(Source source) throws IOException, GeneralSecurityException, HttpException {
+    static Index index(Source source) throws IOException, HttpException {
         byte[] doc;
         byte[] sig;
         try {
@@ -223,7 +308,13 @@ final class Updates {
             throw new IOException("could not read the signed " + INDEX + " that says which release is"
                 + " current: " + e.getMessage(), e);
         }
-        ReleaseKey.verify(source.keys(), doc, sig);
+        try {
+            ReleaseKey.verify(source.keys(), doc, sig);
+        } catch (GeneralSecurityException e) {
+            // These bytes arrived and are being refused, which is not the same event as failing to
+            // fetch them; check() tells the two apart and the daemon logs only this one.
+            throw new Rejected(e.getMessage() == null ? e.toString() : e.getMessage(), e);
+        }
         return Index.parse(new String(doc, StandardCharsets.UTF_8));
     }
 
@@ -269,37 +360,66 @@ final class Updates {
         }
 
         /**
-         * Writes {@code i} down when it is at or above what is there. Re-read immediately before
-         * writing because the daemon's daily check and a {@code jailscale update} in a terminal are
-         * two processes on one file: the later writer must not be allowed to carry an older read
-         * back over a higher number.
+         * Writes {@code i} down when it is above what {@code seen} held, under a lock the other
+         * process takes too.
+         *
+         * <p><b>Two processes write this file</b> -- the daemon's daily check and a
+         * {@code jailscale update} in a terminal -- and it is the first in the config directory that
+         * {@link DaemonLock} does not serialise. A re-read before the write is not enough on its
+         * own: read, write and rename are three operations, so two checks that interleave can still
+         * end with the lower sequence on disk, and a temp file named after its target is the same
+         * path in both processes, so one can truncate what the other is about to rename into place.
+         * The lock closes the first and the unique temp name closes the second; neither is
+         * expensive once a day.
+         *
+         * <p>Nothing is written when the pointer has not moved, which is every day but the few a
+         * year one is re-issued. {@code checkedAt} is the only field that would change, and nothing
+         * reads it back.
          *
          * <p>A write that fails is logged and not raised. The check itself succeeded, the answer is
          * already correct, and the floor simply does not advance -- on a read-only home, or where
          * the file belongs to the user who ran the other process, that is the whole of the harm.
          */
-        static void record(Path file, Index i, long now) {
-            if (file == null) {
+        static void record(Path file, Index i, long now, Seen seen) {
+            if (file == null || (i.seq() == seen.seq() && i.tag().equals(seen.tag()))) {
                 return;
             }
+            Path dir = file.getParent(); // null for a bare filename, which needs no directory made
+            Path tmp = null;
             try {
-                if (i.seq() < load(file).seq()) {
-                    return;
-                }
-                String json = JsonObject.builder().put("seq", i.seq()).put("tag", i.tag())
-                    .put("checkedAt", now / 1000).toJson();
-                Path dir = file.getParent(); // null for a bare filename, which needs no directory made
                 if (dir != null) {
                     Files.createDirectories(dir);
                 }
-                Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-                Files.writeString(tmp, json + "\n", StandardCharsets.UTF_8);
-                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                // A lock file of its own, never renamed over: locking update.json itself would leave
+                // the second process holding a lock on an inode the first had already replaced.
+                Path lock = file.resolveSibling(file.getFileName() + ".lock");
+                try (FileChannel ch = FileChannel.open(lock, StandardOpenOption.CREATE,
+                        StandardOpenOption.WRITE)) {
+                    ch.lock(); // released when the channel closes, however this block ends
+                    if (i.seq() < load(file).seq()) {
+                        return; // the other process got here first with a higher one
+                    }
+                    String json = JsonObject.builder().put("seq", i.seq()).put("tag", i.tag())
+                        .put("checkedAt", now / 1000).toJson();
+                    tmp = dir == null ? Files.createTempFile("update", ".tmp")
+                        : Files.createTempFile(dir, "update", ".tmp");
+                    Files.writeString(tmp, json + "\n", StandardCharsets.UTF_8);
+                    Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                    tmp = null;
+                }
             } catch (IOException | RuntimeException e) {
                 // Not raised -- the check itself succeeded and its answer is correct -- but not
                 // whispered either: a floor that has stopped advancing is a protection quietly
                 // going stale, and the operator is the only one who can fix the permissions.
                 LOG.warn("could not write {}, so the release index floor stays where it is: {}", file, e.toString());
+            } finally {
+                if (tmp != null) {
+                    try {
+                        Files.deleteIfExists(tmp); // a rename that did not happen leaves nothing behind
+                    } catch (IOException ignored) {
+                        // the write's own reason is the one worth reporting
+                    }
+                }
             }
         }
     }
@@ -320,7 +440,7 @@ final class Updates {
         static Index parse(String text) throws IOException {
             String[] lines = text.split("\n");
             if (lines.length == 0 || !lines[0].trim().equals(INDEX_FORMAT)) {
-                throw new IOException("the signed " + INDEX + " is not in a format this build reads"
+                throw new Rejected("the signed " + INDEX + " is not in a format this build reads"
                     + " (it begins " + (lines.length == 0 ? "empty" : "\"" + lines[0].trim() + "\"")
                     + ", this build reads \"" + INDEX_FORMAT + "\")");
             }
@@ -330,10 +450,13 @@ final class Updates {
             String expires = null;
             for (int i = 1; i < lines.length; i++) {
                 int colon = lines[i].indexOf(':');
-                if (colon <= 0) {
+                // The name starts the line, because the shell reader anchors it there
+                // (`sed -n "s/^seq:..."`): a line this accepted and that one did not would be two
+                // readers of one signed document disagreeing about what it says.
+                if (colon <= 0 || Character.isWhitespace(lines[i].charAt(0))) {
                     continue;
                 }
-                String name = lines[i].substring(0, colon).trim();
+                String name = lines[i].substring(0, colon);
                 String value = lines[i].substring(colon + 1).trim();
                 switch (name) {
                     case "seq" -> seq = value;
@@ -345,27 +468,35 @@ final class Updates {
                 }
             }
             if (seq == null || tag == null || issued == null || expires == null) {
-                throw new IOException("the signed " + INDEX + " does not carry a seq, a tag, an issued"
+                throw new Rejected("the signed " + INDEX + " does not carry a seq, a tag, an issued"
                     + " and an expires");
             }
             long n;
             try {
                 n = Long.parseLong(seq);
             } catch (NumberFormatException e) {
-                throw new IOException("the signed " + INDEX + " has a seq that is not a number: " + seq);
+                throw new Rejected("the signed " + INDEX + " has a seq that is not a number: " + seq);
             }
             if (n < 1) {
                 // Not merely non-negative: `Seen` reads a stored zero as "no floor at all", so a
                 // pointer at zero would be accepted and then remembered as never having been seen.
-                throw new IOException("the signed " + INDEX + " has a seq below 1: " + seq);
+                throw new Rejected("the signed " + INDEX + " has a seq below 1: " + seq);
+            }
+            if (!seq.equals(Long.toString(n))) {
+                // One spelling per number. `Long.parseLong` reads "09" and "+9" as nine; the shell
+                // reads the first as nine too and then dies on it in `$(( ))`, and would read the
+                // second as neither. A sequence both readers cannot spell the same way is refused
+                // here rather than left for whichever of them looks at it next.
+                throw new Rejected("the signed " + INDEX + " writes its seq as " + seq + " rather than "
+                    + n + "; a sequence has one spelling");
             }
             if (!tagOk(tag)) {
-                throw new IOException("the signed " + INDEX + " names something that is not a release tag: " + tag);
+                throw new Rejected("the signed " + INDEX + " names something that is not a release tag: " + tag);
             }
             long from = instant(issued, "issued");
             long until = instant(expires, "expires");
             if (until < from) {
-                throw new IOException("the signed " + INDEX + " expires (" + expires + ") before it was"
+                throw new Rejected("the signed " + INDEX + " expires (" + expires + ") before it was"
                     + " issued (" + issued + ")");
             }
             return new Index(n, tag, from, until);
@@ -374,8 +505,12 @@ final class Updates {
         private static long instant(String s, String what) throws IOException {
             try {
                 return Instant.parse(s).toEpochMilli();
-            } catch (DateTimeParseException e) {
-                throw new IOException("the signed " + INDEX + " carries an " + what
+            } catch (DateTimeParseException | ArithmeticException e) {
+                // ArithmeticException too: Instant.parse accepts instants either side of what a long
+                // of milliseconds can hold (+999999999-12-31T23:59:59.999999999Z parses and then
+                // overflows), and without this the caller is told "long overflow" by something that
+                // declares it throws IOException.
+                throw new Rejected("the signed " + INDEX + " carries an " + what
                     + " this build cannot read: " + s);
             }
         }

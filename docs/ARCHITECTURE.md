@@ -1092,15 +1092,16 @@ checks that the key it is about to sign with is the one the previous release com
 that file and publishes. **"Published" is made to mean "signed"** rather than left as a convention
 the web UI's Publish button does not know: `published.yml` runs `tools/verify-release.sh` the
 moment a release is published, against the keys that tag's own `ReleaseKey.java` lists, and a
-release that fails is put back into draft. `releases/latest` never shows a draft, so an unsigned
-release is visible to nodes for the seconds that takes. The same check is what lets `:latest` on
+release that fails is put back into draft. Nodes no longer read `releases/latest` at all — they
+read the signed pointer below, which no unsigned release can move — so what that window now bounds
+is what a person following a link would see, not what a node would install. The same check is what lets `:latest` on
 GHCR move — after it, and after the tag push's image build has finished, which runs on its own
 clock. A release tag has to match `vMAJOR.MINOR.PATCH[-suffix]`, checked before the four native
 builds and again by the signing script; the rule is written once, in `tools/release-keys.sh`,
 because the hyphen in it is what marks a pre-release for the workflow and for `Updates.compare`
 alike, and a tag outside the grammar would have been a full release every node reports "cannot
-compare" on. The public half is compiled into the binary, like `LATEST` and for the same reason
-(§11.2). A build that carries no key refuses to download rather than falling back to the checksum
+compare" on. The public half is compiled into the binary, like `DOWNLOADS` and the pointer's own
+tag below, and for the same reason (§11.2). A build that carries no key refuses to download rather than falling back to the checksum
 alone; the check that cannot be made is not quietly skipped.
 
 **A signed pointer says which release is current, and `update` reads it.**
@@ -1132,9 +1133,10 @@ The node's clock is allowed to be wrong for the same reason — the worst a bad 
 state file, holds the highest `seq` this node has accepted, and a pointer below it is refused with
 what it said and what this node has already seen. Without it, whoever can publish can put an old —
 genuinely signed, so every other check passes — pointer back up and hold a node on the release it
-names. It is written only after every other check has passed, re-read immediately before writing
-because the daemon's daily check and a `jailscale update` in a terminal are two processes on one
-file, and kept beside `node.json` rather than inside it: `update` runs in the CLI process so that it
+names. It is written only after every other check has passed, under a lock the other writer takes too —
+the daemon's daily check and a `jailscale update` in a terminal are two processes on one file, and
+this is the first file in the state directory that the daemon lock does not already serialise — and
+kept beside `node.json` rather than inside it: `update` runs in the CLI process so that it
 answers while the daemon is down, and a second writer on the file that holds the MachineKey is not a
 race worth introducing for a counter. A node with nowhere to keep it still checks — there the floor
 is the one it has always had, the version this binary is — and a file that cannot be read is rebuilt

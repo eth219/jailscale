@@ -468,7 +468,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("links", linkRows())
             .put("revoked", revokedRows())
             .put("lastError", link.lastError())
-            .put("update", lastUpdate == null ? null : lastUpdate.json().build());
+            .put("update", lastUpdate == null ? null : lastUpdate.json(System.currentTimeMillis()).build());
         Message.RegisterResponse r = link.lastRegister();
         if (r != null) {
             b.put("registration", r.status());
@@ -518,11 +518,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 Updates.Result r = Updates.check(Version.string(), config.updateFile());
                 if (r.newer()) {
                     LOG.info("{}", r.line());
-                } else if (r.error() != null && r.seq() > 0) {
-                    // A pointer that was fetched, verified and then refused -- a sequence that went
-                    // backwards above all (docs/update-freshness) -- is not the connectivity failure
-                    // the silence above is for: those come back with no sequence at all. This is the
-                    // only place a node says it on its own, since nobody runs `status` daily.
+                } else if (r.outcome() == Updates.Outcome.REFUSED || r.outcome() == Updates.Outcome.STALE) {
+                    // The two a node has to say on its own, because nobody runs `status` daily: a
+                    // pointer that was refused (a sequence that went backwards, a signature no key
+                    // here accepts), and one that has expired -- which is what a withheld upgrade
+                    // looks like from inside. Everything else stays quiet: a node with no route to
+                    // the internet, a clock that disagrees and a `dev` build are all conditions that
+                    // would otherwise fill this log with the same line every day for ever.
                     LOG.warn("{}", r.line());
                 }
                 lastUpdate = r;

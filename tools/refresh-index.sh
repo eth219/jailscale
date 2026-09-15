@@ -55,6 +55,18 @@ trap 'rm -rf "$dir"' EXIT
 rc=0
 index_fetch "$repo" "$dir/now" || rc=$?
 [ "$rc" != 1 ] || { echo "could not read the current pointer, so this will not write one." >&2; exit 1; }
+if [ "$rc" = 4 ]; then
+    # The release is there and carries no pointer. That is either a bootstrap somebody half-finished
+    # or, far more likely, an upload that deleted the assets and then failed -- and the two are
+    # indistinguishable from here, so the safe reading is the second: never restart a sequence over
+    # assets that existed. Deleting the release is the deliberate act that says otherwise.
+    echo "$INDEX_TAG exists and carries no pointer." >&2
+    echo "If an upload lost its assets, do NOT start a new sequence: re-issue above the highest one" >&2
+    echo "any node has seen. If it truly never carried a pointer, say so by deleting it --" >&2
+    echo "  gh release delete -R $repo $INDEX_TAG --cleanup-tag" >&2
+    echo "-- and then run: tools/refresh-index.sh --first vX.Y.Z" >&2
+    exit 1
+fi
 
 seq=""
 tag=""
@@ -124,15 +136,28 @@ echo "checking that $tag is signed ..."
     exit 1
 }
 
-# The key has to be one the field accepts, which is the list the release BEFORE this one compiled
-# in -- not this one's, which may already carry the next key of a rotation that no deployed binary
-# has yet. Same rule as signing a release, for the same reason.
+# The key has to be one that BOTH lists accept, and that is not the rule for signing a release.
+#
+# A release's signature is only ever checked by binaries older than it, so the list the previous
+# release compiled in is the right anchor there. A pointer is different: it is read by nodes at
+# every version, including the one it names -- telling a node on T that it is current is the
+# pointer's whole job -- so a key that only the older list carries produces a pointer every node on
+# the named release refuses, and the next re-issue then refuses to overwrite it.
 kms_public_key "$dir/pub.pem"
 spki=$(spki_base64 "$dir/pub.pem")
 fingerprint=$(spki_fingerprint "$dir/pub.pem")
 previous=$(release_previous_tag "$root" "$tag")
-accepted_from=${previous:-$tag}
-accepted=$(release_keys_at "$root" "$accepted_from")
+accepted=""
+accepted_from=$previous
+[ -n "$previous" ] && accepted=$(release_keys_at "$root" "$previous")
+if [ -z "$accepted" ]; then
+    # The same fallback sign-release.sh has: a previous release that carries no key list at all
+    # (anything before signing existed) leaves nothing in the field to be compatible with, and
+    # without this the one release you would most want to point back at is the one that is refused.
+    accepted_from=$tag
+    accepted=$(release_keys_at "$root" "$tag")
+    echo "nothing before $tag carries a key list; checking against $tag's own instead."
+fi
 [ -n "$accepted" ] || { echo "cannot read a key list from $RELEASE_KEYS_SRC at $accepted_from." >&2; exit 1; }
 printf '%s\n' "$accepted" | grep -qxF "$spki" || {
     echo "the key you are signing with is not one that $accepted_from accepts." >&2
@@ -140,6 +165,17 @@ printf '%s\n' "$accepted" | grep -qxF "$spki" || {
     echo "Signing anyway would publish a pointer every binary in the field refuses to read." >&2
     exit 1
 }
+named=$(release_keys_at "$root" "$tag")
+if [ -n "$named" ] && [ "$accepted_from" != "$tag" ]; then
+    printf '%s\n' "$named" | grep -qxF "$spki" || {
+        echo "the key you are signing with is not one that $tag itself accepts." >&2
+        echo "  this key:  $spki" >&2
+        echo "A pointer is read by nodes at every version, including the one it names, so a key only" >&2
+        echo "the older list carries publishes a pointer every node on $tag refuses. Sign with a key" >&2
+        echo "on both lists -- during a rotation that is the old one until the new release is out." >&2
+        exit 1
+    }
+fi
 
 echo
 echo "about to publish: seq $seq, tag $tag"

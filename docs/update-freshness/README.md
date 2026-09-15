@@ -255,6 +255,35 @@ a node that has already seen better. Neither 4 nor 5 is required for either prop
   find out. The daemon says a refusal out loud once a day for the same reason -- `status` carries it,
   but nobody runs `status` daily.
 
+## What a review of the whole of it changed
+
+- **A check answers with an outcome, not with two nullable fields.** `Result` carries one of
+  current / newer / stale / cannot-tell / refused / unreachable, because both consumers were
+  inferring the category and both got it wrong: the daemon read "a sequence went backwards" out of
+  `seq > 0` and so warned daily about a `dev` build's "cannot compare", while never saying anything
+  about an expired pointer — the one thing the expiry exists to surface. The CLI derived its stream
+  and exit status the same way and exited 1 while announcing an upgrade.
+- **A clock that disagrees says "cannot tell".** Both documents promised that and the code did the
+  opposite: a slow clock produced a hard error. It is the same answer an expiry gives, and the
+  upgrade the pointer names is still offered — a clock is not evidence about a release.
+- **A release-index that exists and carries no pointer is its own state.** `gh release upload
+  --clobber` deletes an asset before it uploads the replacement and loses it if the upload fails, so
+  "no assets at all" is a state the publishing step can produce — and reading it as "there is no
+  pointer" is what would let `--first` restart the sequence over a fleet that has seen higher. Only
+  a release that does not exist authorises a first sequence now; the recovery for the other state is
+  to re-issue above what the fleet has seen, or to delete the release on purpose.
+- **A pointer needs a key on both lists.** Signing a release is checked against the list the
+  *previous* release compiled in, because only older binaries verify it. A pointer is read by nodes
+  at every version, including the one it names, so a key only the older list carries publishes a
+  pointer every node on the named release refuses. Both lists are checked now, and the fallback for
+  a previous release that predates signing — which sign-release.sh always had — is here too.
+- **A sequence has one spelling.** `09` is nine to both readers and then kills the next `$(( ))` in
+  the shell, after the release it was signing is already out. Both readers refuse it instead.
+- **Something runs the expiry check.** The fourteen-day warning was reachable only by a human typing
+  a command nobody had a reason to type, which for a scheme whose whole cost is a recurring manual
+  act is the wrong place to keep the reminder. The nightly CI run checks the published pointer and
+  goes red two weeks out.
+
 ## What building step 2 settled
 
 - **An expired pointer is reported on stderr and exits 1 when there is nothing newer**, so a script
