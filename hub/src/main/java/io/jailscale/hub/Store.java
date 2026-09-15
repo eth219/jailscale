@@ -551,14 +551,62 @@ final class Store implements AutoCloseable {
     }
 
     /**
+     * What this store held that the primary's state does not, and is about to lose
+     * (ARCHITECTURE.md §13.5). Counts for everything, names for the things a person holds.
+     */
+    record Superseded(List<String> nodes, List<String> names, List<String> domains, List<Integer> ports,
+        int credentials, Path kept) {
+
+        boolean any() {
+            return !nodes.isEmpty() || !names.isEmpty() || !domains.isEmpty() || !ports.isEmpty() || credentials > 0;
+        }
+
+        /** Only what there is: an operator reading this at two in the morning is owed a short line. */
+        @Override
+        public String toString() {
+            StringBuilder b = new StringBuilder();
+            append(b, "nodes", nodes);
+            append(b, "names", names);
+            append(b, "domains", domains);
+            append(b, "ports", ports);
+            if (credentials > 0) {
+                append(b, "unused invites or auth-keys", List.of(credentials));
+            }
+            return b.length() == 0 ? "nothing" : b.toString();
+        }
+
+        private static void append(StringBuilder b, String what, List<?> items) {
+            if (!items.isEmpty()) {
+                b.append(b.length() == 0 ? "" : ", ").append(what).append(' ').append(items);
+            }
+        }
+    }
+
+    /**
      * Throws away everything held and replaces it with {@code snapshotJson} from the primary,
      * persisting it as this store's own snapshot and truncating the log. The version check is the
      * one {@link #load} makes: a standby running an older binary than its primary must stop rather
      * than replay state it cannot read.
+     *
+     * <p><b>Whatever this host held and the primary does not is gone, and that is the whole of the
+     * reconciliation (§13.5).</b> There is no merge here and there cannot be a cheap one: the two
+     * stores share no lineage a write can be placed in, so nothing can say whether a name this host
+     * holds is one the other has never seen or one it deliberately released. The primary's state
+     * wins entire, which is what a lease with an epoch buys and the whole of what it buys.
+     *
+     * <p>What that costs is normally nothing -- a standby's state came from this same primary -- and
+     * it is not nothing after a partition in which this host was itself a primary: a node that joined
+     * here, or a name claimed here, exists nowhere afterwards, and the node finds out by being an
+     * unknown machine key the next time it connects. So it is <b>reported and kept</b> rather than
+     * silently dropped: the returned record names what went, and the state as it stood is written to
+     * {@code state.superseded.snapshot} beside the live one, from which an operator can read the
+     * records back. That file is overwritten by the next one, so it is a recovery for the event that
+     * has just been logged and not an archive.
      */
-    synchronized void replaceWith(String snapshotJson) throws IOException {
+    synchronized Superseded replaceWith(String snapshotJson) throws IOException {
         JsonObject s = Json.parseObject(snapshotJson);
         checkVersion(s, "the primary's state");
+        Superseded lost = supersededBy(s);
         nodesByKey.clear();
         invites.clear();
         authKeys.clear();
@@ -575,6 +623,49 @@ final class Store implements AutoCloseable {
         nextNodeId = 1;
         loadSnapshot(s);
         snapshot();
+        return lost;
+    }
+
+    /**
+     * What the incoming state does not have, worked out before anything is cleared. The copy is
+     * written first, so a hub that dies during the replacement has still kept what it was about to
+     * drop; when nothing would be dropped, nothing is written and no file is left to mislead.
+     */
+    private Superseded supersededBy(JsonObject incoming) throws IOException {
+        Store theirs = new Store();
+        theirs.loadSnapshot(incoming);
+        List<String> lostNodes = new ArrayList<>();
+        for (NodeRec n : nodesByKey.values()) {
+            if (!theirs.nodesByKey.containsKey(n.mkey())) {
+                lostNodes.add(n.user() + "/" + n.hostname());
+            }
+        }
+        List<String> lostNames = new ArrayList<>(names.keySet());
+        lostNames.removeAll(theirs.names.keySet());
+        List<String> lostDomains = new ArrayList<>(domains.keySet());
+        lostDomains.removeAll(theirs.domains.keySet());
+        List<Integer> lostPorts = new ArrayList<>(ports.keySet());
+        lostPorts.removeAll(theirs.ports.keySet());
+        int credentials = 0;
+        for (String id : invites.keySet()) {
+            credentials += theirs.invites.containsKey(id) ? 0 : 1;
+        }
+        for (String id : authKeys.keySet()) {
+            credentials += theirs.authKeys.containsKey(id) ? 0 : 1;
+        }
+        Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials,
+            dir.resolve("state.superseded.snapshot"));
+        if (lost.any()) {
+            Files.writeString(lost.kept(), snapshotJson(), StandardCharsets.UTF_8);
+        }
+        return lost;
+    }
+
+    /** An empty store with no directory behind it: somewhere to replay another's snapshot and compare. */
+    private Store() {
+        this.dir = null;
+        this.logPath = null;
+        this.snapshotPath = null;
     }
 
     private void checkVersion(JsonObject s, String what) throws IOException {

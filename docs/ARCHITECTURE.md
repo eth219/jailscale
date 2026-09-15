@@ -473,6 +473,7 @@ $JAILHUB_STATE/            (default /var/lib/jailhub, else ~/.local/share/jailhu
 ├── jailhub.lock           process lock; a second `jailhub serve` fails immediately
 ├── jailhub.sock           admin IPC socket (§6.3)
 ├── availability.json      the process's own uptime record and what it saw of its peers (§13.2)
+├── state.superseded.snapshot   only after a hand-off took something away: the state as it stood (§13.5)
 └── tls/                   account.key, wildcard.key, wildcard.pem, wildcard.key.prev (0600)
 ```
 
@@ -1864,11 +1865,34 @@ decision where it was; and a returning primary standing down by epoch.
 
 **What this is and is not.** A lease with fencing and an epoch, not a replicated log with
 consensus. The writes it protects are rare -- names claimed, nodes joined -- and the worst outcome
-of a wrong promotion is two primaries until the link heals, at which point the epoch settles it and
-the writes made in between merge, the later epoch winning. Visitors notice nothing throughout. What
-a hostile node can do with this is make that merge happen, on an open-registration hub, at an hour
-when it is the only node; the default above and the rate limit are what make that worthless. What a
-node can do outside this vote is what §11.1 already bounds.
+of a wrong promotion is two primaries until the link heals, at which point the epoch settles which
+one it was.
+
+**The loser's writes do not merge into the winner's. They are discarded, and this said otherwise
+until it was read against the code.** `Store.replaceWith` clears everything this host holds and
+replaces it with the primary's snapshot, which is the whole of the reconciliation: a node that
+joined the losing hub during the partition, a name claimed there, a domain, a raw port, an invite
+created there, all cease to exist when the link heals. A merge is not a small thing left undone
+either -- the two stores share no lineage a write can be placed in, so nothing can distinguish a
+name this host holds and has never told anyone about from one the winner deliberately released, and
+guessing wrong resurrects a name an operator took away. Whole-state replacement is what a lease with
+an epoch buys, and the whole of what it buys.
+
+So the loss is **reported and kept** rather than silent. On replacing its state a hub compares the
+two and logs, at warning, the nodes, names, domains, ports and unused credentials it held and the
+primary does not, saying that those nodes have to join again and those names are free to claim; and
+it writes its state as it stood to `state.superseded.snapshot` in the state directory, which is a
+snapshot a `jailhub` can read, so an operator can see exactly what was there. The file is written
+only when something is actually dropped and is overwritten by the next such event: it is a recovery
+for the incident just logged, not an archive. An ordinary standby resync takes nothing away -- its
+state came from this same primary -- and leaves no file and no warning. `StoreReplicationTest`
+holds both cases. Without a person reading that line, the first anyone knows is a node discovering
+it is an unknown machine key.
+
+Visitors notice nothing throughout. What a hostile node can do with this is force that replacement,
+on an open-registration hub, at an hour when it is the only node; the default above and the rate
+limit are what make that worthless. What a node can do outside this vote is what §11.1 already
+bounds.
 
 ---
 
@@ -2333,6 +2357,15 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   to the standby waits for a person (§13.5).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.
+- **Writes made on the losing side of a partition are discarded when it heals, not merged** (§13.5).
+  Both hubs serve throughout, so a node that reaches only the hub that turns out to have the lower
+  epoch can join, claim a name, bring a domain or take a raw port, and every one of those is gone
+  when the epochs settle -- the winner's state replaces the loser's entire. The node finds out by
+  being an unknown machine key. What bounds it is that the window is a partition long enough to
+  promote (30 s plus the witness window) and that these writes are rare; what makes it survivable is
+  that the hub says what it dropped and keeps a readable copy of the state it dropped it from. A
+  real merge needs a lineage the two stores do not share, which is the piece of a replicated log
+  this design does not have and does not claim to.
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
   loses events when one socket is parked for read and for write together (JDK-8334574), so one side
   of each of those sockets is kept off the poller there. Measured at about 60 KB per concurrent

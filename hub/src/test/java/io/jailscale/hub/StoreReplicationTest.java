@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -8,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.proto.json.JsonObject;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -73,6 +75,76 @@ class StoreReplicationTest {
                 () -> standby.replaceWith("{\"v\":" + (Store.STATE_VERSION + 1) + ",\"nextNodeId\":1,\"events\":[]}"));
             assertTrue(e.getMessage().contains("newer jailhub"), e.getMessage());
             assertTrue(standby.isAdmin("alice"), "a refused snapshot leaves the store as it was");
+        }
+    }
+
+    @Test
+    void whatTheLosingPrimaryHeldIsNamedAndKeptRatherThanSilentlyDropped() throws Exception {
+        // ARCHITECTURE.md §13.5: after a partition the epochs settle which host is the primary, and
+        // the loser's state does not merge into the winner's -- it is replaced by it. There is no
+        // lineage the two stores share, so nothing can tell a name this host has never told anyone
+        // about from one the other deliberately released. What can be done is to say what went, and
+        // to keep it: a node that joined the losing hub during the partition exists nowhere
+        // afterwards, and would otherwise find out by being an unknown machine key.
+        Path a = TestDirs.newRoot("winner");
+        Path b = TestDirs.newRoot("loser");
+        try (Store winner = new Store(a); Store loser = new Store(b)) {
+            // Both were primaries for a while. They agree about alice, who joined before the split.
+            for (Store s : List.of(winner, loser)) {
+                s.registerNode("mkey:alice", "alice", "laptop", "macos");
+                s.claimName("web", "alice", "mkey:alice", "127.0.0.1:3000");
+            }
+            // And then each served someone the other never saw.
+            winner.registerNode("mkey:carol", "carol", "ci-box", "linux");
+            loser.registerNode("mkey:bob", "bob", "desktop", "linux");
+            loser.claimName("bobapp", "bob", "mkey:bob", "127.0.0.1:8080");
+            loser.claimDomain("app.example.com", "bob", "mkey:bob");
+            loser.assignPort(2222, "tcp", "bob", "mkey:bob", "127.0.0.1:22");
+            loser.createAuthKey("jk_partition", "bob", null, 1, 3600);
+
+            Store.Superseded lost = loser.replaceWith(winner.snapshotJson());
+
+            assertTrue(lost.any(), "the loser held things the winner does not");
+            assertEquals(List.of("bob/desktop"), lost.nodes());
+            assertEquals(List.of("bobapp"), lost.names());
+            assertEquals(List.of("app.example.com"), lost.domains());
+            assertEquals(List.of(2222), lost.ports());
+            assertEquals(1, lost.credentials(), "the auth-key created here");
+            // Not what they agreed on, and not what the winner has that this host never had.
+            assertFalse(lost.names().contains("web"), "a name both held is not lost");
+            assertFalse(lost.nodes().contains("carol/ci-box"), "the winner's own node is not a loss here");
+
+            // The replacement still happened: this host is the winner's copy now.
+            assertNull(loser.node("mkey:bob"), "bob is gone from the live state");
+            assertNotNull(loser.node("mkey:carol"), "and carol arrived with the snapshot");
+
+            // And what went is recoverable rather than only named: the state as it stood is beside
+            // the live one, and it is a snapshot a Store can read.
+            assertTrue(Files.exists(lost.kept()), "the superseded state should be kept at " + lost.kept());
+            Path recovered = TestDirs.newRoot("recovered");
+            Files.copy(lost.kept(), recovered.resolve("state.snapshot"));
+            try (Store back = new Store(recovered)) {
+                assertNotNull(back.node("mkey:bob"), "bob should be readable from the kept copy");
+                assertEquals(1, back.names().stream().filter(n -> n.name().equals("bobapp")).count());
+            }
+        }
+    }
+
+    @Test
+    void anOrdinaryResyncLosesNothingAndLeavesNoFile() throws Exception {
+        // The common case by far: a standby's state came from this primary, so a fresh snapshot
+        // takes nothing away and must not leave a warning or a file behind for an operator to
+        // wonder about.
+        Path a = TestDirs.newRoot("primary");
+        Path b = TestDirs.newRoot("standby");
+        try (Store primary = new Store(a); Store standby = new Store(b)) {
+            primary.registerNode("mkey:alice", "alice", "laptop", "macos");
+            primary.claimName("web", "alice", "mkey:alice", "127.0.0.1:3000");
+            standby.replaceWith(primary.snapshotJson());
+
+            Store.Superseded again = standby.replaceWith(primary.snapshotJson());
+            assertFalse(again.any(), "a resync of the same state loses nothing: " + again);
+            assertFalse(Files.exists(again.kept()), "and writes no superseded copy");
         }
     }
 

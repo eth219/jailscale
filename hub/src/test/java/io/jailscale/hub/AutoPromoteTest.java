@@ -149,6 +149,49 @@ class AutoPromoteTest {
     }
 
     @Test
+    void whatTheStandingDownPrimaryServedAloneIsReportedAndKept() throws Exception {
+        // §13.5: both hubs serve through a partition, so the one that turns out to have the lower
+        // epoch may have served joins and claims nobody else saw. Those do not merge when the link
+        // heals -- the winner's state replaces this host's entire -- so what it must not do is
+        // vanish without a word.
+        pair();
+        a.close();
+        a = null;
+        waitFor("the standby never promoted itself", () -> "primary".equals(b.role()));
+
+        // While A is away from B, it serves someone B will never hear about. Written into A's state
+        // directory directly, which is what A having served it amounts to by the time it restarts.
+        try (Store served = new Store(root.resolve("a"))) {
+            served.registerNode("mkey:bob", "bob", "desktop", "linux");
+            served.claimName("bobapp", "bob", "mkey:bob", "127.0.0.1:8080");
+        }
+
+        b.roleFile().promote(); // as a second failover in the field would, so B outranks A on return
+        a = new Hub(cfgA.withPeer(URI.create("https://hub.test:" + portB), CERT, "127.0.0.1"));
+        a.relayEndpointOverride = "127.0.0.1:" + portA;
+        a.start();
+        assertTrue(a.store().node("mkey:bob") != null, "A starts holding what it served");
+        waitFor("the returning primary never stood down", () -> "standby".equals(a.role()));
+        waitFor("the demoted hub never synced", () -> a.peerClient() != null && a.peerClient().isSynced());
+
+        // Gone from the live state, which is the design: there is no lineage to merge along.
+        assertTrue(a.store().node("mkey:bob") == null, "bob does not exist on the primary's state");
+        assertFalse(a.store().names().stream().anyMatch(n -> n.name().equals("bobapp")), "nor does the name");
+
+        // But kept where an operator can read it, and it is a snapshot a Store opens.
+        Path kept = root.resolve("a/state.superseded.snapshot");
+        assertTrue(Files.exists(kept), "the superseded state should be kept at " + kept);
+        Path recovered = TestDirs.newRoot("recovered");
+        Files.copy(kept, recovered.resolve("state.snapshot"));
+        try (Store back = new Store(recovered)) {
+            assertTrue(back.node("mkey:bob") != null, "bob should be readable from the kept copy");
+            assertTrue(back.names().stream().anyMatch(n -> n.name().equals("bobapp")), "and so should the name");
+        }
+        // And alice, who both hubs knew about, came through the hand-off untouched.
+        assertTrue(a.store().node(alice.machineKey()) != null);
+    }
+
+    @Test
     void aPartitionIsNotADeathWhenANodeCanStillReachThePrimary() throws Exception {
         pair();
         // Cut only the hub-to-hub channel. alice still reaches A on her control connection, so
