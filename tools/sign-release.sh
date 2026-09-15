@@ -43,6 +43,7 @@ repo=$(cd "$root" && gh repo view --json nameWithOwner --jq .nameWithOwner) \
 
 . "$(dirname "$0")/kms-key.sh"
 . "$(dirname "$0")/openssl-ed25519.sh"
+. "$(dirname "$0")/release-index.sh"
 
 if command -v sha256sum >/dev/null 2>&1; then
     sha256() { sha256sum "$@"; }
@@ -124,12 +125,13 @@ git -C "$root" merge-base --is-ancestor "$want_commit" main || {
     echo "If main is current, this tag names a commit main never had, and it should not be signed." >&2
     exit 1
 }
-# --match so a tag that is not a release (a benchmark baseline, a bisect marker) is never "the
-# previous release", and --exclude so a pre-release is not either: nothing in the field was built
-# from an rc, because releases/latest skips pre-releases and nodes only ever fetch that. A key
-# list read from an rc is a list no deployed binary accepts, and a rotation checked against it
-# would publish a release every node refuses -- the exact outcome this check exists to stop.
-previous=$(git -C "$root" describe --tags --match 'v*' --exclude 'v*-*' --abbrev=0 "$tag^" 2>/dev/null || true)
+# Which release the field's key list comes from, by the one definition of it in
+# tools/release-keys.sh -- a tag that is not a release is never "the previous release", and neither
+# is a pre-release, because nothing in the field was built from an rc. A key list read from an rc is
+# a list no deployed binary accepts, and a rotation checked against it would publish a release every
+# node refuses, which is the exact outcome this check exists to stop. tools/refresh-index.sh asks
+# the same question about the pointer and has to get the same answer.
+previous=$(release_previous_tag "$root" "$tag")
 accepted=""
 accepted_from=$previous
 [ -n "$previous" ] && accepted=$(keys_at "$previous")
@@ -221,3 +223,54 @@ if [ "$(gh release view -R "$repo" "$tag" --json isDraft --jq .isDraft)" = "true
         *) echo "$tag stays a draft; gh release edit -R $repo $tag --draft=false when you are ready." ;;
     esac
 fi
+
+# --- the pointer that says which release is current (docs/update-freshness) --------------------
+#
+# What was signed above says which release it *is*. Nothing yet says which one is the newest, and
+# that is the gap ARCHITECTURE.md §15 records: whoever can publish can hold a node on an older,
+# genuinely signed release for as long as the index keeps naming it. The pointer closes it, and it
+# is moved here rather than by hand, so that publishing a release and announcing it are one act
+# with one decision in them. tools/refresh-index.sh does the same thing between releases.
+echo
+if [ "$(gh release view -R "$repo" "$tag" --json isDraft --jq .isDraft)" = "true" ]; then
+    echo "$tag is a draft, so the index still names what it named."
+    echo "Publish it and then: tools/refresh-index.sh --tag $tag"
+    exit 0
+fi
+if [ "$(gh release view -R "$repo" "$tag" --json isPrerelease --jq .isPrerelease)" = "true" ]; then
+    echo "$tag is a pre-release, so the index is left alone: releases/latest skips these and so do nodes."
+    exit 0
+fi
+index_rc=0
+index_fetch "$repo" "$dir/index" || index_rc=$?
+if [ "$index_rc" = 3 ]; then
+    echo "$tag is out. There is no $INDEX_TAG pointer yet, and this will not invent one:"
+    echo "  tools/refresh-index.sh --first $tag"
+    exit 0
+fi
+if [ "$index_rc" != 0 ]; then
+    echo "$tag is out, but the current pointer could not be read, so it has not been moved." >&2
+    echo "A sequence that restarts because a network was down is the rule it exists for, deleted." >&2
+    echo "When you can reach GitHub again: tools/refresh-index.sh --tag $tag" >&2
+    exit 1
+fi
+index_keys=$(release_keys_at "$root" "$(index_key_rev "$root" "$dir/index")")
+index_line=$(index_verify "$dir/index" "$index_keys") || {
+    echo "$tag is out, but the pointer that is published does not verify; find out why before" >&2
+    echo "overwriting it. Nothing has been changed." >&2
+    exit 1
+}
+index_seq=$(printf '%s' "$index_line" | cut -d' ' -f1)
+index_names=$(printf '%s' "$index_line" | cut -d' ' -f2)
+if ! release_newer_than "$tag" "$index_names"; then
+    # Signing an older patch after a newer release is out is a thing that happens, and moving the
+    # pointer back to it is not what the person doing it asked for. It stays a deliberate act:
+    # refresh-index.sh --tag says the sentence about what it means and asks.
+    echo "$tag is out. The index names $index_names, which is not below it, so it has not been moved."
+    echo "If you do mean to point it back: tools/refresh-index.sh --tag $tag"
+    exit 0
+fi
+echo "moving the index from $index_names (seq $index_seq) to $tag ..."
+index_issue "$repo" "$dir/index" "$tag" "$((index_seq + 1))" "$dir/pub.pem"
+echo
+echo "$INDEX_TAG now names $tag at seq $((index_seq + 1))."
