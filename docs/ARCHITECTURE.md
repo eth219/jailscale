@@ -910,8 +910,11 @@ ceiling, linear above it — so raising the ceiling with `-XX:MaxHeapSize=` thro
 `JAILSCALE_DAEMON_OPTS` (§14) buys visitors rather than leaving a node with a number that suited a
 smaller heap. Over the bound the stream is reset with `RST_NO_CAPACITY` before the handshake, since
 what is being conserved is the state the handshake would create; the node logs at most one line a
-minute saying it is at its ceiling, and `jailscale status` reports `visitorCeiling` and
-`visitorsRefused` beside `visitorsInFlight`.
+minute saying it is at its ceiling, and `jailscale status` reports `visitorCeiling`,
+`visitorsRefused` and `visitorsStalled` beside `visitorsInFlight`. The last of those is the
+first-byte deadline below, counted the same way and reported for the same reason the others are:
+refusals alone cannot tell a node full of visitors being served from one held open by visitors that
+are not there.
 
 **450 was measured, not chosen, and the alternative it is measured against is not a healthy node.**
 Against an unbounded node on darwin-arm64 at the shipped ceiling: 400, 450, 500 and 550 stalled
@@ -929,11 +932,43 @@ ordinary visitor in 1 to 36 ms.
 the one being fixed.** Someone who holds `MAX_IN_FLIGHT` connections open keeps everyone else out.
 The hub avoids that by reclaiming instead — it can pick a stream that has provably not consumed a
 byte in `STALL_MS`, so it frees memory from a connection that is not using it. Nothing on the node
-is idle in that sense: a visitor's TLS state is live for as long as the visitor is, so reclaiming
-here means choosing a victim among connections that are all making progress. Refusing the
-thousand-and-first visitor costs that visitor; not refusing it costs all of them and the hub link
+is idle in that sense **once a visitor is established**: its TLS state is live for as long as it is,
+so reclaiming there means choosing a victim among connections that are all making progress. Refusing
+the thousand-and-first visitor costs that visitor; not refusing it costs all of them and the hub link
 besides, which is what the measurements above are of. The hub already caps a name at
 `SniRouter.MAX_PER_NAME` = 1,024 on the same reasoning.
+
+**Before a visitor is established there is no victim to choose, and that phase is bounded.** A
+visitor has `Visitors.FIRST_BYTE_MS` = 30 s from the moment its stream arrives to finish the
+handshake and send its first application byte; past it the stream is reset and the slot goes back.
+This closes a hole the paragraph above used to leave open. The reads underneath a visitor wait for
+ever — `MuxStream` parks on its lock with no clock on it — so a ClientHello good enough for the SNI
+router to route, followed by silence, kept a slot and its tens of kilobytes of TLS state until the
+process restarted. At `MAX_PER_IP` = 64 that is **eight addresses to take a 450-visitor node dark on
+every one of its links**, for eight TCP connections, no registration and no traffic: cheaper than
+anything §11.5 meters, and worse than the starvation of §15 because it needs no busy neighbour.
+
+The mechanism is `MuxStream.readDeadline`, an absolute moment rather than a `setSoTimeout`. An idle
+timeout restarts on every byte, so a peer that sends one byte just inside it holds the stream for
+ever and the bound buys nothing against exactly the caller it is set for; the phases worth bounding
+are each finished by some moment or not at all. It bounds a *wait* and never data: bytes already
+queued are read out even past the deadline, so a visitor whose first byte lands in the last
+millisecond is served rather than cut. It comes off at that first byte and never goes back on,
+because everything after it is the established connection the paragraph above is about — an SSE
+stream or a websocket may say nothing for hours, and a raw tcp or udp link (§8.4) never carries one
+at all, since there the server may legitimately speak first. A gated link keeps it a moment longer,
+through the request head the gate has to read.
+
+30 s because the slow part of an honest handshake here is not the network but the hub: the node
+waits at most `RemoteSigning.SIGN_TIMEOUT_MS` = 10 s for its signature, so a handshake that will
+succeed at all has already failed by then, and three times that leaves room for a visitor's round
+trips either side without cutting anything the signing timeout would not. It is tighter than a
+general-purpose server's — nginx's `client_header_timeout` is 60 s — and the reason is the budget it
+defends: nginx has tens of thousands of slots to spend on connections that may yet say something,
+and this node has 450. A browser's speculative preconnect is the one honest visitor that loses a
+connection to it, and it loses a cache it rebuilds on the next handshake. `VisitorStallTest` holds a
+node whose ceiling is one: a stalled ClientHello takes the slot, the next visitor is refused while it
+is held, the stalled one is dropped, and the node serves again.
 
 **The node tells the hub this number, and the hub admits against it.** It rides on `Hello`
 (§5.4), and `SniRouter` checks it beside its own two caps, so a visitor a full node cannot take is
@@ -2285,9 +2320,14 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 - **At its bound a node refuses well-behaved visitors and abusive ones alike**, because the hub
   cannot tell them apart before admitting them. That is the cost `FlowBudget` names in its argument
-  for reclaiming rather than refusing (§5.3), and the node cannot take that way out: a visitor's TLS
-  state is live for as long as the visitor is, so there is no stalled connection to pick. **The
-  denial is also quieter than what it replaced.** Filling a node used to end in an
+  for reclaiming rather than refusing (§5.3), and the node cannot take that way out for an
+  established visitor: its TLS state is live for as long as it is, so there is no stalled connection
+  to pick. **What it can pick is a visitor that never arrived at all**, and since `FIRST_BYTE_MS`
+  (§9.3) that is what it does: 30 s to finish the handshake and say something, or the slot goes
+  back. So filling a node now costs holding live connections rather than opening silent ones — the
+  entry above still describes what a determined attacker gets, but it costs traffic now, where
+  before it cost eight TCP connections and a wait. **The denial is also quieter than what it
+  replaced.** Filling a node used to end in an
   `OutOfMemoryError`, a dropped hub connection and a reconnect — an outage, but a loud one. Now the
   node sits full, logs one line a minute, and turns everyone away. What it costs an attacker is
   bounded by `MAX_PER_IP` = 64, so filling a 450-visitor node takes eight addresses; that per-address

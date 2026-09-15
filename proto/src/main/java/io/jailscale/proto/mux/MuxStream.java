@@ -62,6 +62,8 @@ public final class MuxStream {
      * thing meant to protect it. Written only under {@code lock}, so it is never a torn value.
      */
     private volatile int queued;
+    /** When an inbound wait gives up, as an epoch millisecond, or 0 for never ({@link #readDeadline}). */
+    private volatile long readDeadline;
 
     private final InputStream in = new InputStream() {
         @Override
@@ -82,12 +84,7 @@ public final class MuxStream {
             int refill = 0;
             synchronized (lock) {
                 while (current == null && inbound.isEmpty() && !remoteClosed && error == null) {
-                    try {
-                        lock.wait();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new IOException("interrupted");
-                    }
+                    awaitInbound();
                 }
                 if (current == null) {
                     if (!inbound.isEmpty()) {
@@ -163,12 +160,7 @@ public final class MuxStream {
         int n;
         synchronized (lock) {
             while (current == null && inbound.isEmpty() && !remoteClosed && error == null) {
-                try {
-                    lock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("interrupted");
-                }
+                awaitInbound();
             }
             if (current == null) {
                 if (!inbound.isEmpty()) {
@@ -312,18 +304,60 @@ public final class MuxStream {
         return out;
     }
 
+    /**
+     * Bounds how long reads on this stream wait for the peer's next frame. An epoch millisecond, or
+     * 0 -- the default -- to wait for ever. Past it a read throws {@link MuxTimeoutException} and
+     * leaves the stream as it was, so what to do about it stays with the caller, which is normally
+     * to reset it.
+     *
+     * <p><b>A deadline and not a {@code setSoTimeout}</b>, which is the shape of every other timeout
+     * around this and the wrong one here. An idle timeout restarts on each byte, so a peer that
+     * sends one byte just inside it holds the stream for ever: the bound buys nothing against
+     * exactly the caller it would be set for. The phases anyone has wanted to bound -- a visitor's
+     * TLS handshake, its first request (ARCHITECTURE.md §9.3) -- are each finished by some moment or
+     * not at all, and a moment is what this takes.
+     *
+     * <p><b>Reads only.</b> A blocked write is waiting on the peer's flow-control credit, and
+     * whether to cut that off is {@link FlowBudget}'s question: it can see what the wait is costing
+     * in queued bytes, which is what makes a victim choosable there and not here.
+     *
+     * <p>Nothing sets one unless it means to bound a phase, and no stream carries one for its whole
+     * life: a link that is idle by design -- a websocket, an SSE stream, a database session over a
+     * raw port -- is a stream nobody may put a clock on.
+     */
+    public void readDeadline(long atEpochMillis) {
+        readDeadline = atEpochMillis;
+    }
+
+    /**
+     * One inbound wait, bounded by {@link #readDeadline}. The caller holds {@code lock}, which is
+     * what makes the {@code wait} here the same wait it replaced; with no deadline set the argument
+     * is 0, which is {@code Object.wait}'s own "for ever", so that path is unchanged.
+     */
+    private void awaitInbound() throws IOException {
+        long at = readDeadline;
+        long left = 0;
+        if (at != 0) {
+            left = at - System.currentTimeMillis();
+            if (left <= 0) {
+                throw new MuxTimeoutException("stream " + id + ": nothing arrived by its read deadline");
+            }
+        }
+        try {
+            lock.wait(left);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted");
+        }
+    }
+
     /** Datagram streams: the next whole datagram, or null when the peer closed. */
     public byte[] receive() throws IOException {
         byte[] d;
         int refill = 0;
         synchronized (lock) {
             while (inbound.isEmpty() && !remoteClosed && error == null) {
-                try {
-                    lock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("interrupted");
-                }
+                awaitInbound();
             }
             if (inbound.isEmpty()) {
                 if (error != null) {

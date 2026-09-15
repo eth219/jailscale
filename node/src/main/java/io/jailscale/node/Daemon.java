@@ -66,10 +66,19 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * the only one anything has measured, and the way to move it is the heap ceiling it comes from.
      */
     public Daemon(NodeConfig config, int visitorCeiling) throws IOException {
+        this(config, visitorCeiling, Visitors.FIRST_BYTE_MS);
+    }
+
+    /**
+     * As above with §9.3's first-byte deadline given as well. Here for the same reason and with the
+     * same caveat as the bound: a test that wants to watch a slot come back cannot sit out the
+     * shipped thirty seconds, and nothing on the command line reaches this either.
+     */
+    public Daemon(NodeConfig config, int visitorCeiling, long firstByteMs) throws IOException {
         this.config = config;
         this.state = NodeState.load(config.stateFile());
         // visitors first: its bound goes into every Hello this link sends (ARCHITECTURE.md §9.3).
-        this.visitors = new Visitors(state, visitorCeiling);
+        this.visitors = new Visitors(state, visitorCeiling, firstByteMs);
         this.link = new HubLink(state, Version.string(), this, visitors.maxInFlight());
         this.domainCerts = new DomainCerts(config.configDir());
     }
@@ -451,6 +460,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             // cannot say whether a node is busy or full, and those are different problems.
             .put("visitorCeiling", visitors.maxInFlight())
             .put("visitorsRefused", visitors.refused())
+            // And how many took a slot without ever speaking (§9.3). A node whose refusals climb
+            // while this does too is being held open, not visited, which is a different answer.
+            .put("visitorsStalled", visitors.stalled())
             // The multiplexer's own three waits, which `proto` records on both sides and only the
             // hub publishes (ARCHITECTURE.md §14). The node is the busy writer in the saturation
             // case -- the bulk travels node to hub -- so these are the numbers that say whether a

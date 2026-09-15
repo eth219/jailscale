@@ -1,0 +1,237 @@
+package io.jailscale.hub;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.jailscale.node.Daemon;
+import io.jailscale.node.NodeConfig;
+import io.jailscale.proto.http.Http;
+import io.jailscale.proto.http.HttpRequest;
+import io.jailscale.proto.http.HttpResponse;
+import io.jailscale.proto.ipc.Ipc;
+import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.tls.Tls;
+import io.jailscale.proto.util.Log;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URI;
+import java.nio.ByteBuffer;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import javax.net.ssl.SNIHostName;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+
+/**
+ * ARCHITECTURE.md §9.3: a visitor that takes a slot and then says nothing has to lose it.
+ *
+ * <p>The node bounds how many visitors it serves at once, and nothing used to bound how long one
+ * could hold a place in that bound without finishing its handshake -- the reads underneath wait for
+ * ever. So a ClientHello good enough for the hub to route, followed by silence, kept tens of
+ * kilobytes of TLS state and one of {@code maxInFlight} slots for the life of the process. At the
+ * hub's 64 connections per address that is eight addresses to take a 450-visitor node dark on every
+ * name it serves, which is cheaper than any of the abuse §11.5 meters.
+ *
+ * <p>The node here holds <b>one</b> visitor, so the held slot is the whole node and a second visitor
+ * being refused is the same evidence a 450th would be, without opening 450 connections. Its
+ * first-byte deadline is {@link #DEADLINE_MS} rather than the shipped thirty seconds for the same
+ * reason. Both come through the {@code Daemon} constructor that exists for it.
+ */
+@Timeout(90)
+class VisitorStallTest {
+
+    private static final Path CERT = Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath();
+    private static final Path KEY = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
+    private static final long DEADLINE_MS = 1_500;
+
+    private Path root;
+    private Hub hub;
+    private int port;
+    private final List<Daemon> daemons = new ArrayList<>();
+    private ServerSocket localApp;
+
+    @BeforeEach
+    void start() throws Exception {
+        Log.setLevel(Log.Level.DEBUG);
+        root = TestDirs.newRoot("jstall");
+        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            port = s.getLocalPort();
+        }
+        HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
+            CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test");
+        hub = new Hub(cfg);
+        hub.start();
+        localApp = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        Thread.ofVirtual().start(() -> {
+            while (!localApp.isClosed()) {
+                try {
+                    Socket c = localApp.accept();
+                    Thread.ofVirtual().start(() -> serveLocal(c));
+                } catch (IOException e) {
+                    return;
+                }
+            }
+        });
+    }
+
+    private static void serveLocal(Socket c) {
+        try (c) {
+            HttpRequest r = Http.readRequest(c.getInputStream(), 4096);
+            HttpResponse.text(200, "hello " + r.path()).writeTo(c.getOutputStream());
+        } catch (Exception e) {
+            // visitor gone
+        }
+    }
+
+    @AfterEach
+    void stop() throws Exception {
+        for (Daemon d : daemons) {
+            d.close();
+        }
+        localApp.close();
+        hub.close();
+    }
+
+    @Test
+    void aVisitorThatNeverFinishesItsHandshakeLosesItsSlot() throws Exception {
+        Daemon alice = oneVisitorNode("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
+
+        // The node serves before anything is stalled, so a failure below is the stall and not the setup.
+        assertEquals(200, visit("/first").status());
+
+        try (Socket stalled = new Socket(InetAddress.getLoopbackAddress(), port)) {
+            stalled.setSoTimeout(30_000);
+            stalled.getOutputStream().write(clientHello("myapp.hub.test"));
+            stalled.getOutputStream().flush();
+            InputStream in = stalled.getInputStream();
+
+            // The node's half of the handshake coming back is what says the slot is taken: it has an
+            // SSLEngine, a delegated signature and a place in maxInFlight, and is now waiting for a
+            // Finished that will never be sent.
+            assertTrue(in.read() >= 0, "the node should have answered the ClientHello");
+
+            // While it is held, the node has nothing for anyone else. Without this the test below
+            // would pass on a node that never gave the slot out in the first place.
+            assertThrows(IOException.class, () -> visit("/refused"),
+                "a node holding its only slot should turn the next visitor away");
+
+            // Past the deadline the node drops the visitor it was waiting on, and the hub closes
+            // what it was relaying: everything already sent, then end of stream. Without the
+            // deadline this read blocks until the socket timeout above and the test fails there.
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                // the ServerHello and the rest of a handshake nobody is going to finish
+            }
+            assertEquals(-1, n, "the stalled visitor should have been dropped, not left connected");
+        }
+
+        // And the slot is back: the same node serves again, having done nothing but wait out one
+        // visitor. A retry loop rather than one attempt, because the reset, the hub's teardown and
+        // the counter going back down are three things on three threads.
+        waitFor(() -> served("/after"));
+
+        // The node counted it as what it was. Without this the test would pass on a node that lost
+        // the visitor some other way -- an exception in the handshake, the hub giving up -- and say
+        // nothing about the deadline having been the thing that acted.
+        // Nothing here asserts visitorsInFlight is back to zero: the visit above has only just
+        // closed and its relay is still unwinding, so that number races this read. That the slot
+        // came back is what the visit itself proves -- a node bounded at one could not have served
+        // it otherwise.
+        JsonObject status = ok(cli("alice", JsonObject.builder().put("cmd", "status")));
+        assertEquals(1L, status.lng("visitorsStalled"), status.toString());
+        // Zero, and that is the hub working rather than the refusal above not having happened: the
+        // node advertises its bound on Hello and `SniRouter` admits against it, so a visitor a full
+        // node cannot take is turned away before a stream is opened and never reaches this counter
+        // (§9.3). It is here so that the slot being held is measured on the path it is really held
+        // on -- the node's own bound -- and not mistaken for the hub's.
+        assertEquals(0L, status.lng("visitorsRefused"), status.toString());
+    }
+
+    /**
+     * A real ClientHello for {@code sni} and nothing else. Written by an {@code SSLEngine} rather
+     * than assembled here so that it is the same bytes a browser's first flight would be -- the hub
+     * has to be able to read the SNI out of it and route, or this measures the hub refusing a
+     * malformed record instead of the node holding a slot.
+     */
+    private static byte[] clientHello(String sni) throws Exception {
+        SSLContext ctx = Tls.clientContext(CERT, false);
+        SSLEngine e = ctx.createSSLEngine(sni, 443);
+        e.setUseClientMode(true);
+        SSLParameters p = e.getSSLParameters();
+        p.setProtocols(Tls.TLS13_ONLY);
+        p.setApplicationProtocols(Tls.ALPN_HTTP11);
+        p.setServerNames(List.of(new SNIHostName(sni)));
+        e.setSSLParameters(p);
+        e.beginHandshake();
+        ByteBuffer out = ByteBuffer.allocate(e.getSession().getPacketBufferSize());
+        e.wrap(ByteBuffer.allocate(0), out);
+        out.flip();
+        byte[] hello = new byte[out.remaining()];
+        out.get(hello);
+        return hello;
+    }
+
+    /** A node that serves one visitor at a time and waits {@link #DEADLINE_MS} for its first word. */
+    private Daemon oneVisitorNode(String name) throws IOException {
+        Daemon d = new Daemon(NodeConfig.in(root.resolve(name)), 1, DEADLINE_MS);
+        d.start();
+        daemons.add(d);
+        return d;
+    }
+
+    private HttpResponse visit(String path) throws Exception {
+        SSLContext ctx = Tls.clientContext(CERT, false);
+        try (SSLSocket s = Tls.connect(ctx, "myapp.hub.test", "127.0.0.1", port, true, 10_000)) {
+            Http.writeRequest(s.getOutputStream(), "GET", "myapp.hub.test", path, null, null);
+            return Http.readResponse(s.getInputStream(), 65536);
+        }
+    }
+
+    private boolean served(String path) {
+        try {
+            return visit(path).status() == 200;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private JsonObject cli(String name, JsonObject.Builder req) throws IOException {
+        return Ipc.call(root.resolve(name).resolve("jailscale.sock"), req.build());
+    }
+
+    private JsonObject ok(JsonObject r) {
+        assertTrue(r.optBool("ok", false), r.toString());
+        return r;
+    }
+
+    private interface Check {
+        boolean ok() throws Exception;
+    }
+
+    private static void waitFor(Check c) throws Exception {
+        long deadline = System.currentTimeMillis() + 20_000;
+        while (System.currentTimeMillis() < deadline) {
+            if (c.ok()) {
+                return;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("condition not met in time");
+    }
+}
