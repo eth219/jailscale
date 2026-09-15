@@ -386,6 +386,18 @@ rename is genuinely wanted, the field is added under the new name and the old on
 something the hub cannot verify — which is the vulnerability, not a compatibility shim. That class
 of change moves `MIN_PROTO` and costs every node an upgrade, and is the reason the floor exists.
 
+**What each release has done to the wire, and which mismatches have run.** v0.1.1 and v0.1.2 each
+added one optional `Hello` field -- `host` before v0.1.1, `visitors` before v0.1.2 -- which is the
+additive case above, pinned in `WireFormatTest` against v0.1.0's own `Hello` line. v0.1.3 added
+message types only two hubs exchange, which a node never sees; v0.1.4 and v0.1.5 changed nothing a
+node sees; v0.1.6 added a flag to `Hello` and a list to its response, both omitted when there is
+nothing to say; v0.1.7 added two messages a node only carries between two hubs; v0.1.8 to v0.1.10
+changed nothing on the wire. Both additive steps have also run mismatched on the live hub: a
+released v0.1.0 node against a hub that reads `host`, and the hub on v0.1.2 for half an hour while
+its node was not, the capacity row reading `not advertised` throughout. So a hub and its nodes can
+be replaced separately rather than together. Not tried: the other order, a newer node against an
+older hub, and rolling either half back.
+
 **Two strings never change**: the Noise prologue and the HTTP upgrade token, both
 `jailscale-control-v1`. They are mixed into the handshake hash, so a peer that disagrees fails the
 handshake with nothing to read; evolution belongs in the `proto` number, where the mismatch can be
@@ -1779,7 +1791,11 @@ measures. Measured on v0.1.0's own assets and that column: binaries of 29.8 to 3
 25.3 to 26.4 here, idle RSS on linux-amd64 of 40.6 MB for the hub and 40.1 for the node against 35.1
 and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries five native targets rather than
 four, since the 25.3 line is what dropped macos-amd64 (§3.2). README says the same where it tells
-people which file to download.
+people which file to download. The releases since, v0.1.3 to v0.1.10, changed the hub's control
+plane -- a standby, the availability record, the hub answering its own DNS, the standby serving,
+promotion by the nodes' word (§13) -- and no path a visitor's bytes or an idle process take, and
+the same gate held on each release commit; the table is not re-measured per release for that
+reason.
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
