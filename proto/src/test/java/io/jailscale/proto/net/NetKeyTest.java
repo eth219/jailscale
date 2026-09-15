@@ -2,6 +2,7 @@ package io.jailscale.proto.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.InetAddress;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,20 @@ class NetKeyTest {
         assertEquals("not-an-address", NetKey.of("not-an-address"));
         assertEquals("", NetKey.of((String) null));
         assertNotEquals(NetKey.of("::gg::"), NetKey.of("::hh::"));
+    }
+
+    @Test
+    void somethingThatCannotBeALiteralNeverReachesTheResolver() {
+        // getByName is not the literal parser its name suggests: it short-circuits a string starting
+        // with a hex digit or a colon and sends everything else to the name service, so a colon
+        // bearing name like "zz::1" was a blocking DNS lookup (measured 264 ms) on a path that runs
+        // per connection. Timed rather than mocked, because the defect is the blocking.
+        long started = System.nanoTime();
+        assertEquals("zz::1", NetKey.of("zz::1"));
+        assertEquals("host:name", NetKey.of("host:name"));
+        assertEquals("not-an-address", NetKey.of("not-an-address"));
+        long ms = (System.nanoTime() - started) / 1_000_000;
+        assertTrue(ms < 200, "three unparsable inputs took " + ms + " ms, which is a resolver round trip");
     }
 
     @Test

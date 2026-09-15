@@ -57,7 +57,7 @@ final class Visitors {
     private volatile long lastRefusalLog;
     /** Visitors dropped at {@link #FIRST_BYTE_MS} since this daemon started, and when that was last said. */
     private final java.util.concurrent.atomic.AtomicLong stalledOut = new java.util.concurrent.atomic.AtomicLong();
-    private volatile long lastStallLog = Clock.millis();
+    private volatile long lastStallLog;
     /** A visitor handshake slower than this is worth a line; healthy is single-digit milliseconds. */
     private static final long SLOW_HANDSHAKE_MS = 1_000;
 
@@ -303,8 +303,8 @@ final class Visitors {
         stream.reset(Frame.RST_NO_CAPACITY);
         // One line a minute. A node at its ceiling refuses continuously, and a log that says so on
         // every stream buries the reason among its own symptoms.
-        long now = System.currentTimeMillis();
-        if (now - lastRefusalLog >= REFUSAL_LOG_MS) {
+        long now = Clock.millis();
+        if (lastRefusalLog == 0 || now - lastRefusalLog >= REFUSAL_LOG_MS) {
             lastRefusalLog = now;
             LOG.warn("at the visitor ceiling ({}), refusing new visitors; {} refused so far. "
                 + "Raise it with -XX:MaxHeapSize= in JAILSCALE_DAEMON_OPTS (ARCHITECTURE.md §9.3)",
@@ -327,7 +327,10 @@ final class Visitors {
     private void stalled(String sni) {
         long n = stalledOut.incrementAndGet();
         long now = Clock.millis();
-        if (now - lastStallLog >= REFUSAL_LOG_MS) {
+        // Zero means never said, so the first one always is. Seeding this from the clock suppressed
+        // the first sixty seconds, which is the window an operator restarting into an attack is
+        // watching; and a reading cannot be a sentinel here because Clock has no defined origin.
+        if (lastStallLog == 0 || now - lastStallLog >= REFUSAL_LOG_MS) {
             lastStallLog = now;
             LOG.info("visitor for {} never finished its handshake; dropped after {} ms and the slot released "
                 + "({} so far, ARCHITECTURE.md §9.3)", sni, firstByteMs, n);
@@ -654,7 +657,7 @@ final class Visitors {
      * (§9.3) already read the request head from a buffered view of it -- in which case it is that
      * view, holding whatever the gate read past the head.
      */
-    private static void relay(String sni, TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream,
+    private void relay(String sni, TlsEndpoint tls, InputStream plain, Socket local, MuxStream stream,
         byte[] replay) {
         Thread toLocal = DuplexThread.start("visitor-in", () -> {
             try {
@@ -672,6 +675,14 @@ final class Visitors {
                     drain(tls, local.getOutputStream());
                 }
                 local.shutdownOutput();
+            } catch (MuxTimeoutException e) {
+                // The ungated case, and the common one: nothing cleared the deadline because the
+                // visitor never said its first word, so it expires here rather than in the handshake
+                // or the gate. Counted and reported like the other two, or `visitorsStalled` reads
+                // zero for the default configuration -- the one number that tells a node full of
+                // visitors from a node held open by visitors that are not there.
+                stalled(sni);
+                closeQuietly(local);
             } catch (IOException e) {
                 // Deliberately silent, unlike its opposite number below. An ordinary visit ends with
                 // the relay thread closing `local` in its finally while this one is still in drain,

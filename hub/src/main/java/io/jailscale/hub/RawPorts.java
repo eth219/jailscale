@@ -118,6 +118,7 @@ final class RawPorts implements AutoCloseable {
         private void serve(Socket s) {
             NodeGroup group = link.group();
             MuxStream stream = null;
+            String held = null;
             try {
                 s.setTcpNoDelay(true);
                 String ip = s.getInetAddress().getHostAddress();
@@ -129,12 +130,27 @@ final class RawPorts implements AutoCloseable {
                     port = ph.srcPort();
                 }
                 s.setSoTimeout(0);
+                // The same per-network cap 443 applies (§8.1), which this listener had no form of.
+                // A raw visitor takes a slot in the node's ceiling exactly as an HTTPS one does, and
+                // here it costs a bare TCP connection -- no ClientHello, nothing to route -- so one
+                // address that connects and says nothing could hold every slot a node has. It gets
+                // no first-byte deadline instead of a cap because on a raw port the server may
+                // legitimately speak first (§8.4), so there is no first word to wait for.
+                if (!hub.router().takeSlot(ip)) {
+                    LOG.debug("tcp {} visitor {} refused: too many from that network", link.port(), ip);
+                    Relay.closeQuietly(s);
+                    return;
+                }
+                held = ip;
                 stream = group.openVisitor(link, null, ip, port, null, false);
                 Relay.pump(s, stream, new byte[0]);
             } catch (IOException e) {
                 LOG.debug("tcp {} visitor {} refused: {}", link.port(), s.getInetAddress(), e.getMessage());
                 Relay.closeQuietly(s);
             } finally {
+                if (held != null) {
+                    hub.router().giveSlot(held);
+                }
                 if (stream != null) {
                     group.visitorDone(stream);
                 }

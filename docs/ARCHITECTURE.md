@@ -1420,6 +1420,7 @@ operator's job. Unauthenticated work is metered with per-source token buckets:
 | Registration under `--registration open` | 5 | 1 per 12 min | `rejected{reason: rate-limited}` |
 | Knock queue | 5 entries per address | n/a | `rejected{reason: too-many-pending}` |
 | DNS answer on UDP 53, per /24 or /64 | 50 | 20/s | dropped; one in two answered `TC=1` |
+| DNS answers on UDP 53, all sources together | 500 | 200/s | as above |
 
 **The DNS row is the one that protects somebody else.** Every other line above meters work a stranger
 makes the hub do. A query's source address is a claim rather than a fact, so an attacker puts a
@@ -1442,6 +1443,16 @@ trimmed it would land on the thread reading the socket, once per packet, under e
 exists for. Two networks that hash together share a budget, which limits more rather than less, and
 the key is deliberately not stored to tell them apart — a table that evicted the loser of a collision
 would let an attacker clear a victim's bucket by choosing addresses that land on it.
+
+**The per-network limit bounds a bucket; a victim owns a prefix.** An attacker forging sources
+across a victim's /48 walks 65,536 distinct /64 keys against a table of 2,048 buckets and collects
+every bucket's budget at once, so the per-network figure is not what a victim receives: the ceiling
+is the table size times the per-bucket rate, which was 2,048 x 20 = about 41,000 answers a second,
+11.7 MB/s. A second budget for the whole table -- 500 at once, 200 a second -- is what makes the
+total a number rather than a function of how many source networks an attacker can be bothered to
+forge, and puts a victim at about 57 KB/s. The hub's own `_jailhub-self` probe (§13.3) is exempt
+from both, because it leaves from a public address and metering it handed an attacker a way to stop
+a hub identifying itself; its answer is the lowest-ratio one the zone has.
 
 One over-limit query in two is answered `TC=1` instead of being dropped, which is the difference
 between a limit and a way to take the zone down: a resolver behind a forged address, or sharing a

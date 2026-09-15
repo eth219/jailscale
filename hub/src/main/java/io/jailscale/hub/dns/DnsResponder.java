@@ -100,7 +100,26 @@ public final class DnsResponder implements AutoCloseable {
 
     /** Per-network answer rate on UDP (§11.5); TCP is not metered, having proved its address. */
     private final ResponseRate rate = new ResponseRate();
-    private long lastRateLog = Clock.millis();
+    /**
+     * The encoded question a hub's own self-probe asks (§13.3), so the meter can leave it alone.
+     *
+     * <p>{@code Advertise.whoAmI} asks each glue address on :53 for this name to find out which of
+     * them is this host, and those queries leave from a public address, so they were metered like
+     * anyone's -- which handed an attacker with the forging capability this limiter assumes a way
+     * to stop a hub identifying itself: about twenty packets a second with a source forged into the
+     * hub's own network empties that bucket, the probe is dropped or truncated, {@code DnsQuery}
+     * has no TCP fallback, and {@code whoAmI} swallows the failure at debug and returns null. A hub
+     * that never learns its address serves an empty zone. Exempting the name costs nothing to an
+     * attacker: its answer is 87 bytes for a 52-byte query, the lowest ratio the zone has.
+     */
+    private final byte[] selfQuestion;
+    /**
+     * When the rate warning was last said, or 0 for never. Not seeded from the clock: doing that
+     * suppressed the first sixty seconds of every flood, so a hub restarted into one said nothing
+     * about it for exactly the minute its operator was watching. Zero is the sentinel rather than a
+     * reading because {@link Clock} has no defined origin.
+     */
+    private long lastRateLog;
 
     private final String zone;      // _acme-challenge.hub.example.com (lower case, no trailing dot)
     private final String hubName;   // hub.example.com, the zone apex
@@ -121,6 +140,7 @@ public final class DnsResponder implements AutoCloseable {
         this.hubName = hubName.toLowerCase(Locale.ROOT);
         this.zone = "_acme-challenge." + this.hubName;
         this.selfToken = selfToken;
+        this.selfQuestion = encodeName(SELF_LABEL + "." + this.hubName);
     }
 
     private static String randomToken() {
@@ -235,6 +255,9 @@ public final class DnsResponder implements AutoCloseable {
         if (r == null) {
             return null;
         }
+        if (isSelfProbe(query)) {
+            return r.length > MAX_UDP ? truncate(r) : r;
+        }
         switch (rate.check(source, now)) {
             case DROP -> {
                 logRate(now);
@@ -251,11 +274,28 @@ public final class DnsResponder implements AutoCloseable {
     }
 
     /**
+     * Whether this is a hub asking {@code _jailhub-self} (§13.3). Compared as the bytes the question
+     * already holds rather than parsed again: the name is fixed, so the encoded form is too, and a
+     * query that does not match is merely metered, which is the safe way to be wrong.
+     */
+    private boolean isSelfProbe(byte[] query) {
+        if (query.length < 12 + selfQuestion.length) {
+            return false;
+        }
+        for (int i = 0; i < selfQuestion.length; i++) {
+            if (query[12 + i] != selfQuestion[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * One line a minute while a flood lasts, the way the node reports a visitor ceiling: per query
      * it would be a line per packet under exactly the load that makes the limit matter.
      */
     private void logRate(long now) {
-        if (now - lastRateLog >= RATE_LOG_MS) {
+        if (lastRateLog == 0 || now - lastRateLog >= RATE_LOG_MS) {
             lastRateLog = now;
             LOG.warn("over the per-network answer rate on :53; {} queries dropped and {} answered truncated "
                 + "so far (ARCHITECTURE.md §11.5)", rate.dropped(), rate.truncated());

@@ -39,8 +39,8 @@ final class ResponseRate {
      * Answers a second per network, and what may arrive at once. Far above any honest resolver's
      * traffic for a zone that holds one person's names -- the addresses carry a 30 second TTL and
      * the challenge values five -- and far below what makes a 287-byte answer worth reflecting: at
-     * this rate a victim receives about 5 KB/s from a hub, against the 60 KB/s of queries it costs
-     * the attacker to ask for it.
+     * this rate one network receives about 5 KB/s from a hub; what bounds a victim that owns a whole
+     * prefix is {@link #GLOBAL_PER_SECOND}, because buckets are per key and a prefix holds many.
      */
     static final int BURST = 50;
     static final double PER_SECOND = 20;
@@ -56,11 +56,32 @@ final class ResponseRate {
      */
     static final int SLIP = 2;
 
+    /**
+     * What may leave on UDP 53 for everybody together, however many buckets the traffic touches.
+     *
+     * <p>Per-bucket alone bounds a bucket, not a victim, and those are not the same thing: a victim
+     * site holds a whole prefix, so an attacker forging sources across a /48 walks 65,536 distinct
+     * /64 keys against a table of {@link #BUCKETS}, collects every bucket's budget at once, and the
+     * ceiling becomes the table size times the per-bucket rate -- 2,048 x 20 = about 41,000 answers
+     * a second, 11.7 MB/s of 287-byte answers, against the 5 KB/s this class used to claim. The
+     * per-bucket limit still does the work of keeping one noisy network off everyone else; this is
+     * what makes the total a number rather than a function of how many source networks an attacker
+     * can be bothered to forge.
+     *
+     * <p>Sized far above what this zone sees -- its records carry 30-second and 5-second TTLs and it
+     * holds one person's names -- and far below where reflection is worth anyone's trouble: 200 a
+     * second is about 57 KB/s at a victim, for 60 KB/s of queries to ask for it.
+     */
+    static final int GLOBAL_BURST = 500;
+    static final double GLOBAL_PER_SECOND = 200;
+
     private final double[] tokens = new double[BUCKETS];
     private final long[] at = new long[BUCKETS];
     private final int[] overLimit = new int[BUCKETS];
     private final int burst;
     private final double perSecond;
+    private double globalTokens = GLOBAL_BURST;
+    private long globalAt;
     private long dropped;
     private long truncated;
 
@@ -102,12 +123,23 @@ final class ResponseRate {
         int i = bucket(source);
         double have = Math.min(burst, tokens[i] + Math.max(0, now - at[i]) * perSecond / 1000.0);
         at[i] = now;
-        if (have >= 1) {
+        double total = Math.min(GLOBAL_BURST, globalTokens + Math.max(0, now - globalAt) * GLOBAL_PER_SECOND / 1000.0);
+        globalAt = now;
+        if (have >= 1 && total >= 1) {
             tokens[i] = have - 1;
-            overLimit[i] = 0;
+            globalTokens = total - 1;
             return Verdict.ANSWER;
         }
+        // Only the bucket that refused pays: an answer stopped by the table-wide budget must not
+        // also spend this network's tokens, or a flood elsewhere would empty a quiet network's
+        // bucket and keep it empty.
         tokens[i] = have;
+        globalTokens = total;
+        // Counted up without being reset on an answer. Resetting meant TRUNCATE needed two
+        // *consecutive* over-limit queries, and at any sustained rate between the limit and twice
+        // it the two alternate -- refill lands one token between arrivals, so DROP, ANSWER, DROP,
+        // ANSWER -- so the counter never reached SLIP and that network got silence for ever, which
+        // is the one outcome the slip exists to prevent.
         if (++overLimit[i] >= SLIP) {
             overLimit[i] = 0;
             truncated++;

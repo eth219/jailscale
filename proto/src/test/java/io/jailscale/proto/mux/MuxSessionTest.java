@@ -219,6 +219,22 @@ class MuxSessionTest {
         p.node().close();
     }
 
+    /** A deadline far in the future must not wrap into one already past (ARCHITECTURE.md §9.3). */
+    @Test
+    void anEnormousDeadlineIsNotADeadlineAlreadyPassed() throws Exception {
+        Pair p = pair();
+        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
+        assertNotNull(ns);
+        // Long.MAX_VALUE is how a caller says "effectively never"; added to a clock reading it used
+        // to overflow negative, so every read gave up at once and the node served nobody.
+        ns.readDeadlineIn(Long.MAX_VALUE);
+        hs.out().write("fine".getBytes());
+        assertEquals("fine", new String(ns.in().readNBytes(4)));
+        p.hub().close();
+        p.node().close();
+    }
+
     @Test
     void largeTransferRespectsFlowControl() throws Exception {
         Pair p = pair();

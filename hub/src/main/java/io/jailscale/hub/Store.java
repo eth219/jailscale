@@ -504,7 +504,11 @@ final class Store implements AutoCloseable {
         String key = NetKey.of(ip);
         int n = 0;
         for (PendingRec p : pending.values()) {
-            if (p.ip() != null && key.equals(NetKey.of(p.ip()))) {
+            // The cheap test first: for a v4 record the key IS the address, so the whole v4 case
+            // never parses anything. Without it every knock re-parsed every stored address inside
+            // this monitor -- the scan-on-every-call shape RateLimiter had just been cured of, on a
+            // map an unauthenticated caller grows and nothing prunes.
+            if (p.ip() != null && (key.equals(p.ip()) || key.equals(NetKey.of(p.ip())))) {
                 n++;
             }
         }
@@ -645,18 +649,44 @@ final class Store implements AutoCloseable {
     private Superseded supersededBy(JsonObject incoming) {
         Store theirs = new Store();
         theirs.loadSnapshot(incoming);
+        // By record and not by key. A key comparison only sees what vanished, so a name released
+        // here and re-claimed by somebody else, a port reassigned, a domain taken over or a node
+        // re-approved under another user all came out as "nothing lost" -- the record changed
+        // owner, and the owner is the whole of what these hold.
+        // By owner, not by whole record and not by key alone. A key comparison sees only what
+        // vanished, so a name released here and re-claimed by somebody else -- or a port reassigned,
+        // a domain taken over, a node re-approved under another user -- read as "nothing lost", and
+        // the owner is the whole of what these records hold. Whole-record equality is the other
+        // error: NodeRec carries an id counted per store and every one of these carries a local
+        // timestamp, so two stores that agree completely would differ in all of them.
         List<String> lostNodes = new ArrayList<>();
         for (NodeRec n : nodesByKey.values()) {
-            if (!theirs.nodesByKey.containsKey(n.mkey())) {
+            NodeRec t = theirs.nodesByKey.get(n.mkey());
+            if (t == null || !t.user().equals(n.user())) {
                 lostNodes.add(n.user() + "/" + n.hostname());
             }
         }
-        List<String> lostNames = new ArrayList<>(names.keySet());
-        lostNames.removeAll(theirs.names.keySet());
-        List<String> lostDomains = new ArrayList<>(domains.keySet());
-        lostDomains.removeAll(theirs.domains.keySet());
-        List<Integer> lostPorts = new ArrayList<>(ports.keySet());
-        lostPorts.removeAll(theirs.ports.keySet());
+        List<String> lostNames = new ArrayList<>();
+        for (NameRec r : names.values()) {
+            NameRec t = theirs.names.get(r.name());
+            if (t == null || !t.user().equals(r.user())) {
+                lostNames.add(r.name());
+            }
+        }
+        List<String> lostDomains = new ArrayList<>();
+        for (DomainRec r : domains.values()) {
+            DomainRec t = theirs.domains.get(r.domain());
+            if (t == null || !t.user().equals(r.user())) {
+                lostDomains.add(r.domain());
+            }
+        }
+        List<Integer> lostPorts = new ArrayList<>();
+        for (PortRec r : ports.values()) {
+            PortRec t = theirs.ports.get(r.port());
+            if (t == null || !t.user().equals(r.user())) {
+                lostPorts.add(r.port());
+            }
+        }
         int credentials = 0;
         for (String id : invites.keySet()) {
             credentials += theirs.invites.containsKey(id) ? 0 : 1;
@@ -664,13 +694,50 @@ final class Store implements AutoCloseable {
         for (String id : authKeys.keySet()) {
             credentials += theirs.authKeys.containsKey(id) ? 0 : 1;
         }
+        // And the collections replaceWith clears that nothing compared: an admin added and a CIDR
+        // banned on the losing side of a partition are rights granted and rights taken away, which
+        // is the last thing that should go without a word.
+        List<String> lostAdmins = new ArrayList<>(admins);
+        lostAdmins.removeAll(theirs.admins);
+        for (String a : lostAdmins) {
+            lostNodes.add("admin " + a);
+        }
+        for (BanRec b : bans.values()) {
+            if (!theirs.bans.containsKey(b.cidr())) {
+                lostNames.add("ban " + b.cidr());
+            }
+        }
+        for (Map.Entry<String, String> e : settings.entrySet()) {
+            if (!e.getValue().equals(theirs.settings.get(e.getKey()))) {
+                lostNames.add("setting " + e.getKey());
+            }
+        }
+        if (nextHubKey != null && !nextHubKey.equals(theirs.nextHubKey())) {
+            lostNames.add("hub-key rotation");
+        }
         Path keptAt = dir.resolve("state.superseded.snapshot");
         if (lostNodes.isEmpty() && lostNames.isEmpty() && lostDomains.isEmpty() && lostPorts.isEmpty()
             && credentials == 0) {
+            // Nothing to keep, so nothing may be left lying at that path: a copy from an earlier
+            // hand-off beside a fresh state.snapshot reads as "what this host just lost".
+            try {
+                Files.deleteIfExists(keptAt);
+            } catch (IOException e) {
+                LOG.debug("could not remove a stale {}: {}", keptAt, e.toString());
+            }
             return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
         }
         try {
-            Files.writeString(keptAt, snapshotJson(), StandardCharsets.UTF_8);
+            // Through a temporary and renamed, as snapshot() does and for the same reason: written
+            // in place, a kill part-way leaves a truncated file where the previous incident's good
+            // copy used to be, so the crash this exists to survive is the crash that destroys it.
+            Path tmp = dir.resolve("state.superseded.tmp");
+            Files.writeString(tmp, snapshotJson(), StandardCharsets.UTF_8);
+            try (FileOutputStream fo = new FileOutputStream(tmp.toFile(), true)) {
+                fo.getFD().sync();
+            }
+            Files.move(tmp, keptAt, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            syncDir();
         } catch (IOException e) {
             // Best effort, for the reason syncDir() gives: this file exists to be read by a person,
             // and a state directory that is full or read-only must not be able to stop a standby
@@ -853,7 +920,10 @@ final class Store implements AutoCloseable {
                     LOG.warn("skipping corrupt event line: {}", e.getMessage());
                 }
             }
-            eventsSinceSnapshot = n;
+            // Skipped lines count too: they are still in the file, so the next snapshot has to be
+            // scheduled by them or the dead prefix survives until a thousand fresh events arrive and
+            // every restart until then re-reads it and re-reports a crash that is long over.
+            eventsSinceSnapshot = n + folded;
             if (folded > 0) {
                 // Worth a line: it says the last run did not shut down between its snapshot and the
                 // truncation that follows it, which is a crash and not a stop.

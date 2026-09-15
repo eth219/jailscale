@@ -131,6 +131,35 @@ class StoreReplicationTest {
     }
 
     @Test
+    void aRecordThatChangedHandsCountsAsLostAndSoDoAdminsAndBans() throws Exception {
+        // A key comparison sees only what vanished. A name released on the losing side and
+        // re-claimed there by somebody else is still present under both keys, so it read as "nothing
+        // lost" and bob's claim was overwritten in silence; and admins, bans and settings -- rights
+        // granted and rights taken away -- were not compared at all.
+        Path a = TestDirs.newRoot("winner");
+        Path b = TestDirs.newRoot("loser");
+        try (Store winner = new Store(a); Store loser = new Store(b)) {
+            for (Store s : List.of(winner, loser)) {
+                s.registerNode("mkey:alice", "alice", "laptop", "macos");
+                s.claimName("web", "alice", "mkey:alice", "127.0.0.1:3000");
+            }
+            // The losing side released `web` and gave it to bob, and granted an admin and a ban.
+            loser.releaseName("web");
+            loser.registerNode("mkey:bob", "bob", "desktop", "linux");
+            loser.claimName("web", "bob", "mkey:bob", "127.0.0.1:8080");
+            loser.addAdmin("bob");
+            loser.addBan("198.51.100.0/24", "abuse");
+
+            Store.Superseded lost = loser.replaceWith(winner.snapshotJson());
+
+            assertTrue(lost.names().contains("web"), "a name that changed hands is lost: " + lost);
+            assertTrue(lost.nodes().contains("admin bob"), "an admin granted here is lost: " + lost);
+            assertTrue(lost.names().contains("ban 198.51.100.0/24"), "a ban placed here is lost: " + lost);
+            assertTrue(Files.exists(lost.kept()), "and all of it is kept");
+        }
+    }
+
+    @Test
     void anOrdinaryResyncLosesNothingAndLeavesNoFile() throws Exception {
         // The common case by far: a standby's state came from this primary, so a fresh snapshot
         // takes nothing away and must not leave a warning or a file behind for an operator to
@@ -149,6 +178,12 @@ class StoreReplicationTest {
             // written. The directory is asked directly instead.
             assertNull(again.kept(), "nothing was lost, so there is no copy to name");
             assertFalse(Files.exists(b.resolve("state.superseded.snapshot")), "and none was written");
+
+            // And a copy left by an earlier hand-off is removed rather than left beside a fresh
+            // state.snapshot for the next incident's operator to read as this incident's losses.
+            Files.writeString(b.resolve("state.superseded.snapshot"), "{}");
+            standby.replaceWith(primary.snapshotJson());
+            assertFalse(Files.exists(b.resolve("state.superseded.snapshot")), "a stale copy should be cleared");
         }
     }
 
