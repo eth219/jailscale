@@ -120,13 +120,30 @@ public final class DnsResponder implements AutoCloseable {
     }
 
     public void start(String bindHost, int port) throws IOException {
-        InetSocketAddress addr = new InetSocketAddress(bindHost, port);
-        udp = new DatagramSocket(null);
-        udp.setReuseAddress(true);
-        udp.bind(addr);
-        tcp = new ServerSocket();
-        tcp.setReuseAddress(true);
-        tcp.bind(new InetSocketAddress(bindHost, udp.getLocalPort()), 16);
+        // UDP and TCP on the same port number. With a fixed port that either binds or fails; with
+        // port 0 the number UDP was given may already be a TCP port someone else holds -- the two
+        // spaces are separate, and on Windows a test run made that collision ordinary -- so the
+        // pair is retried with a fresh number rather than reported as a bind failure.
+        IOException last = null;
+        for (int attempt = 0; attempt < (port == 0 ? 8 : 1); attempt++) {
+            udp = new DatagramSocket(null);
+            udp.setReuseAddress(true);
+            udp.bind(new InetSocketAddress(bindHost, port));
+            tcp = new ServerSocket();
+            tcp.setReuseAddress(true);
+            try {
+                tcp.bind(new InetSocketAddress(bindHost, udp.getLocalPort()), 16);
+                last = null;
+                break;
+            } catch (IOException e) {
+                last = e;
+                udp.close();
+                tcp.close();
+            }
+        }
+        if (last != null) {
+            throw last;
+        }
         running = true;
         Thread.ofPlatform().name("dns-udp").daemon(true).start(this::udpLoop);
         Thread.ofVirtual().name("dns-tcp").start(this::tcpLoop);
