@@ -102,6 +102,10 @@ class HomePageTest {
         String html = r.bodyText();
         assertTrue(html.contains("Status"), html);
         assertTrue(html.contains("Uptime"), html);
+        // §13.2: the columns are on the page, each with its tooltip, and the numbers behind them
+        // are in the status JSON as well, so nothing is read from color or height alone.
+        assertTrue(html.contains("<svg class=\"avail\""), html);
+        assertTrue(html.contains("<title>") && html.contains("up throughout</title>"), html);
         assertTrue(html.contains("Nodes"), html);
         assertTrue(html.contains("Memory"), html);
         assertFalse(html.contains("mkey:"), "a node's key must not be on the public page");

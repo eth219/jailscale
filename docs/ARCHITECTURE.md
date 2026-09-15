@@ -1586,6 +1586,12 @@ someone here to look.
 Both are reported over 24 hours, 7 days and 30 days, on `/` and in `/v1/status` under
 `availability` (with `since`, because a window that reaches further back than the record is
 reported over less), and the process figure on `/metrics` as `jailhub_process_availability_<window>_ppm`.
+Under each figure the page draws the minutes down per day for 30 days and per hour for 24, as
+columns in the page's own ink -- an outage is the loud thing on a status page, and 99.9 against
+100 in a column of availability would not be -- with the number in each column's tooltip and the
+same numbers in the JSON (`downMinutesPerDay`, `downMinutesPerHour`), which is the table behind the
+picture. A bucket from before the record began draws nothing and says so. `jailhub availability
+reset` starts the record over, for an operator whose day of deliberate restarts should not count.
 Public for the reason `/v1/status` is public (§6.3). Anyone scraping `/metrics` already computes
 availability from `up`; this is for the operator with no scraper.
 

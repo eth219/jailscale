@@ -161,6 +161,38 @@ final class Availability {
     }
 
     /**
+     * Milliseconds this process was down between {@code from} and {@code to}, or -1 when the
+     * record does not reach back to {@code from} at all: a bucket before the record began is not
+     * a bucket that was up, it is one nobody was counting.
+     */
+    synchronized long processDownBetween(long from, long to) {
+        if (to <= since) {
+            return -1;
+        }
+        return overlap(selfGaps, Math.max(from, since), to);
+    }
+
+    /**
+     * Milliseconds the channel to {@code name} was down between {@code from} and {@code to},
+     * while this process was running to see it; -1 when nothing was observed in that span.
+     */
+    synchronized long peerDownBetween(String name, long from, long to) {
+        Observed o = peers.get(name);
+        if (o == null || to <= since) {
+            return -1;
+        }
+        long start = Math.max(from, since);
+        if ((to - start) - overlap(selfGaps, start, to) <= 0) {
+            return -1;
+        }
+        List<Gap> gaps = new ArrayList<>(o.gaps);
+        if (o.downSince > 0 && to > o.downSince) {
+            gaps.add(new Gap(o.downSince, to));
+        }
+        return overlap(gaps, start, to);
+    }
+
+    /**
      * The fraction of the last {@code windowMillis}, counting only the time this process was
      * running, during which {@code name} was reachable; null before anything has been observed.
      */

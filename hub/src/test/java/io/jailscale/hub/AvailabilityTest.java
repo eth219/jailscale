@@ -112,6 +112,27 @@ class AvailabilityTest {
     }
 
     @Test
+    void downtimeIsCountedPerBucketAndAbsentBeforeTheRecord() throws Exception {
+        Path dir = TestDirs.newRoot("avail");
+        Availability first = new Availability(dir, T0);
+        first.stamp(T0 + 10 * 60_000);
+        // Down from minute 10 to minute 40, then up.
+        Availability a = new Availability(dir, T0 + 40 * 60_000);
+        assertEquals(30 * 60_000, a.processDownBetween(T0, T0 + H));
+        assertEquals(20 * 60_000, a.processDownBetween(T0 + 20 * 60_000, T0 + H), "clipped to the bucket");
+        assertEquals(0, a.processDownBetween(T0 + H, T0 + 2 * H));
+        assertEquals(-1, a.processDownBetween(T0 - 2 * H, T0 - H), "a bucket before the record began is not an up bucket");
+        assertEquals(30 * 60_000, a.processDownBetween(T0 - H, T0 + H), "a bucket the record starts inside counts from the start");
+        // A peer down from minute 50 to 55, seen while this process ran.
+        a.peerUp("b", T0 + 40 * 60_000);
+        a.peerDown("b", T0 + 50 * 60_000);
+        a.peerUp("b", T0 + 55 * 60_000);
+        assertEquals(5 * 60_000, a.peerDownBetween("b", T0, T0 + H));
+        assertEquals(-1, a.peerDownBetween("b", T0 - H, T0), "nothing observed there");
+        assertEquals(-1, a.peerDownBetween("nobody", T0, T0 + H));
+    }
+
+    @Test
     void aResetForgetsEveryGapAndStartsTheRecordNow() throws Exception {
         Path dir = TestDirs.newRoot("avail");
         Availability first = new Availability(dir, T0);
