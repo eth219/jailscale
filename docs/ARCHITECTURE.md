@@ -1326,9 +1326,10 @@ self-traffic for twenty. But a name taken over just after its turn keeps until i
 pass **is** the detection bound, and the earlier bargain held the quantity that costs nothing still
 while letting the one carrying the whole point of the feature float with however many names an
 operator happened to open. What the swap costs is the traffic the objection was about, and the
-answer to it is the ceiling: 20 links is the most a node has, so its self-probe is at most 40
-requests an hour — a TLS handshake and a `GET /` each — to its own names, through its own hub. A
-node holding 20 public names carries more visitor traffic than that by a wide margin. The floor is
+answer to it is the ceiling: 20 links is the most a node has, so a pass costs 20 requests — a TLS
+handshake and a `GET /` each — which is 40 an hour, and 80 in an hour where a link comes back every
+half hour and every return pays for a sweep as well. All of it to its own names, through its own
+hub. A node holding 20 public names carries more visitor traffic than that by a wide margin. The floor is
 unreachable at that ceiling and exists so that raising the ceiling cannot quietly turn this into a
 request a second.
 

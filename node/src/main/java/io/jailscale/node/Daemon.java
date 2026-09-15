@@ -120,6 +120,15 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 reopen(rec, l);
             } catch (IOException | TimeoutException e) {
                 LOG.warn("could not reopen link {}{}: {}", rec.name, l.isRelay() ? " on " + l.relayAddress() : "", e.getMessage());
+                if (!l.isRelay()) {
+                    // `linkId` is per hub session (NodeState.LinkRec), and this session does not
+                    // have one for this name: the hub is not routing it here. Leaving the previous
+                    // session's id would say the opposite to everything that reads it -- `status`
+                    // would call the link open, and the self-probe would connect to the name, be
+                    // answered by the hub's own page under the wildcard certificate, and report a
+                    // reopen that timed out as an interception (§11.3).
+                    rec.linkId = null;
+                }
             }
         }
         askProbeSweep();
@@ -930,14 +939,15 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private void probeSafely(NodeState.LinkRec rec) {
-        if (!state.links.contains(rec)) {
-            // Closed or revoked since the list this came from was taken -- which is seconds to
-            // minutes ago for a sweep, and a sweep runs on the connection that delivers the stored
-            // LinkRevoked (§11.4). The hub answers a name it no longer routes here with its own
-            // page under the wildcard certificate, and the node that took the name terminates its
-            // own TLS, so probing either says TERMINATED ELSEWHERE and calls a name the hub
-            // announced politely a compromise. A false report of that is the worst thing this
-            // feature can do (SelfProbe).
+        if (!state.links.contains(rec) || rec.linkId == null) {
+            // Gone, or not open on this hub session. Closed or revoked since the list this came
+            // from was taken -- which is seconds to minutes ago for a sweep, and a sweep runs on
+            // the connection that delivers the stored LinkRevoked (§11.4) -- or reopened and
+            // refused. The hub answers a name it does not route here with its own page under the
+            // wildcard certificate, and a node that took the name terminates its own TLS, so
+            // probing either says TERMINATED ELSEWHERE and calls a name nobody took by stealth a
+            // compromise. A false report of that is the worst thing this feature can do
+            // (SelfProbe).
             return;
         }
         try {
@@ -1000,8 +1010,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * lets the one carrying the whole point of the feature float: a name taken over just after its
      * turn keeps until its next one, so the pass **is** the detection bound. What the swap costs is
      * that probe traffic now grows with the number of names, which is what the fixed tick was
-     * refusing -- but it grows to a ceiling, because 20 links is one, so a node's self-probe is at
-     * most 40 requests an hour, to its own names, through its own hub. A node holding 20 public
+     * refusing -- but it grows to a ceiling, because 20 links is one: 20 requests a pass, so 40 an
+     * hour, and 80 in the hour where a link comes back every half hour and each return pays for a
+     * sweep as well. All of it to its own names, through its own hub, and a node holding 20 public
      * names is carrying more visitor traffic than that by a wide margin.
      *
      * <p>The floor is not reachable at that ceiling; it is there so that raising the ceiling cannot
