@@ -434,6 +434,8 @@ class LinkEndToEndTest {
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
             assertEquals("link not open", row.get("verdict"), row.toString());
+            // and named the way a probed row is named, so one answer does not carry two shapes
+            assertEquals("goingdown.hub.test", row.get("name"), row.toString());
         }
     }
 

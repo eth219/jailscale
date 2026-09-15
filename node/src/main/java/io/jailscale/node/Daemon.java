@@ -785,6 +785,20 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     /**
+     * What a row of {@code verify} calls a link: the name out of its URL, and the URL itself when
+     * that will not parse. Every row in one answer has to be labelled the same way whatever its
+     * verdict, or a reader correlating them by name matches some links and not others.
+     */
+    private static String probeLabel(NodeState.LinkRec rec) {
+        try {
+            String host = URI.create(rec.url).getHost();
+            return host != null ? host : rec.url;
+        } catch (RuntimeException e) {
+            return rec.url;
+        }
+    }
+
+    /**
      * Probes one link, or null when it carries no TLS this node terminates. Records the result on
      * the link for {@code status} and shouts on the one verdict that means something is wrong, so
      * a probe from the loop below is as loud as one the operator asked for.
@@ -811,7 +825,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             // down -- the same three things `status` weighs to call a link open. The verdict does
             // not go on the record: `status` keeps the last real one beside `open: false` rather
             // than losing it, and the name still counts as never probed if it never was.
-            return new ProbeResult(rec.name, false, "link not open", System.currentTimeMillis());
+            return new ProbeResult(probeLabel(rec), false, "link not open", System.currentTimeMillis());
         }
         String host = rec.url;
         String verdict;
