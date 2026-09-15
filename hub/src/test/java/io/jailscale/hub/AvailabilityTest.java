@@ -98,6 +98,20 @@ class AvailabilityTest {
     }
 
     @Test
+    void aPeerDownForTheWholeLongestWindowIsForgotten() throws Exception {
+        Path dir = TestDirs.newRoot("avail");
+        Availability a = new Availability(dir, T0);
+        a.peerUp("old", T0);
+        a.peerDown("old", T0 + H);
+        a.peerUp("live", T0);
+        a.stamp(T0 + 29 * D);
+        assertEquals(java.util.List.of("old", "live"), a.peerNames(), "still within the window");
+        a.stamp(T0 + 31 * D + H);
+        assertEquals(java.util.List.of("live"), a.peerNames(), "down for longer than the longest window");
+        assertNull(a.peerFraction("old", 30 * D, T0 + 31 * D + H));
+    }
+
+    @Test
     void anUnreadableRecordStartsOverRatherThanRefusingToStart() throws Exception {
         Path dir = TestDirs.newRoot("avail");
         Files.writeString(dir.resolve("availability.json"), "{not json", StandardCharsets.UTF_8);
