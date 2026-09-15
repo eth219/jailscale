@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
+import io.jailscale.proto.net.NetKey;
 import io.jailscale.proto.tls.Sni;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
@@ -103,9 +104,14 @@ final class SniRouter {
             Relay.closeQuietly(socket);
             return;
         }
+        // Counted against the network and not the address (NetKey): in v4 those are the same thing,
+        // and in v6 they are not -- a routed /64 is free and standard, so a per-address cap of 64
+        // would be "64 per address, times eighteen quintillion". `ip` itself is unchanged, since it
+        // is what gets logged, banned and handed to the node as the visitor's address.
+        String ipKey = NetKey.of(ip);
         // Loopback is exempt: a local proxy without PROXY protocol would otherwise fold every visitor into one address.
-        if (acquire(perIp, ip) > MAX_PER_IP && !socket.getInetAddress().isLoopbackAddress()) {
-            release(perIp, ip);
+        if (acquire(perIp, ipKey) > MAX_PER_IP && !socket.getInetAddress().isLoopbackAddress()) {
+            release(perIp, ipKey);
             Metrics.VISITORS_REFUSED.increment();
             Relay.closeQuietly(socket);
             return;
@@ -192,7 +198,7 @@ final class SniRouter {
             LOG.debug("{}: {}", ip, e.getMessage());
             Relay.closeQuietly(socket);
         } finally {
-            release(perIp, ip);
+            release(perIp, ipKey);
         }
     }
 

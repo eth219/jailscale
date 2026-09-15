@@ -1,5 +1,6 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.net.NetKey;
 import io.jailscale.proto.util.Clock;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,8 +61,15 @@ final class RateLimiter {
         this.perSecond = perSecond;
     }
 
-    /** Takes one token for {@code key}; false when that key is over its limit. */
-    boolean allow(String key) {
+    /**
+     * Takes one token for the source address {@code ip}; false when it is over its limit.
+     *
+     * <p>Counted against the network {@link NetKey} gives rather than the address itself, which in
+     * v4 is the address and in v6 is the /64. The hub serves both stacks wherever its listener is
+     * bound to {@code ::}, and per address a v6 caller has every limit here for free.
+     */
+    boolean allow(String ip) {
+        String key = NetKey.of(ip);
         // Monotonic: a bucket refills by elapsed time, and the time of day is not that (Clock).
         long now = Clock.millis();
         if (buckets.size() > MAX_KEYS && now - lastPrune >= pruneIntervalMs) {

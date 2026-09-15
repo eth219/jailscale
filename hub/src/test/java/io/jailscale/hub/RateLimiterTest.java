@@ -56,6 +56,19 @@ class RateLimiterTest {
     }
 
     @Test
+    void anIpv6NetworkDoesNotGetALimitPerAddress() {
+        // §11.5 is a bound per caller, and in v6 a caller is not an address: a routed /64 comes with
+        // every ordinary VPS, so counted per address every limit in that table would be free to
+        // anyone who wanted it. The hub serves both stacks wherever its listener is bound to `::`.
+        RateLimiter r = new RateLimiter(2, 1);
+        assertTrue(r.allow("2001:db8:1:2::1"));
+        assertTrue(r.allow("2001:db8:1:2::2"));
+        assertFalse(r.allow("2001:db8:1:2::3"), "a third address in the same /64 is the same caller");
+        assertFalse(r.allow("2001:db8:1:2:ffff:ffff:ffff:ffff"), "and so is the far end of it");
+        assertTrue(r.allow("2001:db8:1:3::1"), "a different /64 is a different caller");
+    }
+
+    @Test
     void theScanThatBoundsTheMapDoesNotRunOnEveryCall() {
         // The shipped handshake numbers, and the case the scan cannot help with: at 1/s a bucket is
         // not full again until 30 s after its last use, so an attacker rotating addresses leaves

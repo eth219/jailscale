@@ -1481,6 +1481,19 @@ loss, that refused requests paid it too when they should cost nothing, and that 
 10,000 if anyone raises it. A second between scans bounds the map to one second's worth of new
 addresses that have each completed a TLS handshake, at 48 bytes apiece.
 
+**A limit "per address" is counted per /64 in IPv6, and that is not a refinement.** The hub serves
+both stacks wherever its listener is bound to `::`, which is what `--listen [::]:443` does and which
+needs no code — a visitor over v6 is routed, terminated and relayed today exactly as one over v4.
+The smallest thing anyone is *handed* in v6 is a /64, every ordinary VPS comes with one routed to
+it, and that is 18 quintillion source addresses at no cost. Counted per address, every row of the
+table above and the connection caps of §8.1 would read "so many per address, times as many
+addresses as you like", which is not a limit; so `proto.net.NetKey` gives v4 the address and v6 the
+/64, and the buckets and counters are kept against that. What remains is that a subscriber given a
+/48 — a residential line, some hosting — holds 65,536 keys; /48 would close that and would also put
+a whole ISP customer or a campus behind one bucket, which is the worse trade for a limit whose job
+is to be invisible to honest callers. `ban` takes a v6 prefix and always has (§11.5, below), so an
+operator can still bar a /48 by hand.
+
 **Both limiters measure elapsed time with a monotonic clock, not the time of day.** A token bucket
 refills by how long it has been, and `currentTimeMillis` is the time of day, which steps: NTP
 corrects a host whose clock was wrong at boot, and a virtual machine resumed from a snapshot wakes
@@ -2382,6 +2395,16 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   to the standby waits for a person (§13.5).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.
+- **IPv6 works for visitors and not for the hub's own DNS.** A hub bound to `::` (`--listen
+  [::]:443`) serves v6 visitors today — routed by SNI, relayed to the node, counted and limited per
+  /64 (§11.5) like any other caller — and an operator running the three-record setup publishes the
+  AAAA records for that at their own DNS provider, alongside the A records §7.1 asks for. What is
+  **not** implemented is the hub answering AAAA itself: `DnsResponder` returns NODATA for it, the
+  zone view carries v4 addresses only, and `ns1`/`ns2` glue is A. That is exactly the setup where
+  the operator cannot make up the difference — in the delegated mode of §13.3 the hub *is* the
+  authoritative server for the subdomain, so there is nowhere else to put an AAAA record. So: v6
+  ingress on the operator's own records, no v6 under delegation, and nothing in either direction for
+  the raw ports of §8.4, whose addresses come from the same zone view.
 - **Writes made on the losing side of a partition are discarded when it heals, not merged** (§13.5).
   Both hubs serve throughout, so a node that reaches only the hub that turns out to have the lower
   epoch can join, claim a name, bring a domain or take a raw port, and every one of those is gone
