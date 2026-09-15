@@ -50,7 +50,14 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     static final URI LETS_ENCRYPT = URI.create("https://acme-v02.api.letsencrypt.org/directory");
     static final long RENEW_CHECK_MS = 3600_000;
     static final long UPDATE_CHECK_MS = 24 * 3600_000L;
-    static final long PROBE_INTERVAL_MS = 30 * 60_000L;
+    /**
+     * How long a full pass of the self-probe takes: every name this node holds is looked at once
+     * within it, whatever the number of names (ARCHITECTURE.md §11.3). This, and not the interval
+     * between two ticks, is the number the detection bound is written in.
+     */
+    static final long PROBE_PASS_MS = 30 * 60_000L;
+    /** And the shortest a tick may be, so that a pass target cannot turn into a burst of requests. */
+    static final long PROBE_MIN_TICK_MS = 60_000L;
     /**
      * What the self-probe waits on between ticks, so that a hub connection coming up can ask for a
      * pass now instead of at the end of one (ARCHITECTURE.md §11.3).
@@ -806,11 +813,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     /**
      * ARCHITECTURE.md §11.3: run the self-probe without being asked, so an interception is found
-     * rather than waited for. **One name per tick, in turn**, which is what makes the interval
-     * independent of how many names this node holds: §15 objected that a period has to scale with
-     * the number of open names, and it does not if each tick costs one probe regardless. With the
-     * default tick a node with one name is checked every half hour and a node at the 20-link
-     * ceiling every ten hours, at the same cost to the hub either way.
+     * rather than waited for. **One name per tick, and the tick is what a pass costs divided by the
+     * number of names**, so every name is looked at once every {@code PROBE_PASS_MS} whether this
+     * node holds one or twenty. That is the number worth holding still: an interception lasts until
+     * the name's next turn, so the pass is the detection bound and the tick is only how it is paid
+     * for.
      *
      * <p>No switch to turn it off, deliberately. The traffic goes to this node's own public name
      * through its own hub and reaches no third party, so there is nothing here for an operator to
@@ -820,7 +827,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         Set<String> pass = new HashSet<>();
         try {
             while (!closed) {
-                boolean sweep = awaitProbeTick(PROBE_INTERVAL_MS);
+                boolean sweep = awaitProbeTick(probeTick(probableNames(state.links)));
                 if (closed || !link.isConnected()) {
                     continue;
                 }
@@ -843,9 +850,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * Waits out one tick, or less when a hub connection comes up and a sweep is allowed. True when
      * this tick is that sweep.
      *
-     * <p>An ask that arrives inside the cooldown is dropped rather than queued, and the ordinary
-     * ticks carry on underneath it: a node whose link flaps every minute would otherwise turn every
-     * flap into a full pass, which is the one way this could become traffic worth noticing.
+     * <p>An ask that arrives inside a pass of the last sweep is dropped rather than queued, and the
+     * ordinary ticks carry on underneath it: a node whose link flaps every minute would otherwise
+     * turn every flap into a full pass, which is the one way this could become traffic worth
+     * noticing. What it is held to instead is a doubling of the steady rate, at worst.
      */
     private boolean awaitProbeTick(long tickMs) throws InterruptedException {
         long deadline = System.currentTimeMillis() + tickMs;
@@ -853,7 +861,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             while (!closed) {
                 if (sweepAsked) {
                     sweepAsked = false;
-                    if (System.currentTimeMillis() - lastSweepAt >= PROBE_INTERVAL_MS) {
+                    if (System.currentTimeMillis() - lastSweepAt >= PROBE_PASS_MS) {
                         return true;
                     }
                 }
@@ -938,6 +946,32 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         pass.add(pick.name);
         return pick;
+    }
+
+    /**
+     * How long to wait before looking at the next name, so that a pass over all of them takes
+     * {@code PROBE_PASS_MS} whatever the number of names: half an hour at one name, ninety seconds
+     * at the 20-link ceiling.
+     *
+     * <p>This is the other way round from where this started, on purpose. Holding the tick at half
+     * an hour and letting the pass stretch to ten hours fixes the quantity that costs nothing and
+     * lets the one carrying the whole point of the feature float: a name taken over just after its
+     * turn keeps until its next one, so the pass **is** the detection bound. What the swap costs is
+     * that probe traffic now grows with the number of names, which is what the fixed tick was
+     * refusing -- but it grows to a ceiling, because 20 links is one, so a node's self-probe is at
+     * most 40 requests an hour, to its own names, through its own hub. A node holding 20 public
+     * names is carrying more visitor traffic than that by a wide margin.
+     *
+     * <p>The floor is not reachable at that ceiling; it is there so that raising the ceiling cannot
+     * turn this into a request a second by arithmetic nobody looked at again.
+     */
+    static long probeTick(int names) {
+        return Math.max(PROBE_MIN_TICK_MS, PROBE_PASS_MS / Math.max(1, names));
+    }
+
+    /** How many names a pass has to cover. */
+    static int probableNames(List<NodeState.LinkRec> links) {
+        return remaining(new ArrayList<>(links), Set.of()).size();
     }
 
     /** The links carrying TLS this node terminates that have not had their turn in {@code pass}. */

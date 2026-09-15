@@ -1312,13 +1312,25 @@ The four signing conditions are enforced by **the hub**, so they stop a rogue *n
 about a rogue *hub*. The self-probe runs on **the node**. They do not overlap; they face opposite
 directions.
 
-**It also runs on its own, one name every half hour.** Waiting for someone to type `jailscale verify`
-means an interception is found when somebody happens to look, which for an unattended node is never.
-The objection to a schedule was that the period has to scale with the number of open names — short
-enough to matter for one name is a lot of self-traffic for twenty. It does not have to, if a tick
-probes **one** name and the next tick takes the next: the cost of a tick is then one request whatever
-the node holds, and what stretches is how long a full pass takes, from half an hour at one name to
-ten hours at the 20-link ceiling.
+**It also runs on its own, and every name is looked at once every half hour.** Waiting for someone to
+type `jailscale verify` means an interception is found when somebody happens to look, which for an
+unattended node is never. A tick probes **one** name and the next tick takes the next, so a tick
+costs one request whatever the node holds; what scales with the number of names is the tick, which
+is `Daemon.PROBE_PASS_MS` divided by them — half an hour at one name, ninety seconds at the 20-link
+ceiling — with a floor of a minute underneath it.
+
+**Holding the pass still rather than the tick is the other way round from where this started, and is
+the correction.** The first schedule fixed the tick at half an hour and let a pass stretch to ten
+hours at the ceiling, on the objection that a period short enough to matter for one name is a lot of
+self-traffic for twenty. But a name taken over just after its turn keeps until its next one, so the
+pass **is** the detection bound, and the earlier bargain held the quantity that costs nothing still
+while letting the one carrying the whole point of the feature float with however many names an
+operator happened to open. What the swap costs is the traffic the objection was about, and the
+answer to it is the ceiling: 20 links is the most a node has, so its self-probe is at most 40
+requests an hour — a TLS handshake and a `GET /` each — to its own names, through its own hub. A
+node holding 20 public names carries more visitor traffic than that by a wide margin. The floor is
+unreachable at that ceiling and exists so that raising the ceiling cannot quietly turn this into a
+request a second.
 
 **Whose turn it is, is a set of names, not a position in the list of links.** Links open and close
 while a pass runs, so an index into the list of an hour ago points at a different name now: closing
@@ -1346,7 +1358,7 @@ off: the traffic goes to this node's own name through its own hub and reaches no
 
 ### 11.4 Name revocation notices
 
-The self-probe finds a move after the fact, and a name's turn can be hours away (§11.3), so an
+The self-probe finds a move after the fact, and a name's turn can be most of an hour away (§11.3), so an
 **honest hub announces a name change in advance** with `LinkRevoked{linkId, name, reason, at}`, where
 `reason` is `reassigned` (another node opened the same name) or `released` (an operator took it
 back). A compromised hub simply does not send it: this is incident notification, not attack
@@ -2195,9 +2207,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
-- **The self-probe reaches one name every half hour** (§11.3), so at the 20-link ceiling a given name
-  is looked at about every ten hours, and a tick is skipped entirely while the node is not connected
-  to the hub. What bounds detection is that pass, not the tick.
+- **The self-probe leaves this node's own address** (§11.3), so a hub that singles those connections
+  out and routes only them to the node that owns the name is not caught by it, however often it
+  runs. Doing that means discriminating between visitors, which is itself detectable, and the schedule
+  is not what bounds this one: a probe that came from somewhere else -- another node, checking a name
+  on its owner's behalf -- is what would, and nothing does that today.
 - **The address check runs once, at startup, and its answer is only a log line** (§7.2). Nothing
   re-runs it and nothing keeps the verdict, so a record that changes afterwards -- a proxy switched
   on in front of the name, an edited A record -- is never noticed, and an operator who missed the

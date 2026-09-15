@@ -106,6 +106,23 @@ class ProbeScheduleTest {
     }
 
     @Test
+    void aPassTakesTheSameTimeWhateverTheNameCount() {
+        // The point of the whole schedule: what is held still is how long a name waits for its
+        // turn, not how long a tick is. A node with one name and a node with twenty both look at
+        // every name they hold once every PROBE_PASS_MS.
+        assertEquals(Daemon.PROBE_PASS_MS, Daemon.probeTick(1));
+        assertEquals(Daemon.PROBE_PASS_MS, Daemon.probeTick(0));   // nothing to probe: no faster
+        assertEquals(Daemon.PROBE_PASS_MS, Daemon.probeTick(20) * 20);
+        assertEquals(90_000L, Daemon.probeTick(20));
+        // ...down to the floor, which the 20-link ceiling does not reach. It is there so that
+        // raising the ceiling cannot turn this into a request a second by arithmetic alone.
+        assertEquals(Daemon.PROBE_MIN_TICK_MS, Daemon.probeTick(10_000));
+
+        assertEquals(2, Daemon.probableNames(links("https", "tcp", "https", "udp")));
+        assertEquals(0, Daemon.probableNames(links("tcp")));
+    }
+
+    @Test
     void oneTickCostsOneProbeWhateverTheNameCount() {
         // The work in a tick does not grow with the number of names: a node at the 20-link ceiling
         // still has exactly one name selected per tick, and the ceiling is what a pass costs.
