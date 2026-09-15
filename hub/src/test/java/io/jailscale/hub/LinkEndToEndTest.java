@@ -283,8 +283,12 @@ class LinkEndToEndTest {
         waitFor(() -> hub.links().all().size() == 9);
 
         String home = visit("hub.test", "/").bodyText();
-        assertTrue(home.contains("app0.hub.test"), home);
-        assertFalse(home.contains("app8.hub.test"), "the ninth belongs on the directory: " + home);
+        // Both ends of the cut, not just the far one: asserting only that app0 is there and app8
+        // is not would hold just as well if the front page had kept a single row.
+        for (int i = 0; i < 8; i++) {
+            assertTrue(home.contains(">app" + i + ".hub.test"), "app" + i + " should be on the front page: " + home);
+        }
+        assertFalse(home.contains(">app8.hub.test"), "the ninth belongs on the directory: " + home);
         assertTrue(home.contains("All 9 open links"), home);
 
         String directory = visit("hub.test", "/links").bodyText();
@@ -307,7 +311,8 @@ class LinkEndToEndTest {
         }
         // The count at the top is of everything open, not of this page, so it does not move.
         assertTrue(fromFive.contains("9 links are being served"), fromFive);
-        assertTrue(fromFive.contains("Back to the first"), fromFive);
+        // Nine, not the 200-row cap: the number has to be what the first page actually holds.
+        assertTrue(fromFive.contains("Back to the first 9<"), fromFive);
 
         // A cursor is a string a visitor sends, so the page has to survive every string. A query
         // is percent-decoded per escape and a malformed one makes query() throw; nothing between

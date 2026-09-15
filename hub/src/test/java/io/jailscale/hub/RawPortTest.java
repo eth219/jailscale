@@ -65,6 +65,13 @@ class RawPortTest {
         }
     }
 
+    /** The {@code ?from=} value in a directory page's "next" link. */
+    private static String cursorOf(String html) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("/links\\?from=([^\"]+)").matcher(html);
+        assertTrue(m.find(), html);
+        return m.group(1);
+    }
+
     /** First port of {@code n} consecutive ports that are free for both TCP and UDP on loopback. */
     private static int freeRange(int n) {
         outer:
@@ -158,6 +165,25 @@ class RawPortTest {
         int sierra = dir.indexOf("sierra.hub.test");
         assertTrue(bravo >= 0 && rawRow >= 0 && sierra >= 0, dir);
         assertTrue(bravo < rawRow && rawRow < sierra, "the raw port is not where its address reads: " + dir);
+
+        // The key doubles as the paging cursor, so it is read back by machine: by a standby, or by
+        // this hub after a restart under a different LANG. A raw port's number goes into it, and
+        // built in the JVM's default locale that number comes out in Arabic-Indic or Devanagari
+        // digits -- so the same link yields a different cursor on two hosts of the same pair, and
+        // neither can follow the other's "next page". The cursor has to be the same string
+        // whatever the host is set to. Page size 1 so the emitted cursor is the raw port's own.
+        HttpRequest page1 = new HttpRequest("GET", "/links", "HTTP/1.1", new Headers(), null);
+        String here = cursorOf(hub.front().directory(page1, 1));
+        java.util.Locale previous = java.util.Locale.getDefault();
+        String elsewhere;
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG"));
+            elsewhere = cursorOf(hub.front().directory(page1, 1));
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+        assertTrue(here.contains("hub.test"), "expected the raw port to be the cursor, got " + here);
+        assertEquals(here, elsewhere, "the cursor must not follow the JVM's numbering system");
 
         // Bytes both ways, more than one frame, through hub port -> node -> local echo.
         byte[] payload = new byte[200_000];

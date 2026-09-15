@@ -494,10 +494,10 @@ final class HttpFront {
      * tabs keeps both halves linkable and keeps the no-script bargain the rest of this front end
      * makes.
      *
-     * <p>Three facts per link, and every one of them is something the hub already holds for its
+     * <p>Four facts per link, and every one of them is something the hub already holds for its
      * own routing: the address, which is public by construction because a visitor reaches it by
-     * typing it; how many visitors are being relayed to it at this instant; and how long it has
-     * been open. Nothing here is fetched from the link itself. A thumbnail or a favicon would mean
+     * typing it; its kind; how many visitors are being relayed to it at this instant; and how long
+     * it has been open. Nothing here is fetched from the link itself. A thumbnail or a favicon would mean
      * the hub connecting to a node's app as a visitor and republishing what came back on its own
      * front page -- which is the one thing the front page tells people it does not do -- and would
      * put whatever anyone who can join chooses to serve on the operator's page. Who owns a name and
