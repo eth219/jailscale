@@ -82,6 +82,31 @@ final class Metrics {
                 f == null ? 0 : Math.round(f * 1_000_000));
         }
         gauge(b, "jailhub_standbys_connected", "Standby hubs following this one right now.", hub.peers().count());
+        // §7.2. Three series, of which exactly one is meant to be alerted on: what an operator has
+        // to fix is narrower than "not proven", because inconclusive is the ordinary answer of a
+        // host that cannot reach its own public address, and paging someone for that is how a check
+        // earns its way into a permanent silence rule. The other two are for a dashboard: which
+        // verdict stands, and whether the check is still running at all.
+        Reachability.Status address = hub.addressStatus();
+        if (address != null) {
+            gauge(b, "jailhub_address_check_fault",
+                "1 when the address check found something an operator has to fix: the records disagree,"
+                    + " something that is not a hub answers, or another hub does.", address.fault() ? 1 : 0);
+            b.append("# HELP jailhub_address_check Where the address check stands: the verdict as a label,"
+                + " 1 when the name is known to point at this hub.\n")
+                .append("# TYPE jailhub_address_check gauge\n")
+                .append("jailhub_address_check{verdict=\"").append(label(address.verdict()))
+                .append("\"} ").append(address.ok() ? 1 : 0).append('\n');
+            if (hub.addressCheckRunning()) {
+                // Only while the hourly loop runs. A verdict an operator asked for by hand on a hub
+                // where nothing repeats it would otherwise age past every threshold and page for a
+                // check that was never scheduled.
+                gauge(b, "jailhub_address_check_age_seconds",
+                    "Seconds since the address check last ran. It climbs without bound if the check has stopped,"
+                        + " so the rule that catches that is a threshold above the interval, not a test for no change.",
+                    (now - address.at()) / 1000);
+            }
+        }
         // Where the time goes admitting a visitor (§6.3). The point of having all five is the
         // comparison: first_byte running ahead of peek+resolve+open+reply is time spent in no stage
         // at all -- scheduling, queueing or a pause -- which no single stage's timer can show.

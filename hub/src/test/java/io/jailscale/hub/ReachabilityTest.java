@@ -174,6 +174,130 @@ class ReachabilityTest {
         assertEquals(Reachability.MISCONFIGURED, r.verdict());
     }
 
+    // --- what is kept between runs (§7.2) ---------------------------------------------------------
+
+    private static final long NOW = 1_700_000_000_000L;
+
+    private static Reachability.Result result(String verdict, String problem) {
+        return new Reachability.Result(verdict, problem, java.util.List.of("203.0.113.10"));
+    }
+
+    @Test
+    void aVerdictThatHasNotMovedKeepsTheTimeItWasFirstReached() {
+        // since is when the deployment broke, not when it was last confirmed broken. An hourly
+        // pass that rewrote it would answer "misconfigured since a minute ago" for a hub that has
+        // been misconfigured since Tuesday, which is the one thing an operator wants from it.
+        Reachability.Status first = Reachability.fold(null, result(Reachability.MISCONFIGURED, "no wildcard"), 0, null, NOW);
+        assertEquals(NOW, first.since());
+        assertEquals(NOW, first.at());
+
+        Reachability.Status again = Reachability.fold(first, result(Reachability.MISCONFIGURED, "no wildcard"),
+            0, null, NOW + 3_600_000);
+        assertEquals(NOW, again.since(), "the verdict did not move, so neither does since");
+        assertEquals(NOW + 3_600_000, again.at(), "but the run behind it is the new one");
+        assertTrue(again.fault());
+        assertTrue(!again.ok());
+    }
+
+    @Test
+    void aVerdictThatMovedStartsItsOwnClock() {
+        Reachability.Status broken = Reachability.fold(null, result(Reachability.MISCONFIGURED, "no wildcard"), 0, null, NOW);
+        Reachability.Status fixed = Reachability.fold(broken, result(Reachability.PROVEN, null), 0, null, NOW + 3_600_000);
+        assertEquals(Reachability.PROVEN, fixed.verdict());
+        assertEquals(NOW + 3_600_000, fixed.since());
+        assertNull(fixed.problem());
+        assertTrue(fixed.ok());
+        assertTrue(!fixed.fault());
+    }
+
+    @Test
+    void aDifferentFaultUnderTheSameVerdictIsAChange() {
+        // Misconfigured covers a missing wildcard and a wildcard pointing elsewhere. The operator
+        // who adds the record and gets it wrong has changed something, and "misconfigured since
+        // Tuesday" over the new problem would date their edit to the fault it replaced.
+        Reachability.Status noWildcard = Reachability.fold(null, result(Reachability.MISCONFIGURED, "no wildcard"), 0, null, NOW);
+        Reachability.Status wrongWildcard = Reachability.fold(noWildcard,
+            result(Reachability.MISCONFIGURED, "names would reach different places"), 0, null, NOW + 3_600_000);
+        assertEquals(NOW + 3_600_000, wrongWildcard.since());
+        assertTrue(!noWildcard.sameAs(wrongWildcard), "a new problem is a new finding, with its own log line");
+
+        // An inconclusive answer's text carries the socket's own words, which are not a change.
+        Reachability.Status timedOut = Reachability.fold(null, result(Reachability.INCONCLUSIVE, "could not reach it (timed out)."), 0, null, NOW);
+        Reachability.Status refused = Reachability.fold(timedOut,
+            result(Reachability.INCONCLUSIVE, "could not reach it (refused)."), 0, null, NOW + 3_600_000);
+        assertEquals(NOW, refused.since());
+        assertTrue(timedOut.sameAs(refused));
+    }
+
+    @Test
+    void anArrivalFoldedIntoAStandingRunMovesTheVerdictAndNotWhenItRan() {
+        // The run happened an hour ago; the node arrived now. The verdict is the node's to move,
+        // the age of the check is not: a monitor reads it to know the check is still running.
+        Reachability.Status run = Reachability.fold(null, result(Reachability.INCONCLUSIVE, "could not reach it."), 0, null, NOW);
+        Reachability.Status folded = Reachability.fold(run, run.run(), run.at(), NOW + 3_600_000, "203.0.113.5", NOW + 3_600_000);
+        assertEquals(Reachability.OUTSIDE, folded.verdict());
+        assertEquals(NOW, folded.at(), "the check last ran when it ran");
+        assertEquals(NOW + 3_600_000, folded.since(), "and the verdict moved when the node arrived");
+        assertTrue(!folded.text(HOST).startsWith("inconclusive"), folded.text(HOST));
+        assertTrue(!run.text(HOST).startsWith("inconclusive: inconclusive"), run.text(HOST));
+    }
+
+    @Test
+    void aNodeArrivingFromOutsideAnswersWhatThisHostCannot() {
+        // The translated-address case: this host cannot dial its own public address, and a node
+        // that resolved the name and handshook against the pinned key already has the answer.
+        Reachability.Status s = Reachability.fold(null, result(Reachability.INCONCLUSIVE, "could not reach it."),
+            NOW - 60_000, "203.0.113.5", NOW);
+        assertEquals(Reachability.OUTSIDE, s.verdict());
+        assertTrue(s.ok());
+        assertNull(s.problem());
+        assertTrue(s.text(HOST).contains("203.0.113.5"), s.text(HOST));
+    }
+
+    @Test
+    void anArrivalTooOldToSpeakForTheRecordsLeavesTheVerdictAlone() {
+        // What the handshake proved is what the records said then. A day later it says nothing
+        // about a record that may have been edited since, and holding "proven" on it is exactly
+        // the stale answer keeping the verdict at all was meant to stop.
+        Reachability.Status s = Reachability.fold(null, result(Reachability.INCONCLUSIVE, "could not reach it."),
+            NOW - Reachability.OUTSIDE_FRESH_MS - 1, "203.0.113.5", NOW);
+        assertEquals(Reachability.INCONCLUSIVE, s.verdict());
+        assertTrue(!s.ok());
+        assertTrue(!s.fault(), "still not an alarm: nobody has seen anything wrong");
+    }
+
+    @Test
+    void anOutsideViewCannotClearAFaultThisHostCanSee() {
+        // A node's arrival says the hub's own name led it here. It says nothing about the wildcard,
+        // and nothing about another hub answering at the shared address -- so it must not be able
+        // to talk either verdict down into "fine".
+        long arrived = NOW - 60_000;
+        for (String verdict : java.util.List.of(Reachability.MISCONFIGURED, Reachability.ELSEWHERE)) {
+            Reachability.Status s = Reachability.fold(null, result(verdict, "something is wrong"),
+                arrived, "203.0.113.5", NOW);
+            assertEquals(verdict, s.verdict());
+            assertTrue(s.fault(), verdict);
+            assertEquals(arrived, s.outsideAt(), "the arrival is still reported, it just decides nothing");
+        }
+    }
+
+    @Test
+    void theStatusCarriesWhatAMonitorReads() {
+        Reachability.Status s = Reachability.fold(null, result(Reachability.ELSEWHERE, "another hub answers"),
+            NOW - 60_000, "203.0.113.5", NOW);
+        io.jailscale.proto.json.JsonObject j = s.json();
+        assertEquals(Reachability.ELSEWHERE, j.string("verdict"));
+        assertTrue(!j.bool("ok"));
+        assertTrue(j.bool("fault"));
+        assertEquals("another hub answers", j.string("problem"));
+        assertEquals(NOW / 1000, j.lng("at"));
+        assertEquals(NOW / 1000, j.lng("since"));
+        assertEquals("203.0.113.5", j.string("outsideIp"));
+
+        // A verdict with nothing wrong carries no problem field, rather than an empty one.
+        assertTrue(!Reachability.fold(null, result(Reachability.PROVEN, null), 0, null, NOW).json().has("problem"));
+    }
+
     @Test
     void everyAddressIsTriedBeforeGivingUp() {
         // Round-robin A records are ordinary; one unreachable address must not hide a good one.
