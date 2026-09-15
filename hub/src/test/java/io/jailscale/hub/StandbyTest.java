@@ -70,6 +70,36 @@ class StandbyTest {
         }
     }
 
+    /** A visit to a published name through one hub, as a browser would make it. */
+    private static HttpResponse visit(String name, int port) throws Exception {
+        try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), name, "127.0.0.1", port, true, 15_000)) {
+            Http.writeRequest(s.getOutputStream(), "GET", name, "/", null, null);
+            return Http.readResponse(s.getInputStream(), 65536);
+        }
+    }
+
+    /** A local app that answers every request with one line. */
+    private static void serveApp(ServerSocket app) {
+        Thread.ofVirtual().start(() -> {
+            while (!app.isClosed()) {
+                try {
+                    java.net.Socket c = app.accept();
+                    Thread.ofVirtual().start(() -> {
+                        try (c) {
+                            Http.readRequest(c.getInputStream(), 4096);
+                            c.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"
+                                .getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                        } catch (Exception ignored) {
+                            // visitor gone
+                        }
+                    });
+                } catch (IOException e) {
+                    return;
+                }
+            }
+        });
+    }
+
     private static String page(String host, int port) throws Exception {
         try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), host, "127.0.0.1", port, true, 10_000)) {
             Http.writeRequest(s.getOutputStream(), "GET", host, "/", null, null);
@@ -100,13 +130,17 @@ class StandbyTest {
         int portB = freePort();
         primary = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + portA), root.resolve("a"), "127.0.0.1", portA,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1"));
+        // Both hubs share the loopback address here and differ by port, so what a node dials is
+        // told apart from what DNS advertises (§13.4); in a deployment they are the same address.
+        primary.relayEndpointOverride = "127.0.0.1:" + portA;
         primary.start();
-        // §13.3: the primary answers its own name with itself, for the apex and any name under it.
+        // §13.3: alone, the primary answers its own name with itself, for the apex and any name under it.
         assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", primary.dnsPort(), "hub.test", 2000));
         assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", primary.dnsPort(), "web.hub.test", 2000));
 
         // A member with a name, before the standby exists: the snapshot has to carry it.
         app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        serveApp(app);
         alice = new Daemon(NodeConfig.in(root.resolve("alice")));
         alice.start();
         Path aliceSock = root.resolve("alice/jailscale.sock");
@@ -128,6 +162,7 @@ class StandbyTest {
         Files.createDirectories(root.resolve("b"));
         Files.copy(root.resolve("a/hub.key"), root.resolve("b/hub.key"), StandardCopyOption.REPLACE_EXISTING);
         standby = new Hub(sbConfig);
+        standby.relayEndpointOverride = "127.0.0.1:" + portB;
         standby.start(); // returns once the primary's certificate has arrived
 
         assertEquals(primary.tls().keyId(), standby.tls().keyId(), "the standby signs with the primary's certificate");
@@ -135,10 +170,7 @@ class StandbyTest {
         assertTrue(Files.exists(root.resolve("b/tls/wildcard.key")));
         assertEquals(primary.keys().publicText(), standby.keys().publicText());
         waitFor("the snapshot never reached the standby", () -> standby.peerClient().isSynced());
-        // §13.3: while it can reach the primary, the standby answers the primary's address, not its
-        // own -- it serves nothing yet -- and it answers the primary's challenge values.
-        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000));
-        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "web.hub.test", 2000));
+        // §13.3: the standby answers the primary's challenge values.
         primary.dns().setTxt(List.of("challenge-for-the-ca"));
         waitFor("the challenge value never reached the standby",
             () -> DnsQuery.txt("127.0.0.1", standby.dnsPort(), "_acme-challenge.hub.test", 2000).contains("challenge-for-the-ca"));
@@ -157,6 +189,23 @@ class StandbyTest {
         waitFor("the admin never reached the standby", () -> standby.store().isAdmin("alice"));
 
         // Both sides say what they are, to a person and to a monitor.
+        // §13.4: the standby serves. The primary named it to alice, alice opened a relay connection
+        // and reopened her link there, and a visitor who reaches the standby is served by alice --
+        // signed by the standby, with the copy of the key it holds.
+        waitFor("alice never opened a relay connection to the standby", () -> alice.connectedRelays().contains("127.0.0.1:" + portB));
+        waitFor("alice's link never reopened on the standby", () -> standby.links().byName("web") != null);
+        HttpResponse viaStandby = visit("web.hub.test", portB);
+        assertEquals(200, viaStandby.status());
+        assertEquals("hello", viaStandby.bodyText());
+        assertEquals(200, visit("web.hub.test", portA).status(), "and the primary still serves it too");
+        // And DNS says so: the name resolves to both hosts, the apex to the primary alone, and a
+        // name nobody has opened to every host serving, where the "not open" page is.
+        waitFor("the primary never learned alice is on the standby",
+            () -> new java.util.HashSet<>(DnsQuery.a("127.0.0.1", primary.dnsPort(), "web.hub.test", 2000)).equals(java.util.Set.of("203.0.113.1", "203.0.113.2")));
+        assertEquals(java.util.Set.of("203.0.113.1", "203.0.113.2"), new java.util.HashSet<>(DnsQuery.a("127.0.0.1", standby.dnsPort(), "web.hub.test", 2000)));
+        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000));
+        assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", primary.dnsPort(), "hub.test", 2000));
+        assertEquals(java.util.Set.of("203.0.113.1", "203.0.113.2"), new java.util.HashSet<>(DnsQuery.a("127.0.0.1", primary.dnsPort(), "nobody.hub.test", 2000)));
         JsonObject sbStatus = status("hub.test", portB);
         assertEquals("standby", sbStatus.string("role"));
         assertEquals("hub.test", sbStatus.string("primary"));
@@ -189,17 +238,26 @@ class StandbyTest {
         });
         waitFor("the standby did not turn the node away by name",
             () -> Ipc.call(bobSock, JsonObject.builder().put("cmd", "status").build()).toString().contains("standby"));
-        assertEquals(0, standby.registry().size());
+        assertTrue(standby.registry().get(bob.machineKey()) == null, "a control connection is not taken by a standby");
 
-        // Promotion: the standby stops following and takes nodes; the channel to it closes.
+        // §13.4, the point of it all, in the order it happens: the primary goes first. Nobody has
+        // told alice anything, so her relay connection to the standby stays, her name is still
+        // served through it -- signed by the standby with the copy of the key it holds -- and
+        // the standby's DNS now names itself alone for her name and nothing for the apex.
+        primary.close();
+        primary = null;
+        waitFor("the standby still counts the old primary as a peer",
+            () -> DnsQuery.a("127.0.0.1", standby.dnsPort(), "web.hub.test", 2000).equals(List.of("203.0.113.2")));
+        assertEquals(List.of(), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000), "no primary, nothing to point the apex at");
+        assertEquals(200, visit("web.hub.test", portB).status());
+        assertEquals("hello", visit("web.hub.test", portB).bodyText());
+
+        // Promotion: the standby stops following and takes nodes, and the apex is itself.
         JsonObject promoted = Ipc.call(root.resolve("b/jailhub.sock"), JsonObject.builder().put("cmd", "promote").build());
         assertTrue(promoted.optBool("ok", false), promoted.toString());
         assertEquals("primary", promoted.string("role"));
         assertEquals("primary", status("hub.test", portB).string("role"));
-        waitFor("the primary still counts the promoted hub as a standby", () -> primary.peers().count() == 0);
-        // §13.3: promoted, it answers itself; nothing at the parent had to change.
         assertEquals(List.of("203.0.113.2"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000));
-        assertEquals(List.of("203.0.113.2"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "web.hub.test", 2000));
         JsonObject again = Ipc.call(root.resolve("b/jailhub.sock"), JsonObject.builder().put("cmd", "promote").build());
         assertFalse(again.optBool("ok", false), "promoting a primary is an error, not a no-op: " + again);
 
@@ -212,7 +270,6 @@ class StandbyTest {
         });
         assertNotNull(standby.store().node(bob.machineKey()));
         assertEquals("alice", standby.store().nameOwner("web"), "what was replicated is what the promoted hub serves");
-        // The old primary's copy did not change: promotion is one way and says so.
-        assertEquals("primary", status("hub.test", portA).string("role"));
+        assertEquals(200, visit("web.hub.test", portB).status(), "and alice's name is still served after the promotion");
     }
 }

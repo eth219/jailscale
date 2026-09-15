@@ -73,7 +73,15 @@ class WireFormatTest {
         // v0.1.3 line above still reads the same), and the challenge values travel to the standby.
         "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.2\"}",
         "{\"t\":\"PeerHelloResponse\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.1\"}",
-        "{\"t\":\"PeerChallenge\",\"txt\":[\"abc\",\"def\"]}"
+        "{\"t\":\"PeerChallenge\",\"txt\":[\"abc\",\"def\"]}",
+        // §13.4: a relay connection's Hello, the relay list on the response, its change, and the
+        // node set two hubs exchange. The Hello and HelloResponse lines above keep their bytes: the
+        // new fields are omitted when false or empty.
+        "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.6\",\"os\":\"linux\",\"conn\":3,\"visitors\":450,\"relay\":true}",
+        "{\"t\":\"HelloResponse\",\"proto\":1,\"minProto\":1,\"version\":\"0.1.6\",\"dnsSuffix\":\"hub.example.com\",\"relays\":[\"203.0.113.1\",\"203.0.113.2:8443\"]}",
+        "{\"t\":\"RelaysChanged\",\"relays\":[\"203.0.113.2\"]}",
+        "{\"t\":\"PeerNodes\",\"mkeys\":[\"mkey:a\",\"mkey:b\"]}",
+        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.2\",\"endpoint\":\"203.0.113.2:8443\"}"
     };
 
     @Test

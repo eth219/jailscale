@@ -42,12 +42,32 @@ public sealed interface Message {
      * old hub answers an unknown type with {@code Error{unknown-type}}, which is a reply saying
      * something went wrong, where ignoring a field it has no use for is silence.
      */
-    record Hello(int proto, String version, String os, int conn, String host, int visitors) implements Message {
+    record Hello(int proto, String version, String os, int conn, String host, int visitors, boolean relay) implements Message {
+        /** The form every build before {@code relay} sent; the field is omitted on the wire when false. */
+        public Hello(int proto, String version, String os, int conn, String host, int visitors) {
+            this(proto, version, os, conn, host, visitors, false);
+        }
+
         @Override public String type() { return "Hello"; }
     }
 
-    record HelloResponse(int proto, int minProto, String version, String dnsSuffix) implements Message {
+    /**
+     * {@code relays} (ARCHITECTURE.md §13.4): the hosts serving this hub's names right now, as
+     * {@code address} or {@code address:port}, for the node to open a relay connection to each
+     * one that is not the host this control connection reached. Absent from a hub that has none
+     * to name, which is every build before the field and every single-host hub after it.
+     */
+    record HelloResponse(int proto, int minProto, String version, String dnsSuffix, List<String> relays) implements Message {
+        public HelloResponse(int proto, int minProto, String version, String dnsSuffix) {
+            this(proto, minProto, version, dnsSuffix, null);
+        }
+
         @Override public String type() { return "HelloResponse"; }
+    }
+
+    /** The relay set moved while the node was connected (§13.4): the whole current list, not a delta. */
+    record RelaysChanged(List<String> relays) implements Message {
+        @Override public String type() { return "RelaysChanged"; }
     }
 
     record Goodbye(String reason, String detail) implements Message {
@@ -215,7 +235,11 @@ public sealed interface Message {
      * host given a copy of {@code hub.key} can complete the handshake with. A node's
      * MachineKey can never be that key, so the two kinds of caller cannot be confused.
      */
-    record PeerHello(int proto, String version, String host, String address) implements Message {
+    record PeerHello(int proto, String version, String host, String address, String endpoint) implements Message {
+        public PeerHello(int proto, String version, String host, String address) {
+            this(proto, version, host, address, null);
+        }
+
         @Override public String type() { return "PeerHello"; }
     }
 
@@ -223,8 +247,14 @@ public sealed interface Message {
      * {@code address} is the public address the sender advertises for itself in DNS (§13.3), or
      * null when it does not know one yet. Each side learns the other's this way rather than from
      * the socket, which behind address translation says nothing a resolver could use.
+     * {@code endpoint} is what a node dials to reach the sender as a relay (§13.4),
+     * {@code address[:port]}; absent when it is the address on 443, which is every real deployment.
      */
-    record PeerHelloResponse(int proto, String version, String host, String address) implements Message {
+    record PeerHelloResponse(int proto, String version, String host, String address, String endpoint) implements Message {
+        public PeerHelloResponse(int proto, String version, String host, String address) {
+            this(proto, version, host, address, null);
+        }
+
         @Override public String type() { return "PeerHelloResponse"; }
     }
 
@@ -266,6 +296,15 @@ public sealed interface Message {
      */
     record PeerHubKey(String current, String next) implements Message {
         @Override public String type() { return "PeerHubKey"; }
+    }
+
+    /**
+     * The nodes attached to the sender right now, by MachineKey (§13.4). Each hub answers a name
+     * with the hosts its node is on, and this is how it knows about the other host's. The whole
+     * set every time; it is small and a delta would need an order.
+     */
+    record PeerNodes(List<String> mkeys) implements Message {
+        @Override public String type() { return "PeerNodes"; }
     }
 
     /**

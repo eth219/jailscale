@@ -61,6 +61,8 @@ final class NodeState {
         volatile ProbeResult lastProbe; // not persisted: the last self-probe of this name (§11.3)
         volatile long certWarnedAt;    // not persisted: when the expiry warning was last logged
         volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (ARCHITECTURE.md §9.3)
+        /** Not persisted: the link id each relay host gave this link (§13.4), by relay address. */
+        final java.util.Map<String, String> relayLinkIds = new java.util.concurrent.ConcurrentHashMap<>();
 
         LinkRec(String kind, String host, int port, String name) {
             this.kind = kind;
@@ -87,7 +89,9 @@ final class NodeState {
             return null;
         }
         for (LinkRec l : links) {
-            if (linkId.equals(l.linkId)) {
+            // The id the primary gave, or the one a relay host gave the same link (§13.4): a
+            // visitor stream carries whichever host delivered it.
+            if (linkId.equals(l.linkId) || l.relayLinkIds.containsValue(linkId)) {
                 return l;
             }
         }

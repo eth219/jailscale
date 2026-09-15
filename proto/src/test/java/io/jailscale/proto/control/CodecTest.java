@@ -47,6 +47,8 @@ class CodecTest {
             new Message.ChallengeSet("app.example.com", "tok", "tok.thumb"),
             new Message.ChallengeClear("tok"),
             new Message.PeerHello(1, "0.2.0", "hub-b.example.com", "203.0.113.2"),
+            new Message.PeerHello(1, "0.2.0", "hub-b.example.com", "203.0.113.2", "203.0.113.2:8443"),
+            new Message.PeerHelloResponse(1, "0.2.0", "hub.example.com", "203.0.113.1", "203.0.113.1:8443"),
             new Message.PeerHello(1, "0.2.0", "hub-b.example.com", null),
             new Message.PeerHelloResponse(1, "0.2.0", "hub.example.com", "203.0.113.1"),
             new Message.PeerChallenge(List.of("abc", "def")),
@@ -57,6 +59,11 @@ class CodecTest {
                 "-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----", "sha256:ab"),
             new Message.PeerHubKey("hkeypriv:AAAA", null),
             new Message.PeerHubKey("hkeypriv:AAAA", "hkeypriv:BBBB"),
+            new Message.Hello(1, "0.1.6", "linux", 3, null, 450, true),
+            new Message.HelloResponse(1, 1, "0.1.6", "hub.example.com", List.of("203.0.113.1", "203.0.113.2:8443")),
+            new Message.RelaysChanged(List.of("203.0.113.2")),
+            new Message.RelaysChanged(List.of()),
+            new Message.PeerNodes(List.of("mkey:a", "mkey:b")),
         };
         for (Message m : all) {
             byte[] enc = Codec.encode(m);

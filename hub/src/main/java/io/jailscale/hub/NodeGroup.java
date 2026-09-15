@@ -83,8 +83,23 @@ final class NodeGroup {
         streamIds.values().removeIf(id -> (id >>> CONN_SHIFT) == s.conn());
     }
 
+    /**
+     * The control connection, or -- on a host the node reaches only by a relay connection
+     * (§13.4) -- the lowest-numbered connection it has here, which is what carries the
+     * certificate and speaks for the node on this host.
+     */
     NodeSession primary() {
-        return sessions.get(0);
+        NodeSession p = sessions.get(0);
+        if (p != null) {
+            return p;
+        }
+        NodeSession best = null;
+        for (Map.Entry<Integer, NodeSession> e : sessions.entrySet()) {
+            if (best == null || e.getKey() < best.conn()) {
+                best = e.getValue();
+            }
+        }
+        return best;
     }
 
     boolean isEmpty() {

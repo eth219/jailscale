@@ -58,6 +58,13 @@ final class Peers {
         }
     }
 
+    /** Sends {@code m} to every connected standby. */
+    void send(Message m) {
+        for (Session s : sessions) {
+            s.enqueue(m);
+        }
+    }
+
     /** The dns-01 values changed: every standby answers the same ones from now on (§13.3). */
     void challengeChanged(List<String> txt) {
         for (Session s : sessions) {
@@ -85,16 +92,21 @@ final class Peers {
         private final String name;
         /** The address the standby advertises for itself (§13.3), or null when it does not know one. */
         private final String address;
+        /** What a node dials to reach the standby (§13.4): its endpoint when it said one, else the address. */
+        private final String endpoint;
         private final LinkedBlockingDeque<Message> queue = new LinkedBlockingDeque<>();
         private final Consumer<JsonObject> listener = ev -> enqueue(new Message.PeerEvent(Json.write(ev.asMap())));
         private final long connectedAt = System.currentTimeMillis();
+        /** The nodes attached to the standby, as it last said (§13.4). */
+        private volatile java.util.Set<String> nodes = java.util.Set.of();
         private MuxSession mux;
         private volatile boolean closed;
         private final java.util.concurrent.atomic.AtomicLong eventsSent = new java.util.concurrent.atomic.AtomicLong();
 
-        Session(String remoteIp, String peerHost, String address) {
+        Session(String remoteIp, String peerHost, String address, String endpoint) {
             this.remoteIp = remoteIp;
             this.address = address;
+            this.endpoint = endpoint != null ? endpoint : address;
             // A standby normally carries the primary's own name, since that is what it will serve;
             // as a label for "the other host" that says nothing, so the address is used instead.
             this.name = peerHost == null || peerHost.isBlank() || peerHost.equalsIgnoreCase(hub.config().hostname())
@@ -114,6 +126,14 @@ final class Peers {
             return address;
         }
 
+        java.util.Set<String> nodes() {
+            return nodes;
+        }
+
+        String endpoint() {
+            return endpoint;
+        }
+
         long connectedAt() {
             return connectedAt;
         }
@@ -127,6 +147,8 @@ final class Peers {
             sessions.add(this);
             hub.availability().peerUp(name, System.currentTimeMillis());
             LOG.info("standby {} connected from {}", name, remoteIp);
+            enqueue(new Message.PeerNodes(hub.registry().machineKeys()));
+            hub.relaysChanged();
             try {
                 // Keys and certificate first, so that a standby which loses the connection right
                 // after the snapshot can already sign; then the snapshot, put at the head of the
@@ -199,6 +221,7 @@ final class Peers {
             }
             switch (m) {
                 case Message.Ping p -> mux.control(Codec.encode(new Message.Pong(p.id())));
+                case Message.PeerNodes pn -> nodes = java.util.Set.copyOf(pn.mkeys());
                 case Message.Goodbye g -> {
                     LOG.info("standby {} said goodbye: {}", name, g.reason());
                     close();
@@ -233,6 +256,7 @@ final class Peers {
             hub.store().unsubscribe(listener);
             if (sessions.remove(this)) {
                 hub.availability().peerDown(name, System.currentTimeMillis());
+                hub.relaysChanged();
             }
             if (mux != null) {
                 mux.close();

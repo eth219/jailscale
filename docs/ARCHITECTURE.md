@@ -1646,7 +1646,51 @@ change, and a standby answers them as its own.
 
 **What this makes of a failover.** When the primary dies, the standby stops answering its address
 within the channel's timeout; the moment the standby is promoted it answers itself, and visitors
-arrive within the TTL with nothing touched at the parent. `jailhub promote` is the whole of it.
+arrive within the TTL with nothing touched at the parent. `jailhub promote` is the whole of it --
+for the control plane. For visitors, §13.4 makes even that unnecessary.
+
+### 13.4 The standby serves
+
+A standby holds the store and the wildcard key, which is everything the SNI router and the signing
+oracle need. So it serves. A node opens a **relay connection** to every host the hub names besides
+the one its control connection reached, and reopens its links there; a visitor who reaches either
+host is relayed to the node by that host and signed by that host, under §9.2's conditions unchanged,
+because the host that delivered the stream is the host that signs. Losing the primary then stops
+nothing a visitor can see, before anyone has typed anything.
+
+**What a relay connection is.** The same TLS, Noise IK and hello as a control connection, with
+{@code relay} set and connection index 3 (extras keep 1 and 2). It registers nothing and may ask for
+nothing that writes: `LinkOpen` and `LinkClose` are answered, everything else with
+`Error{primary-only}`. A standby answers every connection that way, relay or not, and turns a
+control connection away with `Goodbye{standby}` as before; a relay connection is the one kind it
+takes. `LinkOpen` on such a connection is a **reopen**: the name or domain has to be one the
+replicated store already gives this node, the primary having assigned it and the assignment having
+arrived over the hub-to-hub channel, and nothing is claimed, reassigned, notified or allocated. A
+name the node does not hold yet, a random name it has not been given, and every raw port are
+`primary-only`, and the node asks the primary. Raw TCP and UDP therefore stay with the primary.
+
+**Who names the relays.** The hub's hello carries `relays`: every host serving right now as
+`address` or `address:port`, itself included; the node leaves out the one its control connection
+reached, compared as the socket says. `RelaysChanged` follows when a peer comes or goes, and a hub
+that is shutting down sends nothing -- its last word would have been to strike the host that is
+about to be the only one left. The node's relay set is the hub's word entirely: it opens what is
+named and closes what no longer is, each with the control connection's backoff.
+
+**DNS follows the nodes.** Each hub tells its peer which nodes are attached to it (`PeerNodes`, the
+whole set, whenever it changes), so a published name resolves to the hosts its node is on and the
+apex to the primary alone, where joining and administering are. A name nobody holds resolves to
+every host serving, which is where the "not open" page is. In the two-host deployment that is
+already the shape step 3 of [docs/ha-design](ha-design/README.md) described, with the replicated
+store standing in for the signed lease; the lease is what a third, stateless relay would need,
+and it stays designed rather than built until there is one.
+
+**What survives the primary now.** Streams in flight on the dead host are gone with its sockets;
+new visitors to every open name are served by the other host within the DNS TTL; nodes keep their
+relay connections, since nobody tells them otherwise. Joining, opening a new name, administering,
+lease-free as this is, wait for `jailhub promote`, which is still a person, and the apex resolves to
+nothing until then. Raw ports go with the primary. `StandbyTest` runs the sequence in that order:
+the primary closes first, the name is still served through the standby, then the standby is
+promoted and a new node joins it.
 
 ---
 
@@ -2091,11 +2135,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   has next to every issuance failure and on its status page, and `ls` marks the link. None of that
   helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
   nobody hears from, and its domain goes dark when the certificate runs out.
-- **A standby fails over the visitor path only after promotion** (§13.1, §13.3). What it keeps
-  current is the copy, and with the subdomain delegated to both hubs the promoted standby answers
-  its own name; but promotion itself is a person typing `jailhub promote`, because two hosts cannot
-  tell a partition from a death without a third party. Until then the standby's 443 is a page
-  saying what it is. With three records at the parent instead, the DNS change is the operator's too.
+- **Promotion is a person** (§13.1, §13.3). With the subdomain delegated to both hubs and the
+  standby serving (§13.4), losing the primary stops nothing a visitor sees; what stops is joining,
+  opening new names, administering and raw ports, until someone types `jailhub promote`, because
+  two hosts cannot tell a partition from a death without a third party. With three records at the
+  parent instead, the DNS change is the operator's too.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
   is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
   calls the unit started; the listening sockets are still rebound rather than handed over.

@@ -1,9 +1,11 @@
 # Hub redundancy: control plane, relays, and an uptime figure
 
-A design, of which steps 1 and 4 below are built ([ARCHITECTURE.md §13.1 to §13.3](../ARCHITECTURE.md)):
-the hub-to-hub channel, the standby, promotion, the availability figures, and the hubs answering
-their own DNS. The other steps are not, and this file is what they would be, in the order they are
-now meant to land: 1, 4, 2, 3, 5.
+A design, of which steps 1, 4 and -- for two hosts -- 2 and 3 below are built
+([ARCHITECTURE.md §13.1 to §13.4](../ARCHITECTURE.md)): the hub-to-hub channel, the standby,
+promotion, the availability figures, the hubs answering their own DNS, and the standby serving
+visitors through relay connections with per-name DNS. What is not built is the signed lease, which
+only a third, stateless relay would need, and step 5. The order the steps landed in: 1, 4, 2+3;
+5 is next.
 It records the shape a two-host hub takes and why, cut so that each step leaves the single-host hub
 untouched. Before step 1, §13's answer to losing the host was "copy the state directory and change
 DNS"; the standby is that sentence done by the hub itself, and after step 4 the DNS change is the
@@ -296,14 +298,16 @@ this is for the operator with no scraper.
    The channel is authenticated by the hub key itself -- the standby's Noise static is the copy of
    `hub.key` the operator made -- and rides 443 under the hub's own name. "Mutual probes" became
    the channel's own up and down intervals, which cost nothing and measure the same thing.
-2. (lands fourth) Leases and the relay list: `LinkOpened.lease`, `Hello.relays`,
-   `Hello.controls`. Nodes store leases and connect to every relay. The lease key is a signing key
-   of its own -- `hub.key` is X25519 and cannot sign, and the wildcard key has one job -- and it
-   travels to the standby the way the hub key does.
-3. (lands fifth) The relay role: SNI router and signing forwarder separable from the store,
-   `TlsEndpoint` and `RemoteSigning` shared through `proto`, relay names reserved, per-name DNS
-   answers. Raw TCP and UDP ports stay with the primary in this step; moving them to relays is a
-   decision for later.
+2. **Built for two hosts, without the lease.** `HelloResponse.relays` and `RelaysChanged` name the
+   serving hosts; nodes open a relay connection to each and reopen their links there. Ownership
+   on the second host comes from the replicated store, not from a signed lease: both hosts are
+   control hosts and hold the store, so a lease would sign what the standby already knows. The
+   lease, and its own signing key, are what a third, stateless relay would need, and wait for one.
+3. **Built for two hosts.** The standby serves: it relays and signs with the key it holds, answers
+   `LinkOpen` as a reopen and everything else as `primary-only`, and DNS answers each name with
+   the hosts its node is on (`PeerNodes`). Not built: a relay-only role without the store,
+   `TlsEndpoint`/`RemoteSigning` shared through `proto`, `relayN` names (nodes are told addresses
+   instead). Raw TCP and UDP ports stay with the primary.
 4. **Built.** The hubs answer their own DNS: whole-subdomain delegation, the serving set as the
    answer, liveness from the channel, the host's own address found from the glue, the challenge
    values replicated. Makes `jailhub promote` the whole of a failover. Per-name answers wait for

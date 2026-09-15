@@ -64,6 +64,11 @@ public final class Hub implements AutoCloseable {
     private volatile PeerClient peerClient;
     /** The public address this hub answers for itself (§13.3); null until known. */
     private volatile String advertised;
+    /**
+     * What nodes dial to reach this host as a relay (§13.4), when it is not the advertised
+     * address on 443. Tests, where two hubs share a loopback address and differ by port.
+     */
+    volatile String relayEndpointOverride;
     /** The name servers the parent delegates to, label to address; empty until looked up or when not delegated. */
     private volatile Map<String, String> nameServers = Map.of();
     /** Whether port 53 could be bound: the DNS answers exist only when it could. */
@@ -138,6 +143,7 @@ public final class Hub implements AutoCloseable {
         } catch (GeneralSecurityException e) {
             throw new IOException("trust store: " + e.getMessage(), e);
         }
+        this.links.standby(() -> standby);
         this.router = new SniRouter(this);
         this.adminWeb = new AdminWeb(this);
         // Flags seed the runtime settings once; afterwards /admin and `jailhub setting` own them.
@@ -240,6 +246,8 @@ public final class Hub implements AutoCloseable {
         dns = new io.jailscale.hub.dns.DnsResponder(config.hostname());
         dns.setZone(new io.jailscale.hub.dns.DnsResponder.Zone() {
             @Override public List<String> serving() { return Hub.this.serving(); }
+            @Override public List<String> control() { return Hub.this.control(); }
+            @Override public List<String> forName(String label) { return Hub.this.hostsForName(label); }
             @Override public Map<String, String> nameServers() { return nameServers; }
         });
         dns.onTxtChanged(peers::challengeChanged);
@@ -261,16 +269,171 @@ public final class Hub implements AutoCloseable {
     }
 
     /**
-     * The hosts answered for the hub's name right now (§13.3): a primary answers itself, a
-     * standby answers the primary while it can reach it, and after step 3 both relays.
+     * The hosts serving this hub's names right now (§13.3, §13.4): this host, and every peer whose
+     * hub-to-hub channel is up. A standby serves too -- it holds the store and the key -- so a
+     * name resolves to both hosts, and a visitor who reaches either is served.
      */
     List<String> serving() {
+        List<String> out = new ArrayList<>(2);
+        if (advertised != null) {
+            out.add(advertised);
+        }
+        for (String a : peerAddresses()) {
+            if (!out.contains(a)) {
+                out.add(a);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Where the apex points (§13.4): the control plane, which is the primary alone. A node's
+     * control connection, a join, an admin page all write, and only the primary writes; a
+     * standby that answered the apex with itself would take control connections it must refuse.
+     */
+    List<String> control() {
         if (!standby) {
             return advertised == null ? List.of() : List.of(advertised);
         }
         PeerClient pc = peerClient;
         String primary = pc == null ? null : pc.primaryAddress();
-        return pc != null && pc.isConnected() && primary != null ? List.of(primary) : List.of();
+        return pc != null && pc.isConnected() && primary != null ? List.of(hostOf(primary)) : List.of();
+    }
+
+    /**
+     * The hosts a published name resolves to (§13.4): those its node is attached to, here or on a
+     * peer; the whole serving set when it is attached nowhere or the name is nobody's, so that a
+     * visitor still reaches a host that can say "not open".
+     */
+    List<String> hostsForName(String label) {
+        Store.NameRec rec = store.name(label);
+        if (rec == null || rec.mkey() == null) {
+            return serving();
+        }
+        List<String> out = new ArrayList<>(2);
+        if (advertised != null && registry.get(rec.mkey()) != null) {
+            out.add(advertised);
+        }
+        for (Map.Entry<String, java.util.Set<String>> e : peerNodes().entrySet()) {
+            if (e.getValue().contains(rec.mkey()) && !out.contains(e.getKey())) {
+                out.add(e.getKey());
+            }
+        }
+        return out.isEmpty() ? serving() : out;
+    }
+
+    /** The addresses of the peers whose channel is up right now, IPv4 only, no port. */
+    private List<String> peerAddresses() {
+        List<String> out = new ArrayList<>(2);
+        if (!standby) {
+            for (Peers.Session s : peers.all()) {
+                if (s.address() != null) {
+                    out.add(hostOf(s.address()));
+                }
+            }
+        } else {
+            PeerClient pc = peerClient;
+            if (pc != null && pc.isConnected() && pc.primaryAddress() != null) {
+                out.add(hostOf(pc.primaryAddress()));
+            }
+        }
+        return out;
+    }
+
+    /** The nodes attached to each peer, keyed by the peer's address (§13.4). */
+    private Map<String, java.util.Set<String>> peerNodes() {
+        Map<String, java.util.Set<String>> out = new java.util.LinkedHashMap<>();
+        if (!standby) {
+            for (Peers.Session s : peers.all()) {
+                if (s.address() != null) {
+                    out.put(hostOf(s.address()), s.nodes());
+                }
+            }
+        } else {
+            PeerClient pc = peerClient;
+            if (pc != null && pc.isConnected() && pc.primaryAddress() != null) {
+                out.put(hostOf(pc.primaryAddress()), pc.primaryNodes());
+            }
+        }
+        return out;
+    }
+
+    /** {@code address} or {@code address:port} to the address alone. */
+    static String hostOf(String endpoint) {
+        int c = endpoint.lastIndexOf(':');
+        return c > 0 && endpoint.indexOf(':') == c ? endpoint.substring(0, c) : endpoint;
+    }
+
+    /**
+     * What a node is told to open relay connections to (§13.4): every serving host as
+     * {@code address[:port]}, this one included -- the node leaves out the one its control
+     * connection already reached. The port rides along only when it is not 443, which is a test.
+     */
+    List<String> relaysForNodes() {
+        List<String> out = new ArrayList<>(2);
+        String self = relayEndpoint();
+        if (self != null) {
+            out.add(self);
+        }
+        if (!standby) {
+            for (Peers.Session s : peers.all()) {
+                if (s.endpoint() != null && !out.contains(s.endpoint())) {
+                    out.add(s.endpoint());
+                }
+            }
+        } else {
+            PeerClient pc = peerClient;
+            if (pc != null && pc.isConnected() && pc.primaryEndpoint() != null && !out.contains(pc.primaryEndpoint())) {
+                out.add(pc.primaryEndpoint());
+            }
+        }
+        return out;
+    }
+
+    /** What a node dials to reach this host as a relay: the advertised address, with the port when it is not 443. */
+    String relayEndpoint() {
+        if (relayEndpointOverride != null) {
+            return relayEndpointOverride;
+        }
+        if (advertised == null) {
+            return null;
+        }
+        int p = listener == null ? config.listenPort() : port();
+        return p == 443 ? advertised : advertised + ":" + p;
+    }
+
+    /** The set of attached nodes changed: tell the peer, so its per-name answers follow (§13.4). */
+    void nodesChanged() {
+        List<String> keys = registry.machineKeys();
+        Message m = new Message.PeerNodes(keys);
+        peers.send(m);
+        PeerClient pc = peerClient;
+        if (pc != null) {
+            pc.send(m);
+        }
+    }
+
+    /** The relay set changed (a peer came or went): every node's control connection is told (§13.4). */
+    void relaysChanged() {
+        if (stopped) {
+            // A hub going down closes its peer sessions on the way, and the list without them is
+            // not news a node should act on: the nodes keep their relay connections to the hosts
+            // that are still up, which is the whole point of having them. A crashed hub says
+            // nothing; a closed one must not say more.
+            return;
+        }
+        List<String> relays = relaysForNodes();
+        Message m = new Message.RelaysChanged(relays);
+        for (NodeGroup g : registry.all()) {
+            NodeSession p = g.primary();
+            if (p != null && p.conn() == 0 && !p.isRelay()) {
+                try {
+                    p.send(m);
+                } catch (IOException e) {
+                    LOG.debug("node {}: could not send the relay list: {}", g.machineKey(), e.getMessage());
+                }
+            }
+        }
     }
 
     /** The public address this hub answers for itself, or null while unknown. */
