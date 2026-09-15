@@ -178,6 +178,10 @@ final class HttpFront {
                 process.put(w.label(), Math.round(f * 10_000) / 10_000.0 + "");
             }
         }
+        // The table behind the page's columns: minutes down per day (30, oldest first) and per
+        // hour (24); -1 where the record has nothing for that bucket.
+        process.put("downMinutesPerDay", boxed(downMinutes(a::processDownBetween, now, 86_400_000L, 30)));
+        process.put("downMinutesPerHour", boxed(downMinutes(a::processDownBetween, now, 3_600_000L, 24)));
         JsonObject.Builder peers = JsonObject.builder();
         for (String name : a.peerNames()) {
             JsonObject.Builder p = JsonObject.builder();
@@ -190,6 +194,69 @@ final class HttpFront {
             peers.put(name, p.build());
         }
         return JsonObject.builder().put("process", process.build()).put("peers", peers.build()).build();
+    }
+
+    /** Minutes down per bucket, oldest first; -1 where the record has nothing. */
+    private static long[] downMinutes(java.util.function.BiFunction<Long, Long, Long> down, long now, long bucketMs, int buckets) {
+        long[] out = new long[buckets];
+        long end = now;
+        for (int i = buckets - 1; i >= 0; i--) {
+            long ms = down.apply(end - bucketMs, end);
+            out[i] = ms < 0 ? -1 : (ms + 30_000) / 60_000;
+            end -= bucketMs;
+        }
+        return out;
+    }
+
+    /**
+     * One inline SVG: a column per bucket, its height the minutes down in that bucket, full at
+     * {@code fullAt} minutes or more. A bucket with nothing down draws nothing but its baseline;
+     * one before the record began draws a fainter baseline and says so. Every column carries its
+     * number in a title, which is the tooltip, and the JSON status carries the same numbers, which
+     * is the table. The ink is the page's own, so light and dark come from the same place as the
+     * text; the marks are 8px in a 10px slot, rounded at the data end and square at the base.
+     */
+    private static String strip(long[] minutes, long now, long bucketMs, long fullAt, String what) {
+        int slot = 10;
+        int w = 8;
+        int h = 36;
+        int base = h + 1;
+        StringBuilder s = new StringBuilder();
+        s.append("<svg class=\"avail\" width=\"").append(minutes.length * slot).append("\" height=\"").append(base + 2)
+            .append("\" viewBox=\"0 0 ").append(minutes.length * slot).append(' ').append(base + 2)
+            .append("\" role=\"img\" aria-label=\"").append(escape(what)).append("\">");
+        for (int i = 0; i < minutes.length; i++) {
+            int x = i * slot + 1;
+            long end = now - (minutes.length - 1 - i) * bucketMs;
+            String when = escape(java.time.Instant.ofEpochMilli(end - bucketMs).toString().substring(0, bucketMs >= 86_400_000L ? 10 : 16)
+                .replace('T', ' '));
+            s.append("<g><title>").append(when).append(": ");
+            if (minutes[i] < 0) {
+                s.append("no record</title><rect x=\"").append(x).append("\" y=\"").append(base).append("\" width=\"").append(w)
+                    .append("\" height=\"1\" fill=\"currentColor\" fill-opacity=\".15\"/></g>");
+                continue;
+            }
+            s.append(minutes[i] == 0 ? "up throughout" : minutes[i] + " min down").append("</title>");
+            s.append("<rect x=\"").append(x).append("\" y=\"").append(base).append("\" width=\"").append(w)
+                .append("\" height=\"1\" fill=\"currentColor\" fill-opacity=\".35\"/>");
+            if (minutes[i] > 0) {
+                int bar = (int) Math.max(3, Math.round(h * Math.min(1.0, (double) minutes[i] / fullAt)));
+                int top = base - bar;
+                // Rounded at the data end, square at the baseline.
+                s.append("<path fill=\"currentColor\" fill-opacity=\".6\" d=\"M").append(x).append(',').append(base)
+                    .append("V").append(top + 2).append("a2,2 0 0 1 2,-2h").append(w - 4).append("a2,2 0 0 1 2,2V").append(base).append("Z\"/>");
+            }
+            s.append("</g>");
+        }
+        return s.append("</svg>").toString();
+    }
+
+    private static List<Object> boxed(long[] v) {
+        List<Object> l = new ArrayList<>(v.length);
+        for (long x : v) {
+            l.add(x);
+        }
+        return l;
     }
 
     /** "100% 24h · 99.98% 7d · 99.9% 30d", or what the record's age allows. */
@@ -282,9 +349,16 @@ final class HttpFront {
         Availability avail = hub.availability();
         String sinceNote = now - avail.since() < Availability.WINDOWS.get(Availability.WINDOWS.size() - 1).millis()
             ? " (record since " + escape(java.time.Instant.ofEpochMilli(avail.since()).toString().substring(0, 10)) + ")" : "";
-        row(b, "Availability", availabilityText(w -> avail.processFraction(w, now)) + ", by this process's own record" + sinceNote);
+        long day = 86_400_000L;
+        long hour = 3_600_000L;
+        row(b, "Availability", availabilityText(w -> avail.processFraction(w, now)) + ", by this process's own record" + sinceNote
+            + strip(downMinutes(avail::processDownBetween, now, day, 30), now, day, 60, "Minutes down per day, last 30 days")
+            + strip(downMinutes(avail::processDownBetween, now, hour, 24), now, hour, 15, "Minutes down per hour, last 24 hours")
+            + "<small>Minutes down per day over 30 days, then per hour over 24; a full column is an hour, or a quarter of one.</small>");
         for (String peer : avail.peerNames()) {
-            row(b, "Seen from here", "<code>" + escape(peer) + "</code> " + availabilityText(w -> avail.peerFraction(peer, w, now)));
+            row(b, "Seen from here", "<code>" + escape(peer) + "</code> " + availabilityText(w -> avail.peerFraction(peer, w, now))
+                + strip(downMinutes((f, t) -> avail.peerDownBetween(peer, f, t), now, day, 30), now, day, 60,
+                    "Minutes the channel to " + peer + " was down per day, last 30 days"));
         }
         PeerClient pc = hub.peerClient();
         if (hub.isStandby() && pc != null) {
@@ -433,6 +507,7 @@ final class HttpFront {
             + "p{margin:.75rem 0}a{color:var(--link)}"
             + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%;margin:.25rem 0}"
+            + "svg.avail{display:block;margin:.4rem 0 0;max-width:100%}td small{margin:.25rem 0 0}"
             + "td{padding:.5rem 0;text-align:left;border-top:1px solid var(--rule);vertical-align:baseline}"
             + "tr:first-child td{border-top:0}"
             + "td:first-child{width:11rem;color:var(--dim);padding-right:1rem}"
