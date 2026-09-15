@@ -70,7 +70,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      */
     private final Object probeWake = new Object();
     private boolean sweepAsked;          // guarded by probeWake
-    private long lastSweepAt;            // the probe thread's own
+    /**
+     * When the last sweep ran, on {@link System#nanoTime}: the probe thread's own, and monotonic
+     * because a clock that steps must not move the interval anything here is written in.
+     */
+    private long lastSweepNanos = System.nanoTime() - PROBE_PASS_MS * 1_000_000L;
     /** How close to its end a certificate has to be before anyone is told (ARCHITECTURE.md §15). */
     static final long CERT_WARN_MS = 14 * 86400_000L;
     private static final long CERT_WARN_REPEAT_MS = 86400_000L;
@@ -126,7 +130,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * A node that loses a name is usually offline when it happens -- being offline is why someone
      * else took it (§11.4) -- so the moment the link is back is the moment worth looking, and the
      * ticks spent disconnected went nowhere. The ask is a flag, not a queue: a link that flaps must
-     * cost one pass at most, and {@code lastSweepAt} is what holds it to that.
+     * cost one pass at most, and {@code lastSweepNanos} is what holds it to that.
      */
     private void askProbeSweep() {
         synchronized (probeWake) {
@@ -830,7 +834,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * opt out of.
      */
     private void probeLoop() {
-        Set<String> pass = new HashSet<>();
+        Set<NodeState.LinkRec> pass = new HashSet<>();
         try {
             while (!closed) {
                 boolean sweep = awaitProbeTick(jitter(probeTick(probableNames(state.links))));
@@ -860,22 +864,27 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * ordinary ticks carry on underneath it: a node whose link flaps every minute would otherwise
      * turn every flap into a full pass, which is the one way this could become traffic worth
      * noticing. What it is held to instead is a doubling of the steady rate, at worst.
+     *
+     * <p>The deadline is {@link System#nanoTime}, not the wall clock. The remaining wait is worked
+     * out again after every wakeup, so a clock stepped backwards -- NTP correcting a fast RTC, a VM
+     * resuming -- would otherwise push the next look at a name out by the size of the step, and the
+     * bound this loop exists to hold would be gone without anything saying so.
      */
     private boolean awaitProbeTick(long tickMs) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + tickMs;
+        long deadline = System.nanoTime() + tickMs * 1_000_000L;
         synchronized (probeWake) {
             while (!closed) {
                 if (sweepAsked) {
                     sweepAsked = false;
-                    if (System.currentTimeMillis() - lastSweepAt >= PROBE_PASS_MS) {
+                    if (System.nanoTime() - lastSweepNanos >= PROBE_PASS_MS * 1_000_000L) {
                         return true;
                     }
                 }
-                long left = deadline - System.currentTimeMillis();
+                long left = deadline - System.nanoTime();
                 if (left <= 0) {
                     return false;
                 }
-                probeWake.wait(left);
+                probeWake.wait(Math.max(1, left / 1_000_000L));
             }
         }
         return false;
@@ -897,7 +906,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * waiting would wait nearly two passes rather than the one PROBE_PASS_MS bounds; and a sweep
      * that made no requests at all has nothing to answer the cooldown for.
      */
-    private void sweepProbe(List<NodeState.LinkRec> links, Set<String> pass) throws InterruptedException {
+    private void sweepProbe(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) throws InterruptedException {
         List<NodeState.LinkRec> all = remaining(links, Set.of());
         if (all.isEmpty()) {
             return;
@@ -908,11 +917,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (!link.isConnected()) {
             return;
         }
-        lastSweepAt = System.currentTimeMillis();
+        lastSweepNanos = System.nanoTime();
         pass.clear();
         for (NodeState.LinkRec rec : all) {
             probeSafely(rec);
-            pass.add(rec.name);
+            pass.add(rec);
             if (!link.isConnected()) {
                 break;
             }
@@ -921,6 +930,16 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private void probeSafely(NodeState.LinkRec rec) {
+        if (!state.links.contains(rec)) {
+            // Closed or revoked since the list this came from was taken -- which is seconds to
+            // minutes ago for a sweep, and a sweep runs on the connection that delivers the stored
+            // LinkRevoked (§11.4). The hub answers a name it no longer routes here with its own
+            // page under the wildcard certificate, and the node that took the name terminates its
+            // own TLS, so probing either says TERMINATED ELSEWHERE and calls a name the hub
+            // announced politely a compromise. A false report of that is the worst thing this
+            // feature can do (SelfProbe).
+            return;
+        }
         try {
             probe(rec);
         } catch (RuntimeException e) {
@@ -935,20 +954,23 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * is the turn-taking: the names already looked at in the current pass, carried across ticks and
      * cleared here once every name has had its turn, which is what makes a pass a pass.
      *
-     * <p>It is a set of names rather than a position because a position is a claim about a list
-     * that does not hold still. Links are opened and closed while a pass runs, and an index into
-     * yesterday's list points at a different name in today's: closing one link used to shift every
-     * later name up a place, which skips the one that moved past the cursor -- for a whole pass,
-     * silently, in the loop whose entire purpose is that no name goes unlooked-at for long. Naming
-     * the names instead makes both cases right by construction: a link that goes away takes its
-     * turn with it, and one that appears is due, because a name not in the set has not been probed.
+     * <p>It is a set of the link records themselves rather than a position, because a position is a
+     * claim about a list that does not hold still. Links are opened and closed while a pass runs,
+     * and an index into yesterday's list points at a different name in today's: closing one link
+     * used to shift every later name up a place, which skips the one that moved past the cursor --
+     * for a whole pass, silently, in the loop whose entire purpose is that no name goes
+     * unlooked-at for long. Holding the records makes every case right by construction: a link that
+     * goes away takes its turn with it, one that appears is due, and a name closed and opened again
+     * -- which §11.4 says is the answer to a revocation warning -- is due as well, because it is a
+     * new record. Keyed by name it would have inherited the turn the old one took, and `status`
+     * would sit blank for the one name the operator is watching until the pass ended.
      *
      * <p>A name with no verdict at all goes first. It is the one nothing is known about, and until
      * its first probe the reassurance in {@code status} is an empty field rather than an answer.
      *
      * <p>Separate from the probing so that the turn-taking can be checked without opening a socket.
      */
-    static NodeState.LinkRec dueProbe(List<NodeState.LinkRec> links, Set<String> pass) {
+    static NodeState.LinkRec dueProbe(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) {
         List<NodeState.LinkRec> due = remaining(links, pass);
         if (due.isEmpty()) {
             pass.clear();
@@ -964,7 +986,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 break;
             }
         }
-        pass.add(pick.name);
+        pass.add(pick);
         return pick;
     }
 
@@ -1013,13 +1035,15 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     /** The links carrying TLS this node terminates that have not had their turn in {@code pass}. */
-    private static List<NodeState.LinkRec> remaining(List<NodeState.LinkRec> links, Set<String> pass) {
+    private static List<NodeState.LinkRec> remaining(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) {
         List<NodeState.LinkRec> due = new ArrayList<>();
         for (NodeState.LinkRec rec : links) {
             // Raw ports carry no TLS of ours to compare, and an https link the hub has not answered
             // for yet has no URL to connect to. Neither is a name this can say anything about.
-            if (Message.LinkOpen.HTTPS.equals(rec.kind) && rec.url != null && rec.name != null
-                && !pass.contains(rec.name)) {
+            if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null || rec.name == null) {
+                continue;
+            }
+            if (!pass.contains(rec)) {
                 due.add(rec);
             }
         }

@@ -42,7 +42,7 @@ class ProbeScheduleTest {
         return r;
     }
 
-    private static List<String> names(List<NodeState.LinkRec> links, Set<String> pass, int ticks) {
+    private static List<String> names(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass, int ticks) {
         List<String> out = new ArrayList<>();
         for (int i = 0; i < ticks; i++) {
             NodeState.LinkRec rec = Daemon.dueProbe(links, pass);
@@ -81,7 +81,7 @@ class ProbeScheduleTest {
         // holding "index 1" now points past n1, which loses its turn for the rest of the pass --
         // in the loop whose whole purpose is that no name goes unlooked-at for long.
         List<NodeState.LinkRec> l = new ArrayList<>(links("https", "https", "https"));
-        Set<String> pass = new HashSet<>();
+        Set<NodeState.LinkRec> pass = new HashSet<>();
         assertEquals("n0", Daemon.dueProbe(l, pass).name);
         l.remove(0);
         assertEquals(List.of("n1", "n2"), names(l, pass, 2));
@@ -92,7 +92,7 @@ class ProbeScheduleTest {
         // The other half of the same property: a name nothing has looked at yet is not made to wait
         // for the next pass, because "not in the set" is exactly "has not had its turn".
         List<NodeState.LinkRec> l = new ArrayList<>(links("https", "https"));
-        Set<String> pass = new HashSet<>();
+        Set<NodeState.LinkRec> pass = new HashSet<>();
         assertEquals("n0", Daemon.dueProbe(l, pass).name);
         l.add(link(Message.LinkOpen.HTTPS, "fresh"));
         assertEquals(List.of("n1", "fresh", "n0"), names(l, pass, 3));
@@ -104,6 +104,20 @@ class ProbeScheduleTest {
         // answer, so it is the one worth spending the tick on wherever it sits in the list.
         List<NodeState.LinkRec> l = List.of(probed("a"), probed("b"), link(Message.LinkOpen.HTTPS, "c"));
         assertEquals(List.of("c", "a", "b"), names(l, new HashSet<>(), 3));
+    }
+
+    @Test
+    void reopeningANameInsideAPassDoesNotInheritItsTurn() {
+        // §11.4: deliberately reopening a name is the answer to a revocation warning. The record is
+        // a new one with no verdict, so it must not be held off by the turn the old one took --
+        // `status` would sit blank for the one name the operator is watching until the pass ended.
+        List<NodeState.LinkRec> l = new ArrayList<>(List.of(probed("a"), probed("b"), probed("c")));
+        Set<NodeState.LinkRec> pass = new HashSet<>(l);     // all three have had their turn
+        l.set(0, link(Message.LinkOpen.HTTPS, "a"));        // "a" closed and opened again
+        assertEquals("a", Daemon.dueProbe(l, pass).name);
+        // Keyed by name the pass would have read as complete and started over, handing b and c a
+        // second turn each before the new record got its first. Keyed by the record, only it is due.
+        assertEquals(4, pass.size());
     }
 
     @Test
@@ -145,7 +159,7 @@ class ProbeScheduleTest {
         String[] many = new String[20];
         java.util.Arrays.fill(many, "https");
         List<NodeState.LinkRec> l = links(many);
-        Set<String> pass = new HashSet<>();
+        Set<NodeState.LinkRec> pass = new HashSet<>();
         assertEquals(20, new HashSet<>(names(l, pass, 20)).size());
         assertEquals(20, pass.size());
     }

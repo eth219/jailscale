@@ -1332,15 +1332,27 @@ node holding 20 public names carries more visitor traffic than that by a wide ma
 unreachable at that ceiling and exists so that raising the ceiling cannot quietly turn this into a
 request a second.
 
-**Whose turn it is, is a set of names, not a position in the list of links.** Links open and close
-while a pass runs, so an index into the list of an hour ago points at a different name now: closing
-one link shifts every later name up a place, and whichever name moves past the cursor loses its turn
-for the rest of the pass -- silently, in the loop that exists so that no name goes unlooked-at for
-long. Carrying the names already visited makes both directions right without a special case, because
-a name that is not in the set has not been probed: a link that goes away takes its turn with it, and
-one opened mid-pass is due rather than waiting for the next. Raw ports are never candidates at all,
-since they carry no TLS of ours to compare, and a name with no verdict yet goes ahead of the rest --
-until its first probe what `status` shows for it is an empty field rather than an answer.
+**Whose turn it is, is the set of links already looked at, not a position in the list of them.**
+Links open and close while a pass runs, so an index into the list of an hour ago points at a
+different name now: closing one link shifts every later name up a place, and whichever name moves
+past the cursor loses its turn for the rest of the pass -- silently, in the loop that exists so that
+no name goes unlooked-at for long. Carrying the links already visited makes every direction right
+without a special case: one that goes away takes its turn with it, one opened mid-pass is due rather
+than waiting for the next, and a name closed and opened again -- which §11.4 says is the answer to a
+revocation warning -- is due as well, because it is a new link. Keyed by the name instead it would
+have inherited the turn the old one took, and `status` would sit blank for the one name the operator
+is watching until the pass ended. Raw ports are never candidates at all, since they carry no TLS of
+ours to compare, and a name with no verdict yet goes ahead of the rest -- until its first probe what
+`status` shows for it is an empty field rather than an answer.
+
+**A link that has gone is never probed, however it went.** The hub answers a name it no longer
+routes here with its own page under the wildcard certificate, and a name handed to another node is
+terminated by that node, so probing either would report `TERMINATED ELSEWHERE` for a name nobody
+took by stealth. That matters most exactly where the sweep runs: the connection that comes back is
+the one carrying the `LinkRevoked` the hub stored while this node was away (§11.4), so the list a
+sweep started from can lose a name while the sweep is still working through it. Each probe therefore
+checks that the link is still open first. A false report of a compromised hub is the worst thing
+this feature can do.
 
 **A link coming up is a reason to look now, not at the end of a tick.** A tick spent disconnected
 does nothing -- the traffic has nowhere to go -- and the stretch a node spends offline is exactly
