@@ -650,42 +650,6 @@ class HomePageTest {
     }
 
     /**
-     * The same two numbers in the answer a monitor reads. {@code /v1/status} published the version
-     * and not the protocol, so the one consumer that cannot read the HTML was the one the endpoint
-     * exists for: it could see <em>which build</em> a hub runs and had to turn that into <em>what it
-     * will talk to</em> through a mapping no release note carries (#165).
-     *
-     * <p>Held against {@link Message#PROTO} and {@link NodeSession#MIN_PROTO} and not against
-     * literals, the same shape as the page assertion above, so the two renderings cannot drift
-     * apart -- and against the page itself, because "the JSON says what the table says" is the
-     * claim, not "each of them says something". Verified by removing each field (missing field) and
-     * by writing one by hand (expected 1, was 2); both fail here.
-     *
-     * <p>What it cannot fail on, checked the same way: the two constants are equal today, so
-     * {@code minProto} taken from {@code PROTO} -- or the reverse -- passes this and every other
-     * test in the repository. Nothing here distinguishes them until they part, which is the moment
-     * the distinction starts to matter; {@link ProtoSkewTest} is what holds the floor itself.
-     */
-    @Test
-    void theStatusJsonNamesTheProtocolAndTheFloorBesideTheVersion() throws Exception {
-        JsonObject status = Json.parseObject(http("GET", "/v1/status", null, null).bodyText());
-        assertEquals(Message.PROTO, status.integer("proto"), status.toString());
-        assertEquals(NodeSession.MIN_PROTO, status.integer("minProto"), status.toString());
-        // Version and protocol answer "will my copy work here" together, and #140's argument was
-        // that the first without the second is the half that cannot be acted on.
-        assertEquals(Hub.version(), status.string("version"), status.toString());
-
-        // And that this is the number the page prints, not merely a number. Reading it back out of
-        // the HTML is what makes a JSON field that quietly reports something else fail here rather
-        // than in a dashboard six months from now. Both matches are closed on the right -- the row
-        // by the comma before "and takes", the paragraph by its tag -- because a bare prefix would
-        // hold "the JSON says 1" against a page saying 12 and pass.
-        String page = http("GET", "/", null, null).bodyText();
-        assertTrue(page.contains("<tr><td>Protocol</td><td>" + status.integer("proto") + ","), page);
-        assertTrue(page.contains("<b>protocol " + status.integer("proto") + "</b>"), page);
-    }
-
-    /**
      * The operator block, and the half that matters more: a hub nobody has configured says nothing
      * at all. The alternative shape -- a section on every hub reading "operator: not set" -- is a
      * worse page for the case that needs it least, and it is what this would quietly become if the

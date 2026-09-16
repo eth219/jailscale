@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.json.Json;
@@ -94,6 +95,17 @@ class MetricsEndpointTest {
         assertTrue(o.lng("uptimeSeconds") >= 0, r.bodyText());
         // The certificate is the field worth alerting on, so it has to be a number, not "loaded".
         assertTrue(o.lng("certificateNotAfter") > 1_700_000_000L, r.bodyText());
+        // Which build is up answers half of "will my copy work here"; the protocol answers the
+        // other half, and without it a monitor has to turn a version into a protocol through a
+        // mapping no release note carries (#165). Against the constants the handshake enforces and
+        // not against literals, so this cannot drift from what a join actually does -- the same
+        // shape as HomePageTest's assertion on the two the page prints.
+        assertEquals(Message.PROTO, o.integer("proto"), r.bodyText());
+        assertEquals(NodeSession.MIN_PROTO, o.integer("minProto"), r.bodyText());
+        // What this cannot fail on: the two constants are equal today, so minProto taken from
+        // PROTO -- or the reverse -- passes here and everywhere else in the repository. Nothing
+        // distinguishes them until they part, which is when the distinction starts to matter;
+        // ProtoSkewTest is what holds the floor itself.
     }
 
     /**

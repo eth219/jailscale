@@ -779,8 +779,8 @@ has no credential to offer and a name that has stopped answering was never a sec
 added, so a monitor that reads the ones it knows keeps working (§5.4); the ones added since are
 `role` (`primary` or `standby`, with `primary` and `inSync` on a standby, §13.1), `availability`
 (§13.2), and `proto` with `minProto` -- the pair the page prints beside the version, here because a
-monitor that can read a fleet's versions and not its protocols cannot see a flag day coming and has
-no release note mapping one to the other (§5.4).
+monitor that can read a fleet's versions and not its protocols cannot see a flag day coming, and no
+release note maps one to the other.
 
 **`GET /metrics`** is the Prometheus text format, which needs no library to produce, and it is **not
 on 443 at all**. It has a listener of its own -- plain HTTP, `--metrics-listen 127.0.0.1:9090` by
