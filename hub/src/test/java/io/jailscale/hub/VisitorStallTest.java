@@ -111,13 +111,17 @@ class VisitorStallTest {
         }
     }
 
+    /**
+     * Through {@link TestCloseables#closeAll} rather than in sequence: a daemon that throws on the
+     * way out used to leave {@code localApp} and {@code hub} open, and a hub holding its port for
+     * the rest of the suite surfaces as some later class failing to bind (#159).
+     */
     @AfterEach
     void stop() throws Exception {
-        for (Daemon d : daemons) {
-            d.close();
-        }
-        localApp.close();
-        hub.close();
+        List<AutoCloseable> all = new ArrayList<>(daemons);
+        all.add(localApp);
+        all.add(hub);
+        TestCloseables.closeAll(all.toArray(new AutoCloseable[0]));
     }
 
     @Test
