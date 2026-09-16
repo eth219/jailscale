@@ -1707,7 +1707,12 @@ out while the hub was restarting, which leaves the name in this node's list with
 and `jailscale down` followed by `jailscale verify`, where nothing is open at all. The check
 therefore sits in the probe itself rather than in the loop, so the command this section sends
 operators to is covered by it as well. A false report of a compromised hub is the worst thing this
-feature can do, and `link not open` is what all three of those are.
+feature can do, and `link not open` is what all three of those are. **The exit status leaves that
+verdict out**, because it is neither a pass nor a failure: nothing was probed. `jailscale verify`
+exits non-zero when a name it could check did not verify, so `jailscale down` followed by
+`jailscale verify` -- the third of those three -- is a printed row and an exit 0, rather than the
+alarm this section sends operators to raised by a node being off. An unreachable name still counts:
+something was tried and did not answer.
 
 **A link coming up is a reason to look now, not at the end of a tick.** A tick spent disconnected
 does nothing -- the traffic has nowhere to go -- and the stretch a node spends offline is exactly

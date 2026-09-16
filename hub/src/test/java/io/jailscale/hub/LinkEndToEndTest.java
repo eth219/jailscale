@@ -163,6 +163,7 @@ class LinkEndToEndTest {
         // is one the node recorded.
         JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));
         assertTrue(verified.integer("checked") >= 1, verified.toString());
+        assertTrue(verified.optBool("allOk", false), "names that verified: the exit status is 0");
         for (Object o : verified.array("results")) {
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
@@ -567,9 +568,13 @@ class LinkEndToEndTest {
         waitFor(() -> hub.links().byName("goingdown") == null);
 
         // `ok` is that the check ran; the CLI prints the rows on that and nothing else. What the
-        // rows concluded is `allOk`, which is what the exit status follows.
+        // rows concluded is `allOk`, which is what the exit status follows -- and a name nothing was
+        // probed for is not one of them. This asserted the opposite until the pair of commands
+        // above was noticed to be an ordinary thing to type: it left `jailscale verify` exiting 1,
+        // which is the alarm §11.3 raises for a hub terminating this node's TLS, on a node being
+        // off. The row is still there and still says what it says.
         JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));
-        assertFalse(verified.optBool("allOk", true), verified.toString());
+        assertTrue(verified.optBool("allOk", false), verified.toString());
         assertEquals(1, verified.integer("checked"), verified.toString());
         for (Object o : verified.array("results")) {
             @SuppressWarnings("unchecked")

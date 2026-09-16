@@ -846,7 +846,12 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             if (p == null) {
                 continue; // raw ports carry no TLS of ours to compare
             }
-            allOk &= p.ok();
+            // A name that is not open here is reported and not counted: nothing was probed, so it
+            // is neither a pass nor a failure, and the exit status is what an operator scripting
+            // §11.3 reads as "the hub is terminating my TLS".
+            if (p.checked()) {
+                allOk &= p.ok();
+            }
             rows.add(p.json().asMap());
         }
         // `ok` is whether the command ran; what each name concluded is its row. Folding the
@@ -910,7 +915,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             // The verdict does not go on the record: `status` keeps the last real one beside
             // `open: false` rather than losing it, and the name still counts as never probed if
             // it never was.
-            return new ProbeResult(probeLabel(rec), false, "link not open", System.currentTimeMillis());
+            return new ProbeResult(probeLabel(rec), false, ProbeResult.NOT_OPEN, System.currentTimeMillis());
         }
         String host = rec.url;
         String verdict;
