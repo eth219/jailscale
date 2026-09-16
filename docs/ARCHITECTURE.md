@@ -364,7 +364,14 @@ stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA fr
   than refuses, because refusing would hand an attacker a cheaper denial than the one being fixed
   and would not free what is already held. And **nothing is advertised on the wire** -- RST is
   already the receiver's to send at any time -- so no flag day and no node needs upgrading for a hub
-  to protect itself.
+  to protect itself. **The gauge is checked against the heap and not only against itself.**
+  `FlowBudgetHeapTest` fills the same streams on one rig to two queue depths and compares the
+  slopes, so every fixed cost is in both readings and cancels; at a full frame the answer is 1.00,
+  which is what makes the derived 24 MB 24 MB of heap. **On the JVM**, on Temurin 25 and
+  darwin-arm64: it is an accounting check, and what a native image holds for the same queues is a
+  different measurement that has not been taken. It charges the payload and not the `byte[]` that
+  carries it, so the same method reads 1.40 at 64-byte frames and 30.3 at one-byte ones, which is
+  [#154](https://github.com/eth219/jailscale/issues/154) and open.
 - **One writer a session, and control does not queue behind data.** `NoiseChannel.write` holds one
   lock across the encryption and the socket write, because the nonce must advance in wire order. With
   every producer calling it directly, one blocked write stalled every frame on that session: a
