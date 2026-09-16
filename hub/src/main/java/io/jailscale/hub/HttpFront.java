@@ -672,22 +672,34 @@ final class HttpFront {
             .append(" underneath it, no root. Intel Macs run <code>jailscale.jar</code> on a JVM.</p>");
         // "latest" is a moving target and this hub is not: it can say which copies it will talk to,
         // and what happens to one it will not, so nobody has to find that out from a failed join.
-        b.append("<p>Any recent release will do: this hub speaks <b>protocol ")
+        // What it must not say is that any recent release will do: the floor is enforced from both
+        // ends -- a jailscale has its own minimum hub protocol and refuses a hub below it -- and
+        // this page can only speak for this end of it.
+        b.append("<p>This hub speaks <b>protocol ")
             .append(io.jailscale.proto.control.Message.PROTO).append("</b> and takes ")
             .append(NodeSession.MIN_PROTO == io.jailscale.proto.control.Message.PROTO
                 ? "nothing older" : "protocol " + NodeSession.MIN_PROTO + " and newer")
             .append(". One that is too old is turned away at the handshake with a line saying so and")
-            .append(" which version this hub runs, rather than half-working.</p>");
+            .append(" which version this hub runs, rather than half-working; a jailscale newer than")
+            .append(" this hub decides for itself whether it will still talk to it.</p>");
+        if (hub.isStandby()) {
+            // A standby answers Goodbye{standby} to every control connection (§13.4), so the lines
+            // above are true of this deployment and not of this host. Saying "join here" on a page
+            // that will refuse the join is worse than saying nothing.
+            b.append("<p><b>Not on this host, though:</b> it is the standby. It serves links that are")
+                .append(" already open and takes no joins; the primary is where joining happens.</p>");
+        }
         // The page already says how to check the hub's binary. It said nothing about the file the
         // reader is about to download, which is the one they can actually do something about.
         b.append("<p>The releases are signed. Once you have <code>jailscale</code>,")
             .append(" <code>jailscale update --download</code> checks the signature of everything it")
-            .append(" fetches after that, so this is the one copy you check by hand: its hash is in")
-            .append(" <code>SHA256SUMS.txt</code> beside the download, and")
-            .append(" <a href=\"").append(REPO).append("/blob/main/tools/verify-release.sh\">")
-            .append("<code>tools/verify-release.sh</code></a> checks the signature over that file the")
-            .append(" same way the daemon will. The first copy is the one nothing of ours can vouch")
-            .append(" for yet; every copy after it is checked against a key this one pinned.</p>");
+            .append(" fetches after that, so this is the one copy you check by hand: the signature is")
+            .append(" over <code>RELEASE.txt</code>, which names the tag and carries the digest of")
+            .append(" <code>SHA256SUMS.txt</code>, and your download's hash is in that.")
+            .append(" <a href=\"").append(REPO).append("/blob/main/docs/release-verification.md\">")
+            .append("How to check it</a> is three commands. The first copy is the one nothing of ours")
+            .append(" can vouch for yet; every copy after it is checked against a key this one")
+            .append(" pinned.</p>");
         // Say what this hub actually accepts rather than assuming a default.
         boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
         if (open) {

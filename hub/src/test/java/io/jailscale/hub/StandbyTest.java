@@ -228,6 +228,12 @@ class StandbyTest {
         // page that called every hub degraded.
         assertTrue(prPage.contains("All systems operational"), prPage);
         assertTrue(page("hub.test", portB).contains("All systems operational"), page("hub.test", portB));
+        // §13.4: a standby answers Goodbye{standby} to every control connection, so its own page
+        // must not tell a reader to join here -- while the primary's, which will take the join,
+        // must not carry the warning. Both halves, because either alone is satisfied by a page
+        // that always says it or never does.
+        assertTrue(page("hub.test", portB).contains("Not on this host, though:"), page("hub.test", portB));
+        assertFalse(prPage.contains("Not on this host, though:"), prPage);
         JsonObject ipcStatus = Ipc.call(root.resolve("a/jailhub.sock"), JsonObject.builder().put("cmd", "status").build());
         assertEquals(1, ipcStatus.array("standbys").size(), ipcStatus.toString());
 

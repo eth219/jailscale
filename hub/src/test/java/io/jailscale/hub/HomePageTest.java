@@ -608,9 +608,12 @@ class HomePageTest {
     }
 
     /**
-     * What the page says about which copy of jailscale will work here has to be what the handshake
-     * actually enforces, so both numbers are read from the code that enforces them rather than
-     * typed into the assertion: a protocol bump that forgets this page fails here.
+     * That the page carries these two facts at all, and that it takes them from the constants the
+     * handshake enforces rather than from a number somebody typed. It cannot fail on a protocol
+     * bump -- page and assertion read the same constant, which is the point of the page reading it
+     * -- so what it catches is the paragraph going away, a number written by hand drifting from
+     * {@code MIN_PROTO}, and the wrong one of the two branches below being taken. That the floor is
+     * enforced at all is {@link ProtoSkewTest}'s.
      */
     @Test
     void thePageSaysWhichClientsThisHubTakesAndHowToCheckTheOneYouGet() throws Exception {
@@ -629,6 +632,9 @@ class HomePageTest {
         // about -- the paragraph further down is about the hub's own binary and is not this.
         assertTrue(page.contains("jailscale update --download"), page);
         assertTrue(page.contains("SHA256SUMS.txt"), page);
-        assertTrue(page.contains("tools/verify-release.sh"), page);
+        assertTrue(page.contains("docs/release-verification.md"), page);
+        // The signature is over RELEASE.txt and not over the checksum list, which the page said
+        // until review; the two are one step apart and the page has to get the step right.
+        assertTrue(page.contains("RELEASE.txt"), page);
     }
 }

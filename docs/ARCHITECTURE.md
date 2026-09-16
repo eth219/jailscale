@@ -577,7 +577,11 @@ The hub's own page at `/` is the same machinery seen from the other side. It sta
 how to join *this* hub (read from the stored registration setting rather than assumed), **which
 copies of `jailscale` it will talk to** -- the protocol it speaks and the floor it enforces, read
 from `Message.PROTO` and `NodeSession.MIN_PROTO` so the page cannot drift from the handshake, since
-"latest" is a moving target and this hub is not -- and how it
+"latest" is a moving target and this hub is not; it says that for this end only, because a client
+has a floor of its own (`HubLink.MIN_HUB_PROTO`) and refuses a hub below it, which this page cannot
+promise anything about. A standby says plainly that joining does not happen here: it answers
+`Goodbye{standby}` to every control connection (§13.4), and a page that invites a join it will
+refuse is worse than one that says nothing. Then how it
 is doing: version, uptime, nodes online against nodes registered, links open, whether a certificate
 is loaded, and resident memory. Those are properties of the service, so they are public. The node
 list, the addresses nodes connect from, and the controls over them are rendered only when the
