@@ -63,14 +63,14 @@ class RawPortSlotCapTest {
         }
     }
 
-    /** A hub with one raw tcp port open on a node, reading PROXY headers or not. */
-    private void start(boolean proxyProtocol) throws Exception {
+    /** A hub with one raw tcp port open on a node, and no PROXY headers: every visitor is 127.0.0.1. */
+    private void start() throws Exception {
         root = TestDirs.newRoot("rpc");
         int port = freePort();
         int lo = freePort();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withPortRange(lo, lo);
-        hub = new Hub(proxyProtocol ? cfg.withProxyProtocol(true, List.of()) : cfg);
+        hub = new Hub(cfg);
         hub.start();
 
         echo = new ServerSocket(0, 128, InetAddress.getLoopbackAddress());
@@ -105,21 +105,13 @@ class RawPortSlotCapTest {
     }
 
     /**
-     * One visitor, held open. {@code srcIp} null connects as itself; anything else announces that
-     * address in a PROXY header, which is how one loopback test presents many visitors and how the
-     * address arrives in the deployment §8.5 describes.
-     *
-     * <p>True when the port served it, which is a round trip through the node's echo and not merely
-     * an accepted socket: a refused visitor is closed after the accept, so connecting always
-     * succeeds and only the bytes tell the two apart.
+     * One visitor, held open. True when the port served it, which is a round trip through the
+     * node's echo and not merely an accepted socket: a refused visitor is closed after the accept,
+     * so connecting always succeeds and only the bytes tell the two apart.
      */
-    private boolean served(Socket s, String srcIp, String word) throws IOException {
+    private boolean served(Socket s, String word) throws IOException {
         s.connect(new InetSocketAddress("127.0.0.1", rawPort), 5000);
         s.setSoTimeout(10_000);
-        if (srcIp != null) {
-            s.getOutputStream().write(("PROXY TCP4 " + srcIp + " 127.0.0.1 51234 " + rawPort + "\r\n")
-                .getBytes(StandardCharsets.US_ASCII));
-        }
         byte[] out = word.getBytes(StandardCharsets.US_ASCII);
         s.getOutputStream().write(out);
         s.getOutputStream().flush();
@@ -142,13 +134,13 @@ class RawPortSlotCapTest {
 
     @Test
     void aVisitorThisHubCannotTellApartIsNotCappedOnARawPortEither() throws Exception {
-        start(false);
+        start();
         List<Socket> open = new ArrayList<>();
         try {
             for (int i = 0; i <= SniRouter.MAX_PER_IP + 2; i++) {
                 Socket s = new Socket();
                 open.add(s);
-                assertTrue(served(s, null, "visitor-" + i),
+                assertTrue(served(s, "visitor-" + i),
                     "visitor " + i + " was refused; 127.0.0.1 is every visitor behind a forwarder that says nothing");
             }
             assertEquals(open.size(), hub.registry().get(node.machineKey()).visitorsInFlight(),

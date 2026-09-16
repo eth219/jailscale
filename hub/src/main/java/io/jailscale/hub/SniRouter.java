@@ -66,18 +66,30 @@ final class SniRouter {
     }
 
     /**
-     * Takes a visitor slot on behalf of a listener that is not 443 -- the raw tcp ports of §8.4,
-     * which accept on their own sockets and so never reached the cap above. Returns the key it took,
-     * to be handed back to {@link #giveSlot}, or null when that network is already at
-     * {@link #MAX_PER_IP} and nothing was taken.
+     * Takes a visitor slot for one connection, or null when that network is already at
+     * {@link #MAX_PER_IP} and nothing was taken. What comes back is the key, to be handed to
+     * {@link #giveSlot}: the caller gives back what it took rather than an address the key may not
+     * have come from.
      *
-     * <p>{@code attributed} is whether a PROXY header said who the visitor is, and {@code peer} is
-     * what the socket says whether it did or not, because both of the rules above apply here too
-     * and for the same reasons: the key is the address the hub can believe, and a connection it
-     * cannot attribute *and* that arrives on loopback is exempt. A forwarder on this host without
-     * the PROXY protocol folds every visitor onto one address, and a raw port that capped that at
-     * {@link #MAX_PER_IP} would cap the world at 64 -- which is what it did, while 443 behind the
-     * same forwarder capped nobody.
+     * <p>Both listeners ask here -- 443 above, and the raw tcp ports of §8.4, which accept on their
+     * own sockets and so never reached this at all. They had one rule written twice, and only one
+     * of the two copies had the exemption below: a forwarder on this host that sends no PROXY
+     * header folds every visitor onto one address, so a raw port capped the world at 64 while 443
+     * behind the same forwarder capped nobody.
+     *
+     * <p><b>Counted against the network and not the address</b> ({@link NetKey}): in v4 those are
+     * the same thing, and in v6 they are not -- a routed /64 is free and standard, so a per-address
+     * cap of 64 would be "64 per address, times eighteen quintillion". {@code ip} itself is
+     * untouched, since it is what gets logged, banned and handed to the node as the visitor's
+     * address; when nothing attributed the connection the key is taken from the bytes {@code peer}
+     * holds, rather than formatting that address to text and parsing it straight back once per
+     * connection.
+     *
+     * <p><b>The exemption is for visitors this hub cannot tell apart</b>, not for a peer that
+     * happens to be local. Once a header has attributed the connection the cap applies again --
+     * testing the socket's peer instead meant that every hub behind nginx on localhost, which is
+     * the deployment deploy/nginx-stream.conf documents, had no per-address cap at all and one
+     * client could exhaust MAX_PER_NAME and the node's ceiling.
      */
     String takeSlot(String ip, InetAddress peer, boolean attributed) {
         String key = attributed ? NetKey.of(ip) : NetKey.of(peer);
@@ -136,22 +148,8 @@ final class SniRouter {
             Relay.closeQuietly(socket);
             return;
         }
-        // Counted against the network and not the address (NetKey): in v4 those are the same thing,
-        // and in v6 they are not -- a routed /64 is free and standard, so a per-address cap of 64
-        // would be "64 per address, times eighteen quintillion". `ip` itself is unchanged, since it
-        // is what gets logged, banned and handed to the node as the visitor's address.
-        // From the bytes the socket holds unless a PROXY header replaced the address, rather than
-        // formatting that address to text and parsing it straight back once per connection.
-        String ipKey = attributed ? NetKey.of(ip) : NetKey.of(socket.getInetAddress());
-        // The exemption is for visitors this hub cannot tell apart, not for a peer that happens to
-        // be local: a proxy on loopback WITHOUT the PROXY protocol folds everyone into one address,
-        // and capping that would cap the world. Once a header has attributed the connection the cap
-        // applies again -- testing the socket's peer instead meant that every hub behind nginx on
-        // localhost, which is the deployment deploy/nginx-stream.conf documents, had no per-address
-        // cap at all and one client could exhaust MAX_PER_NAME and the node's ceiling.
-        boolean unattributedLocal = !attributed && socket.getInetAddress().isLoopbackAddress();
-        if (acquire(perIp, ipKey) > MAX_PER_IP && !unattributedLocal) {
-            release(perIp, ipKey);
+        String ipKey = takeSlot(ip, socket.getInetAddress(), attributed);
+        if (ipKey == null) {
             Metrics.VISITORS_REFUSED.increment();
             Relay.closeQuietly(socket);
             return;
@@ -178,7 +176,7 @@ final class SniRouter {
                 // -- and since that cap is now per /64, sixteen nodes sharing one subnet or office
                 // LAN, at the four connections each the design expects, refused the seventeenth node
                 // and every visitor from that network with it.
-                release(perIp, ipKey);
+                giveSlot(ipKey);
                 held = false;
                 hub.front().serve(layer(socket, peek.consumed(), hub.tls().context().getSocketFactory()), ip);
                 return;
@@ -248,7 +246,7 @@ final class SniRouter {
             Relay.closeQuietly(socket);
         } finally {
             if (held) {
-                release(perIp, ipKey);
+                giveSlot(ipKey);
             }
         }
     }
