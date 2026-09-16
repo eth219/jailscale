@@ -69,6 +69,17 @@ class HeadHasNoBodyTest {
 
     private static Head head(Socket s, String host, String path) throws Exception {
         Http.writeRequest(s.getOutputStream(), "HEAD", host, path, new Headers(), null);
+        return readHead(s);
+    }
+
+    /** The same, for a request {@link Http#writeRequest} cannot send: the bytes go out verbatim. */
+    private static Head raw(Socket s, String request) throws Exception {
+        s.getOutputStream().write(request.getBytes(StandardCharsets.ISO_8859_1));
+        s.getOutputStream().flush();
+        return readHead(s);
+    }
+
+    private static Head readHead(Socket s) throws Exception {
         InputStream in = s.getInputStream();
         HttpResponse r = Http.readResponseHead(in);
         return new Head(r, in.read());
@@ -129,27 +140,47 @@ class HeadHasNoBodyTest {
 
     @Test
     void aRejectedHeadIsAnsweredWithoutABodyToo() throws Exception {
-        // This request never becomes an HttpRequest -- the request line parses and the header line
-        // after it does not -- so the front answers out of the exception, which is the one place the
-        // method has to be carried rather than read off the request.
-        String malformed = "%s / HTTP/1.1\r\nHost: hub.test\r\nNoColon\r\n\r\n";
-        try (SSLSocket s = tls("hub.test")) {
-            s.getOutputStream().write(String.format(malformed, "HEAD").getBytes(StandardCharsets.ISO_8859_1));
-            s.getOutputStream().flush();
-            InputStream in = s.getInputStream();
-            HttpResponse r = Http.readResponseHead(in);
-            assertEquals(400, r.status());
-            assertTrue(contentLength(r) > 0, "the reason is still described in Content-Length");
-            assertEquals(-1, in.read(), "a rejected HEAD was answered with the error text");
+        // Neither of these ever becomes an HttpRequest, so the front answers out of the exception,
+        // which is the one place the method has to be carried rather than read off the request.
+        // Two shapes, because they fail at different points of the parse and the method has to
+        // survive both: a header line that does not parse, and an absolute-form request target
+        // (RFC 9112 §3.2.2 -- legal, and what a client configured for a proxy sends), which is
+        // rejected on the request line itself, after the method on it was read.
+        String badHeader = "%s / HTTP/1.1\r\nHost: hub.test\r\nNoColon\r\n";
+        String badTarget = "%s http://hub.test/ HTTP/1.1\r\nHost: hub.test\r\n\r\n";
+        for (String malformed : new String[] {badHeader, badTarget}) {
+            try (SSLSocket s = tls("hub.test")) {
+                Head h = raw(s, String.format(malformed, "HEAD"));
+                assertEquals(400, h.resp().status());
+                assertTrue(contentLength(h.resp()) > 0, "the reason is still described in Content-Length");
+                assertEquals(-1, h.next(), "a rejected HEAD was answered with the error text");
+            }
+            // And the same request as a GET still gets the text: the method decides, not the error.
+            try (SSLSocket s = tls("hub.test")) {
+                s.getOutputStream().write(String.format(malformed, "GET").getBytes(StandardCharsets.ISO_8859_1));
+                s.getOutputStream().flush();
+                HttpResponse r = Http.readResponse(s.getInputStream(), 1 << 20);
+                assertEquals(400, r.status());
+                assertEquals(contentLength(r), r.body().length);
+                assertTrue(r.body().length > 0);
+            }
         }
-        // And the same request as a GET still gets the text: the method decides, not the error.
-        try (SSLSocket s = tls("hub.test")) {
-            s.getOutputStream().write(String.format(malformed, "GET").getBytes(StandardCharsets.ISO_8859_1));
-            s.getOutputStream().flush();
-            HttpResponse r = Http.readResponse(s.getInputStream(), 1 << 20);
-            assertEquals(400, r.status());
-            assertEquals(contentLength(r), r.body().length);
-            assertTrue(r.body().length > 0);
+        // The other two listeners each read the method off the exception themselves, and one that
+        // got that wrong still passes every case above. badHeader and not badTarget, because these
+        // two are plaintext: badTarget is rejected with its headers still unread, and closing a
+        // socket that has bytes left in its receive queue sends an RST, which would lose the
+        // answer this is about to read rather than test it.
+        try (Socket s = new Socket("127.0.0.1", hub.metricsPort())) {
+            s.setSoTimeout(10_000);
+            Head h = raw(s, String.format(badHeader, "HEAD"));
+            assertEquals(400, h.resp().status());
+            assertEquals(-1, h.next(), "the metrics listener answered a rejected HEAD with the error text");
+        }
+        try (Socket s = new Socket("127.0.0.1", hub.httpPort())) {
+            s.setSoTimeout(10_000);
+            Head h = raw(s, String.format(badHeader, "HEAD"));
+            assertEquals(400, h.resp().status());
+            assertEquals(-1, h.next(), "port 80 answered a rejected HEAD with the error text");
         }
     }
 

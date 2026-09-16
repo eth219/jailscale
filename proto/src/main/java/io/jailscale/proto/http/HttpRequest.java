@@ -8,6 +8,15 @@ import java.util.Map;
 /** A parsed HTTP/1.1 request: method, target, headers and a fully buffered body. */
 public record HttpRequest(String method, String target, String version, Headers headers, byte[] body) {
 
+    /**
+     * Whether this is a HEAD, which is what decides that the response stops at the blank line
+     * (RFC 9110 §9.3.2). Here rather than at each front, because the comparison is the whole of
+     * what a front has to get right to answer one and every front needs it.
+     */
+    public boolean isHead() {
+        return "HEAD".equals(method);
+    }
+
     /** Path part of the target, without the query string. */
     public String path() {
         int q = target.indexOf('?');

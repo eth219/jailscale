@@ -37,17 +37,22 @@ public final class Http {
         }
         String method = parts[0];
         String target = parts[1];
-        if (!target.startsWith("/")) {
-            throw new HttpException(400, "bad request target");
-        }
         Headers headers;
         byte[] body;
         try {
+            // The target check is inside the try and not above it so that every rejection from
+            // here down carries the method, rather than the two the fronts happened to be looking
+            // at: a HEAD in absolute-form (RFC 9112 §3.2.2, legal and what a proxy sends) is
+            // rejected here, and answering it with the text of the error is the same defect as
+            // answering it with the page.
+            if (!target.startsWith("/")) {
+                throw new HttpException(400, "bad request target");
+            }
             headers = readHeaders(in);
             body = readBody(in, headers, maxBody);
         } catch (HttpException e) {
             // Carry the method into the error: everything above here has already read it, and the
-            // front that answers 431 or 413 needs it to frame the answer to a HEAD.
+            // front that answers 400, 431 or 413 needs it to frame the answer to a HEAD.
             throw new HttpException(e.status(), e.getMessage(), method);
         }
         return new HttpRequest(method, target, parts[2], headers, body);

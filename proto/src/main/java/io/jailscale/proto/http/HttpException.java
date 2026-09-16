@@ -32,4 +32,12 @@ public final class HttpException extends Exception {
     public String method() {
         return method;
     }
+
+    /**
+     * Whether the request this answers was a HEAD -- false when the method was never read, which
+     * is the only answer available then. {@link HttpRequest#isHead()} for a request that parsed.
+     */
+    public boolean isHead() {
+        return "HEAD".equals(method);
+    }
 }

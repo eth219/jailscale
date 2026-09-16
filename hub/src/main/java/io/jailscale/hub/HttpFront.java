@@ -150,13 +150,13 @@ final class HttpFront {
             } catch (HttpException e) {
                 // The request never became one, so the method comes off the exception: it was read
                 // before the line that was rejected, and an error is still an answer to a HEAD.
-                write(HttpResponse.text(e.status(), e.getMessage()), out, "HEAD".equals(e.method()));
+                write(HttpResponse.text(e.status(), e.getMessage()), out, e.isHead());
                 return;
             } catch (EOFException e) {
                 return;
             }
             LOG.debug("{} {} from {}", req.method(), req.path(), ip);
-            boolean headOnly = req.method().equals("HEAD");
+            boolean headOnly = req.isHead();
             String path = req.path();
             if (path.equals("/v1/noise")) {
                 if (!req.method().equals("POST") || !req.wantsUpgrade(UPGRADE_PROTOCOL)) {

@@ -1,5 +1,7 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.http.Http;
+import io.jailscale.proto.http.HttpException;
 import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
@@ -264,8 +266,9 @@ final class SniRouter {
         try (SSLSocket s = layer(socket, consumed, hub.tls().context().getSocketFactory())) {
             s.setSoTimeout(HELLO_TIMEOUT_MS);
             s.startHandshake();
-            // Drain the request line so the client gets a clean response.
-            HttpRequest req = io.jailscale.proto.http.Http.readRequest(s.getInputStream(), 4096);
+            // Read the request: draining it is what lets the client see a clean response, and the
+            // method is what says whether that response carries its body (RFC 9110 §9.3.2).
+            HttpRequest req = Http.readRequest(s.getInputStream(), 4096);
             // noindex,nofollow like every other page the hub writes (HttpFront.NOINDEX): this one
             // is served under the wildcard for any name at all, so it says of whatever name a
             // crawler was handed that this hub knows it, which is the thing /links is kept out of
@@ -275,8 +278,8 @@ final class SniRouter {
             // widest surface the hub has.
             HttpFront.secured(HttpResponse.html(404, "<!doctype html><meta charset=utf-8>" + HttpFront.NOINDEX
                 + "<title>jailscale</title><p><b>" + HttpFront.escape(name) + "</b> is not open right now.</p>"))
-                .writeTo(s.getOutputStream(), req.method().equals("HEAD"));
-        } catch (io.jailscale.proto.http.HttpException e) {
+                .writeTo(s.getOutputStream(), req.isHead());
+        } catch (HttpException e) {
             // not HTTP; nothing to say
         }
     }

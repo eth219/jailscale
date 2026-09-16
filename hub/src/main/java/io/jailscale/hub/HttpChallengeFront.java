@@ -60,12 +60,12 @@ final class HttpChallengeFront implements AutoCloseable {
             try {
                 req = Http.readRequest(socket.getInputStream(), 0);
             } catch (HttpException e) {
-                HttpResponse.text(e.status(), e.getMessage()).writeTo(socket.getOutputStream(), "HEAD".equals(e.method()));
+                HttpResponse.text(e.status(), e.getMessage()).writeTo(socket.getOutputStream(), e.isHead());
                 return;
             } catch (EOFException e) {
                 return;
             }
-            route(req).writeTo(socket.getOutputStream(), req.method().equals("HEAD"));
+            route(req).writeTo(socket.getOutputStream(), req.isHead());
         } catch (IOException e) {
             LOG.debug("http80: {}", e.getMessage());
         }
