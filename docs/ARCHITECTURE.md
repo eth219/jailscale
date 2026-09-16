@@ -1826,7 +1826,10 @@ hub identifying itself -- empty that bucket with about twenty packets a second a
 dropped, the lookup gives up, and a hub that never learns its address serves an empty zone. The
 answer was to exempt the name, and the cost of that was the sentence above: with one name unmetered
 the total is not a number. The lookup asks over TCP when a datagram does not come back, so the
-flood costs an attacker a flood and buys nothing, and the exemption is gone.
+flood costs an attacker a flood and buys nothing, and the exemption is gone. What is left of that
+attack is on TCP, where it costs a handshake per attempt from an address the attacker really holds
+and the operator can really see -- and where this server has no meter and no connection bound at
+all, which is #146.
 
 One over-limit query in two is answered `TC=1` instead of being dropped, which is the difference
 between a limit and a way to take the zone down: a resolver behind a forged address, or sharing a

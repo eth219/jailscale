@@ -232,24 +232,49 @@ public final class DnsQuery {
         }
     }
 
-    /** The same question with a two-byte length in front of it, which is DNS over TCP (RFC 1035 §4.2.2). */
+    /**
+     * The same question with a two-byte length in front of it, which is DNS over TCP (RFC 1035
+     * §4.2.2).
+     *
+     * <p>Bounded by one deadline rather than by a timeout per read. {@code setSoTimeout} bounds how
+     * long one {@code read} waits, which for a message read in pieces is a bound on the pieces and
+     * not on the message: a peer sending one byte just inside the timeout holds the caller for as
+     * long as it likes. The UDP path this falls back from was bounded by a single receive, and
+     * {@code Hub.checkAddress} calls it holding a lock and answering an operator's command, so
+     * "as long as it likes" is not an acceptable inheritance.
+     */
     private static byte[] overTcp(String server, int port, byte[] query, int id, int timeoutMs) throws IOException {
+        long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
         try (java.net.Socket s = new java.net.Socket()) {
             s.connect(new InetSocketAddress(server, port), timeoutMs);
-            s.setSoTimeout(timeoutMs);
-            java.io.DataOutputStream out = new java.io.DataOutputStream(s.getOutputStream());
-            out.writeShort(query.length);
+            java.io.OutputStream out = s.getOutputStream();
+            out.write(new byte[] {(byte) (query.length >>> 8), (byte) query.length});
             out.write(query);
             out.flush();
-            java.io.DataInputStream in = new java.io.DataInputStream(s.getInputStream());
-            int len = in.readUnsignedShort();
-            if (len > 65535 || len < 12) {
+            byte[] length = read(s, new byte[2], deadline);
+            int len = ((length[0] & 0xff) << 8) | (length[1] & 0xff);
+            if (len < 12) {
                 throw new IOException("bad DNS response length " + len);
             }
-            byte[] m = new byte[len];
-            in.readFully(m);
-            return checked(m, id);
+            return checked(read(s, new byte[len], deadline), id);
         }
+    }
+
+    /** {@code buf} filled from {@code s}, with every read inside what is left of {@code deadline}. */
+    private static byte[] read(java.net.Socket s, byte[] buf, long deadline) throws IOException {
+        for (int n = 0; n < buf.length;) {
+            long leftMs = (deadline - System.nanoTime()) / 1_000_000L;
+            if (leftMs <= 0) {
+                throw new IOException("DNS answer did not arrive in time");
+            }
+            s.setSoTimeout((int) Math.min(Integer.MAX_VALUE, leftMs));
+            int r = s.getInputStream().read(buf, n, buf.length - n);
+            if (r < 0) {
+                throw new IOException("DNS answer cut short");
+            }
+            n += r;
+        }
+        return buf;
     }
 
     /** A reply is this question's only if it carries this question's id. */

@@ -1,6 +1,7 @@
 package io.jailscale.hub.dns;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.DataInputStream;
@@ -35,18 +36,74 @@ class DnsQueryFallbackTest {
         // One number, two sockets, as a real server has -- except that this one never reads its
         // datagrams. A bound and silent UDP socket is what a flood on the path looks like to the
         // caller: the question goes out and the answer does not come back.
-        try (DatagramSocket silent = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0));
-            ServerSocket tcp = new ServerSocket()) {
-            int port = silent.getLocalPort();
-            tcp.setReuseAddress(true);
-            tcp.bind(new InetSocketAddress("127.0.0.1", port), 4);
-            Thread.ofVirtual().start(() -> serve(tcp, zone));
+        try (Pair p = pair()) {
+            int port = p.port();
+            Thread.ofVirtual().start(() -> serve(p.tcp, zone));
 
             long started = System.nanoTime();
             List<String> got = DnsQuery.txt("127.0.0.1", port, "_acme-challenge.hub.example.com", 500);
             assertEquals(List.of("only-over-tcp"), got, "the TCP half answered what UDP would not");
             assertTrue(System.nanoTime() - started >= 400_000_000L,
                 "and it waited for the datagram first, rather than skipping UDP");
+        }
+    }
+
+    @Test
+    void aTrickleOnTheTcpPathIsBoundedByOneDeadlineAndNotByOneRead() throws Exception {
+        // A per-read timeout bounds the pieces, not the message: a peer that sends one byte just
+        // inside it makes progress forever. `Hub.checkAddress` asks this while holding a lock and
+        // while answering an operator's command, so the fallback has to be bounded as a whole.
+        try (Pair p = pair()) {
+            Thread.ofVirtual().start(() -> {
+                try (java.net.Socket s = p.tcp.accept()) {
+                    s.getOutputStream().write(new byte[] {0x10, 0x00});  // 4,096 bytes to come
+                    for (int i = 0; i < 4096; i++) {
+                        s.getOutputStream().write(0);
+                        s.getOutputStream().flush();
+                        Thread.sleep(50);                                // ... one at a time
+                    }
+                } catch (IOException | InterruptedException ignored) {
+                    // the caller gave up, which is the point
+                }
+            });
+            long started = System.nanoTime();
+            assertThrows(IOException.class,
+                () -> DnsQuery.txt("127.0.0.1", p.port(), "_acme-challenge.hub.example.com", 300));
+            long ms = (System.nanoTime() - started) / 1_000_000L;
+            assertTrue(ms < 10_000, "the whole exchange should be bounded, gave up after " + ms + " ms");
+        }
+    }
+
+    /**
+     * A TCP listener and a UDP socket on one number, drawn the way {@code DnsResponder.start} draws
+     * them since #102: the number comes from TCP and UDP is asked for the twin, since the reverse
+     * order lost that race on Windows. Neither socket asks for reuse -- an exclusive bind is what
+     * makes "the twin is free" mean anything, and SO_REUSEADDR on Windows would let this bind on
+     * top of a listener that is already there and then test that listener instead of this one.
+     */
+    private static Pair pair() throws IOException {
+        IOException last = null;
+        for (int attempt = 0; attempt < 32; attempt++) {
+            ServerSocket tcp = new ServerSocket();
+            try {
+                tcp.bind(new InetSocketAddress("127.0.0.1", 0), 4);
+                return new Pair(tcp, new DatagramSocket(new InetSocketAddress("127.0.0.1", tcp.getLocalPort())));
+            } catch (IOException e) {
+                last = e;
+                tcp.close();
+            }
+        }
+        throw new IOException("no number free for both TCP and UDP after 32 tries", last);
+    }
+
+    private record Pair(ServerSocket tcp, DatagramSocket udp) implements AutoCloseable {
+        int port() {
+            return tcp.getLocalPort();
+        }
+
+        @Override public void close() throws IOException {
+            udp.close();
+            tcp.close();
         }
     }
 
@@ -74,26 +131,22 @@ class DnsQueryFallbackTest {
         // "bad DNS response". It now sends the caller to TCP, where guessing is not on offer.
         DnsResponder zone = new DnsResponder("hub.example.com");
         zone.setTxt(List.of("the-real-answer"));
-        try (DatagramSocket wrong = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0));
-            ServerSocket tcp = new ServerSocket()) {
-            int port = wrong.getLocalPort();
-            tcp.setReuseAddress(true);
-            tcp.bind(new InetSocketAddress("127.0.0.1", port), 4);
-            Thread.ofVirtual().start(() -> serve(tcp, zone));
+        try (Pair p = pair()) {
+            Thread.ofVirtual().start(() -> serve(p.tcp, zone));
             Thread.ofVirtual().start(() -> {
                 try {
                     byte[] buf = new byte[512];
-                    java.net.DatagramPacket p = new java.net.DatagramPacket(buf, buf.length);
-                    wrong.receive(p);
-                    byte[] forged = zone.respond(java.util.Arrays.copyOf(buf, p.getLength()));
+                    java.net.DatagramPacket in = new java.net.DatagramPacket(buf, buf.length);
+                    p.udp.receive(in);
+                    byte[] forged = zone.respond(java.util.Arrays.copyOf(buf, in.getLength()));
                     forged[0] ^= 0x5a;  // somebody else\'s id
-                    wrong.send(new java.net.DatagramPacket(forged, forged.length, p.getSocketAddress()));
+                    p.udp.send(new java.net.DatagramPacket(forged, forged.length, in.getSocketAddress()));
                 } catch (IOException ignored) {
                     // the test is over
                 }
             });
             assertEquals(List.of("the-real-answer"),
-                DnsQuery.txt("127.0.0.1", port, "_acme-challenge.hub.example.com", 2000));
+                DnsQuery.txt("127.0.0.1", p.port(), "_acme-challenge.hub.example.com", 2000));
         }
     }
 }
