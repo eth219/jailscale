@@ -279,8 +279,8 @@ TCP 443, SNI = hub.example.com
              └─ [2B len BE][Noise transport message]    <- one mux frame in each
 ```
 
-Both HTTP ends are hand-written (§3.1): the hub's front is about 750 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, a root page and the link directory, the
+Both HTTP ends are hand-written (§3.1): the hub's front is about 1,100 lines serving `/v1/key`,
+`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, `/favicon.svg`, a root page and the link directory, the
 node's client about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier
 because its 4-byte client-to-server masking would touch every visitor byte again, frame headers and
 close semantics come with it, and it would only help behind proxies passing `Upgrade: websocket`
@@ -605,6 +605,42 @@ choice and not a hub missing a host; and the availability figure, because a deli
 counts as down and a status line that says "Degraded" for a day after every upgrade is one an
 operator learns to ignore, which costs more than the row it explains. Everything else on the page --
 a version, a key, a memory figure -- is a fact with no good or bad about it and stays ungraded.
+
+**Every answer on this name carries the same three headers**, added where the response is written
+and not in each handler, so a route nobody thought about gets them too. The front end's own shape is
+what makes the policy exact rather than aspirational -- no script, no external stylesheet, no font,
+and nothing ever fetched from a node -- so `default-src 'none'` is the truth: with `style-src
+'unsafe-inline'` for the one inline stylesheet, `img-src 'self'` for the icon, and `form-action`
+and `frame-ancestors` for `/admin`, whose forms are the only things here that change state. Then
+`X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`, because an invitation URL and
+an admin login URL are credentials in a path and a `Referer` is how a path travels somewhere nobody
+chose to send it. `set` and not `add`, so a handler that sets one of these itself is replaced rather
+than doubled: two policies on one response are intersected by the browser, and the looser one a
+handler asked for would silently not apply.
+
+**There is no HSTS**, and that is a decision rather than an omission. It would be the obvious fourth
+header -- everything here is HTTPS and the hub holds the key -- but HSTS is scoped to a **host**,
+not to a host and port (RFC 6797 §8.3), and a raw TCP port (§8.4) is published on the hub's own
+name. A browser that has loaded this page once would rewrite `http://<hub>:10042/` to `https://`
+before sending anything, and a raw port relays bytes with no TLS at all: the link is unreachable
+from that browser, there is no click-through, it lasts as long as the max-age, and the operator
+cannot withdraw it. That cost was not visible when the header was proposed, so the header is not
+here and the question is.
+
+**What a browser asks for, the hub now answers.** An icon -- two nodes and the hop between them,
+drawn in the markup rather than served from a file, so there is no build step and no byte array in
+the binary, and it follows the reader's colour scheme, which no `.ico` does -- under `/favicon.svg`
+and `/favicon.ico` both, and linked from every page on the hub's own name -- not from the wildcard's
+"not open" page, whose `/favicon.svg` is a different origin that `img-src 'self'` refuses and whose
+own name answers that path with the same page. A description and `og:` tags on `/` and **only**
+there, so the hub introduces itself when its address is pasted into a chat: an invitation's URL is a
+credential and the directory carries other people's names, and neither wants a card made of it. And
+the answers a person can arrive at by mistyping -- 404, and 405 on a page -- go through the same
+frame as everything else, with the nav on them, instead of `not found` in the browser's default
+serif with no way back. The machine answers do not: the 426 and 429 that answer a control
+connection, and the JSON under `/v1`, are read by something that is not a browser, and a frame would
+be bytes it has to skip. The 500 is the one page held as a literal, because it is written when
+something else has just thrown and a handler that calls the machinery that failed fails twice.
 
 **The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
 open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
