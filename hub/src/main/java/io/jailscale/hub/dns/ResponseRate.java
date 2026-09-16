@@ -82,7 +82,6 @@ final class ResponseRate {
     private final double perSecond;
     private double globalTokens = GLOBAL_BURST;
     private long globalAt;
-    private long answered;
     private long dropped;
     private long truncated;
     private long globalRefused;
@@ -130,7 +129,6 @@ final class ResponseRate {
         if (have >= 1 && total >= 1) {
             tokens[i] = have - 1;
             globalTokens = total - 1;
-            answered++;
             return Verdict.ANSWER;
         }
         if (have >= 1) {
@@ -159,11 +157,14 @@ final class ResponseRate {
         return Verdict.DROP;
     }
 
-    /** Queries answered, dropped and answered truncated since this hub started (§11.5). */
-    synchronized long answered() {
-        return answered;
-    }
-
+    /**
+     * Queries dropped and answered truncated since this hub started (§11.5).
+     *
+     * <p>What was answered is not counted here and cannot be: the queries this meter never sees --
+     * loopback, exempt a few lines above, and the self-probe, exempt before {@code check} is called
+     * at all -- are answered all the same, so a count taken here is the metered traffic under a name
+     * that claims to be all of it. {@code DnsResponder} counts where the answer is produced.
+     */
     synchronized long dropped() {
         return dropped;
     }
