@@ -21,26 +21,39 @@ final class TestCloseables {
      * Closes each item in order, skipping nulls -- a fixture whose {@code @BeforeEach} threw part
      * way through still has its {@code @AfterEach} run, and half of its fields unset.
      *
+     * <p>It catches {@link Throwable} and not {@link Exception}, because an {@code Error} on the
+     * way out -- an assertion inside a close path, most likely -- strands the items behind it
+     * exactly as an exception does, and stranding them is the whole of what this is for.
+     *
      * @throws Exception the first failure, carrying any later ones as suppressed
+     * @throws Error the first failure, when that is what it was
      */
     static void closeAll(AutoCloseable... items) throws Exception {
-        Exception first = null;
+        Throwable first = null;
         for (AutoCloseable c : items) {
             if (c == null) {
                 continue;
             }
             try {
                 c.close();
-            } catch (Exception e) {
+            } catch (Throwable t) {
                 if (first == null) {
-                    first = e;
-                } else {
-                    first.addSuppressed(e);
+                    first = t;
+                } else if (first != t) {
+                    // Throwable refuses to suppress itself, and the same instance arriving twice --
+                    // one closeable listed twice, or a cached throwable rethrown -- would turn this
+                    // into an IllegalArgumentException that says nothing about either close.
+                    first.addSuppressed(t);
                 }
             }
         }
-        if (first != null) {
-            throw first;
+        switch (first) {
+            case null -> { }
+            case Error e -> throw e;
+            case Exception e -> throw e;
+            // Throwable is not sealed, so the compiler wants this arm. Nothing in this repository
+            // extends it directly; wrapping is the honest answer if anything ever does.
+            default -> throw new IllegalStateException("close threw " + first, first);
         }
     }
 }
