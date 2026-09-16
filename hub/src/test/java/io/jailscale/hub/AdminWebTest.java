@@ -102,6 +102,13 @@ class AdminWebTest {
         String loginPath = URI.create(link.string("url")).getPath();
         assertTrue(loginPath.startsWith("/admin/login/"));
 
+        // Fetching a login link is what spends it, and robots.txt is advice a link unfurler or a
+        // browser prefetch never reads -- so the methods that cannot be a person clicking are
+        // refused instead of consuming the token. These come before the GET below on purpose: if
+        // either of them spent it, the GET would be the one-time second fetch and fail with 403.
+        assertEquals(405, http("HEAD", loginPath, null, null).status());
+        assertEquals(405, http("POST", loginPath, null, "").status());
+
         HttpResponse login = http("GET", loginPath, null, null);
         assertEquals(302, login.status());
         String setCookie = login.headers().get("Set-Cookie");

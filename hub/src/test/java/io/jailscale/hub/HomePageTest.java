@@ -354,7 +354,11 @@ class HomePageTest {
         String meta = "<meta name=\"robots\" content=\"noindex,nofollow\">";
         // An invitation renders for any token, because viewing one never spends it.
         assertTrue(http("GET", "/links", null, null).bodyText().contains(meta));
-        assertTrue(http("GET", "/join/" + enc("not-a-real-token"), null, null).bodyText().contains(meta));
+        HttpResponse invite = http("GET", "/join/" + enc("not-a-real-token"), null, null);
+        assertTrue(invite.bodyText().contains(meta));
+        // The one page here whose body is a credential is also the one that must not be kept: the
+        // two that carry nothing secret said no-store while this one did not.
+        assertEquals("no-store", invite.headers().get("Cache-Control"));
         assertTrue(http("GET", "/admin", null, null).bodyText().contains(meta));
 
         String home = http("GET", "/", null, null).bodyText();

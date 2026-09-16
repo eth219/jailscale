@@ -265,7 +265,11 @@ final class SniRouter {
             s.startHandshake();
             // Drain the request line so the client gets a clean response.
             io.jailscale.proto.http.Http.readRequest(s.getInputStream(), 4096);
-            HttpResponse.html(404, "<!doctype html><meta charset=utf-8><title>jailscale</title>"
+            // noindex,nofollow like every other page the hub writes (HttpFront.NOINDEX): this one
+            // is served under the wildcard for any name at all, so it says of whatever name a
+            // crawler was handed that this hub knows it, which is the thing /links is kept out of
+            // an index for.
+            HttpResponse.html(404, "<!doctype html><meta charset=utf-8>" + HttpFront.NOINDEX + "<title>jailscale</title>"
                 + "<p><b>" + HttpFront.escape(name) + "</b> is not open right now.</p>").writeTo(s.getOutputStream());
         } catch (io.jailscale.proto.http.HttpException e) {
             // not HTTP; nothing to say
