@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.http.HttpResponse;
@@ -25,6 +26,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -222,11 +225,36 @@ class CliTest {
         throw new AssertionError("the daemon never reported itself connected: " + ok(cli("status")).out());
     }
 
+    /**
+     * The line is the binary's name, its version, and the protocol it speaks -- the last because
+     * the hub's page names a protocol ("this hub speaks protocol N and takes nothing older") and
+     * the only other way to find out whether the copy in your hand satisfies that sentence was to
+     * attempt a join and read the rejection (#140).
+     *
+     * <p>The number is asserted against {@link Message#PROTO} rather than against a literal, so
+     * this fails in both directions it has to: dropping the suffix stops the line matching at all,
+     * and a hand-written number in {@code Main} that is not the one the protocol holds fails the
+     * comparison. A literal here would pass a flag day while the CLI lied about it. Both were
+     * checked by making them happen.
+     *
+     * <p>The number is read from {@code Message.PROTO} reflectively, and that is not decoration.
+     * {@code PROTO} is a compile-time constant: written as {@code Message.PROTO}, javac folds it
+     * into this class exactly as it folds it into {@code Main}, and the assertion would compare
+     * two copies of the same vintage -- a tree that recompiled {@code proto} alone would print a
+     * stale number and pass. A reflective read goes to the loaded {@code proto} class instead, so
+     * the child's folded copy is checked against what the protocol holds now. Falsified by doing
+     * it: bumping {@code PROTO} and rebuilding only {@code proto} fails this test.
+     */
     @Test
-    void versionIsTheBinaryNameAndItsVersion() throws Exception {
+    void versionIsTheBinaryNameItsVersionAndTheProtocolItSpeaks() throws Exception {
         Run r = ok(cli("version"));
-        assertTrue(r.out().startsWith("jailscale "), r.all());
-        assertFalse(r.out().strip().endsWith("jailscale"), "the version itself is missing: " + r.out());
+        Matcher m = Pattern.compile("^jailscale \\S+ \\(protocol (\\d+)\\)$").matcher(r.out().strip());
+        // The shape carries the old assertion too: a line with the version missing is
+        // `jailscale (protocol 1)`, which this does not match.
+        assertTrue(m.matches(), "not the version line: " + r.all());
+        int proto = Message.class.getField("PROTO").getInt(null);
+        assertEquals(String.valueOf(proto), m.group(1),
+            "the CLI names a protocol this build does not speak: " + r.out());
     }
 
     @Test

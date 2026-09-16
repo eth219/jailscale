@@ -1,5 +1,6 @@
 package io.jailscale.node;
 
+import io.jailscale.proto.control.Message;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Args;
@@ -73,7 +74,14 @@ public final class Main {
         NodeConfig cfg = configOf(a);
         try {
             switch (cmd) {
-                case "version" -> System.out.println("jailscale " + Version.string());
+                // The protocol number, beside the version, because the hub's page names one
+                // ("this hub speaks protocol N and takes nothing older") and a reader holding a
+                // copy of this binary had no way to print the other. It is the same constant
+                // HubLink puts in every Hello -- but PROTO is a compile-time constant and javac
+                // folds it into the string here, so what this prints is the number `node` was
+                // last compiled against, not the one `proto` holds now. A clean build is what
+                // makes them the same, and a clean build is what CI and every release do.
+                case "version" -> System.out.println("jailscale " + Version.string() + " (protocol " + Message.PROTO + ")");
                 case "update" -> update(cfg, a);
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
