@@ -2109,6 +2109,13 @@ peer interval that was open when this process last stamped is closed at that sta
 the restart, so the two records never overlap and the peer figure is divided by the time there was
 someone here to look.
 
+**Neither figure is the availability of a link.** Both are about this hub, and a name has exactly
+one node behind it (§8.2): when the node's host is asleep the name is down while both hubs go on
+stamping themselves up, and the strip stays green, correctly. Redundancy at the hub therefore pays
+exactly where the hub is the less available of the two, which is true of a host that exists to be
+up and not of the laptop a node is usually on. What a visitor needs is both uptimes at once, and
+this figure is the half the hub is in a position to measure ([docs/ha-design](ha-design/README.md)).
+
 Both are reported over 24 hours, 7 days and 30 days, on `/` and in `/v1/status` under
 `availability` (with `since`, because a window that reaches further back than the record is
 reported over less), and the process figure on `/metrics` as `jailhub_process_availability_<window>_ppm`.
@@ -2802,7 +2809,9 @@ say so and name the issue. An entry that does neither has not been through that 
   host would need a role without the store, which is designed, not built, and decided work
   (§1.2, [#72](https://github.com/eth219/jailscale/issues/72), [docs/ha-design](ha-design/README.md)). Streams in flight on a host that dies are cut with its
   sockets, raw TCP and UDP ports live on the primary alone, and a promotion with no node attached
-  to the standby waits for a person (§13.5).
+  to the standby waits for a person (§13.5). Nor is the doubling end to end: a name still has
+  exactly one node behind it (§8.2), so when that node's host is down the name is down whatever the
+  hub count is, and §13.2's availability figure is a statement about the hubs and not about a link.
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
   is attached to could differ.
 - **IPv6 works for visitors and not for the hub's own DNS.** A hub bound to `::` (`--listen

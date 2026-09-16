@@ -319,4 +319,5 @@ this is for the operator with no scraper.
 
 A name has one node behind it. When that node's host is down the name is down whatever the hub
 count is, so redundancy at the hub pays only where the hub is the less available of the two. README's
-Limits and §13 should say so when this lands.
+Limits says so, and [ARCHITECTURE.md §13.2](../ARCHITECTURE.md) says it where the availability
+figure is defined, so that the number is not read as a statement about someone's link.
