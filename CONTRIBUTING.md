@@ -38,6 +38,31 @@ which this project's hand-off path hits directly ([ARCHITECTURE.md §3.2](docs/A
 Building from source needs nothing but a JDK. That is why SpotBugs and JaCoCo live behind profiles:
 they are the only third parties in the build, and keeping them off `package` is the point.
 
+### Moving the JDK or GraalVM pin
+
+A toolchain bump is not a version-number change here. Delegated signing works by **predicting the
+bytes JSSE writes** for its ServerHello and EncryptedExtensions, because JSSE never shows them
+([§9.2](docs/ARCHITECTURE.md)), and a JDK that writes the same handshake some other way takes every
+hub-signed handshake down until the prediction is updated. It cannot forge anything — the hub
+recomputes the hash itself — but it is an outage that arrives on somebody else's release schedule.
+So before the pin moves, on the new toolchain:
+
+```sh
+./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+and say in the PR that it was run and against which build. The pins are `native.sh` and the
+`graalvm/setup-graalvm` steps in `.github/workflows/{ci,images,release}.yml`, alongside the
+`setup-java` steps that fix what the `test` job runs on; the JDK floor is the paragraph above.
+
+**A green pull request does not do this for you.** `test` runs the suite on Liberica rather than on
+the GraalVM pin, and `analyze` skips tests. The two jobs that do run the suite on the pin are
+`budget`, which is skipped on pull requests, and `release`, which runs on a tag — so a reconstruction
+this bump broke is found on main at the earliest and in a release at the latest. The run has to be
+yours, and naming the build is what tells a reviewer it happened on the new toolchain and not the
+old one. `TranscriptTest` is the whole safety net here, which is why its javadoc argues against
+simplifying it away.
+
 ## Before a pull request
 
 ```sh

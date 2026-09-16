@@ -956,7 +956,12 @@ scalar, the cipher suite is on the handshake session, the session id is the clie
 node checks its reconstruction against the hash JSSE handed it **before** sending anything, so a JDK
 that writes these messages differently fails the handshake locally with a clear reason, and
 `TranscriptTest` runs the reconstruction against JSSE itself, retry included, so such a JDK fails the
-build first. The hub trusts none of this: it recomputes from its own copy of the ClientHello.
+build first. That test also asks for the transcript of a handshake JSSE negotiated exactly as it did,
+written differently -- the ServerHello's extensions in the other order, a legacy version that is not
+0x0303, EncryptedExtensions that acknowledge SNI -- and requires each to be refused, so it fails in
+the direction it claims rather than only when the handshake itself changes; CONTRIBUTING.md puts
+running it against the new toolchain on the list for a JDK or GraalVM bump, which is when this
+arrives. The hub trusts none of this: it recomputes from its own copy of the ClientHello.
 
 **What this binds.** Conditions 2 and 3 bind the *request* to a stream the hub delivered for a name
 the node owns; condition 1 binds the *content* to being a TLS 1.3 server handshake; condition 4 binds

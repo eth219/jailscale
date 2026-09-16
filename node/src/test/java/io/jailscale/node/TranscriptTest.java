@@ -28,10 +28,13 @@ import java.security.Signature;
 import java.security.SignatureException;
 import java.security.SignatureSpi;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SNIHostName;
 import javax.net.ssl.SSLContext;
@@ -50,6 +53,23 @@ import org.junit.jupiter.api.Timeout;
  * hash from the ClientHello it delivered. Run against JSSE itself, with a local key standing in for
  * the hub's, so that a JDK that starts writing its ServerHello or EncryptedExtensions differently
  * fails here and not in production.
+ *
+ * <p><strong>What this is protecting, and why it is not a redundant assertion about JSSE.</strong>
+ * {@code Tls13.serverHello} and {@code Tls13.encryptedExtensions} do not read those messages off
+ * the wire — JSSE never shows them — they *predict* their bytes, down to the order of the
+ * extensions. A JDK that writes the same handshake a different way makes every hub-signed
+ * handshake fail at the node until the prediction is updated. It cannot weaken the binding, since
+ * the hub recomputes the hash itself, but it is an outage on somebody else's release schedule, and
+ * this class is the only thing that catches it before the toolchain pin moves (issue #78;
+ * CONTRIBUTING.md says to run it when the pin does move). So it must not be simplified into "the
+ * handshake succeeded": the handshake succeeds whether or not the reconstruction matched, because
+ * the signature is made from the real key either way.
+ *
+ * <p>Two different things can fail here and the messages keep them apart. A <em>changed
+ * encoding</em> is the risk above and shows up as a reconstruction that no longer matches; a
+ * <em>changed handshake</em> is a JDK that negotiates differently — other key shares by default,
+ * so no HelloRetryRequest — which breaks this test's setup rather than the prediction, and is
+ * fixed here rather than in {@code Tls13}.
  */
 @Timeout(60)
 class TranscriptTest {
@@ -58,8 +78,17 @@ class TranscriptTest {
     private static final Path KEY = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
     private static final String HOST = "myapp.hub.test";
 
-    /** What the signer saw: JSSE's content, and the reconstruction made from the endpoint's state. */
-    record Signed(byte[] content, Transcript.Reconstructed t, List<byte[]> clientMessages, Exception failure) {}
+    /** What the signer saw: JSSE's content, the reconstruction, and every input it was made from. */
+    record Signed(byte[] content, Transcript.Reconstructed t, List<byte[]> clientMessages, List<byte[]> serverMessages,
+        List<byte[]> randomChunks, String cipherSuite, Exception failure) {}
+
+    /**
+     * What a reconstruction failure in this class means. Spelled out at each assertion because the
+     * message is most of the value of the failure: whoever sees it is moving a toolchain pin.
+     */
+    private static final String ENCODING_CHANGED = "this JDK no longer writes the ServerHello or EncryptedExtensions "
+        + "the way Tls13 predicts, so every hub-signed handshake is down until the prediction is updated "
+        + "(ARCHITECTURE.md §9.2). The reconstruction said: ";
 
     private static final AtomicReference<TlsEndpoint> ENDPOINT = new AtomicReference<>();
     private static final AtomicReference<Signed> SIGNED = new AtomicReference<>();
@@ -89,15 +118,19 @@ class TranscriptTest {
         protected byte[] engineSign() throws SignatureException {
             byte[] bytes = content.toByteArray();
             TlsEndpoint tls = ENDPOINT.get();
+            // Snapshots, taken where the node takes them: before its own flight is on the wire.
+            List<byte[]> clientMessages = tls.clientMessages();
+            List<byte[]> serverMessages = tls.serverMessages();
+            List<byte[]> draws = RemoteSigning.RANDOM.draws();
+            String suite = tls.handshakeSession().getCipherSuite();
             Transcript.Reconstructed t = null;
             Exception failure = null;
             try {
-                t = Transcript.reconstruct(tls.clientMessages(), tls.serverMessages(), RemoteSigning.RANDOM.draws(),
-                    tls.handshakeSession().getCipherSuite(), certificateMessage, bytes);
+                t = Transcript.reconstruct(clientMessages, serverMessages, draws, suite, certificateMessage, bytes);
             } catch (GeneralSecurityException e) {
                 failure = e;
             }
-            SIGNED.set(new Signed(bytes, t, tls.clientMessages(), failure));
+            SIGNED.set(new Signed(bytes, t, clientMessages, serverMessages, draws, suite, failure));
             try {
                 Signature real = Signature.getInstance("SHA256withECDSA", "SunEC");
                 real.initSign(realKey);
@@ -196,7 +229,7 @@ class TranscriptTest {
     @Test
     void plainHandshakeIsReconstructedAndTheHubGetsTheSameHash() throws Exception {
         Signed s = handshake(p -> { }, new String[] {"h2", "http/1.1"});
-        assertNull(s.failure(), String.valueOf(s.failure()));
+        assertNull(s.failure(), ENCODING_CHANGED + s.failure());
         assertEquals(1, s.clientMessages().size());
         assertNull(s.t().helloRetryRequest());
         assertArrayEquals(Tls13.transcriptHashIn(s.content()), hubSide(s.clientMessages(), s.t(), s.content()));
@@ -210,8 +243,11 @@ class TranscriptTest {
         // none the server takes, and gets a HelloRetryRequest for X25519.
         Signed s = handshake(p -> p.setNamedGroups(new String[] {"secp256r1", "secp384r1", "secp521r1", "ffdhe2048", "x25519"}),
             new String[] {"http/1.1"});
-        assertNull(s.failure(), String.valueOf(s.failure()));
-        assertEquals(2, s.clientMessages().size(), "two ClientHellos around the retry");
+        assertNull(s.failure(), ENCODING_CHANGED + s.failure());
+        assertEquals(2, s.clientMessages().size(),
+            "no HelloRetryRequest happened, so the retry path was not exercised. That is a changed handshake and not a "
+                + "changed encoding: this JDK's client offered a key share the server took. Fix the setup above, do not "
+                + "delete the test -- the message_hash rule of RFC 8446 §4.4.1 is covered nowhere else");
         assertNotNull(s.t().helloRetryRequest());
         assertTrue(Tls13.isHelloRetryRequest(s.t().helloRetryRequest()));
         assertArrayEquals(Tls13.transcriptHashIn(s.content()), hubSide(s.clientMessages(), s.t(), s.content()));
@@ -220,12 +256,12 @@ class TranscriptTest {
     @Test
     void otherSuitesAndNoAlpnStillReconstruct() throws Exception {
         Signed s = handshake(p -> p.setCipherSuites(new String[] {"TLS_AES_128_GCM_SHA256"}), new String[0]);
-        assertNull(s.failure(), String.valueOf(s.failure()));
+        assertNull(s.failure(), ENCODING_CHANGED + s.failure());
         assertEquals("SHA-256", Tls13.hashAlgorithmOf(s.content()));
         assertArrayEquals(Tls13.transcriptHashIn(s.content()), hubSide(s.clientMessages(), s.t(), s.content()));
         assertArrayEquals(Tls13.encryptedExtensions(true, TlsEndpoint.GROUP_IDS, "http/1.1", false), s.t().encryptedExtensions());
         Signed chacha = handshake(p -> p.setCipherSuites(new String[] {"TLS_CHACHA20_POLY1305_SHA256"}), new String[] {"http/1.1"});
-        assertNull(chacha.failure(), String.valueOf(chacha.failure()));
+        assertNull(chacha.failure(), ENCODING_CHANGED + chacha.failure());
         assertArrayEquals(Tls13.transcriptHashIn(chacha.content()), hubSide(chacha.clientMessages(), chacha.t(), chacha.content()));
     }
 
@@ -236,12 +272,127 @@ class TranscriptTest {
         // on-path member's forged handshake, and it is what the check exists to refuse.
         Signed a = handshake(p -> { }, new String[] {"http/1.1"});
         Signed b = handshake(p -> { }, new String[] {"http/1.1"});
-        assertNull(a.failure());
-        assertNull(b.failure());
+        assertNull(a.failure(), ENCODING_CHANGED + a.failure());
+        assertNull(b.failure(), ENCODING_CHANGED + b.failure());
         byte[] forged = hubSide(a.clientMessages(), b.t(), b.content());
         assertFalse(Arrays.equals(forged, Tls13.transcriptHashIn(b.content())));
         // and the reconstruction itself refuses when its inputs are not this handshake's
         assertThrows(GeneralSecurityException.class, () -> Transcript.reconstruct(a.clientMessages(), List.of(), List.of(new byte[32]),
             "TLS_AES_256_GCM_SHA384", certificateMessage, b.content()));
+    }
+    @Test
+    void aChangedEncodingOfTheSameHandshakeIsWhatThisFails() throws Exception {
+        // The direction the tests above cannot show. They run against one JDK and assert that its
+        // encoding was predicted; none of them says what happens when a JDK predicts it *wrongly*,
+        // and a reconstruction that had quietly stopped comparing would pass every one of them.
+        // So: keep this handshake exactly as JSSE negotiated it -- same ClientHello, same random
+        // draws, same suite -- and change only how the server's two messages are written, which is
+        // the whole of the risk in issue #78. Each variant must be refused.
+        Signed s = handshake(p -> { }, new String[] {"http/1.1"});
+        assertNull(s.failure(), ENCODING_CHANGED + s.failure());
+        byte[] sh = s.t().serverHello();
+        byte[] ee = s.t().encryptedExtensions();
+        assertEquals(2, extensionsOf(ee).size(), "EncryptedExtensions should carry supported_groups and ALPN here");
+
+        // The control. Synthesising a CertificateVerify content from the reconstruction JSSE itself
+        // agreed with must reconstruct; without it, the refusals below would only be saying that
+        // this test builds its inputs wrongly.
+        assertNotNull(reconstructAsIf(s, sh, ee), "the unperturbed encoding must still reconstruct");
+
+        // Each of these is a way a JDK could write this same handshake differently. Tls13 predicts
+        // an exact byte layout -- "the order JSSE writes them in", "nothing else, SNI
+        // acknowledgement included" -- and these are what hold those claims to their word.
+        refuses(s, rewriteExtensions(sh, TranscriptTest::reversed), ee, "the ServerHello's extensions in the other order");
+        refuses(s, legacyVersion(sh, 0x0304), ee, "a ServerHello carrying 0x0304 rather than the legacy 0x0303");
+        refuses(s, sh, rewriteExtensions(ee, TranscriptTest::reversed), "EncryptedExtensions with ALPN before supported_groups");
+        refuses(s, sh, rewriteExtensions(ee, e -> added(e, new byte[] {0, 0, 0, 0})),
+            "EncryptedExtensions that acknowledge SNI with an empty server_name");
+    }
+
+    /** {@link Transcript#reconstruct} against the content a JDK writing {@code sh} and {@code ee} would hand over. */
+    private static Transcript.Reconstructed reconstructAsIf(Signed s, byte[] sh, byte[] ee) throws GeneralSecurityException {
+        byte[] hash = Tls13.transcriptHash(Tls13.hashAlgorithmOf(s.content()), s.clientMessages(), s.t().helloRetryRequest(),
+            sh, ee, certificateMessage);
+        byte[] content = Arrays.copyOf(Tls13.CERT_VERIFY_CONTEXT, Tls13.CERT_VERIFY_CONTEXT.length + hash.length);
+        System.arraycopy(hash, 0, content, Tls13.CERT_VERIFY_CONTEXT.length, hash.length);
+        return Transcript.reconstruct(s.clientMessages(), s.serverMessages(), s.randomChunks(), s.cipherSuite(),
+            certificateMessage, content);
+    }
+
+    private static void refuses(Signed s, byte[] sh, byte[] ee, String what) {
+        assertFalse(Arrays.equals(sh, s.t().serverHello()) && Arrays.equals(ee, s.t().encryptedExtensions()),
+            what + ": the variant changed no bytes, so it can prove nothing");
+        assertThrows(GeneralSecurityException.class, () -> reconstructAsIf(s, sh, ee),
+            "a JDK writing " + what + " must leave the reconstruction with nothing that hashes to what it asked to have "
+                + "signed. That it reconstructed anyway means this test can no longer fail in the direction it claims");
+    }
+
+    // --- writing the same handshake differently ----------------------------------------------
+
+    /**
+     * The extensions of a ServerHello or EncryptedExtensions, each with its own four-byte header.
+     * Both message bodies end in a {@code u16} length and that block; what differs is the prefix
+     * ahead of it, which for a ServerHello is version, random, echoed session id, suite and
+     * compression, and for EncryptedExtensions is nothing.
+     */
+    private static List<byte[]> extensionsOf(byte[] message) {
+        byte[] body = Arrays.copyOfRange(message, 4, message.length);
+        int i = prefixLength(message[0] & 0xff, body);
+        int end = i + 2 + u16(body, i);
+        List<byte[]> exts = new ArrayList<>();
+        for (i += 2; i + 4 <= end; ) {
+            int len = u16(body, i + 2);
+            exts.add(Arrays.copyOfRange(body, i, i + 4 + len));
+            i += 4 + len;
+        }
+        return exts;
+    }
+
+    /** The same message with its extension block replaced by {@code f}'s answer. */
+    private static byte[] rewriteExtensions(byte[] message, UnaryOperator<List<byte[]>> f) {
+        byte[] body = Arrays.copyOfRange(message, 4, message.length);
+        int prefix = prefixLength(message[0] & 0xff, body);
+        ByteArrayOutputStream block = new ByteArrayOutputStream();
+        for (byte[] e : f.apply(extensionsOf(message))) {
+            block.writeBytes(e);
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(body, 0, prefix);
+        out.write(block.size() >> 8);
+        out.write(block.size());
+        out.writeBytes(block.toByteArray());
+        return Tls13.message(message[0] & 0xff, out.toByteArray());
+    }
+
+    private static int prefixLength(int type, byte[] body) {
+        if (type == Tls13.ENCRYPTED_EXTENSIONS) {
+            return 0;
+        }
+        assertEquals(Tls13.SERVER_HELLO, type, "only a ServerHello or EncryptedExtensions has a prefix here");
+        return 34 + 1 + (body[34] & 0xff) + 2 + 1; // version, random | session id | suite, compression
+    }
+
+    /** The ServerHello with a different {@code legacy_version}, which is otherwise 0x0303 forever. */
+    private static byte[] legacyVersion(byte[] serverHello, int version) {
+        byte[] m = serverHello.clone();
+        m[4] = (byte) (version >> 8);
+        m[5] = (byte) version;
+        return m;
+    }
+
+    private static List<byte[]> reversed(List<byte[]> exts) {
+        List<byte[]> l = new ArrayList<>(exts);
+        Collections.reverse(l);
+        return l;
+    }
+
+    private static List<byte[]> added(List<byte[]> exts, byte[] extension) {
+        List<byte[]> l = new ArrayList<>(exts);
+        l.add(extension);
+        return l;
+    }
+
+    private static int u16(byte[] b, int i) {
+        return ((b[i] & 0xff) << 8) | (b[i + 1] & 0xff);
     }
 }
