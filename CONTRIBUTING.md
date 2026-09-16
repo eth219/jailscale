@@ -6,9 +6,13 @@ signed releases people install with `sudo install`. Those three constraints deci
 
 ## Reporting a security problem
 
-**Do not open a public issue with the details.** Private vulnerability reporting is not enabled on
-this repository yet (#62). Until it is, open an issue that says only that you have something to
-report and asks for a private channel — no detail in it.
+**Do not open a public issue with the details.** Use the **Report a vulnerability** button under
+[Security](https://github.com/eth219/jailscale/security/advisories), which opens a private advisory
+that only you and the maintainer can read.
+
+This is one person's project. An honest expectation is a first reply within a few days and a fix in
+the next release, not a published SLA; the releases that get fixes are the latest one and whatever
+the live hub is running. #62 is open to write that down properly in a `SECURITY.md`.
 
 Before reporting, check [ARCHITECTURE.md §15](docs/ARCHITECTURE.md): it lists what this project
 cannot do, at length and on purpose. That a compromised hub can impersonate every name under its
