@@ -64,6 +64,9 @@ public final class DnsResponder implements AutoCloseable {
     public static final List<String> GLUE_LABELS = List.of("ns1", "ns2");
     /** The name whose TXT is this process's own token (§13.3). */
     public static final String SELF_LABEL = "_jailhub-self";
+    /** The label a dns-01 challenge points the CA at. */
+    static final String CHALLENGE_LABEL = "_acme-challenge";
+    private static final byte[] CHALLENGE_BYTES = labelBytes(CHALLENGE_LABEL);
 
     /**
      * What the zone says right now, asked on every query so the answer is never stale: the
@@ -142,6 +145,7 @@ public final class DnsResponder implements AutoCloseable {
 
     private final String zone;      // _acme-challenge.hub.example.com (lower case, no trailing dot)
     private final String hubName;   // hub.example.com, the zone apex
+    private final List<byte[]> hubLabels;   // the same, label by label: what a question is matched against
     private final List<String> txt = new CopyOnWriteArrayList<>();
     private final String selfToken;
     private volatile Zone view = NOTHING;
@@ -157,7 +161,8 @@ public final class DnsResponder implements AutoCloseable {
     /** With a chosen token (tests): two responders on one machine can then be told apart. */
     public DnsResponder(String hubName, String selfToken) {
         this.hubName = hubName.toLowerCase(Locale.ROOT);
-        this.zone = "_acme-challenge." + this.hubName;
+        this.hubLabels = labels(this.hubName);
+        this.zone = CHALLENGE_LABEL + "." + this.hubName;
         this.selfToken = selfToken;
         this.selfQuestion = encodeName(SELF_LABEL + "." + this.hubName);
     }
@@ -394,11 +399,8 @@ public final class DnsResponder implements AutoCloseable {
         if (qn == null) {
             return error(q, RCODE_FORMERR);
         }
-        String qname = qn.name();
-        boolean acme = qname.equals(zone);
-        boolean atApex = !acme && qname.equals(hubName);
-        boolean below = !acme && !atApex && qname.endsWith("." + hubName);
-        if (!acme && !atApex && !below) {
+        List<byte[]> labels = qn.labels();
+        if (labels.size() < hubLabels.size() || !endsWithApex(labels)) {
             return error(q, RCODE_REFUSED); // not our zone
         }
         // A budget with no room for records is a truncation whatever the records would have been,
@@ -409,13 +411,52 @@ public final class DnsResponder implements AutoCloseable {
         if (!budget.records()) {
             return truncated(qn);
         }
-        if (acme) {
+        // What is left above the apex: nothing at all is the apex itself, and one label is a name
+        // this zone may hold.
+        List<byte[]> prefix = labels.subList(0, labels.size() - hubLabels.size());
+        if (prefix.size() == 1 && java.util.Arrays.equals(prefix.get(0), CHALLENGE_BYTES)) {
             return challenge(qn);
         }
-        if (atApex) {
+        if (prefix.isEmpty()) {
             return apex(qn);
         }
-        return under(qn, qname.substring(0, qname.length() - hubName.length() - 1));
+        return under(qn, prefix);
+    }
+
+    /** Whether {@code labels} ends in the apex's, byte for byte and label for label. */
+    private boolean endsWithApex(List<byte[]> labels) {
+        int off = labels.size() - hubLabels.size();
+        for (int i = 0; i < hubLabels.size(); i++) {
+            if (!java.util.Arrays.equals(labels.get(off + i), hubLabels.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * ASCII case folding, which is the only case rule DNS has (RFC 4343). A byte over 0x7F is
+     * itself: it is not a letter here, whatever encoding the sender had in mind.
+     */
+    private static byte lower(byte b) {
+        return b >= 'A' && b <= 'Z' ? (byte) (b + 0x20) : b;
+    }
+
+    /** A name as the case-folded labels a question is compared against. */
+    private static List<byte[]> labels(String name) {
+        List<byte[]> out = new ArrayList<>();
+        for (String label : name.split("\\.")) {
+            out.add(labelBytes(label));
+        }
+        return out;
+    }
+
+    private static byte[] labelBytes(String label) {
+        byte[] b = label.getBytes(StandardCharsets.ISO_8859_1);
+        for (int i = 0; i < b.length; i++) {
+            b[i] = lower(b[i]);
+        }
+        return b;
     }
 
     /**
@@ -434,17 +475,22 @@ public final class DnsResponder implements AutoCloseable {
     /**
      * One reading of the question, carried to whatever builds the answer.
      *
+     * <p>{@code labels} is the name, label by label and case-folded as ASCII, and never joined
+     * into one string: a label may hold a dot, and a byte over 0x7F is not a character, so the
+     * string form makes two names that differ on the wire into one -- which is how a single label
+     * reading {@code ns1.<hub>} was answered with ns1's glue.
+     *
      * <p>{@code end} is the offset one past the question: what an answer echoes, and what a
      * truncated answer is cut to. {@code budget} is what the transport will carry. The two travel
      * with the question because they are spent in the same place — {@link #build}, which is the only
      * code that knows how large the answer came out.
      */
-    private record Question(byte[] query, String name, int type, int end, Budget budget) {}
+    private record Question(byte[] query, List<byte[]> labels, int type, int end, Budget budget) {}
 
     /** The one reading of a question in this file; null is a FORMERR for the caller to send. */
     private static Question parse(byte[] q, Budget budget) {
         int p = 12;
-        StringBuilder name = new StringBuilder();
+        List<byte[]> labels = new ArrayList<>();
         while (p < q.length) {
             int l = q[p++] & 0xff;
             if (l == 0) {
@@ -453,17 +499,18 @@ public final class DnsResponder implements AutoCloseable {
             if ((l & 0xc0) != 0 || p + l > q.length) {
                 return null;
             }
-            if (name.length() > 0) {
-                name.append('.');
+            byte[] label = new byte[l];
+            for (int i = 0; i < l; i++) {
+                label[i] = lower(q[p + i]);
             }
-            name.append(new String(q, p, l, StandardCharsets.US_ASCII));
+            labels.add(label);
             p += l;
         }
         if (p + 4 > q.length) {
             return null;
         }
         int type = ((q[p] & 0xff) << 8) | (q[p + 1] & 0xff);
-        return new Question(q, name.toString().toLowerCase(Locale.ROOT), type, p + 4, budget);
+        return new Question(q, labels, type, p + 4, budget);
     }
 
     /** {@code _acme-challenge.<hub>}, exactly as before the hub answered anything else. */
@@ -526,16 +573,20 @@ public final class DnsResponder implements AutoCloseable {
     }
 
     /** A name under the apex: a name server's glue, this process's token, or the wildcard. */
-    private byte[] under(Question qn, String label) {
+    private byte[] under(Question qn, List<byte[]> prefix) {
         int qtype = qn.type();
         Zone z = view;
         Map<String, String> ns = ordered(z.nameServers());
         List<byte[]> answers = new ArrayList<>();
-        if (label.equals(SELF_LABEL)) {
+        // One label is a name this zone may hold, decoded a byte to a character so that two labels
+        // that differ on the wire cannot arrive here as one string; deeper is null, since no name
+        // this zone holds has two labels and the wildcard covers the rest.
+        String label = prefix.size() == 1 ? new String(prefix.get(0), StandardCharsets.ISO_8859_1) : null;
+        if (SELF_LABEL.equals(label)) {
             if (qtype == TYPE_TXT) {
                 answers.add(rr(TYPE_TXT, TTL_TXT, txtRdata(selfToken)));
             }
-        } else if (ns.containsKey(label) || GLUE_LABELS.contains(label)) {
+        } else if (label != null && (ns.containsKey(label) || GLUE_LABELS.contains(label))) {
             // A glue name answers the parent's glue, or nothing until that is known: never the
             // wildcard, which would tell a resolver the other name server is this host.
             if (qtype == TYPE_A && ns.containsKey(label)) {
@@ -548,7 +599,7 @@ public final class DnsResponder implements AutoCloseable {
             // A single label is a published name, answered with the hosts its node is on; anything
             // deeper, or a name nobody holds, gets the hosts serving right now, where the "not open"
             // page is. Whether the name is open is the SNI router's question, not DNS's.
-            for (String a : label.indexOf('.') < 0 ? z.forName(label) : z.serving()) {
+            for (String a : label != null ? z.forName(label) : z.serving()) {
                 byte[] rd = ipv4(a);
                 if (rd != null) {
                     answers.add(rr(TYPE_A, TTL_ADDRESS, rd));

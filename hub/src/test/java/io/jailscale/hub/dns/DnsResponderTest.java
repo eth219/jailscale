@@ -135,6 +135,99 @@ class DnsResponderTest {
         assertEquals(5, r[3] & 0x0f, "REFUSED");
     }
 
+    /**
+     * A question whose labels are given as bytes, so that a label may hold a dot or a byte over
+     * 0x7F -- neither of which {@code DnsFuzzTest.query} can write, splitting a String on '.'.
+     */
+    private static byte[] rawQuery(int id, int type, String... labels) {
+        java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+        o.write(id >>> 8);
+        o.write(id);
+        o.write(0x01);
+        o.write(0x00);
+        o.write(0);
+        o.write(1);
+        for (int i = 0; i < 6; i++) {
+            o.write(0);
+        }
+        for (String label : labels) {
+            byte[] b = label.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+            o.write(b.length);
+            o.writeBytes(b);
+        }
+        o.write(0);
+        o.write(type >>> 8);
+        o.write(type);
+        o.write(0);
+        o.write(1); // IN
+        return o.toByteArray();
+    }
+
+    private static int rcode(byte[] response) {
+        return response[3] & 0x0f;
+    }
+
+    @Test
+    void twoWireNamesThatPrintAsOneStringAreNotOneName() throws Exception {
+        DnsResponder d = new DnsResponder("hub.example.com");
+        d.setTxt(List.of("challenge-value"));
+        d.setZone(new DnsResponder.Zone() {
+            @Override public List<String> serving() { return List.of("203.0.113.9"); }
+            @Override public Map<String, String> nameServers() { return Map.of("ns1", "203.0.113.1"); }
+        });
+        // The names as the zone holds them, so that refusing everything cannot pass this.
+        byte[] glue = d.respond(rawQuery(1, 1, "ns1", "hub", "example", "com"));
+        assertEquals(0, rcode(glue));
+        assertEquals(List.of("203.0.113.1"), addresses(DnsQuery.parse(glue, 1, 1)));
+        assertEquals(List.of("challenge-value"),
+            txt(DnsQuery.parse(d.respond(rawQuery(2, 16, "_acme-challenge", "hub", "example", "com")), 2, 16)));
+
+        // One label whose 19 bytes are `ns1.hub.example.com`: legal on the wire, under the 63-byte
+        // cap the parser enforces, and a different name from the four-label form. Joining the
+        // labels with a dot made the two one string, and this was answered with ns1's glue.
+        assertEquals(5, rcode(d.respond(rawQuery(3, 1, "ns1.hub.example.com"))),
+            "a single label that prints as ns1.<hub> is not a name in this zone");
+        // The same collapse the other way round: a dot inside the last label.
+        assertEquals(5, rcode(d.respond(rawQuery(4, 16, "_acme-challenge.hub", "example.com"))),
+            "a two-label name that prints as the challenge name is not the challenge name");
+    }
+
+    @Test
+    void aLabelOutsideAsciiIsStillItsOwnName() {
+        List<String> asked = new java.util.ArrayList<>();
+        DnsResponder d = new DnsResponder("hub.example.com");
+        d.setZone(new DnsResponder.Zone() {
+            @Override public List<String> serving() { return List.of("203.0.113.9"); }
+            @Override public Map<String, String> nameServers() { return Map.of(); }
+            @Override public List<String> forName(String label) {
+                asked.add(label);
+                return serving();
+            }
+        });
+        // US-ASCII decoding turns every byte over 0x7F into the one replacement character, which
+        // made all 128 of them the same published name.
+        assertEquals(0, rcode(d.respond(rawQuery(5, 1, "\u0080", "hub", "example", "com"))));
+        assertEquals(0, rcode(d.respond(rawQuery(6, 1, "\u0081", "hub", "example", "com"))));
+        assertEquals(0, rcode(d.respond(rawQuery(7, 1, "MyApp", "hub", "example", "com"))));
+        assertEquals(List.of("\u0080", "\u0081", "myapp"), asked, "one label of bytes, one name, folded as ASCII");
+    }
+
+    private static List<String> addresses(List<byte[]> rdata) throws IOException {
+        List<String> out = new java.util.ArrayList<>();
+        for (byte[] rd : rdata) {
+            out.add(java.net.InetAddress.getByAddress(rd).getHostAddress());
+        }
+        return out;
+    }
+
+    private static List<String> txt(List<byte[]> rdata) {
+        List<String> out = new java.util.ArrayList<>();
+        for (byte[] rd : rdata) {
+            out.add(new String(rd, 1, rd[0] & 0xff, java.nio.charset.StandardCharsets.US_ASCII));
+        }
+        return out;
+    }
+
     @Test
     void ignoresGarbageAndResponses() {
         DnsResponder d = new DnsResponder("hub.test");
