@@ -304,13 +304,58 @@ class AdminCommandTest {
             assertEquals("knock is on or off, not OFF", set(ipc, "knock", "OFF"));
             assertEquals("registration is invite or open, not opne", set(ipc, "registration", "opne"));
             assertEquals("invitePolicy is members or admins, not admin", set(ipc, "invitePolicy", "admin"));
-            assertEquals("no such setting knok (autoPromote, invitePolicy, knock, registration)", set(ipc, "knok", "off"));
+            assertEquals("no such setting knok (autoPromote, contact, invitePolicy, knock, operator, registration, terms)",
+                set(ipc, "knok", "off"), "the list an operator is offered has to be all of them");
             assertEquals("on", hub.store().setting(Store.SETTING_KNOCK, "on"), "a refused setting must not have been written");
 
             assertNull(set(ipc, "knock", "off"));
             assertEquals("off", hub.store().setting(Store.SETTING_KNOCK, "on"));
+            // Stripped for these as well as for the text settings: a trailing space out of a shell
+            // or a copied line is not a fourth value, and refusing it says "knock is on or off, not
+            // off", an error whose difference from the value the operator cannot see.
+            assertNull(set(ipc, "knock", " on "));
+            assertEquals("on", hub.store().setting(Store.SETTING_KNOCK, "off"));
             assertNull(set(ipc, "registration", "open"));
             assertNull(set(ipc, "invitePolicy", "admins"));
+        } finally {
+            hub.close();
+        }
+    }
+
+    /**
+     * The three settings that take text rather than one of a fixed few (#99). Two of them end up in
+     * an {@code href} on a page anyone can load, so the scheme is checked where it is set: an
+     * operator who pastes the wrong thing is told at the prompt, and a visitor never finds out
+     * instead. Empty is not a refusal -- it is how a value comes back off the page.
+     */
+    @Test
+    void theOperatorSettingsTakeTextAndRefuseAHrefNobodyMeantToPublish() throws Exception {
+        Hub hub = startedHub();
+        try {
+            AdminIpc ipc = new AdminIpc(hub);
+            assertNull(set(ipc, "operator", "Example Ltd"));
+            assertNull(set(ipc, "contact", "mailto:abuse@example.com"));
+            assertNull(set(ipc, "terms", "https://example.com/aup"));
+            assertEquals("Example Ltd", hub.store().setting(Store.SETTING_OPERATOR, ""));
+            assertEquals("mailto:abuse@example.com", hub.store().setting(Store.SETTING_CONTACT, ""));
+
+            assertEquals("contact takes an https:// or mailto: URL, up to 200 characters, or empty to clear",
+                set(ipc, "contact", "javascript:alert(1)"));
+            assertEquals("contact takes an https:// or mailto: URL, up to 200 characters, or empty to clear",
+                set(ipc, "contact", "http://example.com/abuse"), "plain http is not a contact this hub will print");
+            assertEquals("terms takes an https:// URL, up to 200 characters, or empty to clear",
+                set(ipc, "terms", "mailto:legal@example.com"));
+            assertEquals("operator takes a name, up to 120 characters, or empty to clear",
+                set(ipc, "operator", "x".repeat(121)));
+            assertEquals("mailto:abuse@example.com", hub.store().setting(Store.SETTING_CONTACT, ""),
+                "a refused value must not have been written");
+
+            assertNull(set(ipc, "contact", ""), "empty is how it comes back off the page");
+            assertEquals("", hub.store().setting(Store.SETTING_CONTACT, "unset"));
+            // Spaces are the same act, and not a third state: stored as typed, they would neither
+            // clear the value nor be refused, and the page would keep the section around a blank.
+            assertNull(set(ipc, "operator", "   "));
+            assertEquals("", hub.store().setting(Store.SETTING_OPERATOR, "unset"));
         } finally {
             hub.close();
         }

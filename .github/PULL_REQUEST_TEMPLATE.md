@@ -25,6 +25,15 @@ Closes #
 - [ ] `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false` **on the new toolchain** — required if this moves the JDK or GraalVM pin. Paste the `Tests run:` line and name the build; `BUILD SUCCESS` alone does not tell a typo from a pass (CONTRIBUTING.md says why)
 - [ ] Not applicable, because: <!-- say so rather than leaving boxes unticked -->
 
+## Documents this change makes untrue
+
+<!-- Name them, or write "none". `ARCHITECTURE.md` §15 is what a reader is pointed at to find out
+     what this system cannot do and §14 is where its numbers are, so a change that removes a limit
+     or moves a figure and leaves those sections alone has left them wrong. "None" is the usual
+     answer and is worth writing, because "none" says the sections were looked at and a blank says
+     nothing at all. Nothing in CI can check this: no test can tell that a sentence stopped being
+     true. -->
+
 ## Tests
 
 <!-- What each new test can fail. A test that cannot fail in the direction it claims passes just as
