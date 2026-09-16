@@ -217,23 +217,33 @@ class StandbyTest {
         assertTrue(sbStatus.object("availability").object("peers").has("hub.test"), sbStatus.toString());
         assertTrue(sbStatus.object("availability").object("process").has("24h"), sbStatus.toString());
         String prPage = page("hub.test", portA);
+        // One fetch each, read many times below: re-fetching per assertion is a TLS handshake and a
+        // page render apiece, and it also means a failing assertion's message shows a page other
+        // than the one that failed.
+        String sbPage = page("hub.test", portB);
         // "connected" and not "in sync": a standby acknowledges nothing, so that is the whole of
         // what the primary can say about it. The standby's own page below is where "in sync" is
         // claimed, by the side that knows.
         assertTrue(prPage.contains("standby <code>127.0.0.1</code> connected"), prPage);
         assertTrue(prPage.contains("Seen from here"), prPage);
-        assertTrue(page("hub.test", portB).contains("standby of <code>hub.test</code>, in sync"));
+        assertTrue(sbPage.contains("standby of <code>hub.test</code>, in sync"), sbPage);
         // A pair that is doing its job is not graded as a problem on either side. This is the
         // assertion that makes the two below mean something: without it they would also pass on a
         // page that called every hub degraded.
         assertTrue(prPage.contains("All systems operational"), prPage);
-        assertTrue(page("hub.test", portB).contains("All systems operational"), page("hub.test", portB));
+        assertTrue(sbPage.contains("All systems operational"), sbPage);
         // §13.4: a standby answers Goodbye{standby} to every control connection, so its own page
         // must not tell a reader to join here -- while the primary's, which will take the join,
         // must not carry the warning. Both halves, because either alone is satisfied by a page
         // that always says it or never does.
-        assertTrue(page("hub.test", portB).contains("Not on this host, though:"), page("hub.test", portB));
+        assertTrue(sbPage.contains("Not on this host, though:"), sbPage);
         assertFalse(prPage.contains("Not on this host, though:"), prPage);
+        // And the join itself is gone, not merely warned about: the command names the apex, which
+        // resolves to the primary alone and to nothing at all once the primary is down -- which is
+        // the state a reader is in when they are looking at the standby's page.
+        assertFalse(sbPage.contains("jailscale up --hub"), sbPage);
+        assertFalse(sbPage.contains("jailscale up --invite"), sbPage);
+        assertTrue(prPage.contains("jailscale up --hub hub.test") || prPage.contains("jailscale up --invite"), prPage);
         JsonObject ipcStatus = Ipc.call(root.resolve("a/jailhub.sock"), JsonObject.builder().put("cmd", "status").build());
         assertEquals(1, ipcStatus.array("standbys").size(), ipcStatus.toString());
 

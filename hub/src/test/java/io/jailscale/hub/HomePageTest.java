@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
+import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Headers;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpResponse;
@@ -618,11 +619,11 @@ class HomePageTest {
     @Test
     void thePageSaysWhichClientsThisHubTakesAndHowToCheckTheOneYouGet() throws Exception {
         String page = http("GET", "/", null, null).bodyText();
-        assertTrue(page.contains("<b>protocol " + io.jailscale.proto.control.Message.PROTO + "</b>"), page);
-        assertTrue(page.contains("<tr><td>Protocol</td><td>" + io.jailscale.proto.control.Message.PROTO), page);
+        assertTrue(page.contains("<b>protocol " + Message.PROTO + "</b>"), page);
+        assertTrue(page.contains("<tr><td>Protocol</td><td>" + Message.PROTO), page);
         // The two are equal today, so the page says "nothing older"; when they part, it has to say
         // the floor instead, and this is the assertion that notices.
-        if (NodeSession.MIN_PROTO == io.jailscale.proto.control.Message.PROTO) {
+        if (NodeSession.MIN_PROTO == Message.PROTO) {
             assertTrue(page.contains("nothing older"), page);
         } else {
             assertTrue(page.contains("protocol " + NodeSession.MIN_PROTO + " and newer"), page);
