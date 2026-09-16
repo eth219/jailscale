@@ -39,22 +39,30 @@ class DnsFuzzTest {
         for (int i = 0; i < 20_000; i++) {
             byte[] in = i < seeds.length ? seeds[i] : mutate(rng, seeds[i % seeds.length]);
             try {
-                byte[] out = d.respond(in);
-                if (out != null && out.length > 4096) {
+                byte[] whole = d.respond(in);
+                if (whole == null) {
+                    continue;                       // not a question: no budget makes one of it
+                }
+                if (whole.length > 4096) {
                     fail("oversized answer for " + Arrays.toString(in));
                 }
-                if (out != null) {
-                    // `truncate` walks the question inside a response that echoes these same mutated
-                    // bytes, so it parses attacker input as surely as `respond` does. Run on every
-                    // case rather than only the oversized ones -- that is where the walk is
-                    // exercised -- and once, since the oversized check is a property of the result.
-                    byte[] cut = DnsResponder.truncate(out);
-                    if (cut.length > out.length || (cut[2] & 0x02) == 0) {
-                        fail("bad truncation of " + Arrays.toString(out));
-                    }
-                    if (out.length > DnsResponder.MAX_UDP && cut.length > DnsResponder.MAX_UDP) {
-                        fail("answer of " + cut.length + " bytes would go on UDP for " + Arrays.toString(in));
-                    }
+                // The bounded forms come from the same encoder and the same mutated question, so
+                // they are driven over every case rather than only the oversized ones -- what used
+                // to walk a finished response to find the question again is now the offset
+                // `respond` parsed, and both shapes are cut to it.
+                byte[] datagram = d.respond(in, DnsResponder.MAX_UDP);
+                byte[] slip = d.respond(in, DnsResponder.NO_RECORDS);
+                if (datagram == null || slip == null) {
+                    fail("answered whole but not within a budget: " + Arrays.toString(in));
+                }
+                if (datagram.length > DnsResponder.MAX_UDP) {
+                    fail("answer of " + datagram.length + " bytes would go on UDP for " + Arrays.toString(in));
+                }
+                if (slip.length > DnsResponder.MAX_UDP || slip.length > whole.length) {
+                    fail("bad truncation of " + Arrays.toString(whole));
+                }
+                if (whole.length > DnsResponder.MAX_UDP && (datagram[2] & 0x02) == 0) {
+                    fail("TC should be set on what a datagram can carry of " + Arrays.toString(in));
                 }
             } catch (Throwable t) {
                 fail("case " + i + " threw " + t, t);

@@ -1666,6 +1666,14 @@ Nothing here reaches that today at 287 bytes, but nothing enforced it either, an
 datagram is not an error a resolver reports — it is one it discards, which under `_acme-challenge`
 is a certificate that stops renewing and says so nowhere.
 
+**The bound is the encoder's, and it covers the question too.** How much may leave arrives at
+`build()` as a budget — 512 for a datagram, room for no records at all for the slip above,
+unbounded for TCP — and an answer that does not fit is emitted there as the `TC` form, from the
+offset the question was already parsed to. It used to be a second pass over the finished response,
+walking the question again to find that offset: a weaker parser of the same bytes, kept in step
+with the encoder by hand, and the change that adds EDNS or question compression is the change that
+would make its truncation malformed.
+
 A node the hub already knows returns before the credential check, so reconnections never touch the
 bucket. The bursts are generous because a node opens up to four connections and a NAT can hide many
 nodes behind one address; the sustained rate is what limits abuse. Open registration needs a bucket

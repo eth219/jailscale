@@ -119,30 +119,15 @@ class DnsAmplificationTest {
         byte[] datagram = d.answerForUdp(q, java.net.InetAddress.getByName("198.51.100.7"), 1_000_000);
         assertTrue(datagram.length <= DnsResponder.MAX_UDP, "UDP answer was " + datagram.length + " bytes");
         assertTrue((datagram[2] & 0x02) != 0, "TC should be set so the resolver asks again over TCP");
+        // And the shape of it, which is what a resolver has to be able to match to its query: the
+        // header and the question, counting no records at all.
+        assertEquals(q.length, datagram.length, "the header and the question, and nothing after it");
+        assertEquals(1, datagram[5], "the question is still echoed");
+        for (int i = 6; i < 12; i++) {
+            assertEquals(0, datagram[i], "no records should be counted at byte " + i);
+        }
         // TCP is unchanged: it has a length prefix, so the whole answer goes.
         assertTrue(d.respond(q).length > DnsResponder.MAX_UDP, "TCP should still carry the whole answer");
-    }
-
-    @Test
-    void anAnswerTooLargeForADatagramComesBackTruncated() {
-        // Nothing this zone holds reaches 512 today, so the path is driven with a response built by
-        // hand: the point is that the bound exists and produces a well-formed TC answer, not that
-        // some name currently trips it.
-        byte[] question = DnsFuzzTest.query("myapp." + HUB, 1);
-        byte[] oversized = new byte[600];
-        System.arraycopy(question, 0, oversized, 0, question.length);
-        oversized[2] = (byte) 0x84;                       // QR, AA
-        oversized[6] = 0;
-        oversized[7] = 9;                                 // nine answers, none of which survive
-
-        byte[] t = DnsResponder.truncate(oversized);
-        assertEquals(question.length, t.length, "the header and the question, and nothing after it");
-        assertTrue((t[2] & 0x02) != 0, "TC should be set");
-        assertEquals(1, t[5], "the question is still echoed");
-        for (int i = 6; i < 12; i++) {
-            assertEquals(0, t[i], "no records should be counted at byte " + i);
-        }
-        assertTrue(t.length <= question.length, "a truncated answer must not be larger than the query");
     }
 
     /** The zone at its largest: two hosts, both name servers, an issuance in flight. */

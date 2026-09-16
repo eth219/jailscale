@@ -97,6 +97,18 @@ public final class DnsResponder implements AutoCloseable {
      * it the answer is the header with {@code TC} set and the resolver asks again over TCP.
      */
     static final int MAX_UDP = 512;
+    /**
+     * The budget over TCP, where a length prefix carries whatever the answer is: nothing is ever
+     * truncated there, so this only has to be past the largest message this zone can build.
+     */
+    static final int WHOLE = Integer.MAX_VALUE;
+    /**
+     * Room for no records at all: the header with {@code TC} and the question, which is the polite
+     * half of the answer rate's refusal ({@code ResponseRate.SLIP}). Not a size — a byte count
+     * small enough to force truncation would also be too small for the question that form has to
+     * echo, and the question's length is the encoder's to know, not this constant's.
+     */
+    static final int NO_RECORDS = 0;
     private static final long RATE_LOG_MS = 60_000;
     private final Throttle rateLog = new Throttle(RATE_LOG_MS);
 
@@ -245,21 +257,27 @@ public final class DnsResponder implements AutoCloseable {
      * that has not offered EDNS, so anything longer becomes a pointer to TCP. Over TCP neither
      * applies — the address is proved by a handshake, and a length prefix carries whatever the
      * answer is.
+     *
+     * <p>Both reach the encoder as a budget rather than as a pass over a finished answer: what the
+     * meter decided and what a datagram holds are the same kind of statement about how much may
+     * leave, and {@link #build} is the only code that knows what the answer came to.
      */
     byte[] answerForUdp(byte[] query, InetAddress source, long now) {
-        byte[] r = respond(query);
-        if (r == null) {
+        // Asked before the meter, because these are the two cases respond() has no answer for at
+        // all: metering them would spend a network's budget on a packet that is not a question and
+        // count it as answered, which is not the order this limit has ever been applied in.
+        if (!isQuery(query)) {
             return null;
         }
         if (isSelfProbe(query)) {
-            return r.length > MAX_UDP ? truncate(r) : r;
+            return respond(query, MAX_UDP);
         }
         ResponseRate.Verdict v = rate.check(source, now);
-        if (v != ResponseRate.Verdict.ANSWER) {
-            logRate(now);
-            return v == ResponseRate.Verdict.DROP ? null : truncate(r);
+        if (v == ResponseRate.Verdict.ANSWER) {
+            return respond(query, MAX_UDP);
         }
-        return r.length > MAX_UDP ? truncate(r) : r;
+        logRate(now);
+        return v == ResponseRate.Verdict.DROP ? null : respond(query, NO_RECORDS);
     }
 
     /** Queries answered on UDP 53 since this hub started, for the metrics endpoint (§6.3). */
@@ -308,47 +326,6 @@ public final class DnsResponder implements AutoCloseable {
         }
     }
 
-    /**
-     * The same answer with nothing in it: the header with {@code TC} set and the question echoed, so
-     * a resolver asks again over TCP.
-     *
-     * <p>Two callers with one shape. A response over {@link #MAX_UDP} has to be truncated because
-     * that is what a resolver with no EDNS is allowed to receive, and an answer larger than that
-     * would be quietly dropped by the resolver rather than read -- which for
-     * {@code _acme-challenge} means a certificate that stops renewing, reported nowhere. Over the
-     * rate limit it is the polite half of the refusal ({@code ResponseRate.SLIP}). Nothing here
-     * measures 512 today, at 287 bytes for the largest answer this zone can hold, but nothing
-     * enforced it either, and the zone is what grows.
-     */
-    static byte[] truncate(byte[] response) {
-        int p = 12;
-        while (p < response.length && (response[p] & 0xff) != 0) {
-            int l = response[p] & 0xff;
-            if ((l & 0xc0) != 0) {
-                // A compression pointer: two bytes, so the question ends at p + 6 and not p + 5.
-                // Rather than encode a second reading of that, give up and keep the header, which
-                // is a well-formed TC answer whatever follows. Unreachable while respond() FORMERRs
-                // any question label with the pointer bits set, which is why this was wrong and
-                // harmless at once -- the fix worth making is build() emitting the bounded form
-                // from the length it already has, which is a change to the encoder, not to this.
-                p = -1;
-                break;
-            }
-            p += l + 1;
-        }
-        // The question's terminating zero, then qtype and qclass; a response whose question cannot
-        // be walked keeps the header alone, which is still a well-formed TC answer.
-        int end = p >= 0 && p + 5 <= response.length ? p + 5 : 12;
-        byte[] out = java.util.Arrays.copyOf(response, end);
-        out[2] |= 0x02;             // TC
-        out[4] = 0;
-        out[5] = (byte) (end == 12 ? 0 : 1);
-        for (int i = 6; i < 12; i++) {
-            out[i] = 0;             // no answer, authority or additional records
-        }
-        return out;
-    }
-
     private void tcpLoop() {
         while (running) {
             try {
@@ -384,19 +361,62 @@ public final class DnsResponder implements AutoCloseable {
         }
     }
 
-    /** Builds a response for one query message, or null if it is not a query we can parse. */
+    /** The whole response for one query message, which is what TCP sends, or null if it is not a query. */
     byte[] respond(byte[] q) {
-        if (q.length < 12) {
+        return respond(q, WHOLE);
+    }
+
+    /**
+     * The same, within a budget: how many bytes the answer may take on its way out. {@link #MAX_UDP}
+     * for a datagram, {@link #NO_RECORDS} for the answer rate's slip, {@link #WHOLE} for TCP. An answer
+     * that does not fit comes back as the {@code TC} form, written by the same encoder.
+     */
+    byte[] respond(byte[] q, int budget) {
+        if (!isQuery(q)) {
             return null;
-        }
-        int flags = ((q[2] & 0xff) << 8) | (q[3] & 0xff);
-        if ((flags & 0x8000) != 0) {
-            return null; // a response, not a query
         }
         int qdcount = ((q[4] & 0xff) << 8) | (q[5] & 0xff);
         if (qdcount != 1) {
             return error(q, RCODE_FORMERR);
         }
+        Question qn = parse(q, budget);
+        if (qn == null) {
+            return error(q, RCODE_FORMERR);
+        }
+        String qname = qn.name();
+        if (qname.equals(zone)) {
+            return challenge(qn);
+        }
+        if (qname.equals(hubName)) {
+            return apex(qn);
+        }
+        if (qname.endsWith("." + hubName)) {
+            return under(qn, qname.substring(0, qname.length() - hubName.length() - 1));
+        }
+        return error(q, RCODE_REFUSED); // not our zone
+    }
+
+    /**
+     * Whether this is a query at all: twelve bytes of header, and {@code QR} clear. Exactly the two
+     * cases {@link #respond} has nothing to say to, named so that {@link #answerForUdp} can ask them
+     * without building an answer first.
+     */
+    private static boolean isQuery(byte[] q) {
+        return q.length >= 12 && (q[2] & 0x80) == 0;
+    }
+
+    /**
+     * One reading of the question, carried to whatever builds the answer.
+     *
+     * <p>{@code end} is the offset one past the question: what an answer echoes, and what a
+     * truncated answer is cut to. {@code budget} is what the transport will carry. The two travel
+     * with the question because they are spent in the same place — {@link #build}, which is the only
+     * code that knows how large the answer came out.
+     */
+    private record Question(byte[] query, String name, int type, int end, int budget) {}
+
+    /** The one reading of a question in this file; null is a FORMERR for the caller to send. */
+    private static Question parse(byte[] q, int budget) {
         int p = 12;
         StringBuilder name = new StringBuilder();
         while (p < q.length) {
@@ -405,7 +425,7 @@ public final class DnsResponder implements AutoCloseable {
                 break;
             }
             if ((l & 0xc0) != 0 || p + l > q.length) {
-                return error(q, RCODE_FORMERR);
+                return null;
             }
             if (name.length() > 0) {
                 name.append('.');
@@ -414,25 +434,15 @@ public final class DnsResponder implements AutoCloseable {
             p += l;
         }
         if (p + 4 > q.length) {
-            return error(q, RCODE_FORMERR);
+            return null;
         }
-        int qtype = ((q[p] & 0xff) << 8) | (q[p + 1] & 0xff);
-        int questionEnd = p + 4;
-        String qname = name.toString().toLowerCase(Locale.ROOT);
-        if (qname.equals(zone)) {
-            return challenge(q, questionEnd, qtype);
-        }
-        if (qname.equals(hubName)) {
-            return apex(q, questionEnd, qtype);
-        }
-        if (qname.endsWith("." + hubName)) {
-            return under(q, questionEnd, qtype, qname.substring(0, qname.length() - hubName.length() - 1));
-        }
-        return error(q, RCODE_REFUSED); // not our zone
+        int type = ((q[p] & 0xff) << 8) | (q[p + 1] & 0xff);
+        return new Question(q, name.toString().toLowerCase(Locale.ROOT), type, p + 4, budget);
     }
 
     /** {@code _acme-challenge.<hub>}, exactly as before the hub answered anything else. */
-    private byte[] challenge(byte[] q, int questionEnd, int qtype) {
+    private byte[] challenge(Question qn) {
+        int qtype = qn.type();
         List<byte[]> answers = new ArrayList<>();
         if (qtype == TYPE_TXT || qtype == TYPE_ANY) {
             for (String v : txt) {
@@ -448,14 +458,15 @@ public final class DnsResponder implements AutoCloseable {
                 answers.add(rr(TYPE_SOA, TTL_TXT, soa));
             } else {
                 // NODATA: authority section carries the SOA
-                return build(q, questionEnd, List.of(), List.of(rr(TYPE_SOA, TTL_TXT, soa)), List.of(), 0);
+                return build(qn, List.of(), List.of(rr(TYPE_SOA, TTL_TXT, soa)), List.of(), 0);
             }
         }
-        return build(q, questionEnd, answers, List.of(), List.of(), 0);
+        return build(qn, answers, List.of(), List.of(), 0);
     }
 
     /** The zone apex: A is the serving set, NS and SOA the delegation (§13.3). */
-    private byte[] apex(byte[] q, int questionEnd, int qtype) {
+    private byte[] apex(Question qn) {
+        int qtype = qn.type();
         Zone z = view;
         Map<String, String> ns = ordered(z.nameServers());
         List<byte[]> answers = new ArrayList<>();
@@ -483,13 +494,14 @@ public final class DnsResponder implements AutoCloseable {
             answers.add(rr(TYPE_SOA, TTL_ZONE, soaRdata(mname(ns), TTL_ADDRESS)));
         }
         if (answers.isEmpty()) {
-            return nodata(q, questionEnd, ns);
+            return nodata(qn, ns);
         }
-        return build(q, questionEnd, answers, List.of(), additional, 0);
+        return build(qn, answers, List.of(), additional, 0);
     }
 
     /** A name under the apex: a name server's glue, this process's token, or the wildcard. */
-    private byte[] under(byte[] q, int questionEnd, int qtype, String label) {
+    private byte[] under(Question qn, String label) {
+        int qtype = qn.type();
         Zone z = view;
         Map<String, String> ns = ordered(z.nameServers());
         List<byte[]> answers = new ArrayList<>();
@@ -518,15 +530,15 @@ public final class DnsResponder implements AutoCloseable {
             }
         }
         if (answers.isEmpty()) {
-            return nodata(q, questionEnd, ns);
+            return nodata(qn, ns);
         }
-        return build(q, questionEnd, answers, List.of(), List.of(), 0);
+        return build(qn, answers, List.of(), List.of(), 0);
     }
 
     /** No records of that type here (AAAA, MX, ANY, ...): NOERROR with the apex SOA in the authority section. */
-    private byte[] nodata(byte[] q, int questionEnd, Map<String, String> ns) {
+    private byte[] nodata(Question qn, Map<String, String> ns) {
         byte[] soa = rrNamed(encodeName(hubName), TYPE_SOA, TTL_ADDRESS, soaRdata(mname(ns), TTL_ADDRESS));
-        return build(q, questionEnd, List.of(), List.of(soa), List.of(), 0);
+        return build(qn, List.of(), List.of(soa), List.of(), 0);
     }
 
     /** By label, so ns1 is answered before ns2 and is the SOA's mname whatever map the zone handed over. */
@@ -538,23 +550,25 @@ public final class DnsResponder implements AutoCloseable {
         return ns.isEmpty() ? hubName : ns.keySet().iterator().next() + "." + hubName;
     }
 
-    private byte[] build(byte[] q, int questionEnd, List<byte[]> answers, List<byte[]> authority, List<byte[]> additional,
-        int rcode) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(512);
-        out.write(q[0]);
-        out.write(q[1]);
-        int flags = 0x8400 | (q[2] & 0x01) << 8 | rcode; // QR, AA, copy RD, rcode; never RA
-        out.write(flags >>> 8);
-        out.write(flags);
-        out.write(0);
-        out.write(1);
-        out.write(answers.size() >>> 8);
-        out.write(answers.size());
-        out.write(authority.size() >>> 8);
-        out.write(authority.size());
-        out.write(additional.size() >>> 8);
-        out.write(additional.size());
-        out.write(q, 12, questionEnd - 12);
+    /**
+     * The one encoder, and the one place a budget is spent. An answer that does not fit what the
+     * transport will carry leaves here as the {@code TC} form, written from the {@code end} the
+     * question already carries — rather than handed to a second pass that walked the finished
+     * response to find that offset again. That pass was a second and weaker parser of the same
+     * bytes, correct only for as long as nothing made answers larger: the change that adds EDNS,
+     * question compression or a second question is the change that would make its truncation
+     * malformed, and a malformed answer is not an error a resolver reports, it is one it discards.
+     */
+    private byte[] build(Question qn, List<byte[]> answers, List<byte[]> authority, List<byte[]> additional, int rcode) {
+        byte[] q = qn.query();
+        int size = qn.end() + length(answers) + length(authority) + length(additional);
+        if (size > qn.budget()) {
+            return truncated(qn, rcode);
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream(size);
+        // QR, AA, copy RD, rcode; never RA
+        header(out, q, 0x8400 | (q[2] & 0x01) << 8 | rcode, 1, answers.size(), authority.size(), additional.size());
+        out.write(q, 12, qn.end() - 12);
         for (byte[] a : answers) {
             out.writeBytes(a);
         }
@@ -567,17 +581,58 @@ public final class DnsResponder implements AutoCloseable {
         return out.toByteArray();
     }
 
+    /**
+     * The header with {@code TC} set and, where a datagram has room for it, the question echoed: a
+     * resolver reads that as an instruction to ask again over TCP, which this server also answers.
+     *
+     * <p>Two callers with one shape. An answer past {@link #MAX_UDP} has to be cut because that is
+     * what a resolver with no EDNS is allowed to receive, and one larger is discarded rather than
+     * read — which under {@code _acme-challenge} is a certificate that stops renewing and says so
+     * nowhere. Over the answer rate it is the polite half of the refusal
+     * ({@code ResponseRate.SLIP}), and it arrives here as a budget of {@link #NO_RECORDS}.
+     */
+    private static byte[] truncated(Question qn, int rcode) {
+        byte[] q = qn.query();
+        ByteArrayOutputStream out = new ByteArrayOutputStream(qn.end());
+        header(out, q, 0x8600 | (q[2] & 0x01) << 8 | rcode, 1, 0, 0, 0);
+        out.write(q, 12, qn.end() - 12);
+        return out.toByteArray();
+    }
+
+    /**
+     * A bare header: FORMERR or REFUSED in twelve bytes, which no budget can make smaller, so none
+     * is taken. It is not turned into a {@code TC} answer when the answer rate slips one through
+     * either — a refusal carrying {@code TC} sends a resolver to TCP to be refused a second time,
+     * and a refusal echoes no question, so there is nothing in it to reflect.
+     */
     private byte[] error(byte[] q, int rcode) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(12);
+        header(out, q, 0x8000 | rcode, 0, 0, 0, 0);
+        return out.toByteArray();
+    }
+
+    /** The twelve bytes every message starts with: the query's id, the flags given, and four counts. */
+    private static void header(ByteArrayOutputStream out, byte[] q, int flags, int qd, int an, int ns, int ar) {
         out.write(q[0]);
         out.write(q[1]);
-        int flags = 0x8000 | rcode;
-        out.write(flags >>> 8);
-        out.write(flags);
-        for (int i = 0; i < 8; i++) {
-            out.write(0);
+        writeShort(out, flags);
+        writeShort(out, qd);
+        writeShort(out, an);
+        writeShort(out, ns);
+        writeShort(out, ar);
+    }
+
+    private static void writeShort(ByteArrayOutputStream out, int v) {
+        out.write(v >>> 8);
+        out.write(v);
+    }
+
+    private static int length(List<byte[]> records) {
+        int n = 0;
+        for (byte[] r : records) {
+            n += r.length;
         }
-        return out.toByteArray();
+        return n;
     }
 
     /** A resource record whose name is a pointer to the question name (offset 12). */
