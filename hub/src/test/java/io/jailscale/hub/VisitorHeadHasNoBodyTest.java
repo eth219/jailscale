@@ -16,7 +16,6 @@ import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -61,16 +60,16 @@ class VisitorHeadHasNoBodyTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("vhead");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
         app = TestPorts.listen(8);
-        // After the live app is bound, and not before: a port picked by binding and closing is
-        // free for the kernel to hand straight back to the next bind of 0, and if that bind is the
-        // app's then every link below points at a server that answers and three cases assert 502
-        // against a 200.
-            deadPort = TestPorts.reserve();
+        // A number nothing listens on, and nothing in this suite will be given later either:
+        // reserve() registers it, so the app cannot come to be bound on it and leave three cases
+        // asserting 502 against a 200. That is the whole point of taking it from here rather than
+        // binding and closing.
+        deadPort = TestPorts.reserve();
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {

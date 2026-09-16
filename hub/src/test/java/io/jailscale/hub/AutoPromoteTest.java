@@ -12,8 +12,6 @@ import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
-import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Files;
@@ -87,7 +85,6 @@ class AutoPromoteTest {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("ap");
         portA = TestPorts.reserve();
-        portB = TestPorts.reserve();
         // Both units name the other (§13.5): the role file, not the flag, says which is which.
         cfgA = HubConfig.withCert(URI.create("https://hub.test:" + portA), root.resolve("a"), "127.0.0.1", portA,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1");
@@ -104,6 +101,11 @@ class AutoPromoteTest {
         assertTrue(up.optBool("ok", false), up.toString());
         assertTrue(Ipc.call(aliceSock, JsonObject.builder().put("cmd", "open").put("port", app.getLocalPort()).put("name", "web").build()).optBool("ok", false));
 
+        // Drawn here and not beside portA: TestPorts keeps two of its own callers apart, but a hub
+        // binds its DNS pair, /metrics and the plain-HTTP front on port 0, and those draws know
+        // nothing of its register. Reserved before A starts, B's number is one of the numbers A
+        // could be handed.
+        portB = TestPorts.reserve();
         cfgB = HubConfig.withCert(URI.create("https://hub.test:" + portB), root.resolve("b"), "127.0.0.1", portB,
             null, null, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1").withAdvertise("203.0.113.2");

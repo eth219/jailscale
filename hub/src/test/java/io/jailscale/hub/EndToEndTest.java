@@ -13,8 +13,6 @@ import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,7 +43,7 @@ class EndToEndTest {
         Log.setLevel(Log.Level.DEBUG);
         // AF_UNIX paths are limited to ~100 bytes on macOS; keep the tree short.
         root = TestDirs.newRoot("js");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         Path cert = Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath();
         Path key = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
         HubConfig cfg = HubConfig.withCert(URI.create("https://localhost:" + port), root.resolve("hub"), "127.0.0.1", port,

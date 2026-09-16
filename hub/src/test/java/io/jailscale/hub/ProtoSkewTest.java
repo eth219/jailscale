@@ -16,8 +16,6 @@ import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.NoiseChannel;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Path;
 import javax.net.ssl.SSLContext;
@@ -56,7 +54,7 @@ class ProtoSkewTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jps");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();

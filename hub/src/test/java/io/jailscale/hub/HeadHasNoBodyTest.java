@@ -9,8 +9,6 @@ import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.InputStream;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -49,7 +47,7 @@ class HeadHasNoBodyTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("head");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         // Port 0 on both extra listeners: the defaults (9090, 80) would collide with a second test
         // JVM, and 80 needs root besides.
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,

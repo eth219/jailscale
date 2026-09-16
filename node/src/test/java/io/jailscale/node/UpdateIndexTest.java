@@ -11,7 +11,6 @@ import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.json.Json;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;

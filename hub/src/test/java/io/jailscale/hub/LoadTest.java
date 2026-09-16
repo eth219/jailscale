@@ -13,7 +13,6 @@ import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -97,7 +96,7 @@ class LoadTest {
     void thousandConcurrentVisitors() throws Exception {
         Log.setLevel(Log.Level.INFO);
         root = TestDirs.newRoot("jload");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();

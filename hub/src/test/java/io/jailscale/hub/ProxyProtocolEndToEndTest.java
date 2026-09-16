@@ -17,7 +17,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -103,9 +102,8 @@ class ProxyProtocolEndToEndTest {
     void visitorAddressSurvivesTheProxyAndReachesTheApp() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jp");
-            port = TestPorts.reserve();
-        int rawLo;
-            rawLo = TestPorts.reserve();
+        port = TestPorts.reserve();
+        int rawLo = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withProxyProtocol(true, List.of()).withPortRange(rawLo, rawLo));

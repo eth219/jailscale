@@ -18,8 +18,6 @@ import java.nio.file.Files;
 import io.jailscale.proto.json.Json;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -53,7 +51,7 @@ class HomePageTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("home");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
@@ -568,8 +566,7 @@ class HomePageTest {
             .put("peers", JsonObject.builder().build())
             .toJson());
 
-        int port2;
-            port2 = TestPorts.reserve();
+        int port2 = TestPorts.reserve();
         Hub down = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port2), state, "127.0.0.1", port2,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         down.start();
@@ -699,5 +696,24 @@ class HomePageTest {
         String blank = http("GET", "/", null, null).bodyText();
         assertFalse(blank.contains("Who runs this hub"), blank);
         assertTrue(blank.contains("rather than one to depend on"), blank);
+
+        // And the scheme, for the same reason and by the same route: written straight to the store
+        // to stand for a peer running a build from before the rule. A check that guards only the
+        // door an admin knocks on is not a check, so this is what says the read side has one --
+        // drop it and every assertion above still passes.
+        hub.store().setSetting(Store.SETTING_CONTACT, "javascript:alert(1)");
+        String hostile = http("GET", "/", null, null).bodyText();
+        assertFalse(hostile.contains("javascript:"), hostile);
+        assertFalse(hostile.contains("Who runs this hub"), hostile);
+        assertTrue(hostile.contains("rather than one to depend on"), hostile);
+
+        // The two settings do not take the same values -- terms refuses mailto: where it is set --
+        // so the page has to read each one against its own rule rather than against "is this a
+        // link at all", or an address a peer replicated in is published as terms of use.
+        hub.store().setSetting(Store.SETTING_CONTACT, "");
+        hub.store().setSetting(Store.SETTING_TERMS, "mailto:legal@example.com");
+        String wrongTerms = http("GET", "/", null, null).bodyText();
+        assertFalse(wrongTerms.contains("What is allowed here"), wrongTerms);
+        assertFalse(wrongTerms.contains("Who runs this hub"), wrongTerms);
     }
 }

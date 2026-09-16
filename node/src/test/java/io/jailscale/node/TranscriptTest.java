@@ -12,7 +12,6 @@ import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.tls.Tls13;
 import java.io.ByteArrayOutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;

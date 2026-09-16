@@ -7,7 +7,6 @@ import io.jailscale.proto.tls.Pem;
 import io.jailscale.proto.tls.Tls;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;

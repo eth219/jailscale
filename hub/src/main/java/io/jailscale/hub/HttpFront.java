@@ -598,21 +598,34 @@ final class HttpFront {
                         String lastError, List<Peers.Session> standbys) {}
 
     /**
-     * Whether a stored URL may be put in an {@code href}. Schemes are case-insensitive, so
+     * Whether a stored URL is a page this hub will link to. Schemes are case-insensitive, so
      * {@code HTTPS://} is a URL and refusing it would be an error whose difference from what the
-     * operator typed is invisible. Used where the value is set ({@link AdminIpc}) <b>and</b> where
-     * it is read: a value arrives by replication too, from a peer that may be running a build
-     * older than this rule, and a check that only guards the front door is not a check.
+     * operator typed is invisible.
      */
-    static boolean linkable(String url) {
-        String lower = url.toLowerCase(java.util.Locale.ROOT);
-        return lower.startsWith("https://") || lower.startsWith("mailto:");
+    static boolean https(String url) {
+        return url.toLowerCase(java.util.Locale.ROOT).startsWith("https://");
     }
 
-    /** A stored URL, or nothing at all when it is not one this page will link to. */
-    private static String linkOrNothing(String stored) {
-        String url = stored.strip();
-        return linkable(url) ? url : "";
+    /**
+     * Whether a stored URL may be put in an {@code href}: a page, or an address to write to. Used
+     * where the value is set ({@link AdminIpc}) <b>and</b> where it is read: a value arrives by
+     * replication too, from a peer that may be running a build older than this rule, and a check
+     * that only guards the front door is not a check.
+     */
+    static boolean linkable(String url) {
+        return https(url) || url.toLowerCase(java.util.Locale.ROOT).startsWith("mailto:");
+    }
+
+    /**
+     * A stored setting, or nothing at all when it is not a value this page will link to. The rule
+     * is {@link AdminIpc#SETTING_TEXT}'s own and not a second reading of it: a rule written twice
+     * is a rule that parts, and it had -- {@code terms} refuses {@code mailto:} where it is set,
+     * so a page that asked only "is this linkable" would have published as terms of use an
+     * address a peer replicated in. Empty is not a URL, so a cleared setting falls out here too.
+     */
+    private String linkOrNothing(String key) {
+        String url = hub.store().setting(key, "").strip();
+        return AdminIpc.SETTING_TEXT.get(key).test(url) ? url : "";
     }
 
     /**
@@ -775,8 +788,8 @@ final class HttpFront {
         String operator = hub.store().setting(Store.SETTING_OPERATOR, "").strip();
         // And checked again here, not only where they are set: these two go into an href, and the
         // store is written by replication as well as by an admin on this host.
-        String contact = linkOrNothing(hub.store().setting(Store.SETTING_CONTACT, ""));
-        String terms = linkOrNothing(hub.store().setting(Store.SETTING_TERMS, ""));
+        String contact = linkOrNothing(Store.SETTING_CONTACT);
+        String terms = linkOrNothing(Store.SETTING_TERMS);
         // One boolean and not the same three tests written twice: the closing sentence under
         // Limits turns on exactly this, and a hand-written negation of it down there is a link to
         // an anchor that was never drawn, waiting for somebody to edit one of the two.

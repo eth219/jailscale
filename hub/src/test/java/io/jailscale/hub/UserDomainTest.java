@@ -19,7 +19,6 @@ import io.jailscale.proto.util.Log;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -75,7 +74,7 @@ class UserDomainTest {
     void ownDomainIsIssuedRelayedAndPassedThrough() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jd");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withHttp("127.0.0.1", 0).withUserDomainCa(CERT));
         hub.start();

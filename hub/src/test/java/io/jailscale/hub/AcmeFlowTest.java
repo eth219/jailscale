@@ -94,8 +94,7 @@ class AcmeFlowTest {
     void hubObtainsWildcardCertificateAndServesALink() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("ja");
-        int port;
-            port = TestPorts.reserve();
+        int port = TestPorts.reserve();
         Hub[] hubRef = new Hub[1];
         ca = new MockCa(() -> hubRef[0].dnsPort());
         HubConfig cfg = new HubConfig(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,

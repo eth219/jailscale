@@ -27,7 +27,7 @@ final class AdminIpc implements Ipc.Handler {
     static final Map<String, java.util.function.Predicate<String>> SETTING_TEXT = Map.of(
         Store.SETTING_OPERATOR, v -> v.length() <= 120,
         Store.SETTING_CONTACT, v -> v.length() <= 200 && HttpFront.linkable(v),
-        Store.SETTING_TERMS, v -> v.length() <= 200 && HttpFront.linkable(v) && !v.toLowerCase(java.util.Locale.ROOT).startsWith("mailto:"));
+        Store.SETTING_TERMS, v -> v.length() <= 200 && HttpFront.https(v));
 
     /** What to say when one of the above refuses a value. */
     private static String textSettingRule(String key) {
@@ -389,10 +389,14 @@ final class AdminIpc implements Ipc.Handler {
                 // A value with a space in it is several positionals, and taking the first was
                 // silent: `jailhub setting operator Example Ltd` stored "Example" and replied ok.
                 // The first setting whose value is prose is the first one that could hit this.
-                if (a.positional(3) != null) {
+                // The line it suggests is the whole value and not the first two words of it: an
+                // error that shows something other than what was typed is one more thing to work
+                // out, and the words are all right here.
+                List<String> words = a.positional();
+                if (words.size() > 3) {
                     throw new IllegalArgumentException("a value with spaces has to be quoted: "
-                        + "jailhub setting " + a.positional(1) + " \"" + a.positional(2) + " "
-                        + a.positional(3) + " ...\"");
+                        + "jailhub setting " + words.get(1) + " \""
+                        + String.join(" ", words.subList(2, words.size())) + "\"");
                 }
                 b.put("key", need(a.positional(1), "<key>")).put("value", need(a.positional(2), "<value>"));
             }

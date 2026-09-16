@@ -10,8 +10,6 @@ import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -42,7 +40,7 @@ class MetricsEndpointTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("metrics");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         // Port 0: the fixed default would collide with a second test JVM, and with whatever else
         // on this machine happens to own 9090.
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,

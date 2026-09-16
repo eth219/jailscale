@@ -9,8 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Args;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.List;
@@ -271,11 +269,30 @@ class AdminCommandTest {
         assertEquals("--user is required", e.getMessage());
     }
 
+    /**
+     * A value with a space in it arrives as several positional words, and taking the first of them
+     * was silent: {@code jailhub setting operator Example Ltd} stored "Example" and replied ok. The
+     * operator has to be told, and told with the line they meant in front of them -- all of it, not
+     * the first two words and an ellipsis, since the difference between the two is one more thing
+     * to work out at a prompt.
+     */
+    @Test
+    void aSettingValueWithSpacesIsRefusedRatherThanTruncated() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> req("setting", "operator", "Example", "Ltd"));
+        assertEquals("a value with spaces has to be quoted: jailhub setting operator \"Example Ltd\"", e.getMessage());
+        IllegalArgumentException more = assertThrows(IllegalArgumentException.class,
+            () -> req("setting", "operator", "The", "Example", "Company", "Ltd"));
+        assertEquals("a value with spaces has to be quoted: jailhub setting operator \"The Example Company Ltd\"",
+            more.getMessage());
+        // And the quoted form, which is one positional, still goes through.
+        assertEquals("Example Ltd", req("setting", "operator", "Example Ltd").string("value"));
+    }
+
     /** A throwaway hub on a free port, with the test certificate. */
     private static Hub startedHub() throws Exception {
         Path root = TestDirs.newRoot("ja");
-        int port;
-            port = TestPorts.reserve();
+        int port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath(),
             Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath(),

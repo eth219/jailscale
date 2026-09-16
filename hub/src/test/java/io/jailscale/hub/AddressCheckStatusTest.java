@@ -8,8 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.proto.json.JsonObject;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.List;
@@ -197,8 +195,7 @@ class AddressCheckStatusTest {
      */
     private static Hub hub(boolean addressCheck) throws Exception {
         Path root = TestDirs.newRoot("ac");
-        int port;
-            port = TestPorts.reserve();
+        int port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath(),
             Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath(),

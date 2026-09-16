@@ -77,16 +77,16 @@ class VisitorStallTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jstall");
-            port = TestPorts.reserve();
+        port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test");
         hub = new Hub(cfg);
         hub.start();
         localApp = TestPorts.listen(8);
-        // After localApp is bound, not before: a port picked by binding and closing is free for
-        // the kernel to hand straight back to the next bind of 0, and if that were localApp's the
-        // "dead" link below would reach a server that answers.
-            deadPort = TestPorts.reserve();
+        // A number nothing listens on, and nothing in this suite will be given later either:
+        // reserve() registers it, so the "dead" link below cannot come to reach a server that
+        // answers. That is the whole point of taking it from here rather than binding and closing.
+        deadPort = TestPorts.reserve();
         Thread.ofVirtual().start(() -> {
             while (!localApp.isClosed()) {
                 try {

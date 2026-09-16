@@ -148,17 +148,23 @@ Two binaries so server code never lands in the client artifact; the module bound
 dependency inversion into a compile error rather than a review comment.
 
 **The tests take their ports from one place.** `proto` publishes a test-jar for a single class,
-`TestPorts`, and every port in every suite comes from it. The idiom it replaces was to open a socket
-on port 0, read the number, close it, and bind that number later: between the close and the bind the
-port belongs to nobody, and the next thing in the same JVM to ask the kernel for an ephemeral one can
-be handed it. That failed three times in one day, in three test classes, on two operating systems --
-and once on `main` in the `budget` job, which pull requests do not run, so it arrived after a merge
-that was green. `reserve()` remembers what it has given out and `listen()` re-rolls when the kernel
-offers a port already promised, which is the half that matters: the failure was never this class
-handing out the same number twice, it was an echo server being given the number a hub was about to
-bind. Surefire runs one JVM per module with no parallelism, so that pair covers every collision the
-suite can have with itself; a port taken by another process on the machine still fails the bind, and
-says so.
+`TestPorts`, and every port a test picks for itself comes from it. The idiom it replaces was to open
+a socket on port 0, read the number, close it, and bind that number later: between the close and the
+bind the port belongs to nobody, and the next thing in the same JVM to ask the kernel for an
+ephemeral one can be handed it. That failed three times in one day, in three test classes, on two
+operating systems -- and once on `main` in the `budget` job, which pull requests do not run, so it
+arrived after a merge that was green. `reserve()` remembers what it has given out and `listen()`
+re-rolls when the kernel offers a port already promised, which is the half that matters: the failure
+was never this class handing out the same number twice, it was an echo server being given the number
+a hub was about to bind. Surefire runs one JVM per module with no parallelism, so no two callers of
+it run at once.
+
+What that pair does **not** cover is a port drawn by something other than a test: a hub binds its DNS
+TCP/UDP pair, `/metrics` and the plain-HTTP front on port 0, and those draws know nothing of the
+register, so a hub started between a `reserve()` and the bind it was reserved for can be handed that
+number. Reserve each port immediately before the thing that binds it and the window is shut; the DNS
+suites draw their own numbers because drawing them is what they are testing. A port taken by another
+process on the machine still fails the bind, and says so. `TestPorts`' own javadoc keeps this list.
 
 ### 3.1 GraalVM Native Image rules
 
@@ -622,10 +628,12 @@ replicates, so a standby serves the same answer without being configured twice. 
 two URLs is checked where they are set **and again where they are read**: they end up in an `href`
 on a page anyone can load, `javascript:` in an operator's typo is not a thing to learn about from a
 visitor, and the store is written by replication as well as by an admin on this host, so a check
-that guards only the front door is not a check. Case-insensitively, because `HTTPS://` is a URL and
-refusing it would be an error whose difference from the value typed is invisible. Empty clears, and
-so does a value that is only spaces: the value is stripped before either test, so a blank name is
-never a third state between set and cleared.
+that guards only the front door is not a check. The page asks the same per-setting predicate the
+admin socket does, rather than a second reading of it: the two settings do not take the same values
+-- `terms` is a page and refuses `mailto:` -- and a rule written twice is a rule that parts.
+Case-insensitively, because `HTTPS://` is a URL and refusing it would be an error whose difference
+from the value typed is invisible. Empty clears, and so does a value that is only spaces: the value
+is stripped before either test, so a blank name is never a third state between set and cleared.
 
 **The whole section is drawn only when one of the three is set**, and with it the only honest
 retention sentence the hub has -- which is deliberately **not an inventory**. Three attempts at one

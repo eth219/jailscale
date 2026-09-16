@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import io.jailscale.proto.net.TestPorts;
 
 /**
  * Ports for the tests, handed out so that two of them cannot be given the same one.
@@ -25,14 +24,23 @@ import io.jailscale.proto.net.TestPorts;
  * <p><b>Both halves are needed.</b> Remembering what {@link #reserve} has given out stops this
  * class handing the same number twice, which was never the common failure; the failure was an
  * unrelated listener being handed a number already promised to something else. So {@link #listen}
- * exists too, and every listener in the tests goes through it: it re-rolls when the kernel offers a
- * port this class has promised, holding the refused sockets open until it has one, because letting
- * them go is how the kernel comes to offer the same number again.
+ * exists too, and the listeners the tests open themselves go through it: it re-rolls when the
+ * kernel offers a port this class has promised, holding the refused sockets open until it has one,
+ * because letting them go is how the kernel comes to offer the same number again.
  *
- * <p>Surefire runs one JVM per module with no parallelism, so every collision seen so far is
- * between two callers here. A port taken by another process on the machine is outside what this can
- * do anything about -- the bind still fails, and the message says so rather than a number being
- * quietly reused.
+ * <p>Surefire runs one JVM per module with no parallelism, so no two callers here run at once.
+ * <b>What this does not cover</b>, and what a reserved port can still be lost to:
+ * <ul>
+ *   <li>a listener the code under test opens on port 0 -- every hub started in a test binds a DNS
+ *       TCP/UDP pair that way, and {@code /metrics} and the plain-HTTP front too, so a hub started
+ *       between a {@code reserve()} and the bind it was reserved for can be handed that number.
+ *       Reserving each port immediately before the thing that binds it is what keeps that window
+ *       shut, and is why the two-hub tests draw the standby's number after the primary is up;</li>
+ *   <li>the DNS suites ({@code DnsResponderTest}, {@code DnsQueryFallbackTest},
+ *       {@code ReferralTest}), which draw their own numbers because they are testing that draw;</li>
+ *   <li>another process on the machine. The bind still fails, and the message says so rather than
+ *       a number being quietly reused.</li>
+ * </ul>
  */
 public final class TestPorts {
 
@@ -57,10 +65,10 @@ public final class TestPorts {
                 if (TAKEN.add(port)) {
                     // Closed before returning, because the caller is the one that binds it. That
                     // is the residual this class cannot remove: between here and their bind the
-                    // port is held by nothing, so an *outbound* socket in this JVM could still be
-                    // given it. Nothing in these tests opens one on loopback without binding it
-                    // first, which is why the failures all had this class's own callers on both
-                    // ends of them.
+                    // port is held by nothing, so anything else in this JVM that asks the kernel
+                    // for one -- including a listener the code under test opens on port 0 -- can
+                    // be given it. The class comment lists what that means in practice; the short
+                    // of it is to call this immediately before the bind it is for.
                     s.close();
                     return port;
                 }
