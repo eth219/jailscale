@@ -574,14 +574,32 @@ and auth-keys, and toggle the three settings, as server-rendered HTML with no Ja
 engine, and a session-bound CSRF token on every form.
 
 The hub's own page at `/` is the same machinery seen from the other side. It states what the hub is,
-how to join *this* hub (read from the stored registration setting rather than assumed), and how it
-is doing: version, uptime, nodes online against nodes registered, links open, whether a certificate
-is loaded, and resident memory. Those are properties of the service, so they are public. The node
-list, the addresses nodes connect from, and the controls over them are rendered only when the
-request carries a current admin session, and the rights are re-checked on that request rather than
-trusted from the cookie. Resident set size is read from `/proc/self/status` where it exists and
-omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
-occupies.
+how to join *this* hub (read from the stored registration setting rather than assumed), which copies
+of `jailscale` it will talk to, and how it is doing: version, uptime, nodes online against nodes
+registered, links open, whether a certificate is loaded, and resident memory. Those are properties
+of the service, so they are public. The node list, the addresses nodes connect from, and the
+controls over them are rendered only when the request carries a current admin session, and the
+rights are re-checked on that request rather than trusted from the cookie. Resident set size is read
+from `/proc/self/status` where it exists and omitted elsewhere rather than guessed at, because a
+native image's heap is a small part of what it occupies.
+
+**Which copies of `jailscale` it will talk to** is the protocol it speaks and the floor it enforces,
+read from `Message.PROTO` and `NodeSession.MIN_PROTO` so the page cannot drift from the handshake,
+since "latest" is a moving target and this hub is not. It says that for this end only, because a
+client has a floor of its own (`HubLink.MIN_HUB_PROTO`) and refuses a hub below it, which this page
+cannot promise anything about. A standby prints no join at all: it answers `Goodbye{standby}` to
+every control connection (§13.4), the apex the command would name resolves to the primary alone and
+to nothing while the primary is down, and a page that invites a join it will refuse is worse than
+one that says nothing. It says what it is instead, and where joining happens.
+
+**The page also says how to check the copy being downloaded**, which is not the same question as
+the hub's own binary under the status table: releases are signed, `jailscale update --download`
+checks the signature of everything it fetches afterwards, and so the first copy is the only one
+checked by hand -- its hash against `SHA256SUMS.txt`, that file in turn against the signature over
+`RELEASE.txt`, and `tools/verify-release.sh` over the pair the same way the daemon will. Said
+plainly as trust on first use, because that is what it is. The note under the status table makes
+the same two steps of it, rather than leaving the hub's own binary compared against an unchecked
+checksum list.
 
 **One line above the table says whether any of it is a problem.** The rows were all the same weight:
 a certificate with 85 days left and one with 5 read as the same sentence in the same grey, though

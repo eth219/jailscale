@@ -1,5 +1,6 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpException;
 import io.jailscale.proto.http.HttpRequest;
@@ -37,6 +38,14 @@ final class HttpFront {
     static final double HANDSHAKE_PER_SECOND = 1.0;
     /** Where the page sends someone who does not have the binary yet. */
     private static final String REPO = "https://github.com/eth219/jailscale";
+    /**
+     * The floor in words, read from the constant the handshake enforces so the page cannot drift
+     * from it (ARCHITECTURE.md §5.4). Written once because the page says it twice -- in the
+     * paragraph above the join and in the status row -- and two copies of a sentence about a
+     * number are two places for it to go stale separately.
+     */
+    private static final String TAKES = NodeSession.MIN_PROTO == Message.PROTO
+        ? "nothing older" : "protocol " + NodeSession.MIN_PROTO + " and newer";
     /** How many open links the front page shows before it hands over to the directory at /links. */
     private static final int LINKS_ON_HOME = 8;
     /**
@@ -666,6 +675,10 @@ final class HttpFront {
     private String home(HttpRequest req) {
         StringBuilder b = new StringBuilder(nav("/"));
         String host = escape(hub.config().hostname());
+        // Sampled once for the whole page, for the reason the status section below already gives:
+        // the role is live state, and a hub promoted between two readings of it renders a page that
+        // contradicts itself -- here, "it is the standby" above a table that says primary.
+        boolean standby = hub.isStandby();
         b.append("<p><code>").append(host).append("</code> is a jailscale hub. It publishes a port on your")
             .append(" machine over HTTPS without opening an inbound port: the hub relays the bytes and your")
             .append(" machine terminates the TLS. <a href=\"").append(REPO).append("\">What this is</a>.</p>");
@@ -676,21 +689,51 @@ final class HttpFront {
         b.append("<p><a href=\"").append(REPO).append("/releases/latest\">Download <code>jailscale</code></a>")
             .append(" for Linux, Apple-silicon macOS or Windows: one file, no runtime to install")
             .append(" underneath it, no root. Intel Macs run <code>jailscale.jar</code> on a JVM.</p>");
-        // Say what this hub actually accepts rather than assuming a default.
-        boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
-        if (open) {
-            b.append("<p>Registration is open, so joining takes effect immediately:</p>")
-                .append("<pre>jailscale up --hub ").append(host).append("\njailscale open 3000</pre>");
+        // "latest" is a moving target and this hub is not: it can say which copies it will talk to,
+        // and what happens to one it will not, so nobody has to find that out from a failed join.
+        // What it must not say is that any recent release will do: the floor is enforced from both
+        // ends -- a jailscale has its own minimum hub protocol and refuses a hub below it -- and
+        // this page can only speak for this end of it.
+        b.append("<p>This hub speaks <b>protocol ")
+            .append(Message.PROTO).append("</b> and takes ").append(TAKES)
+            .append(". One that is too old is turned away at the handshake with a line saying so and")
+            .append(" which version this hub runs, rather than half-working; a jailscale newer than")
+            .append(" this hub decides for itself whether it will still talk to it.</p>");
+        // The page already says how to check the hub's binary. It said nothing about the file the
+        // reader is about to download, which is the one they can actually do something about.
+        b.append("<p>The releases are signed. Once you have <code>jailscale</code>,")
+            .append(" <code>jailscale update --download</code> checks the signature of everything it")
+            .append(" fetches after that, so this is the one copy you check by hand: the signature is")
+            .append(" over <code>RELEASE.txt</code>, which names the tag and carries the digest of")
+            .append(" <code>SHA256SUMS.txt</code>, and your download's hash is in that.")
+            .append(" <a href=\"").append(REPO).append("/blob/main/docs/release-verification.md\">")
+            .append("How to check it</a> is one command from a clone, or four by hand. The first copy")
+            .append(" is the one nothing of ours can vouch for yet; every copy after it is checked")
+            .append(" against a key this one pinned.</p>");
+        if (standby) {
+            // A standby answers Goodbye{standby} to every control connection (§13.4), so the join
+            // below is not printed here at all rather than printed beside a warning: a page that
+            // invites a join it will refuse is worse than one that says nothing, and while the
+            // primary is down the apex this would tell them to type resolves to nothing.
+            b.append("<p><b>Not on this host, though:</b> it is the standby. It serves links that are")
+                .append(" already open and takes no joins; the primary is where joining happens.</p>");
         } else {
-            b.append("<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>;")
-                .append(" with one in hand:</p>")
-                .append("<pre>jailscale up --invite &lt;url&gt;\njailscale open 3000</pre>");
+            // Say what this hub actually accepts rather than assuming a default.
+            boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
+            if (open) {
+                b.append("<p>Registration is open, so joining takes effect immediately:</p>")
+                    .append("<pre>jailscale up --hub ").append(host).append("\njailscale open 3000</pre>");
+            } else {
+                b.append("<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>;")
+                    .append(" with one in hand:</p>")
+                    .append("<pre>jailscale up --invite &lt;url&gt;\njailscale open 3000</pre>");
+            }
+            b.append("<p>That serves <code>127.0.0.1:3000</code> at <code>https://&lt;name&gt;.").append(host)
+                .append("</code>, with a certificate your own machine terminates. <code>--name myapp</code> asks for")
+                .append(" a particular name, <code>--tcp</code> forwards a raw port instead, and")
+                .append(" <code>--domain app.example.com</code> uses a domain of yours, whose key never leaves your")
+                .append(" machine.</p>");
         }
-        b.append("<p>That serves <code>127.0.0.1:3000</code> at <code>https://&lt;name&gt;.").append(host)
-            .append("</code>, with a certificate your own machine terminates. <code>--name myapp</code> asks for")
-            .append(" a particular name, <code>--tcp</code> forwards a raw port instead, and")
-            .append(" <code>--domain app.example.com</code> uses a domain of yours, whose key never leaves your")
-            .append(" machine.</p>");
 
         // A public hub is asking people to route their traffic through a stranger's machine. What it
         // can and cannot do with that traffic belongs on its own front page, not only in the docs.
@@ -711,13 +754,14 @@ final class HttpFront {
         // goes above the table and is the worst of them. Everything else on this page is a fact with
         // no good or bad about it -- a version, a key, a memory figure -- and stays ungraded.
         PeerClient pc = hub.peerClient();
-        // Sampled once. The grade and the Role row are two readings of the same live state, and
+        // Sampled once, at the top of this method, and used by every part of the page that depends
+        // on the role. The grade and the Role row are two readings of the same live state, and
         // taken separately a standby that connects or drops between them puts a verdict on the page
         // that contradicts the row directly under it. The role is read on its own and not through
         // `pc != null`: a hub that stood down without a --peer of its own is a standby with no peer
         // client, and reading it as a primary would have this page call it healthy.
         Peer peerState;
-        if (hub.isStandby()) {
+        if (standby) {
             // isSynced() is already "connected and synced", so it is sampled first and connected is
             // widened to match; the other order can leave synced true beside connected false, which
             // the row would print as "in sync" for a hub that is not.
@@ -747,6 +791,9 @@ final class HttpFront {
         // this page as "0.1.0-SNAPSHOT" long after v0.1.2 shipped, and the operator reading it had
         // no way to tell from here that it was neither 0.1.0 nor current.
         row(b, "Version", escape(Hub.version()) + (released(Hub.version()) ? "" : " (not a release build)"));
+        // Beside the version, because it is the other half of "will my copy work here": a version
+        // says what this hub is, the protocol says what it will talk to (§5.4).
+        row(b, "Protocol", Message.PROTO + ", and takes " + TAKES);
         // Which build, and which key: the two things about this hub that can be compared with
         // something the reader already has. Both are self-reported, which the note below says.
         String sha = Build.executableSha256();
@@ -823,7 +870,9 @@ final class HttpFront {
         b.append("<p><small>The hub key is the one a node pins when it joins, and <code>jailscale status</code>")
             .append(" prints the one yours pinned. The binary hash is of the file this process is running: compare it")
             .append(" with <code>SHA256SUMS.txt</code> in <a href=\"").append(REPO).append("/releases\">the release")
-            .append("</a> it claims to be, remembering that a container or source build is its own binary. Both are")
+            .append("</a> it claims to be -- checked through <code>RELEASE.txt</code>'s signature the same way as")
+            .append(" above, since an unchecked checksum list says nothing about which release it belongs to --")
+            .append(" and remembering that a container or source build is its own binary. Both are")
             .append(" what this hub says about itself, so they tell you an operator is running what they think they")
             .append(" are; a dishonest hub prints whatever it likes here.</small></p>");
 

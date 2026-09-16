@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
+import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Headers;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpResponse;
@@ -605,5 +606,36 @@ class HomePageTest {
             Http.writeRequest(s.getOutputStream(), "GET", "hub.test", path, new Headers(), null);
             return Http.readResponse(s.getInputStream(), 1 << 20);
         }
+    }
+
+    /**
+     * That the page carries these two facts at all, and that it takes them from the constants the
+     * handshake enforces rather than from a number somebody typed. It cannot fail on a protocol
+     * bump -- page and assertion read the same constant, which is the point of the page reading it
+     * -- so what it catches is the paragraph going away, a number written by hand drifting from
+     * {@code MIN_PROTO}, and the wrong one of the two branches below being taken. That the floor is
+     * enforced at all is {@link ProtoSkewTest}'s.
+     */
+    @Test
+    void thePageSaysWhichClientsThisHubTakesAndHowToCheckTheOneYouGet() throws Exception {
+        String page = http("GET", "/", null, null).bodyText();
+        assertTrue(page.contains("<b>protocol " + Message.PROTO + "</b>"), page);
+        assertTrue(page.contains("<tr><td>Protocol</td><td>" + Message.PROTO), page);
+        // The two are equal today, so the page says "nothing older"; when they part, it has to say
+        // the floor instead, and this is the assertion that notices.
+        if (NodeSession.MIN_PROTO == Message.PROTO) {
+            assertTrue(page.contains("nothing older"), page);
+        } else {
+            assertTrue(page.contains("protocol " + NodeSession.MIN_PROTO + " and newer"), page);
+        }
+
+        // And the file the reader is about to download, which is the one they can do something
+        // about -- the paragraph further down is about the hub's own binary and is not this.
+        assertTrue(page.contains("jailscale update --download"), page);
+        assertTrue(page.contains("SHA256SUMS.txt"), page);
+        assertTrue(page.contains("docs/release-verification.md"), page);
+        // The signature is over RELEASE.txt and not over the checksum list, which the page said
+        // until review; the two are one step apart and the page has to get the step right.
+        assertTrue(page.contains("RELEASE.txt"), page);
     }
 }
