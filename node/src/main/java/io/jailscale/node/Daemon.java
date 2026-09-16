@@ -509,6 +509,28 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return rec.linkId != null && link.isConnected();
     }
 
+    /**
+     * Whether this node is serving {@code rec} right now: through the hub it is joined to, or
+     * through any relay host whose connection is up (§13.4).
+     *
+     * <p>{@link #isOpen} alone is the wrong question for the self-probe. A relay serves this node's
+     * names while the primary is away -- "losing the primary then stops nothing a visitor can see"
+     * -- so a name reached over a relay is publicly served and is exactly the kind whose TLS
+     * somebody else might be terminating. Answering `link not open` for it would leave the check
+     * silent over the window §11.4 says names change hands in, which is the window it exists for.
+     */
+    private boolean servedHere(NodeState.LinkRec rec) {
+        if (isOpen(rec)) {
+            return true;
+        }
+        for (java.util.Map.Entry<String, HubLink> e : relays.entrySet()) {
+            if (e.getValue().isConnected() && rec.relayLinkIds.containsKey(e.getKey())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private List<Object> linkRows() {
         List<Object> rows = new ArrayList<>();
         for (NodeState.LinkRec l : state.links) {
@@ -840,6 +862,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private void verify(Ipc.Reply reply) throws IOException {
         List<Object> rows = new ArrayList<>();
         boolean allOk = true;
+        int probed = 0;
         SSLContext ctx = probeContext();
         for (NodeState.LinkRec rec : state.links) {
             ProbeResult p = probe(rec, ctx);
@@ -848,16 +871,20 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             }
             // A name that is not open here is reported and not counted: nothing was probed, so it
             // is neither a pass nor a failure, and the exit status is what an operator scripting
-            // §11.3 reads as "the hub is terminating my TLS".
+            // §11.3 reads as "the hub is terminating my TLS". It is left out of `checked` for the
+            // same reason -- `checked >= 1 && allOk` is the shape a monitor is written in, and a
+            // count that included the unprobed rows would answer it with "all clear" on a node that
+            // verified nothing at all.
             if (p.checked()) {
                 allOk &= p.ok();
+                probed++;
             }
             rows.add(p.json().asMap());
         }
         // `ok` is whether the command ran; what each name concluded is its row. Folding the
         // verdicts into `ok` made the CLI print `error: failed` and drop the rows, so the one
         // answer this section sends operators to never reached them (§11.3).
-        reply.done(JsonObject.builder().put("ok", true).put("allOk", allOk).put("checked", rows.size()).put("results", rows));
+        reply.done(JsonObject.builder().put("ok", true).put("allOk", allOk).put("checked", probed).put("results", rows));
     }
 
     /**
@@ -909,7 +936,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
             return null;
         }
-        if (!state.links.contains(rec) || !isOpen(rec)) {
+        if (!state.links.contains(rec) || !servedHere(rec)) {
             // Closed or revoked (§11.4), or not open on this hub session -- the same test `status`
             // makes, plus whether the record is still in the list, which `status` only iterates.
             // The verdict does not go on the record: `status` keeps the last real one beside
@@ -1363,6 +1390,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             rl.close();
         }
         relays.clear();
+    }
+
+    /** Whether the hub this node joined is connected right now (tests; `status` reports it too). */
+    public boolean isHubConnected() {
+        return link.isConnected();
     }
 
     /** The relay connections that are up right now, by address (tests). */

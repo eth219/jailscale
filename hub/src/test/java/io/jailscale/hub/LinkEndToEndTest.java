@@ -575,7 +575,8 @@ class LinkEndToEndTest {
         // off. The row is still there and still says what it says.
         JsonObject verified = ok(cli("alice", JsonObject.builder().put("cmd", "verify")));
         assertTrue(verified.optBool("allOk", false), verified.toString());
-        assertEquals(1, verified.integer("checked"), verified.toString());
+        assertEquals(0, verified.integer("checked"), "nothing was probed, and `checked` says so: " + verified);
+        assertEquals(1, verified.array("results").size(), "the row is still reported: " + verified);
         for (Object o : verified.array("results")) {
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
