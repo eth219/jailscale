@@ -111,7 +111,9 @@ final class Metrics {
         // traffic they bound, so neither the operator nor anyone choosing the numbers could say how
         // much headroom a real zone has -- which is the question those numbers are an answer to.
         if (hub.dns() != null) {
-            counter(b, "jailhub_dns_answers_total", "DNS queries answered on UDP 53.", hub.dns().answered());
+            counter(b, "jailhub_dns_answers_total",
+                "DNS queries answered in full on UDP 53; one answered TC=1 by the limit is counted as truncated, not here.",
+                hub.dns().answered());
             counter(b, "jailhub_dns_dropped_total",
                 "DNS queries dropped by the answer-rate limit (§11.5).", hub.dns().dropped());
             counter(b, "jailhub_dns_truncated_total",

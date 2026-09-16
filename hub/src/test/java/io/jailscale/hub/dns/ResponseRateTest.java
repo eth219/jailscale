@@ -179,6 +179,51 @@ class ResponseRateTest {
     }
 
     @Test
+    void whatIsAnsweredIsCountedEvenWhereTheMeterNeverSawIt() throws Exception {
+        // The counter behind jailhub_dns_answers_total, which said "DNS queries answered on UDP 53"
+        // while counting only the ones that spent budget. The two exemptions are answered without
+        // the meter seeing them -- and on a hub whose resolvers arrive through a forwarder on this
+        // host, the exempt ones are all of them, so the metric could read zero while the zone was
+        // being served normally.
+        DnsResponder d = new DnsResponder("hub.test", "token");
+        d.setZone(new DnsResponder.Zone() {
+            @Override public java.util.List<String> serving() {
+                return java.util.List.of("203.0.113.1");
+            }
+
+            @Override public java.util.Map<String, String> nameServers() {
+                return java.util.Map.of();
+            }
+        });
+        long now = 1_000_000;
+        byte[] ordinary = DnsFuzzTest.query("myapp.hub.test", 1);
+        byte[] selfProbe = DnsFuzzTest.query(DnsResponder.SELF_LABEL + ".hub.test", 16);
+
+        assertEquals(0, d.answered());
+        assertTrue(d.answerForUdp(ordinary, InetAddress.getByName("198.51.100.7"), now) != null);
+        assertEquals(1, d.answered(), "a metered answer");
+        assertTrue(d.answerForUdp(ordinary, InetAddress.getLoopbackAddress(), now) != null);
+        assertEquals(2, d.answered(), "an answer to a loopback source, which the meter exempts");
+        assertTrue(d.answerForUdp(selfProbe, InetAddress.getByName("198.51.100.8"), now) != null);
+        assertEquals(3, d.answered(), "an answer to a self-probe, which never reaches the meter");
+
+        // A query that is not one is not an answer, and neither is a drop: the four counters
+        // partition what arrives rather than overlapping.
+        assertEquals(null, d.answerForUdp(new byte[5], InetAddress.getLoopbackAddress(), now));
+        InetAddress far = InetAddress.getByName("198.51.100.9");
+        long before = d.answered();
+        int dropped = 0;
+        for (int i = 0; i < 200; i++) {
+            if (d.answerForUdp(ordinary, far, now) == null) {
+                dropped++;
+            }
+        }
+        assertTrue(dropped > 0, "a flood should be dropped");
+        assertEquals(200 - dropped - d.truncatedByRate(), d.answered() - before,
+            "answered, dropped and truncated should add up to what arrived");
+    }
+
+    @Test
     void manyNetworksCostNothingToTrack() throws Exception {
         // The point of the fixed table: an attacker rotating source networks is the case that would
         // grow a map, and the scan that trimmed it would run on the thread reading the socket. Here

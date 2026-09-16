@@ -129,6 +129,15 @@ public final class DnsResponder implements AutoCloseable {
     /** Per-network answer rate on UDP (§11.5); TCP is not metered, having proved its address. */
     private final ResponseRate rate = new ResponseRate();
     /**
+     * Full answers sent on UDP 53, for the metrics endpoint (§6.3). Counted here rather than inside
+     * {@link ResponseRate} because two kinds of query are answered without that meter ever seeing
+     * them -- a loopback source, and the self-probe -- so a count taken there is the metered traffic
+     * under a name that says it is all of it, and reads zero on a hub whose resolvers all arrive
+     * through a forwarder on this host. The slip is not counted here: it is a truncation, it has its
+     * own counter, and the four together should partition the queries rather than overlap.
+     */
+    private final java.util.concurrent.atomic.AtomicLong answered = new java.util.concurrent.atomic.AtomicLong();
+    /**
      * The encoded question a hub's own self-probe asks (§13.3), so the meter can leave it alone.
      *
      * <p>{@code Advertise.whoAmI} asks each glue address on :53 for this name to find out which of
@@ -320,19 +329,27 @@ public final class DnsResponder implements AutoCloseable {
             return null;
         }
         if (isSelfProbe(query)) {
-            return respond(query, Budget.DATAGRAM);
+            return counted(respond(query, Budget.DATAGRAM));
         }
         ResponseRate.Verdict v = rate.check(source, now);
         if (v == ResponseRate.Verdict.ANSWER) {
-            return respond(query, Budget.DATAGRAM);
+            return counted(respond(query, Budget.DATAGRAM));
         }
         logRate(now);
         return v == ResponseRate.Verdict.DROP ? null : respond(query, Budget.NO_RECORDS);
     }
 
+    /** One answer on its way out, counted as it goes. */
+    private byte[] counted(byte[] response) {
+        if (response != null) {
+            answered.incrementAndGet();
+        }
+        return response;
+    }
+
     /** Queries answered on UDP 53 since this hub started, for the metrics endpoint (§6.3). */
     public long answered() {
-        return rate.answered();
+        return answered.get();
     }
 
     /** Of those refused, how many by each budget: one network's own, and the table-wide one. */
