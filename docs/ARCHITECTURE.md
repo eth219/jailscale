@@ -279,7 +279,7 @@ TCP 443, SNI = hub.example.com
              └─ [2B len BE][Noise transport message]    <- one mux frame in each
 ```
 
-Both HTTP ends are hand-written (§3.1): the hub's front is about 750 lines serving `/v1/key`,
+Both HTTP ends are hand-written (§3.1): the hub's front is about 1,100 lines serving `/v1/key`,
 `/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, `/favicon.svg`, a root page and the link directory, the
 node's client about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier
 because its 4-byte client-to-server masking would touch every visitor byte again, frame headers and

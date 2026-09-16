@@ -607,4 +607,25 @@ class LinkEndToEndTest {
         }
         throw new AssertionError("condition not met in time");
     }
+
+    /**
+     * The page the hub writes under the wildcard for a name nobody has opened. It is the widest
+     * surface the hub has -- any label, at any depth, reaches it -- and it is written by a different
+     * class from the pages out front, which is exactly how it came to be the one frame the first
+     * pass at this forgot. Nothing else drives it, so without this test dropping
+     * {@code HttpFront.secured} here leaves a green suite.
+     */
+    @Test
+    void theNotOpenPageUnderTheWildcardIsCoveredByTheSameHeaders() throws Exception {
+        HttpResponse r = visit("nobody.hub.test", "/");
+        assertEquals(404, r.status());
+        assertTrue(r.bodyText().contains("is not open right now"), r.bodyText());
+        assertTrue(r.bodyText().contains("noindex"), r.bodyText());
+        String csp = r.headers().get("Content-Security-Policy");
+        assertNotNull(csp, "the wildcard page is a page in a browser too");
+        assertTrue(csp.contains("default-src 'none'"), csp);
+        assertEquals("nosniff", r.headers().get("X-Content-Type-Options"));
+        assertEquals("no-referrer", r.headers().get("Referrer-Policy"));
+        assertEquals("max-age=31536000", r.headers().get("Strict-Transport-Security"));
+    }
 }

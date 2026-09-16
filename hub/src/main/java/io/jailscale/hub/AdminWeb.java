@@ -443,6 +443,10 @@ final class AdminWeb {
     private static String page(String title, String body) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             + HttpFront.NOINDEX
+            // The same icon as the pages out front. Without the link a browser falls back to asking
+            // for /favicon.ico, which is answered -- but with nosniff and an SVG body, which some
+            // browsers will not draw from that name.
+            + "<link rel=\"icon\" href=\"/favicon.svg\">"
             + "<title>" + HttpFront.escape(title) + "</title>"
             + "<style>body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #ddd}"

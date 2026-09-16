@@ -207,8 +207,12 @@ final class HttpFront {
             return hub.adminWeb().handle(req);
         }
         if (!req.method().equals("GET") && !req.method().equals("HEAD")) {
-            return errorPage(405, "Not that way", "That method is not one this page answers. "
-                + "Everything here is a GET.");
+            // The guard is above the dispatch, so it answers for paths of both kinds and has to
+            // pick the shape the way each of them would: a POST to /v1/key is a client that got
+            // the method wrong, and a page is bytes it has to skip to find that out.
+            return path.startsWith("/v1/") ? HttpResponse.text(405, "method not allowed")
+                : errorPage(405, "Not that way", "That method is not one this page answers."
+                    + " Everything here is a GET.");
         }
         if (path.equals("/favicon.svg") || path.equals("/favicon.ico")) {
             // Both names: the link element in the frame asks for the first, and a browser that was
