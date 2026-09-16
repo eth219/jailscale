@@ -20,6 +20,7 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.net.ssl.SSLSocket;
@@ -421,5 +422,27 @@ class HomePageTest {
         assertEquals(HttpFront.Health.CRITICAL, HttpFront.certificateHealth(true, -5 * day));
         // Not loaded is not the same as expired: nothing is being served, and nothing has failed.
         assertEquals(HttpFront.Health.WARNING, HttpFront.certificateHealth(false, 0));
+    }
+
+    /**
+     * The two words the line can say and everything it says after them. A live hub can be driven
+     * into one grade at a time, so the tests above never reach "Critical" at all and never reach
+     * two problems at once: a verdict hard-coded to "Degraded", or one that named only the first
+     * problem it found, passes every one of them. This drives the renderer directly, where both
+     * are reachable.
+     */
+    @Test
+    void theVerdictTakesTheWorstGradeAndNamesEveryProblemUnderIt() {
+        HttpFront.Problem ok = new HttpFront.Problem(HttpFront.Health.OK, "");
+        HttpFront.Problem warning = new HttpFront.Problem(HttpFront.Health.WARNING, "a warning");
+        HttpFront.Problem critical = new HttpFront.Problem(HttpFront.Health.CRITICAL, "a critical");
+        assertTrue(HttpFront.verdict(List.of(ok, ok)).contains("All systems operational"));
+        assertTrue(HttpFront.verdict(List.of(ok, warning)).contains("Degraded &mdash; a warning"));
+        // Critical takes the word, and does not hide the warning underneath it: worst named first.
+        String both = HttpFront.verdict(List.of(warning, critical));
+        assertTrue(both.contains("Critical &mdash; a critical; a warning"), both);
+        assertFalse(both.contains("Degraded"), both);
+        // The dot never carries it alone, on this line as on the strips (§13.2).
+        assertTrue(both.contains("class=\"sw\""), both);
     }
 }

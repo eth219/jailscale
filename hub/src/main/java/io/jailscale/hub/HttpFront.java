@@ -350,7 +350,15 @@ final class HttpFront {
     }
 
     /** A thing the page grades: its state, and how the verdict line says it in words. */
-    private record Problem(Health level, String says) {}
+    record Problem(Health level, String says) {}
+
+    /**
+     * One reading of the certificate, taken once per page: whether one is loaded, when it ends, and
+     * how long that is from now. The grade above the table and the row inside it are two statements
+     * about the same certificate, and reading it twice lets a renewal land between them -- a row
+     * showing ninety days under a mark that says the certificate expired.
+     */
+    private record Cert(boolean loaded, String notAfter, long left) {}
 
     /**
      * The wildcard's remaining life as a grade. It is the one row on this page whose number decides
@@ -367,7 +375,7 @@ final class HttpFront {
             return Health.WARNING;
         }
         long day = 86_400_000L;
-        if (msLeft <= 0 || msLeft < 3 * day) {
+        if (msLeft < 3 * day) {
             return Health.CRITICAL;
         }
         return msLeft < 14 * day ? Health.WARNING : Health.OK;
@@ -380,7 +388,7 @@ final class HttpFront {
      * grade and below is named, because "Degraded" without saying what is degraded sends the reader
      * back to the table this line exists to save them from.
      */
-    private static String verdict(List<Problem> checks) {
+    static String verdict(List<Problem> checks) {
         Health worst = Health.OK;
         StringBuilder says = new StringBuilder();
         for (Health h : List.of(Health.CRITICAL, Health.WARNING)) {
@@ -398,17 +406,24 @@ final class HttpFront {
         return "<p class=\"verdict\"><span class=\"sw\" style=\"background:" + worst.colour + "\"></span>" + word + "</p>";
     }
 
+    /** The one reading of the certificate that both the grade and the row are made from. */
+    private Cert certState() {
+        if (!hub.tls().isLoaded()) {
+            return new Cert(false, null, 0);
+        }
+        java.util.Date notAfter = hub.tls().leaf().getNotAfter();
+        return new Cert(true, notAfter.toString(), notAfter.getTime() - System.currentTimeMillis());
+    }
+
     /** The certificate's grade and how the verdict says it. {@link #certificateRow} says it in the row. */
-    private Problem certificateProblem() {
-        boolean loaded = hub.tls().isLoaded();
-        long left = loaded ? hub.tls().leaf().getNotAfter().getTime() - System.currentTimeMillis() : 0;
-        Health h = certificateHealth(loaded, left);
+    private static Problem certificateProblem(Cert c) {
+        Health h = certificateHealth(c.loaded(), c.left());
         if (h == Health.OK) {
             return new Problem(h, "");
         }
-        return new Problem(h, !loaded ? "no certificate is loaded yet"
-            : left <= 0 ? "the certificate expired " + Resources.humanDuration(-left) + " ago"
-            : "the certificate expires in " + Resources.humanDuration(left));
+        return new Problem(h, !c.loaded() ? "no certificate is loaded yet"
+            : c.left() <= 0 ? "the certificate expired " + Resources.humanDuration(-c.left()) + " ago"
+            : "the certificate expires in " + Resources.humanDuration(c.left()));
     }
 
     /**
@@ -420,12 +435,18 @@ final class HttpFront {
     private Problem roleProblem(Peer peer) {
         if (peer.following()) {
             return peer.synced() ? new Problem(Health.OK, "")
-                : new Problem(Health.WARNING, peer.connected()
-                    ? "not in sync with the primary yet" : "not connected to the primary");
+                : new Problem(Health.WARNING, peer.connected() ? "not in sync with the primary yet"
+                    // A hub that stood down to another primary (§13.5) without having been given
+                    // a --peer of its own has no peer client at all, so it is not merely out of
+                    // touch with a primary, it has none to be out of touch with.
+                    : peer.primary() == null ? "standing by with no primary to follow"
+                    : "not connected to the primary");
         }
         // Connected, and not more: the primary has no acknowledgement to grade, and a standby that
         // stops reading is dropped by Peers at MAX_QUEUED and becomes the absence this does grade.
-        // Between those two it reads as connected, which is the limit of what this side knows.
+        // That cap is reached by events being appended, though, so on a hub where nothing is
+        // happening there is no bound on the wait at all. Between the two it reads as connected,
+        // which is the limit of what this side knows.
         return hub.config().peer() != null && peer.standbys().isEmpty()
             ? new Problem(Health.WARNING, "no standby is connected")
             : new Problem(Health.OK, "");
@@ -434,7 +455,9 @@ final class HttpFront {
     /**
      * One reading of the hub-to-hub state, taken once per page. {@code following} is this hub being
      * a standby: then the other fields describe the primary it follows, and {@code standbys} is
-     * empty. Otherwise it holds the sessions standbys have open to this one.
+     * empty -- {@code primary} is null when it has no peer client, which is a hub that stood down
+     * (§13.5) and is following nothing. Otherwise it holds the sessions standbys have open to this
+     * one. {@code synced} implies {@code connected}, which is why the two are sampled in that order.
      */
     private record Peer(boolean following, boolean connected, boolean synced, String primary,
                         String lastError, List<Peers.Session> standbys) {}
@@ -519,14 +542,29 @@ final class HttpFront {
         PeerClient pc = hub.peerClient();
         // Sampled once. The grade and the Role row are two readings of the same live state, and
         // taken separately a standby that connects or drops between them puts a verdict on the page
-        // that contradicts the row directly under it.
-        Peer peerState = hub.isStandby() && pc != null
-            ? new Peer(true, pc.isConnected(), pc.isSynced(), pc.primaryHost(), pc.lastError(), List.of())
-            : new Peer(false, false, false, null, null, hub.peers().all());
-        Problem cert = certificateProblem();
+        // that contradicts the row directly under it. The role is read on its own and not through
+        // `pc != null`: a hub that stood down without a --peer of its own is a standby with no peer
+        // client, and reading it as a primary would have this page call it healthy.
+        Peer peerState;
+        if (hub.isStandby()) {
+            // isSynced() is already "connected and synced", so it is sampled first and connected is
+            // widened to match; the other order can leave synced true beside connected false, which
+            // the row would print as "in sync" for a hub that is not.
+            boolean synced = pc != null && pc.isSynced();
+            peerState = new Peer(true, synced || (pc != null && pc.isConnected()), synced,
+                pc == null ? null : pc.primaryHost(), pc == null ? null : pc.lastError(), List.of());
+        } else {
+            peerState = new Peer(false, false, false, null, null, hub.peers().all());
+        }
+        Cert certState = certState();
+        Problem cert = certificateProblem(certState);
         Problem role = roleProblem(peerState);
         // A hub nobody has joined yet is not a hub in trouble; one whose nodes have all gone is.
-        Problem nodes = registered > 0 && online == 0
+        // Only a primary grades it, for the same reason it cannot grade a standby as in sync: a
+        // standby takes no control connections, so what it counts online is the relay connections
+        // nodes have opened to it (§13.4), and a node that has not opened one yet is not a node
+        // that is down.
+        Problem nodes = !peerState.following() && registered > 0 && online == 0
             ? new Problem(Health.WARNING, registered == 1 ? "the one registered node is offline"
                 : "none of the " + registered + " registered nodes are online")
             : new Problem(Health.OK, "");
@@ -571,7 +609,9 @@ final class HttpFront {
                 + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today"));
         }
         if (peerState.following()) {
-            row(b, "Role", role.level().mark() + "standby of <code>" + escape(peerState.primary()) + "</code>, "
+            row(b, "Role", role.level().mark()
+                + (peerState.primary() == null ? "standby, following no primary"
+                    : "standby of <code>" + escape(peerState.primary()) + "</code>") + ", "
                 + (peerState.synced() ? "in sync" : peerState.connected() ? "connected, not yet in sync" : "not connected"
                     + (peerState.lastError() == null ? "" : " (" + escape(peerState.lastError()) + ")"))
                 + ", epoch " + hub.epoch());
@@ -593,7 +633,7 @@ final class HttpFront {
             row(b, "Role", role.level().mark() + r);
         }
         row(b, "Nodes", nodes.level().mark() + online + " online of " + registered + " registered");
-        row(b, "Certificate", cert.level().mark() + certificateRow());
+        row(b, "Certificate", cert.level().mark() + certificateRow(certState));
         // Heap is a small part of what a native image occupies, so where RSS is unavailable say
         // that rather than let a two-megabyte heap read as the process footprint.
         row(b, "Memory", rss < 0
@@ -874,14 +914,13 @@ final class HttpFront {
      * down at once, and until now the only place that number appeared was a log line at install
      * time (ARCHITECTURE.md §15).
      */
-    private String certificateRow() {
-        if (!hub.tls().isLoaded()) {
+    private static String certificateRow(Cert c) {
+        if (!c.loaded()) {
             return "not loaded yet";
         }
-        long left = hub.tls().leaf().getNotAfter().getTime() - System.currentTimeMillis();
-        return left <= 0
-            ? "EXPIRED " + Resources.humanDuration(-left) + " ago"
-            : escape(hub.tls().leaf().getNotAfter().toString()) + " (" + Resources.humanDuration(left) + " left)";
+        return c.left() <= 0
+            ? "EXPIRED " + Resources.humanDuration(-c.left()) + " ago"
+            : escape(c.notAfter()) + " (" + Resources.humanDuration(c.left()) + " left)";
     }
 
     private static void row(StringBuilder b, String label, String value) {
