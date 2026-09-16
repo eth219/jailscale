@@ -662,15 +662,15 @@ class HomePageTest {
         // The retention sentence is the part an operator cannot write for themselves, so it is not
         // theirs to configure: it says what the process does, and where that stops.
         assertTrue(named.contains("thirty days of uptime record"), named);
-        assertTrue(named.contains("keeps no list of them"), named);
+        assertTrue(named.contains("keeps no list"), named);
         assertTrue(named.contains("is the operator's and not something this page can answer for"), named);
-        // A pending join holds the address it knocked from until somebody decides; the list of
-        // what is kept is only worth printing if it is the whole list -- which is also why the
-        // hostname and system in both records are named, since a record holding them is not
-        // described by the address alone.
-        assertTrue(named.contains("the address a machine knocked from"), named);
-        assertTrue(named.contains("the hostname and system it gave"), named);
-        assertTrue(named.contains("the hostname and system each machine reported"), named);
+        // Three attempts at an inventory were each found short, so the sentence says the shape of
+        // what is kept rather than a list that goes stale the next time the store grows -- and
+        // names the two parts a visitor is actually asking about: what a machine said about itself,
+        // and that it stays until somebody removes it.
+        assertTrue(named.contains("its hostname, its system, and the address it knocked from"), named);
+        assertTrue(named.contains("stays until the"), named);
+        assertTrue(named.contains("<b>Not the visitors.</b>"), named);
         // The closing line is the point of the issue: a hub that has named an operator stops
         // telling visitors not to depend on it and points at who to ask instead.
         assertFalse(named.contains("rather than one to depend on"), named);

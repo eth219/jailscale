@@ -344,6 +344,10 @@ class AdminCommandTest {
                 set(ipc, "contact", "http://example.com/abuse"), "plain http is not a contact this hub will print");
             assertEquals("terms takes an https:// URL, up to 200 characters, or empty to clear",
                 set(ipc, "terms", "mailto:legal@example.com"));
+            // A scheme is case-insensitive, so refusing this one would be the same invisible
+            // difference between the error and the value as `knock "off "` was.
+            assertNull(set(ipc, "terms", "HTTPS://example.com/aup"));
+            assertEquals("HTTPS://example.com/aup", hub.store().setting(Store.SETTING_TERMS, ""));
             assertEquals("operator takes a name, up to 120 characters, or empty to clear",
                 set(ipc, "operator", "x".repeat(121)));
             assertEquals("mailto:abuse@example.com", hub.store().setting(Store.SETTING_CONTACT, ""),

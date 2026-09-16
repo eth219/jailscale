@@ -26,8 +26,8 @@ final class AdminIpc implements Ipc.Handler {
      */
     static final Map<String, java.util.function.Predicate<String>> SETTING_TEXT = Map.of(
         Store.SETTING_OPERATOR, v -> v.length() <= 120,
-        Store.SETTING_CONTACT, v -> v.length() <= 200 && (v.startsWith("https://") || v.startsWith("mailto:")),
-        Store.SETTING_TERMS, v -> v.length() <= 200 && v.startsWith("https://"));
+        Store.SETTING_CONTACT, v -> v.length() <= 200 && HttpFront.linkable(v),
+        Store.SETTING_TERMS, v -> v.length() <= 200 && HttpFront.linkable(v) && !v.toLowerCase(java.util.Locale.ROOT).startsWith("mailto:"));
 
     /** What to say when one of the above refuses a value. */
     private static String textSettingRule(String key) {
@@ -385,7 +385,17 @@ final class AdminIpc implements Ipc.Handler {
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null);
             case "admin-add", "admin-remove" -> b.put("user", need(a.positional(2), "<user>"));
             case "key-rotate" -> b.put("grace", a.has("grace") ? a.seconds("grace", 0) : null);
-            case "setting" -> b.put("key", need(a.positional(1), "<key>")).put("value", need(a.positional(2), "<value>"));
+            case "setting" -> {
+                // A value with a space in it is several positionals, and taking the first was
+                // silent: `jailhub setting operator Example Ltd` stored "Example" and replied ok.
+                // The first setting whose value is prose is the first one that could hit this.
+                if (a.positional(3) != null) {
+                    throw new IllegalArgumentException("a value with spaces has to be quoted: "
+                        + "jailhub setting " + a.positional(1) + " \"" + a.positional(2) + " "
+                        + a.positional(3) + " ...\"");
+                }
+                b.put("key", need(a.positional(1), "<key>")).put("value", need(a.positional(2), "<value>"));
+            }
             default -> { }
         }
         return b.build();

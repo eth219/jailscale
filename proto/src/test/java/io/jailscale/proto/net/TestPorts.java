@@ -49,16 +49,31 @@ public final class TestPorts {
      * daemon's, a peer's. The number is remembered, so nothing else here is given it.
      */
     public static int reserve() throws IOException {
-        for (int i = 0; i < ATTEMPTS; i++) {
-            int port;
-            try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-                port = s.getLocalPort();
+        List<ServerSocket> refused = new ArrayList<>();
+        try {
+            for (int i = 0; i < ATTEMPTS; i++) {
+                ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+                int port = s.getLocalPort();
+                if (TAKEN.add(port)) {
+                    // Closed before returning, because the caller is the one that binds it. That
+                    // is the residual this class cannot remove: between here and their bind the
+                    // port is held by nothing, so an *outbound* socket in this JVM could still be
+                    // given it. Nothing in these tests opens one on loopback without binding it
+                    // first, which is why the failures all had this class's own callers on both
+                    // ends of them.
+                    s.close();
+                    return port;
+                }
+                // Held rather than closed while the loop turns, for the reason listen() holds
+                // them: a port let go here is one the kernel may offer again on the next try.
+                refused.add(s);
             }
-            if (TAKEN.add(port)) {
-                return port;
+            throw new IOException("no unused loopback port in " + ATTEMPTS + " tries");
+        } finally {
+            for (ServerSocket s : refused) {
+                s.close();
             }
         }
-        throw new IOException("no unused loopback port in " + ATTEMPTS + " tries");
     }
 
     /** A listener on loopback, on a port nothing else here has been promised. */
