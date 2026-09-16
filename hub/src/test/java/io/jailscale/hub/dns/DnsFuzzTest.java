@@ -34,9 +34,9 @@ class DnsFuzzTest {
             query("ns1.hub.test", 1),
             query("_jailhub-self.hub.test", 16),
             query("hub.test", 255),
-            // A name this parser accepts and a datagram cannot echo: labels are bounded by the
-            // packet here, not by the 255 bytes RFC 1035 allows a name, so this is the seed that
-            // reaches the branch where the TC answer drops the question too.
+            // A name four times what RFC 1035 allows one, which the parser refuses with FORMERR:
+            // the seed whose mutations walk that length check, and which used to be the one that
+            // reached the branch where the TC answer drops the question too.
             query(LONG_LABELS + "hub.test", 1),
         };
         Random rng = new Random(53);
@@ -107,7 +107,7 @@ class DnsFuzzTest {
         return b;
     }
 
-    /** Sixty labels: 960 bytes of name before the hub's own, which arrives in one datagram and cannot be echoed in one. */
+    /** Sixty labels: 960 octets of name before the hub's own, which arrives in one datagram and is no name at all. */
     static final String LONG_LABELS = "aaaaaaaaaaaaaaa.".repeat(60);
 
     /** A plain query packet: header, one question. */

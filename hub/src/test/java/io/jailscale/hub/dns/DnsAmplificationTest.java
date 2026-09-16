@@ -147,21 +147,26 @@ class DnsAmplificationTest {
     }
 
     @Test
-    void aQuestionTooLongToEchoLeavesTheHeaderAlone() throws Exception {
+    void aQuestionLongerThanANameMayBeIsRefusedBeforeAnyAnswer() throws Exception {
         // The TC answer echoes the question, and nothing used to check that the echo fit either. A
-        // name here is bounded by the packet and not by the 255 bytes RFC 1035 allows one, so this
+        // name was bounded by the packet and not by the 255 octets RFC 1035 allows one, so this
         // query -- 60 labels under the hub name, 998 bytes, which arrives in one datagram -- was
         // answered by cutting to the question's end, which is a 998-byte datagram: over the 512
         // that §11.5 states, broken by the one path that existed to keep it. Not amplification, an
         // answer no larger than the query that asked for it, but an oversized datagram is discarded
         // by a resolver rather than reported, which is the failure the bound is there to prevent.
+        //
+        // The fix for that left the header alone, TC set and the question dropped, which a resolver
+        // matching a reply by its question section discards as unsolicited. So the name is bounded
+        // where it is read now: twelve bytes of FORMERR, and no encoder sees the question at all.
         DnsResponder d = fullest();
         byte[] q = DnsFuzzTest.query(DnsFuzzTest.LONG_LABELS + HUB, 1);
         assertTrue(q.length > DnsResponder.MAX_UDP, "the question itself has to be what does not fit, was " + q.length);
 
         byte[] r = d.answerForUdp(q, java.net.InetAddress.getByName("198.51.100.7"), 1_000_000);
-        assertEquals(12, r.length, "a question too long to echo leaves the header alone, was " + r.length);
-        assertTrue((r[2] & 0x02) != 0, "TC should still be set");
+        assertEquals(12, r.length, "a name over the bound is refused in twelve bytes, was " + r.length);
+        assertEquals(1, r[3] & 0x0f, "FORMERR");
+        assertEquals(0, r[2] & 0x02, "a refusal, not a truncation for a resolver to come back for");
         for (int i = 4; i < 12; i++) {
             assertEquals(0, r[i], "nothing should be counted at byte " + i);
         }

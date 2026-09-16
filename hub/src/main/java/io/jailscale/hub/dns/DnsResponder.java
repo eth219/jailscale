@@ -102,6 +102,21 @@ public final class DnsResponder implements AutoCloseable {
     static final int MAX_UDP = 512;
 
     /**
+     * What a name may measure on the wire, every label's own length byte and the root's zero
+     * included (RFC 1035 §2.3.4). A question over it is refused at {@link #parse} with FORMERR,
+     * which is twelve bytes and the cheapest thing this server can send: no resolver asks for such
+     * a name, the encoder cannot represent one, and the gap between what this parser accepts and
+     * what the encoder can write is where the oversized datagram of {@link #MAX_UDP} came from.
+     *
+     * <p>It is also what keeps a {@code TC} answer matchable. A resolver pairs a reply with its
+     * outstanding query by the question section, so a truncation that had to leave the question out
+     * is one it drops as unsolicited — it never follows the {@code TC} to TCP and simply times
+     * out. Bounded here, the longest question is {@code 12 + MAX_NAME + 4} bytes, which fits every
+     * budget a live caller passes, so the echo is never the thing {@link #truncated} drops.
+     */
+    static final int MAX_NAME = 255;
+
+    /**
      * How much of an answer may leave, which is two questions and not one: how many bytes the
      * transport will carry, and whether records may go at all.
      *
@@ -540,7 +555,9 @@ public final class DnsResponder implements AutoCloseable {
             labels.add(label);
             p += l;
         }
-        if (p + 4 > q.length) {
+        // `p` is one past the name, so `p - 12` is what it measures on the wire: RFC 1035 §2.3.4,
+        // and the bound the encoder has always assumed it was writing within.
+        if (p - 12 > MAX_NAME || p + 4 > q.length) {
             return null;
         }
         int type = ((q[p] & 0xff) << 8) | (q[p + 1] & 0xff);
@@ -710,14 +727,20 @@ public final class DnsResponder implements AutoCloseable {
      * which is a datagram's for both callers that reach here and is whatever a resolver advertised
      * the day one offers EDNS. A question too long for it is dropped with the records, leaving the
      * header — still a well-formed {@code TC} answer, and the same shape this server already sends
-     * for REFUSED, which echoes no question either.
+     * for REFUSED, which echoes no question either. Useful to nobody, though: a resolver pairs a
+     * reply with its query by the question section, so it drops that one as unsolicited and times
+     * out rather than coming back over TCP.
      *
-     * <p>That branch is not hypothetical. A name here is bounded by the packet and not by the 255
-     * bytes RFC 1035 allows one ({@code #89}), so a query of nearly a kilobyte is accepted, and the
-     * pass that used to cut the answer down had no idea what it was cutting it to: it echoed the
-     * question whatever its size, and the answer left at the size of the query — 998 bytes in
-     * {@code DnsAmplificationTest}, over the §11.5 bound, broken by the one path that existed to
-     * keep it.
+     * <p>Which is why nothing live reaches that branch any more. {@link #parse} refuses a name over
+     * {@link #MAX_NAME}, so a question is at most {@code 12 + MAX_NAME + 4} bytes and fits every
+     * budget that exists here. What used to reach it — 60 labels under the hub name, 998 bytes,
+     * echoed at whatever size it came by the pass that cut the answer down, leaving a 998-byte
+     * datagram over the §11.5 bound that pass existed to keep — is twelve bytes of FORMERR now and
+     * never sees an encoder. The branch stays because the byte count is the budget's and not this
+     * file's constant: a resolver that offers EDNS may advertise less room than the question it
+     * sent, and that is the caller it is for. {@code
+     * DnsAmplificationTest.aBudgetSmallerThanADatagramBoundsTheEchoToo} holds it to the promise
+     * meanwhile.
      */
     private static byte[] truncated(Question qn) {
         byte[] q = qn.query();

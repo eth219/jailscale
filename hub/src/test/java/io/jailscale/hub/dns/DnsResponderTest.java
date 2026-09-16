@@ -142,6 +142,69 @@ class DnsResponderTest {
         assertEquals(5, r[3] & 0x0f, "REFUSED");
     }
 
+    @Test
+    void aNameOverTheLengthRfc1035AllowsIsRefusedAndOneAtItIsNot() throws Exception {
+        // 255 octets is a name's whole wire form -- every label's length byte, its bytes, and the
+        // root's zero -- and the parser used to bound a name by the datagram it arrived in and by
+        // nothing else. Both sides of the boundary, because a bound asserted only from above passes
+        // just as well when it refuses every name there is.
+        DnsResponder d = new DnsResponder("hub.example.com");
+        d.setZone(twoHosts(List.of("203.0.113.9")));
+
+        // `hub.example.com` is 16 octets and the root's zero is one, so 238 of them may be a prefix.
+        byte[] longest = rawQuery(8, 1, labelsFilling(238, "hub", "example", "com"));
+        assertEquals(DnsResponder.MAX_NAME, wireNameLength(longest), "the longest name RFC 1035 allows");
+        byte[] answer = d.respond(longest);
+        assertEquals(0, rcode(answer), "which is a question this zone answers like any other");
+        assertEquals(List.of("203.0.113.9"), addresses(DnsQuery.parse(answer, 8, 1)));
+        // And in a datagram, which is the property the bound exists for: the longest question there
+        // is fits the 512 a resolver with no EDNS may be sent, so the TC form never has to drop it
+        // -- a truncation with no question in it is one a resolver discards as unsolicited.
+        byte[] datagram = d.respond(longest, DnsResponder.Budget.DATAGRAM);
+        assertTrue(datagram.length <= DnsResponder.MAX_UDP, "the longest name and its answer in one datagram, was " + datagram.length);
+        assertEquals(0, datagram[2] & 0x02, "with room to spare, so not even truncated");
+        assertEquals(1, datagram[5], "and the question echoed");
+
+        byte[] tooLong = rawQuery(9, 1, labelsFilling(239, "hub", "example", "com"));
+        assertEquals(DnsResponder.MAX_NAME + 1, wireNameLength(tooLong), "one octet past it");
+        byte[] refused = d.respond(tooLong);
+        assertEquals(1, rcode(refused), "FORMERR");
+        assertEquals(12, refused.length, "in twelve bytes");
+        assertEquals(0, refused[5], "which echo no question");
+        assertEquals(0, refused[2] & 0x02, "and are a refusal, not a truncation to come back for");
+    }
+
+    /**
+     * Labels that fill exactly {@code octets} of wire, each label's own length byte included,
+     * followed by {@code apex}. Longest first, so the fill is the fewest labels that can make it.
+     *
+     * <p>Not every amount can be filled: a label costs its length byte, so one octet left over is
+     * one no label can spend, and an empty label is a zero byte -- which {@code rawQuery} writes as
+     * the end of the name, quietly building a shorter question than the caller asked for. It throws
+     * rather than do that.
+     */
+    private static String[] labelsFilling(int octets, String... apex) {
+        List<String> labels = new java.util.ArrayList<>();
+        for (int left = octets; left > 0; ) {
+            int label = Math.min(63, left - 1);     // the label's own length byte is the other one
+            if (label < 1) {
+                throw new IllegalArgumentException(octets + " octets is not a whole number of labels");
+            }
+            labels.add("a".repeat(label));
+            left -= label + 1;
+        }
+        labels.addAll(List.of(apex));
+        return labels.toArray(new String[0]);
+    }
+
+    /**
+     * What the question's name measures on the wire: the query, less its header and its type and
+     * class. A query {@code rawQuery} wrote, therefore -- one question, and nothing behind it.
+     */
+    private static int wireNameLength(byte[] query) {
+        return query.length - 12 - 4;
+    }
+
     /**
      * A question whose labels are given as bytes, so that a label may hold a dot or a byte over
      * 0x7F -- neither of which {@code DnsFuzzTest.query} can write, splitting a String on '.'.
