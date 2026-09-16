@@ -32,10 +32,15 @@ public final class Http {
             throw new EOFException("no request");
         }
         String[] parts = line.split(" ");
+        // The method as far as it is known, read before the line is judged so that the rejection
+        // below carries it: it is the one thrown from the line the method is on. A line that does
+        // not parse is no promise that the token before the first space was a method, but it is the
+        // same guess every rejection further down makes, and guessing wrong here suppresses a body
+        // rather than sending an unframed one. A line of spaces splits to nothing at all.
+        String method = parts.length > 0 ? parts[0] : null;
         if (parts.length != 3 || !parts[2].startsWith("HTTP/1.")) {
-            throw new HttpException(400, "bad request line");
+            throw new HttpException(400, "bad request line", method);
         }
-        String method = parts[0];
         String target = parts[1];
         Headers headers;
         byte[] body;

@@ -140,15 +140,20 @@ class HeadHasNoBodyTest {
 
     @Test
     void aRejectedHeadIsAnsweredWithoutABodyToo() throws Exception {
-        // Neither of these ever becomes an HttpRequest, so the front answers out of the exception,
+        // None of these ever becomes an HttpRequest, so the front answers out of the exception,
         // which is the one place the method has to be carried rather than read off the request.
-        // Two shapes, because they fail at different points of the parse and the method has to
-        // survive both: a header line that does not parse, and an absolute-form request target
-        // (RFC 9112 §3.2.2 -- legal, and what a client configured for a proxy sends), which is
-        // rejected on the request line itself, after the method on it was read.
+        // Four shapes, because they fail at different points of the parse and the method has to
+        // survive each: a header line that does not parse; an absolute-form request target (RFC
+        // 9112 §3.2.2 -- legal, and what a client configured for a proxy sends), rejected on the
+        // request line after the method on it was read; and the two that are rejected by the split
+        // of the request line itself -- more fields than three, and a version this parser does not
+        // take. Those last two are thrown above the block that adds the method to everything else,
+        // in the one place where it had already been read into a local.
         String badHeader = "%s / HTTP/1.1\r\nHost: hub.test\r\nNoColon\r\n";
         String badTarget = "%s http://hub.test/ HTTP/1.1\r\nHost: hub.test\r\n\r\n";
-        for (String malformed : new String[] {badHeader, badTarget}) {
+        String badFields = "%s /a b HTTP/1.1\r\nHost: hub.test\r\n\r\n";
+        String badVersion = "%s / HTTP/2\r\nHost: hub.test\r\n\r\n";
+        for (String malformed : new String[] {badHeader, badTarget, badFields, badVersion}) {
             try (SSLSocket s = tls("hub.test")) {
                 Head h = raw(s, String.format(malformed, "HEAD"));
                 assertEquals(400, h.resp().status());
