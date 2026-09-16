@@ -574,7 +574,10 @@ and auth-keys, and toggle the three settings, as server-rendered HTML with no Ja
 engine, and a session-bound CSRF token on every form.
 
 The hub's own page at `/` is the same machinery seen from the other side. It states what the hub is,
-how to join *this* hub (read from the stored registration setting rather than assumed), and how it
+how to join *this* hub (read from the stored registration setting rather than assumed), **which
+copies of `jailscale` it will talk to** -- the protocol it speaks and the floor it enforces, read
+from `Message.PROTO` and `NodeSession.MIN_PROTO` so the page cannot drift from the handshake, since
+"latest" is a moving target and this hub is not -- and how it
 is doing: version, uptime, nodes online against nodes registered, links open, whether a certificate
 is loaded, and resident memory. Those are properties of the service, so they are public. The node
 list, the addresses nodes connect from, and the controls over them are rendered only when the
@@ -582,6 +585,13 @@ request carries a current admin session, and the rights are re-checked on that r
 trusted from the cookie. Resident set size is read from `/proc/self/status` where it exists and
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
+
+**The page also says how to check the copy being downloaded**, which is not the same question as
+the hub's own binary two paragraphs further down: releases are signed, `jailscale update --download`
+checks the signature of everything it fetches afterwards, and so the first copy is the only one
+checked by hand -- its hash against `SHA256SUMS.txt`, and `tools/verify-release.sh` over the
+signature the same way the daemon will. Said plainly as trust on first use, because that is what it
+is.
 
 **One line above the table says whether any of it is a problem.** The rows were all the same weight:
 a certificate with 85 days left and one with 5 read as the same sentence in the same grey, though

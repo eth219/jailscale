@@ -606,4 +606,29 @@ class HomePageTest {
             return Http.readResponse(s.getInputStream(), 1 << 20);
         }
     }
+
+    /**
+     * What the page says about which copy of jailscale will work here has to be what the handshake
+     * actually enforces, so both numbers are read from the code that enforces them rather than
+     * typed into the assertion: a protocol bump that forgets this page fails here.
+     */
+    @Test
+    void thePageSaysWhichClientsThisHubTakesAndHowToCheckTheOneYouGet() throws Exception {
+        String page = http("GET", "/", null, null).bodyText();
+        assertTrue(page.contains("<b>protocol " + io.jailscale.proto.control.Message.PROTO + "</b>"), page);
+        assertTrue(page.contains("<tr><td>Protocol</td><td>" + io.jailscale.proto.control.Message.PROTO), page);
+        // The two are equal today, so the page says "nothing older"; when they part, it has to say
+        // the floor instead, and this is the assertion that notices.
+        if (NodeSession.MIN_PROTO == io.jailscale.proto.control.Message.PROTO) {
+            assertTrue(page.contains("nothing older"), page);
+        } else {
+            assertTrue(page.contains("protocol " + NodeSession.MIN_PROTO + " and newer"), page);
+        }
+
+        // And the file the reader is about to download, which is the one they can do something
+        // about -- the paragraph further down is about the hub's own binary and is not this.
+        assertTrue(page.contains("jailscale update --download"), page);
+        assertTrue(page.contains("SHA256SUMS.txt"), page);
+        assertTrue(page.contains("tools/verify-release.sh"), page);
+    }
 }

@@ -670,6 +670,24 @@ final class HttpFront {
         b.append("<p><a href=\"").append(REPO).append("/releases/latest\">Download <code>jailscale</code></a>")
             .append(" for Linux, Apple-silicon macOS or Windows: one file, no runtime to install")
             .append(" underneath it, no root. Intel Macs run <code>jailscale.jar</code> on a JVM.</p>");
+        // "latest" is a moving target and this hub is not: it can say which copies it will talk to,
+        // and what happens to one it will not, so nobody has to find that out from a failed join.
+        b.append("<p>Any recent release will do: this hub speaks <b>protocol ")
+            .append(io.jailscale.proto.control.Message.PROTO).append("</b> and takes ")
+            .append(NodeSession.MIN_PROTO == io.jailscale.proto.control.Message.PROTO
+                ? "nothing older" : "protocol " + NodeSession.MIN_PROTO + " and newer")
+            .append(". One that is too old is turned away at the handshake with a line saying so and")
+            .append(" which version this hub runs, rather than half-working.</p>");
+        // The page already says how to check the hub's binary. It said nothing about the file the
+        // reader is about to download, which is the one they can actually do something about.
+        b.append("<p>The releases are signed. Once you have <code>jailscale</code>,")
+            .append(" <code>jailscale update --download</code> checks the signature of everything it")
+            .append(" fetches after that, so this is the one copy you check by hand: its hash is in")
+            .append(" <code>SHA256SUMS.txt</code> beside the download, and")
+            .append(" <a href=\"").append(REPO).append("/blob/main/tools/verify-release.sh\">")
+            .append("<code>tools/verify-release.sh</code></a> checks the signature over that file the")
+            .append(" same way the daemon will. The first copy is the one nothing of ours can vouch")
+            .append(" for yet; every copy after it is checked against a key this one pinned.</p>");
         // Say what this hub actually accepts rather than assuming a default.
         boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
         if (open) {
@@ -741,6 +759,11 @@ final class HttpFront {
         // this page as "0.1.0-SNAPSHOT" long after v0.1.2 shipped, and the operator reading it had
         // no way to tell from here that it was neither 0.1.0 nor current.
         row(b, "Version", escape(Hub.version()) + (released(Hub.version()) ? "" : " (not a release build)"));
+        // Beside the version, because it is the other half of "will my copy work here": a version
+        // says what this hub is, the protocol says what it will talk to (§5.4).
+        row(b, "Protocol", io.jailscale.proto.control.Message.PROTO
+            + (NodeSession.MIN_PROTO == io.jailscale.proto.control.Message.PROTO
+                ? ", and nothing older accepted" : ", accepting " + NodeSession.MIN_PROTO + " and newer"));
         // Which build, and which key: the two things about this hub that can be compared with
         // something the reader already has. Both are self-reported, which the note below says.
         String sha = Build.executableSha256();
