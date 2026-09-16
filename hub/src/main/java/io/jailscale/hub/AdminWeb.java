@@ -425,14 +425,14 @@ final class AdminWeb {
     }
 
     /**
-     * These pages are never for a crawler -- {@code /admin/login/<token>} is a one-shot credential
-     * in a path, exactly as an invitation is -- so they carry the same {@code noindex} the
-     * invitation page does. robots.txt names {@code /admin} as well; the meta is what covers a URL
-     * that was handed to somebody directly.
+     * These pages are never for a crawler: {@code /admin/login/<token>} is a one-shot credential in
+     * a path, and the page behind it prints invitation URLs, which are credentials too. They take
+     * the same {@code noindex,nofollow} the invitation page does, and robots.txt asks for
+     * {@code /admin} not to be fetched at all, because fetching a login link spends it.
      */
     private static String page(String title, String body) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-            + "<meta name=\"robots\" content=\"noindex\">"
+            + HttpFront.NOINDEX
             + "<title>" + HttpFront.escape(title) + "</title>"
             + "<style>body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #ddd}"

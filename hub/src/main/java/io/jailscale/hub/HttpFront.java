@@ -47,18 +47,34 @@ final class HttpFront {
     private static final int LINKS_SHOWN = 200;
 
     /**
-     * What a crawler is asked to leave alone. The directory and the invitation pages are served to
-     * anyone holding the URL, because that is how a visitor reaches a link and how an invitee
-     * reaches an invitation; being in a search index is a different thing. It hands the whole list
-     * to somebody who has never heard of this hub, it outlives the link -- a cached row still says
-     * "open 3 days" after the node has gone -- and an indexed invitation is a live one, since the
-     * token is in the path. {@code /admin} is here for the same reason and not because it is
-     * secret. The hub's own page is left out: it is the page the operator wants found.
+     * The one path a crawler is asked not to fetch, and it is not the obvious one.
      *
-     * <p>Advice a crawler may choose to ignore, so this raises the floor and is not a control; the
-     * control would be listing a link only when the node asks for it (#99).
+     * <p>{@code Disallow} and {@code noindex} do opposite things and only one of them keeps a page
+     * out of a search index. A disallowed page is never fetched, so its {@code noindex} is never
+     * read, and a URL somebody linked from elsewhere can still be listed on the strength of that
+     * link alone -- which for {@code /join/<token>} would publish the token, the very thing the
+     * page is protecting. So the pages that must not be indexed are deliberately left fetchable and
+     * say {@code noindex} themselves ({@link #NOINDEX}); being crawled costs them nothing, since
+     * opening an invitation has never spent it.
+     *
+     * <p>{@code /admin} is the exception and is here for a different reason than secrecy: a login
+     * link is one-shot and {@code AdminWeb} consumes it on the GET, so a machine that fetches one
+     * to see what is there burns it. Nothing under it is indexable anyway -- without a session it
+     * answers 403 -- so the meta stays on those pages as the second layer.
+     *
+     * <p>All of it is advice a crawler may ignore, so this raises the floor and is not a control;
+     * the control would be listing a link only when the node asks to be listed (#99).
      */
-    private static final String ROBOTS = "User-agent: *\nDisallow: /links\nDisallow: /join/\nDisallow: /admin\n";
+    private static final String ROBOTS = "User-agent: *\nDisallow: /admin\n";
+
+    /**
+     * {@code nofollow} as well as {@code noindex}, because these two pages are the ones carrying
+     * addresses that lead to other people's machines: without it a crawler that has read the
+     * directory walks into every app behind it, which is a heavier version of the thing the
+     * directory refuses to do itself. It also keeps a crawler from paging through the whole list
+     * one {@code ?from=} at a time.
+     */
+    static final String NOINDEX = "<meta name=\"robots\" content=\"noindex,nofollow\">";
 
     private final Hub hub;
     private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
@@ -698,7 +714,10 @@ final class HttpFront {
         // opened (Links.portSuffix). Without it every row on a hub that is not on 443 is a link
         // to nothing, which matters more now that the rows are a page meant to be handed around.
         String suffix = hub.links().portSuffix();
-        return "<a href=\"https://" + host + suffix + "\">" + host + suffix + "</a>";
+        // rel=nofollow, not for ranking but because the other end is somebody else's machine and
+        // the hub does not fetch what is behind a link (§6.3). The directory says nofollow for the
+        // whole page; the home page is indexable, so its eight rows have to say it themselves.
+        return "<a rel=\"nofollow\" href=\"https://" + host + suffix + "\">" + host + suffix + "</a>";
     }
 
     /**
@@ -735,15 +754,15 @@ final class HttpFront {
     }
 
     /**
-     * {@code indexable} is false for the pages {@link #ROBOTS} asks a crawler to leave alone. Both
-     * are needed and neither replaces the other: robots.txt is fetched once for the site and says
-     * what not to visit, the meta travels with the page and says what not to keep, which is the one
-     * that covers a URL somebody was handed directly.
+     * {@code indexable} is false for the pages that are served to whoever holds their URL -- the
+     * directory and an invitation. {@link #ROBOTS} explains why those are left fetchable rather
+     * than disallowed: this meta is the thing that actually keeps them out of an index, and a
+     * crawler has to be allowed to read it.
      */
     private static String page(String title, String body, boolean indexable) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            + (indexable ? "" : "<meta name=\"robots\" content=\"noindex\">")
+            + (indexable ? "" : NOINDEX)
             + "<title>" + escape(title) + "</title><style>"
             + ":root{color-scheme:light dark;--bg:#fff;--ink:#15171a;--dim:#70757c;--rule:#e7e8ea;--wash:#f5f6f7;--link:#0b57d0}"
             + "body{font-family:system-ui,-apple-system,sans-serif;max-width:48rem;margin:4rem auto 6rem;"

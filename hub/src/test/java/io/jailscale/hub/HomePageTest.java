@@ -328,10 +328,12 @@ class HomePageTest {
     }
 
     /**
-     * Two mechanisms and one rule: the pages that are served to whoever holds their URL are not
-     * for a search index, and the hub's own page is. The second half is what gives this test a
-     * direction to fail in -- a blanket noindex, or a robots.txt that disallowed everything, would
-     * satisfy every assertion about /links and /join and is exactly the mistake worth catching.
+     * Two mechanisms that pull in opposite directions, and the rule that decides which goes where.
+     * A page that is disallowed is never fetched, so its {@code noindex} is never read -- which is
+     * why the pages that must stay out of an index are the ones robots.txt does *not* name. The
+     * assertions that give this test a direction to fail in are the negative ones: a robots.txt
+     * that disallowed /links and /join, which is the intuitive and wrong thing to write, satisfies
+     * every positive assertion here.
      */
     @Test
     void whatIsServedToWhoeverHoldsTheUrlIsKeptOutOfSearchAndTheHubPageIsNot() throws Exception {
@@ -340,17 +342,19 @@ class HomePageTest {
         assertEquals("text/plain; charset=utf-8", robots.headers().get("Content-Type"));
         String txt = robots.bodyText();
         assertTrue(txt.contains("User-agent: *"), txt);
-        assertTrue(txt.contains("Disallow: /links"), txt);
-        assertTrue(txt.contains("Disallow: /join/"), txt);
+        // Fetching a login link spends it, so that one is asked for by name.
         assertTrue(txt.contains("Disallow: /admin"), txt);
+        // And these are not, on purpose: a crawler that is turned away at robots.txt never reads
+        // the noindex, and a URL linked from somewhere else gets listed on the link alone -- which
+        // for an invitation would publish the token.
+        assertFalse(txt.contains("Disallow: /links"), "disallowing it is what stops the noindex being read: " + txt);
+        assertFalse(txt.contains("Disallow: /join"), "an invitation must be fetchable for its noindex to count: " + txt);
         assertFalse(txt.contains("Disallow: /\n"), "the hub's own page is what the operator wants found: " + txt);
 
-        String meta = "<meta name=\"robots\" content=\"noindex\">";
-        // robots.txt is fetched once for the site; the meta is what covers a URL somebody was
-        // handed. An invitation renders for any token because viewing one never spends it.
+        String meta = "<meta name=\"robots\" content=\"noindex,nofollow\">";
+        // An invitation renders for any token, because viewing one never spends it.
         assertTrue(http("GET", "/links", null, null).bodyText().contains(meta));
-        assertTrue(http("GET", "/join/" + enc("not-a-real-token"), null, null)
-            .bodyText().contains(meta));
+        assertTrue(http("GET", "/join/" + enc("not-a-real-token"), null, null).bodyText().contains(meta));
         assertTrue(http("GET", "/admin", null, null).bodyText().contains(meta));
 
         String home = http("GET", "/", null, null).bodyText();

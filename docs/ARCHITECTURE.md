@@ -545,12 +545,19 @@ the name. Who owns a name and which local port it reaches stay behind the admin 
 list does. **And none of it is for a search index.** That a link's address is public because a
 visitor reaches it by typing it is an argument about that visitor, not about a result that hands the
 whole list to somebody who never heard of this hub and keeps saying "open 3 days" after the node has
-gone; an indexed `/join/<token>` is a live invitation, and an indexed `/admin/login/<token>` a live
-credential. So `/robots.txt` names `/links`, `/join/` and `/admin`, and those pages carry `noindex`
-themselves, because robots.txt is fetched once for a site and the meta is what covers a URL somebody
-was handed directly. `/` is left indexable: it is the page an operator wants found. Both are advice
-a crawler may ignore rather than a control -- the control would be listing a link only when the node
-asks to be listed, which is a change to what `jailscale open` means and is not decided. The directory renders at most 200 rows at a time, like every other unauthenticated
+gone; an indexed `/join/<token>` would be a live invitation, the token in the result. The two
+mechanisms for saying so pull in opposite directions and only one of them works: a page named in
+`Disallow` is never fetched, so its `noindex` is never read, and a URL linked from anywhere else can
+be listed on the strength of that link alone -- for an invitation, exactly the outcome being
+avoided. **So the pages that must stay out of an index are deliberately left crawlable** and say
+`noindex,nofollow` themselves; being fetched costs them nothing, since opening an invitation has
+never spent it, and `nofollow` keeps a crawler from walking the directory into other people's
+machines or paging it one `?from=` at a time. `/robots.txt` names only `/admin`, and for a different
+reason than secrecy: a login link is one-shot and consumed on the GET, so a machine that fetches one
+to see what is there burns it. `/` stays indexable -- it is the page an operator wants found -- and
+its eight preview rows carry `rel=nofollow` for the reason the directory's page-level one does.
+All of it is advice a crawler may ignore rather than a control; the control would be listing a link
+only when the node asks to be listed, which changes what `jailscale open` means and is not decided. The directory renders at most 200 rows at a time, like every other unauthenticated
 answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
 reachable -- the sentence at the top counts every open link, so every one of them has to be. A
 row's address carries the port the hub answers on, the same `portSuffix` the node was told when the
