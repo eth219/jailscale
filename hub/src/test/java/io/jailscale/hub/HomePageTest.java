@@ -650,20 +650,30 @@ class HomePageTest {
         String bare = http("GET", "/", null, null).bodyText();
         assertFalse(bare.contains("Who runs this hub"), "nothing was configured: " + bare);
         assertFalse(bare.contains("What it keeps"), bare);
+        // And the sentence this issue exists to replace stays on the hub that has not replaced it.
+        assertTrue(bare.contains("rather than one to depend on"), bare);
 
         hub.store().setSetting(Store.SETTING_OPERATOR, "Example Ltd");
         hub.store().setSetting(Store.SETTING_CONTACT, "mailto:abuse@example.com");
         hub.store().setSetting(Store.SETTING_TERMS, "https://example.com/aup");
         String named = http("GET", "/", null, null).bodyText();
-        assertTrue(named.contains("<h2>Who runs this hub</h2>"), named);
+        // With an id, because the closing line below links back to it.
+        assertTrue(named.contains("<h2 id=\"who\">Who runs this hub</h2>"), named);
         assertTrue(named.contains("Run by <b>Example Ltd</b>"), named);
         assertTrue(named.contains("<a href=\"mailto:abuse@example.com\">Contact</a>"), named);
         assertTrue(named.contains("<a href=\"https://example.com/aup\">What is allowed here</a>"), named);
         // The retention sentence is the part an operator cannot write for themselves, so it is not
         // theirs to configure: it says what the process does, and where that stops.
-        assertTrue(named.contains("thirty days of the uptime record"), named);
+        assertTrue(named.contains("thirty days of uptime record"), named);
         assertTrue(named.contains("keeps no list of them"), named);
         assertTrue(named.contains("is the operator's and not something this page can answer for"), named);
+        // A pending join holds the address it knocked from until somebody decides; the list of
+        // what is kept is only worth printing if it is the whole list.
+        assertTrue(named.contains("the address a machine knocked from"), named);
+        // The closing line is the point of the issue: a hub that has named an operator stops
+        // telling visitors not to depend on it and points at who to ask instead.
+        assertFalse(named.contains("rather than one to depend on"), named);
+        assertTrue(named.contains("Who that is, and on what terms"), named);
 
         // One of the three is enough to draw it, since a hub that names only where to write has
         // said the thing that matters most.

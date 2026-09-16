@@ -754,7 +754,7 @@ final class HttpFront {
         String contact = hub.store().setting(Store.SETTING_CONTACT, "");
         String terms = hub.store().setting(Store.SETTING_TERMS, "");
         if (!operator.isEmpty() || !contact.isEmpty() || !terms.isEmpty()) {
-            b.append("<h2>Who runs this hub</h2><p>");
+            b.append("<h2 id=\"who\">Who runs this hub</h2><p>");
             if (!operator.isEmpty()) {
                 b.append("Run by <b>").append(escape(operator)).append("</b>. ");
             }
@@ -774,8 +774,9 @@ final class HttpFront {
             // about the traffic while it is moving. These are what stays afterwards, and the last
             // line is the important one: the process can speak for the process and no further.
             b.append("<p>What it keeps: the node list -- who joined, the names they hold and when --")
-                .append(" for as long as a node is registered; the addresses the operator has barred;")
-                .append(" and thirty days of the uptime record above. A visit to a link is relayed and")
+                .append(" for as long as a node is registered; the address a machine knocked from,")
+                .append(" while its join is waiting to be approved or denied; the addresses the")
+                .append(" operator has barred; and thirty days of uptime record. A visit to a link is relayed and")
                 .append(" not recorded: the hub counts visitors and keeps no list of them, and at its")
                 .append(" default log level it names nodes, not visitors. What the machine underneath")
                 .append(" keeps -- the system journal, a proxy in front, a backup of the state")
@@ -949,8 +950,15 @@ final class HttpFront {
         row(b, "New control connections", HANDSHAKE_BURST + " per address, then "
             + (long) HANDSHAKE_PER_SECOND + " a second");
         b.append("</table>");
-        b.append("<p>The operator can remove a node or bar an address, so treat an open hub you do not run")
-            .append(" as a place to try this rather than one to depend on.</p>");
+        // The closing sentence is the one #99 exists to replace, and only for a hub that has
+        // replaced it: naming an operator and a contact is what turns "do not depend on this" into
+        // "here is who to ask". A hub that has named nobody keeps the warning, because for that one
+        // it is still true.
+        b.append(operator.isEmpty() && contact.isEmpty() && terms.isEmpty()
+            ? "<p>The operator can remove a node or bar an address, so treat an open hub you do not run"
+                + " as a place to try this rather than one to depend on.</p>"
+            : "<p>The operator can remove a node or bar an address. Who that is, and on what terms,"
+                + " is under <a href=\"#who\">Who runs this hub</a> above.</p>");
 
         // The admin tables and their forms come last, under everything a visitor came for.
         AdminWeb.Session s = hub.adminWeb().adminSession(req);

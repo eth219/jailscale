@@ -347,6 +347,10 @@ class AdminCommandTest {
 
             assertNull(set(ipc, "contact", ""), "empty is how it comes back off the page");
             assertEquals("", hub.store().setting(Store.SETTING_CONTACT, "unset"));
+            // Spaces are the same act, and not a third state: stored as typed, they would neither
+            // clear the value nor be refused, and the page would keep the section around a blank.
+            assertNull(set(ipc, "operator", "   "));
+            assertEquals("", hub.store().setting(Store.SETTING_OPERATOR, "unset"));
         } finally {
             hub.close();
         }

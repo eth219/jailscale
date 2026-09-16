@@ -252,6 +252,10 @@ final class AdminIpc implements Ipc.Handler {
                 String value = req.string("value");
                 java.util.function.Predicate<String> text = SETTING_TEXT.get(key);
                 if (text != null) {
+                    // Trimmed first, so that a value of spaces is the same act as clearing it
+                    // rather than a third state: neither refused nor cleared, and the section on
+                    // the page still drawn around a blank name.
+                    value = value.strip();
                     // Empty is how a value is taken back off the page, so it is allowed past the
                     // rule rather than being a rule every one of them has to remember to permit.
                     if (!value.isEmpty() && !text.test(value)) {

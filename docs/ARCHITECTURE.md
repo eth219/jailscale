@@ -613,7 +613,10 @@ two URLs is checked where they are set: they end up in an `href` on a page anyon
 retention sentence the hub has: what the *process* keeps -- the node list while a node is
 registered, the barred addresses, thirty days of uptime record -- and that a visit to a link is
 relayed and not recorded, counted and not listed. It ends by saying what it cannot answer for: the
-journal, a proxy in front, a backup of the state directory. A hub somebody runs for themselves has
+journal, a proxy in front, a backup of the state directory. The closing line of the page changes
+with it: a hub that has named nobody keeps "treat an open hub you do not run as a place to try this
+rather than one to depend on", which for that hub is still true, and one that has named an operator
+points at them instead -- which is the whole of what this setting buys. A hub somebody runs for themselves has
 nobody to name and no terms to point at, and a section that appeared everywhere to say "not
 configured" would be a worse page for the case that needs it least.
 
