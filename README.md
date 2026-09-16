@@ -261,6 +261,12 @@ What a compromised hub can and cannot do is written out in
   unit, where an upgrade is a restart. A third, store-less hub and systemd
   socket activation are both decided work, not accepted limits
   ([§1.2](docs/ARCHITECTURE.md)).
+- Redundancy stops at the hub. A name still has exactly one node behind it, so
+  when that node's host is asleep the name is down whatever the hub count is,
+  and the availability figure on the hub's page stays green, because it is a
+  figure about the hub. The second hub pays only where the hub is the less
+  available of the two, and next to a node on a laptop it is not
+  ([ARCHITECTURE.md §13.2](docs/ARCHITECTURE.md)).
 - Upgrading stops one step short of automatic: `update --download` verifies,
   you run the `install` it prints. Which release is *current* comes from a signed
   pointer that expires, and a node refuses one older than the newest it has seen,
