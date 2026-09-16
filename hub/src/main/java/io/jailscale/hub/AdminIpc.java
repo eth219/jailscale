@@ -249,13 +249,15 @@ final class AdminIpc implements Ipc.Handler {
                 .put("expiresAt", System.currentTimeMillis() + AdminWeb.LOGIN_LINK_TTL_MS));
             case "setting" -> {
                 String key = req.string("key");
-                String value = req.string("value");
+                // Trimmed before anything looks at it, and for every setting rather than only the
+                // text ones. For those it is what keeps a value of spaces from being a third state
+                // -- neither refused nor cleared, with the section on the page still drawn around a
+                // blank name. For the fixed-value ones it is what keeps `knock "off "`, which a
+                // shell or a copied line hands over often enough, from being refused with "knock is
+                // on or off, not off": an error whose difference from the value is invisible.
+                String value = req.string("value").strip();
                 java.util.function.Predicate<String> text = SETTING_TEXT.get(key);
                 if (text != null) {
-                    // Trimmed first, so that a value of spaces is the same act as clearing it
-                    // rather than a third state: neither refused nor cleared, and the section on
-                    // the page still drawn around a blank name.
-                    value = value.strip();
                     // Empty is how a value is taken back off the page, so it is allowed past the
                     // rule rather than being a rule every one of them has to remember to permit.
                     if (!value.isEmpty() && !text.test(value)) {

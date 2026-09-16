@@ -310,6 +310,11 @@ class AdminCommandTest {
 
             assertNull(set(ipc, "knock", "off"));
             assertEquals("off", hub.store().setting(Store.SETTING_KNOCK, "on"));
+            // Stripped for these as well as for the text settings: a trailing space out of a shell
+            // or a copied line is not a fourth value, and refusing it says "knock is on or off, not
+            // off", an error whose difference from the value the operator cannot see.
+            assertNull(set(ipc, "knock", " on "));
+            assertEquals("on", hub.store().setting(Store.SETTING_KNOCK, "off"));
             assertNull(set(ipc, "registration", "open"));
             assertNull(set(ipc, "invitePolicy", "admins"));
         } finally {

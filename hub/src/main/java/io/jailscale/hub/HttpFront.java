@@ -750,10 +750,18 @@ final class HttpFront {
         // somebody runs for themselves has nobody to name and no terms to point at, and a section
         // that appeared on every hub to say "not configured" would be a worse page for the case
         // that needs it least (#99).
-        String operator = hub.store().setting(Store.SETTING_OPERATOR, "");
-        String contact = hub.store().setting(Store.SETTING_CONTACT, "");
-        String terms = hub.store().setting(Store.SETTING_TERMS, "");
-        if (!operator.isEmpty() || !contact.isEmpty() || !terms.isEmpty()) {
+        // Stripped where it is read and not only where it is written (AdminIpc): a value arrives
+        // here from the replication stream as well, so a primary running a build without that rule
+        // would otherwise have this page draw the section around a blank name -- and, worse, drop
+        // the closing warning below on the strength of it.
+        String operator = hub.store().setting(Store.SETTING_OPERATOR, "").strip();
+        String contact = hub.store().setting(Store.SETTING_CONTACT, "").strip();
+        String terms = hub.store().setting(Store.SETTING_TERMS, "").strip();
+        // One boolean and not the same three tests written twice: the closing sentence under
+        // Limits turns on exactly this, and a hand-written negation of it down there is a link to
+        // an anchor that was never drawn, waiting for somebody to edit one of the two.
+        boolean named = !operator.isEmpty() || !contact.isEmpty() || !terms.isEmpty();
+        if (named) {
             b.append("<h2 id=\"who\">Who runs this hub</h2><p>");
             if (!operator.isEmpty()) {
                 b.append("Run by <b>").append(escape(operator)).append("</b>. ");
@@ -773,9 +781,10 @@ final class HttpFront {
             // The retention sentence belongs here and not in "What this hub can see", which is
             // about the traffic while it is moving. These are what stays afterwards, and the last
             // line is the important one: the process can speak for the process and no further.
-            b.append("<p>What it keeps: the node list -- who joined, the names they hold and when --")
-                .append(" for as long as a node is registered; the address a machine knocked from,")
-                .append(" while its join is waiting to be approved or denied; the addresses the")
+            b.append("<p>What it keeps: the node list -- who joined, the hostname and system each")
+                .append(" machine reported, the names they hold and when -- for as long as a node is")
+                .append(" registered; the address a machine knocked from, and the hostname and system")
+                .append(" it gave, while its join is waiting to be approved or denied; the addresses the")
                 .append(" operator has barred; and thirty days of uptime record. A visit to a link is relayed and")
                 .append(" not recorded: the hub counts visitors and keeps no list of them, and at its")
                 .append(" default log level it names nodes, not visitors. What the machine underneath")
@@ -954,11 +963,11 @@ final class HttpFront {
         // replaced it: naming an operator and a contact is what turns "do not depend on this" into
         // "here is who to ask". A hub that has named nobody keeps the warning, because for that one
         // it is still true.
-        b.append(operator.isEmpty() && contact.isEmpty() && terms.isEmpty()
-            ? "<p>The operator can remove a node or bar an address, so treat an open hub you do not run"
-                + " as a place to try this rather than one to depend on.</p>"
-            : "<p>The operator can remove a node or bar an address. Who that is, and on what terms,"
-                + " is under <a href=\"#who\">Who runs this hub</a> above.</p>");
+        b.append(named
+            ? "<p>The operator can remove a node or bar an address. Who that is, and on what terms,"
+                + " is under <a href=\"#who\">Who runs this hub</a> above.</p>"
+            : "<p>The operator can remove a node or bar an address, so treat an open hub you do not run"
+                + " as a place to try this rather than one to depend on.</p>");
 
         // The admin tables and their forms come last, under everything a visitor came for.
         AdminWeb.Session s = hub.adminWeb().adminSession(req);
