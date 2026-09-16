@@ -56,6 +56,17 @@ final class Links {
     private final Map<String, Link> byDomain = new ConcurrentHashMap<>();
     private final Map<Integer, Link> byPort = new ConcurrentHashMap<>();
     private final Map<String, Link> byId = new ConcurrentHashMap<>();
+    /**
+     * The three maps a live link can be in, as one list instead of three names written out at
+     * every site that walks them. {@link #all} and {@link #count} have to mean the same thing by
+     * "every link" -- one is the directory's list and the other is the number the front page
+     * prints -- and a fourth map added to one of two hand-written enumerations is those two pages
+     * disagreeing about how many links this hub is serving. Sharing the list is what makes that
+     * impossible; a test can only notice it after the fact, and only for the maps it happens to
+     * have filled. {@code byId} is not here: it is an index of the same links, not a fourth place
+     * one lives.
+     */
+    private final List<Map<?, Link>> live = List.<Map<?, Link>>of(byName, byDomain, byPort);
 
     Links(HubConfig config, Store store, RawPorts raw, DomainVerifier domains, Registry registry) {
         this.config = config;
@@ -78,22 +89,27 @@ final class Links {
     }
 
     List<Link> all() {
-        List<Link> all = new ArrayList<>(byName.values());
-        all.addAll(byDomain.values());
-        all.addAll(byPort.values());
+        List<Link> all = new ArrayList<>(count());
+        for (Map<?, Link> m : live) {
+            all.addAll(m.values());
+        }
         return all;
     }
 
     /**
      * How many links are open, without building the list of them. Exactly {@code all().size()} and
-     * not an approximation of it: {@link #all} is the concatenation of these same three maps, so
-     * the sum of their sizes is its length whatever they hold. The front page wants this number on
-     * every request from anyone visiting the hub's own name, and copying every live link into an
-     * {@code ArrayList} to call {@code size()} on it is the allocation that buys. A map added to
-     * {@code all} has to be added here too, which is what {@code LinkEndToEndTest} pins.
+     * not an approximation of it: both walk {@link #live}, so the sum of those maps' sizes is that
+     * list's length whatever they hold, and neither can be given a map the other is not. The front
+     * page wants this number on every request from anyone visiting the hub's own name, and copying
+     * every live link into an {@code ArrayList} to call {@code size()} on it is the allocation
+     * that buys.
      */
     int count() {
-        return byName.size() + byDomain.size() + byPort.size();
+        int n = 0;
+        for (Map<?, Link> m : live) {
+            n += m.size();
+        }
+        return n;
     }
 
     /** True if {@code host} is {@code <name>.<hub>}; returns the name part or null. */

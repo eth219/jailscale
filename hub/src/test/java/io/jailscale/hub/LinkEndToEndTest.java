@@ -208,7 +208,7 @@ class LinkEndToEndTest {
      * says `noindex` and is where the addresses are. Who opened a link and which local port it
      * reaches are on neither. Fetched the way a stranger fetches it: no session, over the real router.
      *
-     * <p>One link, so this is also the singular branch of the sentence; the nine-link case above is
+     * <p>One link, so this is also the singular branch of the sentence; the nine-link case below is
      * the plural one.
      */
     @Test
@@ -296,9 +296,12 @@ class LinkEndToEndTest {
             ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "app" + i)));
         }
         waitFor(() -> hub.links().all().size() == 9);
-        // The page's number comes from count() and the directory's from all(); they are the same
-        // three maps, and a fourth added to one and not the other would make the two pages disagree
-        // about how many links this hub is serving.
+        // The page's number comes from count() and the directory's from all(). They walk one
+        // shared list of maps, so this cannot drift and this assertion is not what stops it
+        // drifting -- with only named links open it would pass just as well if count() had been
+        // written out by hand and dropped byDomain and byPort. It is here as the smoke test that
+        // the two agree at all, and Links.live is what makes them agree for the maps this test
+        // never fills.
         assertEquals(hub.links().all().size(), hub.links().count(), "count() and all() disagree");
 
         String home = visit("hub.test", "/").bodyText();

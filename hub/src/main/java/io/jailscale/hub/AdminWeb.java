@@ -342,7 +342,7 @@ final class AdminWeb {
         StringBuilder b = new StringBuilder(8192);
         b.append("<p>").append(HttpFront.escape(hub.config().hostname())).append(" · signed in: <b>").append(HttpFront.escape(s.user())).append("</b>")
             .append(" · nodes ").append(store.nodes().size()).append(" · online ").append(hub.registry().size())
-            .append(" · links ").append(hub.links().all().size()).append("</p>");
+            .append(" · links ").append(hub.links().count()).append("</p>");
         String csrf = "<input type=hidden name=csrf value=\"" + s.csrf() + "\">";
         b.append(addressCheck());
         b.append("<form method=post action=/admin/logout>").append(csrf).append("<button>Sign out</button></form>");

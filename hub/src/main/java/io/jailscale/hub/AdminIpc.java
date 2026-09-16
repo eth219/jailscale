@@ -303,7 +303,7 @@ final class AdminIpc implements Ipc.Handler {
             .put("hubKey", hub.keys().publicText())
             .put("nextHubKey", hub.keys().nextPublicText())
             .put("nodes", store.nodes().size())
-            .put("links", hub.links().all().size())
+            .put("links", hub.links().count())
             .put("certKeyId", hub.tls().isLoaded() ? hub.tls().keyId() : null)
             .put("online", hub.registry().size())
             .put("pending", store.pending().size())

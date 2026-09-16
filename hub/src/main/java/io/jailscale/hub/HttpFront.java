@@ -70,8 +70,10 @@ final class HttpFront {
      * to see what is there burns it. Nothing under it is indexable anyway -- without a session it
      * answers 403 -- so the meta stays on those pages as the second layer.
      *
-     * <p>All of it is advice a crawler may ignore, so this raises the floor and is not a control;
-     * the control would be listing a link only when the node asks to be listed (#99).
+     * <p>All of it is advice a crawler may ignore, so this raises the floor and is not a control.
+     * The one part here that is not advice is that {@code /} names no link at all (§6.3): an
+     * address is kept out of an index by not being on the page that asks to be indexed, not by
+     * what the markup around it says about itself.
      */
     private static final String ROBOTS = "User-agent: *\nDisallow: /admin\n";
 
@@ -945,11 +947,12 @@ final class HttpFront {
         // ArrayList; this page is served to everyone who visits the hub's own name, so either of
         // those is per-request allocation proportional to the hub, for a number the three maps
         // already know.
-        int open = hub.links().count();
-        if (open == 0) {
+        // openLinks and not `open`, which in this method already means "registration is open".
+        int openLinks = hub.links().count();
+        if (openLinks == 0) {
             b.append("<p>None open right now.</p>");
         } else {
-            b.append("<p>").append(open).append(open == 1 ? " link is" : " links are")
+            b.append("<p>").append(openLinks).append(openLinks == 1 ? " link is" : " links are")
                 .append(" open right now. <a href=\"/links\">See them &rarr;</a></p>");
         }
 
@@ -1114,8 +1117,9 @@ final class HttpFront {
      * built once per link and sorted alongside it, because {@code Comparator.comparing} would build
      * it afresh on both sides of every comparison -- on a hub holding thousands of links that is
      * hundreds of thousands of short-lived strings per request, on a page that shows 200 rows at
-     * most, in the process relaying every visitor's bytes. Only {@link #directory} needs this now;
-     * the home page wants a count and takes it from {@code all()} directly.
+     * most, in the process relaying every visitor's bytes. Only {@link #directory} needs this now:
+     * the home page wants a count and takes it from {@link Links#count()}, which builds no list at
+     * all.
      */
     private List<Keyed> sortedLinks() {
         List<Keyed> keyed = new ArrayList<>();

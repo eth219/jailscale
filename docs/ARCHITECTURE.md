@@ -694,10 +694,10 @@ something else has just thrown and a handler that calls the machinery that faile
 **The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
 open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
 -- so the front page says how many are open and points at the directory, and names none of them
-(§6.3 is why). The pair are two real URLs with a nav between them rather than one page with scripted
-tabs, so either half can be sent to someone and neither needs a script to arrive at. The status went
-nowhere: the availability record is what tells a first visitor this hub is real, and it belongs
-where they land.
+(the indexing paragraphs below are why). The pair are two real URLs with a nav between them rather
+than one page with scripted tabs, so either half can be sent to someone and neither needs a script
+to arrive at. The status went nowhere: the availability record is what tells a first visitor this
+hub is real, and it belongs where they land.
 
 Each row of the directory carries the address, the kind and how long the link has been open -- every
 one of them something the hub already holds for its own routing. **Nothing on either page is fetched
@@ -817,15 +817,16 @@ lives in `Metrics`, six `LongAdder`s written from every visitor thread and read 
 the signature counter sits at the one point that decides, so a refusal added later cannot forget to
 be counted.
 
-It shows the first of the open links as well -- the address a visitor would type and whether it is
-https, tcp or udp -- because a hub that serves nothing and a hub that is busy look identical without
-it, and points at `/links` for the rest. The count that used to sit in the status table is gone with
-it: the list is the count, and saying both invited them to disagree. Those addresses are public by
-construction: a visitor reaches one by typing it. (Not because "a DNS lookup finds it either way",
-which this document used to say and which `DnsResponder` makes false -- a held name and a name
-nobody holds are answered identically, so DNS neither confirms nor enumerates.) What stays behind
-the admin session is the part that is nobody else's business: who opened a name and which local port
-it reaches.
+It says how many links are open as well -- the number and not one of the addresses -- because a hub
+that serves nothing and a hub that is busy look identical without it, and points at `/links` for the
+rest. It showed the first few of them as rows for a while and does not any more, for the reason
+above: `/` is the page that asks to be indexed. The number sits under "Open links" beside the way
+through to them rather than in the status table, so it is where a reader looking for links is
+already looking. The addresses `/links` carries are public by construction: a visitor reaches one by
+typing it. (Not because "a DNS lookup finds it either way", which this document used to say and
+which `DnsResponder` makes false -- a held name and a name nobody holds are answered identically, so
+DNS neither confirms nor enumerates.) What stays behind the admin session is the part that is nobody
+else's business: who opened a name and which local port it reaches.
 
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's
