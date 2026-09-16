@@ -1662,14 +1662,15 @@ puts one there.
 
 Separately, and not about amplification: a UDP answer is never longer than **512 bytes**, which is
 what a resolver that has not offered EDNS may be sent. Past it the answer is the header with `TC` set.
-Nothing here reaches that today at 287 bytes, but nothing enforced it either, and an oversized
-datagram is not an error a resolver reports — it is one it discards, which under `_acme-challenge`
-is a certificate that stops renewing and says so nowhere.
+Nothing here reaches that today at 287 bytes, and until the budget below nothing enforced it
+either — an oversized datagram is not an error a resolver reports, it is one it discards, which
+under `_acme-challenge` is a certificate that stops renewing and says so nowhere.
 
 **The bound is the encoder's, and it covers the question too.** How much may leave arrives at
-`build()` as a budget — 512 for a datagram, room for no records at all for the slip above,
-unbounded for TCP — and an answer that does not fit is emitted there as the `TC` form, from the
-offset the question was already parsed to. It used to be a second pass over the finished response,
+`build()` as a budget, which is two things and not one: how many bytes the transport will carry,
+and whether records may go at all. TCP is unbounded and takes records, a datagram is 512 and takes
+records, the slip above is 512 and takes none. An answer that does not fit is emitted there as the
+`TC` form, from the offset the question was already parsed to. It used to be a second pass over the finished response,
 walking the question again to find that offset: a weaker parser of the same bytes, kept in step
 with the encoder by hand, and the change that adds EDNS or question compression is the change that
 would make its truncation malformed. That pass also had no idea what it was truncating *to*, so

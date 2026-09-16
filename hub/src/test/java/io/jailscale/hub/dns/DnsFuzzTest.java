@@ -54,8 +54,8 @@ class DnsFuzzTest {
                 // they are driven over every case rather than only the oversized ones -- what used
                 // to walk a finished response to find the question again is now the offset
                 // `respond` parsed, and both shapes are cut to it.
-                byte[] datagram = d.respond(in, DnsResponder.MAX_UDP);
-                byte[] slip = d.respond(in, DnsResponder.NO_RECORDS);
+                byte[] datagram = d.respond(in, DnsResponder.Budget.DATAGRAM);
+                byte[] slip = d.respond(in, DnsResponder.Budget.NO_RECORDS);
                 if (datagram == null || slip == null) {
                     fail("answered whole but not within a budget: " + Arrays.toString(in));
                 }
@@ -65,8 +65,19 @@ class DnsFuzzTest {
                 if (slip.length > DnsResponder.MAX_UDP || slip.length > whole.length) {
                     fail("bad truncation of " + Arrays.toString(whole));
                 }
+                // Never larger than what asked for it: the amplification property, and the one the
+                // old loop asserted here before this was two budgets rather than a second pass.
+                if (slip.length > in.length) {
+                    fail("a truncated answer of " + slip.length + " bytes for a query of " + in.length);
+                }
                 if (whole.length > DnsResponder.MAX_UDP && (datagram[2] & 0x02) == 0) {
                     fail("TC should be set on what a datagram can carry of " + Arrays.toString(in));
+                }
+                // The slip's whole job is to say TC so a resolver comes back over TCP. An answer
+                // over twelve bytes is one this zone built, so its slipped form is a truncation; a
+                // bare header is FORMERR or REFUSED, which is a refusal and not a truncation.
+                if (whole.length > 12 && (slip[2] & 0x02) == 0) {
+                    fail("the slip form should carry TC for " + Arrays.toString(in));
                 }
             } catch (Throwable t) {
                 fail("case " + i + " threw " + t, t);

@@ -97,18 +97,29 @@ public final class DnsResponder implements AutoCloseable {
      * it the answer is the header with {@code TC} set and the resolver asks again over TCP.
      */
     static final int MAX_UDP = 512;
+
     /**
-     * The budget over TCP, where a length prefix carries whatever the answer is: nothing is ever
-     * truncated there, so this only has to be past the largest message this zone can build.
+     * How much of an answer may leave, which is two questions and not one: how many bytes the
+     * transport will carry, and whether records may go at all.
+     *
+     * <p>They were one {@code int} to begin with, zero meaning no records. That reads like a size
+     * right up to the day something computes one — an EDNS buffer minus what is already spent
+     * arrives at zero meaning <i>no room at all</i>, and would have been handed the whole 512 — and
+     * the ceiling the echo is measured against was then a constant rather than what was asked for,
+     * so a resolver that advertised 4,096 would have had its answer cut to 512 anyway. Two fields
+     * that each mean one thing cost a record and cannot be read the wrong way.
      */
-    static final int WHOLE = Integer.MAX_VALUE;
-    /**
-     * Room for no records at all: the header with {@code TC} and the question, which is the polite
-     * half of the answer rate's refusal ({@code ResponseRate.SLIP}). Not a size — a byte count
-     * small enough to force truncation would also be too small for the question that form has to
-     * echo, and the question's length is the encoder's to know, not this constant's.
-     */
-    static final int NO_RECORDS = 0;
+    record Budget(int bytes, boolean records) {
+        /** TCP: a length prefix carries whatever the answer is, so nothing there is ever truncated. */
+        static final Budget WHOLE = new Budget(Integer.MAX_VALUE, true);
+        /** A datagram for a resolver that has not offered EDNS (RFC 1035 §4.2.1). */
+        static final Budget DATAGRAM = new Budget(MAX_UDP, true);
+        /**
+         * Over the answer rate, and the one query in {@code ResponseRate.SLIP} that is answered
+         * rather than dropped: a datagram's room, and no records to put in it.
+         */
+        static final Budget NO_RECORDS = new Budget(MAX_UDP, false);
+    }
     private static final long RATE_LOG_MS = 60_000;
     private final Throttle rateLog = new Throttle(RATE_LOG_MS);
 
@@ -270,14 +281,14 @@ public final class DnsResponder implements AutoCloseable {
             return null;
         }
         if (isSelfProbe(query)) {
-            return respond(query, MAX_UDP);
+            return respond(query, Budget.DATAGRAM);
         }
         ResponseRate.Verdict v = rate.check(source, now);
         if (v == ResponseRate.Verdict.ANSWER) {
-            return respond(query, MAX_UDP);
+            return respond(query, Budget.DATAGRAM);
         }
         logRate(now);
-        return v == ResponseRate.Verdict.DROP ? null : respond(query, NO_RECORDS);
+        return v == ResponseRate.Verdict.DROP ? null : respond(query, Budget.NO_RECORDS);
     }
 
     /** Queries answered on UDP 53 since this hub started, for the metrics endpoint (§6.3). */
@@ -363,16 +374,15 @@ public final class DnsResponder implements AutoCloseable {
 
     /** The whole response for one query message, which is what TCP sends, or null if it is not a query. */
     byte[] respond(byte[] q) {
-        return respond(q, WHOLE);
+        return respond(q, Budget.WHOLE);
     }
 
     /**
-     * The same, within a budget: how many bytes the answer may take on its way out. {@link #MAX_UDP}
-     * for a datagram, {@link #NO_RECORDS} for the answer rate's slip, {@link #WHOLE} for TCP. An
-     * answer that does not fit comes back as the {@code TC} form, written by the same encoder: the
-     * header, and the question with it where the budget has room for the echo.
+     * The same, within a {@link Budget}: what the transport will carry. An answer that does not fit
+     * comes back as the {@code TC} form, written by the same encoder — the header, and the question
+     * with it where the budget has room for the echo.
      */
-    byte[] respond(byte[] q, int budget) {
+    byte[] respond(byte[] q, Budget budget) {
         if (!isQuery(q)) {
             return null;
         }
@@ -385,22 +395,37 @@ public final class DnsResponder implements AutoCloseable {
             return error(q, RCODE_FORMERR);
         }
         String qname = qn.name();
-        if (qname.equals(zone)) {
+        boolean acme = qname.equals(zone);
+        boolean atApex = !acme && qname.equals(hubName);
+        boolean below = !acme && !atApex && qname.endsWith("." + hubName);
+        if (!acme && !atApex && !below) {
+            return error(q, RCODE_REFUSED); // not our zone
+        }
+        // A budget with no room for records is a truncation whatever the records would have been,
+        // and this is the flood the slip exists for: building a set of them to throw away is
+        // per-packet garbage on the thread reading the socket, which is the argument ResponseRate
+        // already makes about its own table. Asked after the zone check, because a name outside the
+        // zone is refused in twelve bytes and that reflects less than the TC form does.
+        if (!budget.records()) {
+            return truncated(qn);
+        }
+        if (acme) {
             return challenge(qn);
         }
-        if (qname.equals(hubName)) {
+        if (atApex) {
             return apex(qn);
         }
-        if (qname.endsWith("." + hubName)) {
-            return under(qn, qname.substring(0, qname.length() - hubName.length() - 1));
-        }
-        return error(q, RCODE_REFUSED); // not our zone
+        return under(qn, qname.substring(0, qname.length() - hubName.length() - 1));
     }
 
     /**
      * Whether this is a query at all: twelve bytes of header, and {@code QR} clear. Exactly the two
      * cases {@link #respond} has nothing to say to, named so that {@link #answerForUdp} can ask them
      * without building an answer first.
+     *
+     * <p>It does not look at the opcode, so a NOTIFY or an UPDATE is answered as though it were a
+     * standard query rather than with NOTIMP. That is how this server has always behaved and it is
+     * not this method's to change quietly; the name says query because that is what it is asked.
      */
     private static boolean isQuery(byte[] q) {
         return q.length >= 12 && (q[2] & 0x80) == 0;
@@ -414,10 +439,10 @@ public final class DnsResponder implements AutoCloseable {
      * with the question because they are spent in the same place — {@link #build}, which is the only
      * code that knows how large the answer came out.
      */
-    private record Question(byte[] query, String name, int type, int end, int budget) {}
+    private record Question(byte[] query, String name, int type, int end, Budget budget) {}
 
     /** The one reading of a question in this file; null is a FORMERR for the caller to send. */
-    private static Question parse(byte[] q, int budget) {
+    private static Question parse(byte[] q, Budget budget) {
         int p = 12;
         StringBuilder name = new StringBuilder();
         while (p < q.length) {
@@ -459,10 +484,10 @@ public final class DnsResponder implements AutoCloseable {
                 answers.add(rr(TYPE_SOA, TTL_TXT, soa));
             } else {
                 // NODATA: authority section carries the SOA
-                return build(qn, List.of(), List.of(rr(TYPE_SOA, TTL_TXT, soa)), List.of(), 0);
+                return build(qn, List.of(), List.of(rr(TYPE_SOA, TTL_TXT, soa)), List.of());
             }
         }
-        return build(qn, answers, List.of(), List.of(), 0);
+        return build(qn, answers, List.of(), List.of());
     }
 
     /** The zone apex: A is the serving set, NS and SOA the delegation (§13.3). */
@@ -497,7 +522,7 @@ public final class DnsResponder implements AutoCloseable {
         if (answers.isEmpty()) {
             return nodata(qn, ns);
         }
-        return build(qn, answers, List.of(), additional, 0);
+        return build(qn, answers, List.of(), additional);
     }
 
     /** A name under the apex: a name server's glue, this process's token, or the wildcard. */
@@ -533,13 +558,13 @@ public final class DnsResponder implements AutoCloseable {
         if (answers.isEmpty()) {
             return nodata(qn, ns);
         }
-        return build(qn, answers, List.of(), List.of(), 0);
+        return build(qn, answers, List.of(), List.of());
     }
 
     /** No records of that type here (AAAA, MX, ANY, ...): NOERROR with the apex SOA in the authority section. */
     private byte[] nodata(Question qn, Map<String, String> ns) {
         byte[] soa = rrNamed(encodeName(hubName), TYPE_SOA, TTL_ADDRESS, soaRdata(mname(ns), TTL_ADDRESS));
-        return build(qn, List.of(), List.of(soa), List.of(), 0);
+        return build(qn, List.of(), List.of(soa), List.of());
     }
 
     /** By label, so ns1 is answered before ns2 and is the SOA's mname whatever map the zone handed over. */
@@ -560,15 +585,19 @@ public final class DnsResponder implements AutoCloseable {
      * question compression or a second question is the change that would make its truncation
      * malformed, and a malformed answer is not an error a resolver reports, it is one it discards.
      */
-    private byte[] build(Question qn, List<byte[]> answers, List<byte[]> authority, List<byte[]> additional, int rcode) {
+    private byte[] build(Question qn, List<byte[]> answers, List<byte[]> authority, List<byte[]> additional) {
         byte[] q = qn.query();
+        Budget budget = qn.budget();
         int size = qn.end() + length(answers) + length(authority) + length(additional);
-        if (size > qn.budget()) {
-            return truncated(qn, rcode);
+        // The definition of a budget, both halves of it. `respond` short-circuits the second before
+        // any of these records is encoded; it stays here because this is the statement, and a
+        // builder reached with no room for records must not answer with some.
+        if (!budget.records() || size > budget.bytes()) {
+            return truncated(qn);
         }
         ByteArrayOutputStream out = new ByteArrayOutputStream(size);
-        // QR, AA, copy RD, rcode; never RA
-        header(out, q, 0x8400 | (q[2] & 0x01) << 8 | rcode, 1, answers.size(), authority.size(), additional.size());
+        // QR, AA, copy RD; never RA, and no rcode -- everything that carries one goes through error()
+        header(out, q, 0x8400 | (q[2] & 0x01) << 8, 1, answers.size(), authority.size(), additional.size());
         out.write(q, 12, qn.end() - 12);
         for (byte[] a : answers) {
             out.writeBytes(a);
@@ -592,25 +621,24 @@ public final class DnsResponder implements AutoCloseable {
      * nowhere. Over the answer rate it is the polite half of the refusal
      * ({@code ResponseRate.SLIP}), and it arrives here as a budget of {@link #NO_RECORDS}.
      *
-     * <p>What the echo has to fit, <b>and it does have to fit</b>. Truncating belongs to UDP alone —
-     * TCP's length prefix carries whatever the answer is — so a datagram is the ceiling, and a
-     * budget that is a size lowers it as far as it goes; {@link #NO_RECORDS} is not one, so it does
-     * not. A question too long for what is left is dropped with the records, leaving the header,
-     * which is still a well-formed {@code TC} answer.
+     * <p>What the echo has to fit, <b>and it does have to fit</b>: the budget's own byte count,
+     * which is a datagram's for both callers that reach here and is whatever a resolver advertised
+     * the day one offers EDNS. A question too long for it is dropped with the records, leaving the
+     * header — still a well-formed {@code TC} answer, and the same shape this server already sends
+     * for REFUSED, which echoes no question either.
      *
      * <p>That branch is not hypothetical. A name here is bounded by the packet and not by the 255
-     * bytes RFC 1035 allows one, so a query of nearly a kilobyte is accepted, and the pass that used
-     * to cut the answer down had no idea what it was cutting it to: it echoed the question whatever
-     * its size, and the answer left at the size of the query — 998 bytes in
+     * bytes RFC 1035 allows one ({@code #89}), so a query of nearly a kilobyte is accepted, and the
+     * pass that used to cut the answer down had no idea what it was cutting it to: it echoed the
+     * question whatever its size, and the answer left at the size of the query — 998 bytes in
      * {@code DnsAmplificationTest}, over the §11.5 bound, broken by the one path that existed to
      * keep it.
      */
-    private static byte[] truncated(Question qn, int rcode) {
+    private static byte[] truncated(Question qn) {
         byte[] q = qn.query();
-        int cap = qn.budget() == NO_RECORDS ? MAX_UDP : Math.min(qn.budget(), MAX_UDP);
-        boolean echo = qn.end() <= cap;
+        boolean echo = qn.end() <= qn.budget().bytes();
         ByteArrayOutputStream out = new ByteArrayOutputStream(echo ? qn.end() : 12);
-        header(out, q, 0x8600 | (q[2] & 0x01) << 8 | rcode, echo ? 1 : 0, 0, 0, 0);
+        header(out, q, 0x8600 | (q[2] & 0x01) << 8, echo ? 1 : 0, 0, 0, 0);
         if (echo) {
             out.write(q, 12, qn.end() - 12);
         }
@@ -622,10 +650,13 @@ public final class DnsResponder implements AutoCloseable {
      * is taken. It is not turned into a {@code TC} answer when the answer rate slips one through
      * either — a refusal carrying {@code TC} sends a resolver to TCP to be refused a second time,
      * and a refusal echoes no question, so there is nothing in it to reflect.
+     *
+     * <p>RD is copied, as RFC 1035 §4.1.1 says it is and as the other two shapes already did. Only
+     * this one dropped it, which was invisible while each wrote its own header.
      */
     private byte[] error(byte[] q, int rcode) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(12);
-        header(out, q, 0x8000 | rcode, 0, 0, 0, 0);
+        header(out, q, 0x8000 | (q[2] & 0x01) << 8 | rcode, 0, 0, 0, 0);
         return out.toByteArray();
     }
 
@@ -662,16 +693,11 @@ public final class DnsResponder implements AutoCloseable {
     private static byte[] rrNamed(byte[] owner, int type, int ttl, byte[] rdata) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(rdata.length + owner.length + 10);
         out.writeBytes(owner);
-        out.write(type >>> 8);
-        out.write(type);
-        out.write(0);
-        out.write(1); // IN
-        out.write(ttl >>> 24);
-        out.write(ttl >>> 16);
-        out.write(ttl >>> 8);
-        out.write(ttl);
-        out.write(rdata.length >>> 8);
-        out.write(rdata.length);
+        writeShort(out, type);
+        writeShort(out, 1); // IN
+        writeShort(out, ttl >>> 16);
+        writeShort(out, ttl);
+        writeShort(out, rdata.length);
         out.writeBytes(rdata);
         return out.toByteArray();
     }

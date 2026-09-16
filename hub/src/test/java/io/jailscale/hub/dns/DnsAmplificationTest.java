@@ -50,6 +50,8 @@ class DnsAmplificationTest {
         String worstAt = "";
         int biggest = 0;
         String biggestAt = "";
+        int biggestDatagram = 0;
+        String biggestDatagramAt = "";
         for (String hub : HUBS) {
             DnsResponder d = fullest(hub);
             for (String name : names(hub)) {
@@ -64,16 +66,30 @@ class DnsAmplificationTest {
                         worst = ratio;
                         worstAt = name + " type " + type;
                     }
+                    // The whole answer, which is TCP's, and what a datagram would carry of it. The
+                    // ratio is taken on the larger of the two, so the bound stays the conservative
+                    // one; the sizes are kept apart because only one of them is bounded by 512.
                     if (r.length > biggest) {
                         biggest = r.length;
                         biggestAt = name + " type " + type;
+                    }
+                    byte[] datagram = d.respond(q, DnsResponder.Budget.DATAGRAM);
+                    if (datagram.length > biggestDatagram) {
+                        biggestDatagram = datagram.length;
+                        biggestDatagramAt = name + " type " + type;
                     }
                 }
             }
         }
         assertTrue(worst <= MAX_RATIO, "worst answer-to-query ratio " + worst + " at " + worstAt);
-        // The absolute size matters on its own: it is what a datagram may carry without EDNS, and
-        // an answer past it is one a resolver discards rather than reads (see DnsResponder.MAX_UDP).
+        // What leaves on :53 is bounded by the encoder, so this half cannot fail without a defect:
+        // it is here because that bound is the thing this file exists to keep honest.
+        assertTrue(biggestDatagram <= DnsResponder.MAX_UDP,
+            "largest datagram " + biggestDatagram + " bytes at " + biggestDatagramAt);
+        // The whole answer is a statement about the zone and not about the transport -- TCP would
+        // carry more. An answer this zone can build that does not fit a datagram is not broken, it
+        // is two round trips for every resolver that asks, which is a design change and not an
+        // accident; §15 says the zone is what grows, so this is where that shows up.
         assertTrue(biggest <= DnsResponder.MAX_UDP, "largest answer " + biggest + " bytes at " + biggestAt);
     }
 
@@ -160,9 +176,22 @@ class DnsAmplificationTest {
         // commit above closed.
         DnsResponder d = fullest();
         byte[] q = DnsFuzzTest.query("myapp." + HUB, 1);
-        assertTrue(d.respond(q).length > q.length, "the whole answer has to be the thing that does not fit");
-        assertEquals(q.length, d.respond(q, q.length).length, "room for the echo exactly, and it is kept");
-        assertEquals(12, d.respond(q, q.length - 1).length, "one byte less and the header goes alone");
+        int whole = d.respond(q).length;
+        assertTrue(whole > q.length, "the whole answer has to be the thing that does not fit");
+
+        // `size > budget`, at the byte where it turns over. Without this the comparison could be
+        // `>=` -- an answer of exactly the budget needlessly truncated -- and every other case
+        // here is far enough from the boundary not to notice.
+        assertEquals(whole, d.respond(q, budget(whole)).length, "room for the answer exactly, and it is kept");
+        assertEquals(q.length, d.respond(q, budget(whole - 1)).length, "one byte less and it is the question alone");
+
+        // And the echo's own boundary, below which not even the question fits.
+        assertEquals(q.length, d.respond(q, budget(q.length)).length, "room for the echo exactly, and it is kept");
+        assertEquals(12, d.respond(q, budget(q.length - 1)).length, "one byte less and the header goes alone");
+    }
+
+    private static DnsResponder.Budget budget(int bytes) {
+        return new DnsResponder.Budget(bytes, true);
     }
 
     /** The zone at its largest: two hosts, both name servers, an issuance in flight. */
