@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Is it already a documented limit?
+    url: https://github.com/eth219/jailscale/blob/main/docs/ARCHITECTURE.md
+    about: "§15 lists at length what this project cannot do. A stated limit is not a defect - check there first."
+  - name: A security problem
+    url: https://github.com/eth219/jailscale/blob/main/CONTRIBUTING.md#reporting-a-security-problem
+    about: "Do not put the details in a public issue. Private reporting is not enabled yet (#62); read this first."
+  - name: How an issue is labelled and claimed
+    url: https://github.com/eth219/jailscale/blob/main/docs/issue-workflow.md
+    about: "Three label axes, and how a session says it is working on something."

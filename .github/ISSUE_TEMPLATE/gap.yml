@@ -1,0 +1,39 @@
+name: Verification gap
+description: The code path exists and nothing verifies it
+labels: ["test-gap", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Not a defect - a defect nobody would notice. Examples already filed: #80 (the clipboard is
+        asserted only in the direction that passes when the feature is dead) and #82 (two upgrade
+        directions have never been tried).
+  - type: textarea
+    id: path
+    attributes:
+      label: What is not verified
+      description: The behaviour, and the files or tests that look like they cover it but do not.
+    validations: { required: true }
+  - type: textarea
+    id: why
+    attributes:
+      label: Why the existing tests do not catch it
+      description: >
+        Usually one of: it asserts only the direction that passes when the feature is dead; it runs
+        on one platform; it is behind a tag or an unset variable nothing sets; it measures the
+        harness. Say which.
+    validations: { required: true }
+  - type: textarea
+    id: close
+    attributes:
+      label: What closing it looks like
+      description: >
+        Including "one person runs this by hand once and comments here" - that is a legitimate answer
+        when CI cannot reach it, and saying so beats leaving it open for a year.
+    validations: { required: true }
+  - type: textarea
+    id: fail
+    attributes:
+      label: What the new check has to be able to fail
+      description: A check that cannot fail in the direction it claims is the gap it was meant to close.
+    validations: { required: true }

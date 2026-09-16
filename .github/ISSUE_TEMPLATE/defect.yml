@@ -1,0 +1,40 @@
+name: Defect
+description: Something behaves differently from what it says it does
+labels: ["bug", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: "Area labels (`area:hub`, `area:node`, …) and a final status are set at triage. Leave them."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what should happen instead
+      description: The observed behaviour first. If a document claims otherwise, say which one and where.
+    validations: { required: true }
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reach it
+      description: |
+        Exact commands where you have them. Say which build: a release tag, a local `./mvnw package`,
+        or native binaries from `./native.sh` — a figure from the JVM is a figure about the JVM.
+      placeholder: |
+        jailscale up --hub ...
+        jailscale publish 3000
+        # then, from elsewhere:
+    validations: { required: true }
+  - type: textarea
+    id: cost
+    attributes:
+      label: Who it hurts, and how badly
+      description: >
+        Ordinary use or an attack? Does it degrade, or go dark? Does it announce itself, or fail
+        silently? This is what decides whether it is worked on next week or next year.
+    validations: { required: true }
+  - type: textarea
+    id: unknown
+    attributes:
+      label: What you did not check
+      description: >
+        Other platforms, other scales, whether it predates a recent change. An honest gap here is
+        worth more than a guess - it tells the next person where to start.
