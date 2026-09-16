@@ -330,18 +330,26 @@ final class HttpFront {
 
     /**
      * Liveness, for something that is not a person and has no credential: is this hub up, which
-     * build answered, how long it has been up, and when the certificate runs out -- the last being
-     * the one that takes every name down at once and the one worth alerting on. That is the whole
-     * list. It used to carry the counters and the hub's state as well, which made the public name's
-     * health check a second copy of {@code /metrics}; the counters live on the metrics listener now
-     * and the per-node detail behind {@code /admin} (ARCHITECTURE.md §6.3). Fields may be added; a
-     * monitor that reads the ones it knows keeps working (§5.4).
+     * build answered, what it will talk to, how long it has been up, and when the certificate runs
+     * out -- the last being the one that takes every name down at once and the one worth alerting
+     * on. That is the whole list. It used to carry the counters and the hub's state as well, which
+     * made the public name's health check a second copy of {@code /metrics}; the counters live on
+     * the metrics listener now and the per-node detail behind {@code /admin} (ARCHITECTURE.md
+     * §6.3). Fields may be added; a monitor that reads the ones it knows keeps working (§5.4).
      */
     private JsonObject status() {
         JsonObject.Builder b = JsonObject.builder()
             .put("ok", true)
             .put("hostname", hub.config().hostname())
             .put("version", Hub.version())
+            // Beside the version for the reason the status table puts them beside each other: a
+            // version says what this hub is, the protocol says what it will talk to (§5.4). The
+            // page says it twice and this endpoint said it nowhere, so the one consumer that
+            // cannot read the HTML -- a fleet monitor, which is who this endpoint is for -- had to
+            // hardcode a version-to-protocol mapping that no release note carries, or scrape the
+            // page. Both constants, so the answer cannot drift from what the handshake enforces.
+            .put("proto", Message.PROTO)
+            .put("minProto", NodeSession.MIN_PROTO)
             .put("uptimeSeconds", Resources.uptimeMillis() / 1000)
             .put("certificateNotAfter", hub.tls().isLoaded() ? hub.tls().leaf().getNotAfter().getTime() / 1000 : null)
             .put("role", hub.role())
