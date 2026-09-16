@@ -145,9 +145,9 @@ public final class DnsResponder implements AutoCloseable {
     private final ResponseRate rate = new ResponseRate();
     /**
      * Answers sent on UDP 53, for the metrics endpoint (§6.3). Counted here rather than inside
-     * {@link ResponseRate} because two kinds of query are answered without that meter ever seeing
-     * them -- a loopback source, and the self-probe -- so a count taken there is the metered traffic
-     * under a name that says it is all of it, and reads zero on a hub whose resolvers all arrive
+     * {@link ResponseRate} because a query from a loopback source is answered without that
+     * meter ever seeing it, so a count taken there is the metered traffic under a name that says it
+     * is all of it, and reads zero on a hub whose resolvers all arrive
      * through a forwarder on this host.
      *
      * <p>Every answer, not only the ones carrying records: a refusal and a datagram-sized truncation
@@ -157,19 +157,6 @@ public final class DnsResponder implements AutoCloseable {
      * table-wide budget rather than one network's own, and is a subset by design.
      */
     private final java.util.concurrent.atomic.AtomicLong answered = new java.util.concurrent.atomic.AtomicLong();
-    /**
-     * The encoded question a hub's own self-probe asks (§13.3), so the meter can leave it alone.
-     *
-     * <p>{@code Advertise.whoAmI} asks each glue address on :53 for this name to find out which of
-     * them is this host, and those queries leave from a public address, so they were metered like
-     * anyone's -- which handed an attacker with the forging capability this limiter assumes a way
-     * to stop a hub identifying itself: about twenty packets a second with a source forged into the
-     * hub's own network empties that bucket, the probe is dropped or truncated, {@code DnsQuery}
-     * has no TCP fallback, and {@code whoAmI} swallows the failure at debug and returns null. A hub
-     * that never learns its address serves an empty zone. Exempting the name costs nothing to an
-     * attacker: its answer is 87 bytes for a 52-byte query, the lowest ratio the zone has.
-     */
-    private final byte[] selfQuestion;
 
 
     private final String zone;      // _acme-challenge.hub.example.com (lower case, no trailing dot)
@@ -193,7 +180,6 @@ public final class DnsResponder implements AutoCloseable {
         this.hubLabels = labels(this.hubName);
         this.zone = CHALLENGE_LABEL + "." + this.hubName;
         this.selfToken = selfToken;
-        this.selfQuestion = encodeName(SELF_LABEL + "." + this.hubName);
     }
 
     private static String randomToken() {
@@ -348,9 +334,12 @@ public final class DnsResponder implements AutoCloseable {
         if (!isQuery(query)) {
             return null;
         }
-        if (isSelfProbe(query)) {
-            return counted(respond(query, Budget.DATAGRAM));
-        }
+        // No name is exempt from here. `_jailhub-self` was, because the lookup that asks for it
+        // had no TCP fallback and anyone able to forge a source into the hub's own network could
+        // stop a hub identifying itself by emptying that bucket -- and one unmetered name is one
+        // name's worth of unbounded egress, which is the total §11.5 says is a number.
+        // `DnsQuery` follows a drop or a TC to TCP now, so the flood costs an attacker a flood and
+        // buys nothing.
         ResponseRate.Verdict v = rate.check(source, now);
         if (v == ResponseRate.Verdict.ANSWER) {
             return counted(respond(query, Budget.DATAGRAM));
@@ -383,23 +372,6 @@ public final class DnsResponder implements AutoCloseable {
 
     public long refusedByGlobalBudget() {
         return rate.globalRefused();
-    }
-
-    /**
-     * Whether this is a hub asking {@code _jailhub-self} (§13.3). Compared as the bytes the question
-     * already holds rather than parsed again: the name is fixed, so the encoded form is too, and a
-     * query that does not match is merely metered, which is the safe way to be wrong.
-     */
-    private boolean isSelfProbe(byte[] query) {
-        if (query.length < 12 + selfQuestion.length) {
-            return false;
-        }
-        for (int i = 0; i < selfQuestion.length; i++) {
-            if (query[12 + i] != selfQuestion[i]) {
-                return false;
-            }
-        }
-        return true;
     }
 
     /**

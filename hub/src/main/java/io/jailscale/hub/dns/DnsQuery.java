@@ -172,7 +172,23 @@ public final class DnsQuery {
         return new Message(m, parseOffsets(m, id, type, true), parseOffsets(m, id, type, false));
     }
 
-    /** One query and its reply, id checked, with or without asking for recursion. */
+    /**
+     * One query and its reply, id checked, with or without asking for recursion.
+     *
+     * <p><b>UDP, then TCP.</b> A datagram that does not come back, or one that comes back truncated,
+     * is asked again over TCP -- which every server this asks answers, the hub's own included, and
+     * where the address is proved by a handshake rather than claimed. RFC 7766 says a resolver
+     * should do this; here it also decides something else. {@code Advertise.whoAmI} asks each glue
+     * address for {@code _jailhub-self} to find out which one is this host, and while that lookup
+     * had no fallback, anyone able to forge a source into the hub's own network could stop the
+     * answer arriving with about twenty packets a second -- so the responder had to exempt that one
+     * name from its answer-rate limits, which left the total that may leave on :53 unbounded
+     * (§11.5). With a fallback the flood costs the attacker a UDP flood and gets a TCP answer
+     * anyway, and the exemption is gone.
+     *
+     * <p>The cost is the worst case: a server that answers nothing at all is now waited for twice,
+     * once per transport.
+     */
     private static byte[] exchange(String server, int port, String name, int type, int timeoutMs, boolean recurse) throws IOException {
         int id = RNG.nextInt(0x10000);
         ByteArrayOutputStream q = new ByteArrayOutputStream(64);
@@ -191,18 +207,57 @@ public final class DnsQuery {
         q.write(0);
         q.write(1);  // IN
         byte[] query = q.toByteArray();
+        try {
+            byte[] m = overUdp(server, port, query, id, timeoutMs);
+            if ((m[2] & 0x02) == 0) {
+                return m;
+            }
+        } catch (IOException e) {
+            // Nothing usable came back over UDP: a lost or refused datagram, a server too busy to
+            // answer, a flood on the path, or a reply that was not this question's -- which is what
+            // an off-path forgery looks like from here. Every one of them is a reason to ask again
+            // where the address is proved rather than claimed.
+        }
+        return overTcp(server, port, query, id, timeoutMs);
+    }
+
+    private static byte[] overUdp(String server, int port, byte[] query, int id, int timeoutMs) throws IOException {
         try (DatagramSocket s = new DatagramSocket()) {
             s.setSoTimeout(timeoutMs);
             s.send(new DatagramPacket(query, query.length, new InetSocketAddress(server, port)));
             byte[] buf = new byte[4096];
             DatagramPacket r = new DatagramPacket(buf, buf.length);
             s.receive(r);
-            byte[] m = java.util.Arrays.copyOf(buf, r.getLength());
-            if (m.length < 12 || (((m[0] & 0xff) << 8) | (m[1] & 0xff)) != id) {
-                throw new IOException("bad DNS response");
-            }
-            return m;
+            return checked(java.util.Arrays.copyOf(buf, r.getLength()), id);
         }
+    }
+
+    /** The same question with a two-byte length in front of it, which is DNS over TCP (RFC 1035 §4.2.2). */
+    private static byte[] overTcp(String server, int port, byte[] query, int id, int timeoutMs) throws IOException {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new InetSocketAddress(server, port), timeoutMs);
+            s.setSoTimeout(timeoutMs);
+            java.io.DataOutputStream out = new java.io.DataOutputStream(s.getOutputStream());
+            out.writeShort(query.length);
+            out.write(query);
+            out.flush();
+            java.io.DataInputStream in = new java.io.DataInputStream(s.getInputStream());
+            int len = in.readUnsignedShort();
+            if (len > 65535 || len < 12) {
+                throw new IOException("bad DNS response length " + len);
+            }
+            byte[] m = new byte[len];
+            in.readFully(m);
+            return checked(m, id);
+        }
+    }
+
+    /** A reply is this question's only if it carries this question's id. */
+    private static byte[] checked(byte[] m, int id) throws IOException {
+        if (m.length < 12 || (((m[0] & 0xff) << 8) | (m[1] & 0xff)) != id) {
+            throw new IOException("bad DNS response");
+        }
+        return m;
     }
 
     /**
