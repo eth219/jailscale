@@ -63,7 +63,10 @@ class AdminWebTest {
                 body = form.getBytes(StandardCharsets.UTF_8);
             }
             Http.writeRequest(s.getOutputStream(), method, "hub.test", path, h, body);
-            return Http.readResponse(s.getInputStream(), 1 << 20);
+            // The last argument is what frames a HEAD: the hub sends the Content-Length a GET would
+            // have and no body, so a reader that took the length at face value would wait for bytes
+            // that are not coming (HeadHasNoBodyTest).
+            return Http.readResponse(s.getInputStream(), 1 << 20, method.equals("HEAD"));
         }
     }
 

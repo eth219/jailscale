@@ -80,12 +80,12 @@ final class MetricsFront implements AutoCloseable {
             try {
                 req = Http.readRequest(socket.getInputStream(), 0);
             } catch (HttpException e) {
-                HttpResponse.text(e.status(), e.getMessage()).writeTo(socket.getOutputStream());
+                HttpResponse.text(e.status(), e.getMessage()).writeTo(socket.getOutputStream(), e.isHead());
                 return;
             } catch (EOFException e) {
                 return;
             }
-            route(req).writeTo(socket.getOutputStream());
+            route(req).writeTo(socket.getOutputStream(), req.isHead());
         } catch (IOException e) {
             LOG.debug("metrics: {}", e.getMessage());
         }

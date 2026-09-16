@@ -71,6 +71,23 @@ class HttpTest {
     }
 
     @Test
+    void headOnlyKeepsTheHeadersAndDropsTheBody() throws Exception {
+        // RFC 9110 §9.3.2: the response to a HEAD carries the header fields a GET would have --
+        // Content-Length describing the body that is not sent -- and stops at the blank line.
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        HttpResponse.json(200, "{\"a\":1}").writeTo(out, true);
+        assertEquals("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\nConnection: close\r\n\r\n",
+            out.toString(StandardCharsets.ISO_8859_1));
+
+        // And the reader agrees with the writer: told the request was HEAD, it stops in the same
+        // place, so a client does not read the next response's status line as this one's body.
+        HttpResponse r = Http.readResponse(new ByteArrayInputStream(out.toByteArray()), 1024, true);
+        assertEquals(200, r.status());
+        assertEquals("7", r.headers().get("Content-Length"));
+        assertEquals(0, r.body().length);
+    }
+
+    @Test
     void clientRoundTrip() throws Exception {
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
         Http.writeRequest(wire, "GET", "hub.example.com", "/v1/key", new Headers().add("Accept", "application/json"), null);

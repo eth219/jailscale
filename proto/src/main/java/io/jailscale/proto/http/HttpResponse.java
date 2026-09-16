@@ -72,6 +72,18 @@ public final class HttpResponse {
 
     /** Writes status line, headers and body. Adds Content-Length unless this is a 101. */
     public void writeTo(OutputStream out) throws IOException {
+        writeTo(out, false);
+    }
+
+    /**
+     * As {@link #writeTo(OutputStream)}, but {@code headOnly} suppresses the body: the request was
+     * HEAD, so the response carries the header fields a GET would have -- Content-Length among them,
+     * describing the body that is not sent -- and stops at the blank line (RFC 9110 §9.3.2). A
+     * caller that dropped the body instead would send {@code Content-Length: 0} and describe a
+     * different resource; a caller that sends it frames the next response wrong for anything that
+     * reads the length rather than the close.
+     */
+    public void writeTo(OutputStream out, boolean headOnly) throws IOException {
         StringBuilder sb = new StringBuilder(256);
         sb.append("HTTP/1.1 ").append(status).append(' ').append(reason(status)).append("\r\n");
         if (status != 101 && !headers.contains("Content-Length")) {
@@ -85,7 +97,7 @@ public final class HttpResponse {
         }
         sb.append("\r\n");
         out.write(sb.toString().getBytes(StandardCharsets.ISO_8859_1));
-        if (status != 101 && body.length > 0) {
+        if (!headOnly && status != 101 && body.length > 0) {
             out.write(body);
         }
         out.flush();
