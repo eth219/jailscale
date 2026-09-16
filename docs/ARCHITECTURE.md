@@ -2426,7 +2426,11 @@ node the same 99 KB each but can fill the hub's 24 MB, which is what a developer
 measurement; neither is the one that always goes first.
 
 **The hub admits on three caps now, and only the third is about capacity.** Per address
-(`MAX_PER_IP` = 64) and per name (`MAX_PER_NAME` = 1,024) are abuse limits and were never
+(`MAX_PER_IP` = 64, not applied to a connection that arrives on loopback with no PROXY header to say
+whose it is -- a forwarder on this host folds every visitor in the world onto one address, and
+capping that caps the world; 443 and the raw **TCP** ports of §8.4 take that slot through the same
+code and so make the same exception, and a raw UDP port takes none at all, having no connection to
+count) and per name (`MAX_PER_NAME` = 1,024) are abuse limits and were never
 capacities — the per-name number sat on the hub's own page as though it were one, against a node
 holding a few hundred. The third is what the node said it will hold, sent on `Hello` (§5.4's
 additive case, and the first field added to an existing message since the protocol shipped). A node

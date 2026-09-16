@@ -125,7 +125,8 @@ final class RawPorts implements AutoCloseable {
                 int port = s.getPort();
                 s.setSoTimeout(SniRouter.HELLO_TIMEOUT_MS);
                 io.jailscale.proto.net.ProxyProtocol.Header ph = hub.readProxyHeader(s);
-                if (ph != null && ph.known()) {
+                boolean attributed = ph != null && ph.known();
+                if (attributed) {
                     ip = ph.srcIp();
                     port = ph.srcPort();
                 }
@@ -136,12 +137,16 @@ final class RawPorts implements AutoCloseable {
                 // address that connects and says nothing could hold every slot a node has. It gets
                 // no first-byte deadline instead of a cap because on a raw port the server may
                 // legitimately speak first (§8.4), so there is no first word to wait for.
-                if (!hub.router().takeSlot(ip)) {
+                //
+                // The same carve-out as well, which it did not have: whether the address was
+                // attributed decides both the key and the exemption, so a forwarder on this host
+                // that sends no PROXY header caps nobody here either.
+                held = hub.router().takeSlot(ip, s.getInetAddress(), attributed);
+                if (held == null) {
                     LOG.debug("tcp {} visitor {} refused: too many from that network", link.port(), ip);
                     Relay.closeQuietly(s);
                     return;
                 }
-                held = ip;
                 stream = group.openVisitor(link, null, ip, port, null, false);
                 Relay.pump(s, stream, new byte[0]);
             } catch (IOException e) {
