@@ -1671,9 +1671,23 @@ puts one there.
 
 Separately, and not about amplification: a UDP answer is never longer than **512 bytes**, which is
 what a resolver that has not offered EDNS may be sent. Past it the answer is the header with `TC` set.
-Nothing here reaches that today at 287 bytes, but nothing enforced it either, and an oversized
-datagram is not an error a resolver reports — it is one it discards, which under `_acme-challenge`
-is a certificate that stops renewing and says so nowhere.
+Nothing here reaches that today at 287 bytes, and until the budget below nothing enforced it
+either — an oversized datagram is not an error a resolver reports, it is one it discards, which
+under `_acme-challenge` is a certificate that stops renewing and says so nowhere.
+
+**The bound is the encoder's, and it covers the question too.** How much may leave arrives at
+`build()` as a budget, which is two things and not one: how many bytes the transport will carry,
+and whether records may go at all. TCP is unbounded and takes records, a datagram is 512 and takes
+records, the slip above is 512 and takes none. An answer that does not fit is emitted there as the
+`TC` form, from the offset the question was already parsed to. It used to be a second pass over the finished response,
+walking the question again to find that offset: a weaker parser of the same bytes, kept in step
+with the encoder by hand, and the change that adds EDNS or question compression is the change that
+would make its truncation malformed. That pass also had no idea what it was truncating *to*, so
+the question it echoed was never measured against the 512 — a name here is bounded by the packet
+rather than by the 255 bytes RFC 1035 allows one, and it cut to the question's end whatever that
+was, so a 998-byte query under the wildcard came back as a 998-byte datagram: the bound above,
+broken by the only path that existed to keep it. A question too long to echo now leaves the header
+alone, which is still a well-formed `TC` answer.
 
 A node the hub already knows returns before the credential check, so reconnections never touch the
 bucket. The bursts are generous because a node opens up to four connections and a NAT can hide many

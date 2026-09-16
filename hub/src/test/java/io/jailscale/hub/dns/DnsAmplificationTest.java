@@ -50,6 +50,8 @@ class DnsAmplificationTest {
         String worstAt = "";
         int biggest = 0;
         String biggestAt = "";
+        int biggestDatagram = 0;
+        String biggestDatagramAt = "";
         for (String hub : HUBS) {
             DnsResponder d = fullest(hub);
             for (String name : names(hub)) {
@@ -64,16 +66,30 @@ class DnsAmplificationTest {
                         worst = ratio;
                         worstAt = name + " type " + type;
                     }
+                    // The whole answer, which is TCP's, and what a datagram would carry of it. The
+                    // ratio is taken on the larger of the two, so the bound stays the conservative
+                    // one; the sizes are kept apart because only one of them is bounded by 512.
                     if (r.length > biggest) {
                         biggest = r.length;
                         biggestAt = name + " type " + type;
+                    }
+                    byte[] datagram = d.respond(q, DnsResponder.Budget.DATAGRAM);
+                    if (datagram.length > biggestDatagram) {
+                        biggestDatagram = datagram.length;
+                        biggestDatagramAt = name + " type " + type;
                     }
                 }
             }
         }
         assertTrue(worst <= MAX_RATIO, "worst answer-to-query ratio " + worst + " at " + worstAt);
-        // The absolute size matters on its own: it is what a datagram may carry without EDNS, and
-        // an answer past it is one a resolver discards rather than reads (see DnsResponder.MAX_UDP).
+        // What leaves on :53 is bounded by the encoder, so this half cannot fail without a defect:
+        // it is here because that bound is the thing this file exists to keep honest.
+        assertTrue(biggestDatagram <= DnsResponder.MAX_UDP,
+            "largest datagram " + biggestDatagram + " bytes at " + biggestDatagramAt);
+        // The whole answer is a statement about the zone and not about the transport -- TCP would
+        // carry more. An answer this zone can build that does not fit a datagram is not broken, it
+        // is two round trips for every resolver that asks, which is a design change and not an
+        // accident; §15 says the zone is what grows, so this is where that shows up.
         assertTrue(biggest <= DnsResponder.MAX_UDP, "largest answer " + biggest + " bytes at " + biggestAt);
     }
 
@@ -119,30 +135,63 @@ class DnsAmplificationTest {
         byte[] datagram = d.answerForUdp(q, java.net.InetAddress.getByName("198.51.100.7"), 1_000_000);
         assertTrue(datagram.length <= DnsResponder.MAX_UDP, "UDP answer was " + datagram.length + " bytes");
         assertTrue((datagram[2] & 0x02) != 0, "TC should be set so the resolver asks again over TCP");
+        // And the shape of it, which is what a resolver has to be able to match to its query: the
+        // header and the question, counting no records at all.
+        assertEquals(q.length, datagram.length, "the header and the question, and nothing after it");
+        assertEquals(1, datagram[5], "the question is still echoed");
+        for (int i = 6; i < 12; i++) {
+            assertEquals(0, datagram[i], "no records should be counted at byte " + i);
+        }
         // TCP is unchanged: it has a length prefix, so the whole answer goes.
         assertTrue(d.respond(q).length > DnsResponder.MAX_UDP, "TCP should still carry the whole answer");
     }
 
     @Test
-    void anAnswerTooLargeForADatagramComesBackTruncated() {
-        // Nothing this zone holds reaches 512 today, so the path is driven with a response built by
-        // hand: the point is that the bound exists and produces a well-formed TC answer, not that
-        // some name currently trips it.
-        byte[] question = DnsFuzzTest.query("myapp." + HUB, 1);
-        byte[] oversized = new byte[600];
-        System.arraycopy(question, 0, oversized, 0, question.length);
-        oversized[2] = (byte) 0x84;                       // QR, AA
-        oversized[6] = 0;
-        oversized[7] = 9;                                 // nine answers, none of which survive
+    void aQuestionTooLongToEchoLeavesTheHeaderAlone() throws Exception {
+        // The TC answer echoes the question, and nothing used to check that the echo fit either. A
+        // name here is bounded by the packet and not by the 255 bytes RFC 1035 allows one, so this
+        // query -- 60 labels under the hub name, 998 bytes, which arrives in one datagram -- was
+        // answered by cutting to the question's end, which is a 998-byte datagram: over the 512
+        // that §11.5 states, broken by the one path that existed to keep it. Not amplification, an
+        // answer no larger than the query that asked for it, but an oversized datagram is discarded
+        // by a resolver rather than reported, which is the failure the bound is there to prevent.
+        DnsResponder d = fullest();
+        byte[] q = DnsFuzzTest.query(DnsFuzzTest.LONG_LABELS + HUB, 1);
+        assertTrue(q.length > DnsResponder.MAX_UDP, "the question itself has to be what does not fit, was " + q.length);
 
-        byte[] t = DnsResponder.truncate(oversized);
-        assertEquals(question.length, t.length, "the header and the question, and nothing after it");
-        assertTrue((t[2] & 0x02) != 0, "TC should be set");
-        assertEquals(1, t[5], "the question is still echoed");
-        for (int i = 6; i < 12; i++) {
-            assertEquals(0, t[i], "no records should be counted at byte " + i);
+        byte[] r = d.answerForUdp(q, java.net.InetAddress.getByName("198.51.100.7"), 1_000_000);
+        assertEquals(12, r.length, "a question too long to echo leaves the header alone, was " + r.length);
+        assertTrue((r[2] & 0x02) != 0, "TC should still be set");
+        for (int i = 4; i < 12; i++) {
+            assertEquals(0, r[i], "nothing should be counted at byte " + i);
         }
-        assertTrue(t.length <= question.length, "a truncated answer must not be larger than the query");
+    }
+
+    @Test
+    void aBudgetSmallerThanADatagramBoundsTheEchoToo() {
+        // No caller passes one today -- both budgets that reach the encoder are a datagram's -- so
+        // this is the parameter's own promise rather than a live path. It is worth pinning because
+        // the next budget is where an echo measured against the constant instead of against what
+        // was asked for would put an oversized answer back on the wire, which is the failure the
+        // commit above closed.
+        DnsResponder d = fullest();
+        byte[] q = DnsFuzzTest.query("myapp." + HUB, 1);
+        int whole = d.respond(q).length;
+        assertTrue(whole > q.length, "the whole answer has to be the thing that does not fit");
+
+        // `size > budget`, at the byte where it turns over. Without this the comparison could be
+        // `>=` -- an answer of exactly the budget needlessly truncated -- and every other case
+        // here is far enough from the boundary not to notice.
+        assertEquals(whole, d.respond(q, budget(whole)).length, "room for the answer exactly, and it is kept");
+        assertEquals(q.length, d.respond(q, budget(whole - 1)).length, "one byte less and it is the question alone");
+
+        // And the echo's own boundary, below which not even the question fits.
+        assertEquals(q.length, d.respond(q, budget(q.length)).length, "room for the echo exactly, and it is kept");
+        assertEquals(12, d.respond(q, budget(q.length - 1)).length, "one byte less and the header goes alone");
+    }
+
+    private static DnsResponder.Budget budget(int bytes) {
+        return new DnsResponder.Budget(bytes, true);
     }
 
     /** The zone at its largest: two hosts, both name servers, an issuance in flight. */

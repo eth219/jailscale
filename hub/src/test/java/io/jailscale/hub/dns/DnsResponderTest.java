@@ -109,6 +109,33 @@ class DnsResponderTest {
     }
 
     @Test
+    void everyShapeCopiesTheRecursionBit() {
+        // RFC 1035 §4.1.1: RD is copied into the response. The answer and the truncated forms
+        // always did; the error one did not, which stayed invisible while each wrote its own header.
+        DnsResponder d = new DnsResponder("hub.test");
+        for (String name : List.of("some.other.example.com", "myapp.hub.test")) {
+            byte[] asked = DnsFuzzTest.query(name, 1);                 // query() sets RD
+            assertEquals(1, d.respond(asked)[2] & 0x01, name + " should carry the RD it was asked with");
+            assertEquals(1, d.respond(asked, DnsResponder.Budget.NO_RECORDS)[2] & 0x01, name + " truncated");
+            byte[] plain = asked.clone();
+            plain[2] &= ~0x01;
+            assertEquals(0, d.respond(plain)[2] & 0x01, name + " should not carry one it was not asked with");
+        }
+    }
+
+    @Test
+    void aNameOutsideTheZoneIsRefusedRatherThanTruncated() {
+        // The slip skips building records, and it has to do that after the zone check and not
+        // before: REFUSED is twelve bytes and echoes no question, which reflects less than the TC
+        // form, and it is a refusal rather than an instruction to come back over TCP.
+        DnsResponder d = new DnsResponder("hub.test");
+        byte[] r = d.respond(DnsFuzzTest.query("some.other.example.com", 1), DnsResponder.Budget.NO_RECORDS);
+        assertEquals(12, r.length, "a refusal is a bare header whatever the budget");
+        assertEquals(0, r[2] & 0x02, "and is not a truncation");
+        assertEquals(5, r[3] & 0x0f, "REFUSED");
+    }
+
+    @Test
     void ignoresGarbageAndResponses() {
         DnsResponder d = new DnsResponder("hub.test");
         assertEquals(null, d.respond(new byte[5]));
