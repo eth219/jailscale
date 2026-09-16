@@ -12,6 +12,13 @@ An issue carries **one type**, **one or more areas**, and — while it is open �
 status**. A closed issue carries none: the status axis says where something is in the process,
 and a closed issue is not in it. Step 8 is where that comes off.
 
+A pull request carries the **type and area of the issue it closes** — copied at
+`gh pr create --label` — and no status. Its own state is its status: draft, open, checks, merged.
+The issue it closes already carries `status:in-review`, and a second copy of that on the pull
+request is a second thing to go stale, which is what step 8 is about. The one exception is
+`status:needs-decision`, which a pull request carries only while a question raised after it was
+opened is waiting on a person; step 7 says when.
+
 **Type** — what kind of work it is. `bug`, `enhancement`, `documentation`, `question`, plus:
 
 | Label | Means |
@@ -187,6 +194,12 @@ Then `/code-review`, and answer what it finds. "Answer" includes deciding a find
 saying why — an unanswered finding and an excluded one look identical six months later, which is the
 argument `spotbugs-exclude.xml` already makes about its own entries.
 
+If the review changes code — `--fix` does — the two commands above ran on code that no longer
+exists, so they run again on what the review left, and the gate is whatever ran last. Read the
+review's diff against the issue before that: `--fix` applies findings it did not ask you about, and
+a fix outside the issue's scope is step 3's widening in a different coat. Revert it and file it
+(step 5) rather than keep it.
+
 **A green local build is not the gate, and has twice been mistaken for it.** CI adds SpotBugs and
 runs the suite on ubuntu, macOS and Windows; a pull request does not run everything main runs. Two
 jobs are skipped on pull requests, and the toolchain a pull request runs on is not the pinned one,
@@ -205,7 +218,15 @@ the conclusions this harness has produced that were confident, plausible and wro
 
 `Closes #N` in the body, so the merge closes the issue and ends the claim. Move the issue to
 `status:in-review`. Say in the body which of the gates above you ran and which you did not — a PR
-that is silent about the budget run is one the reviewer has to assume was not measured.
+that is silent about the budget run is one the reviewer has to assume was not measured. Give the
+pull request the issue's type and area labels, and nothing from the status axis.
+
+A decision that turns up now — a review finding that is a choice, a red check whose fix is one of
+two approaches — is step 4 with a pull request attached. Mark the PR a draft, put the question in a
+comment on it, and add `status:needs-decision` to it: `gh pr list --label status:needs-decision` is
+then the list of pull requests a person owes an answer. Release the issue as in step 4. When the
+answer comes, the label comes off, the draft is undrafted, and whoever continues claims the issue
+again.
 
 ### 8. Merged
 
@@ -234,6 +255,58 @@ gh issue list --state all --limit 300 --json number,state,labels --jq '
 If the work needs looking at again, reopen the issue — that is what asks for the process again, and
 it starts at step 1.
 
+## Running the loop unattended
+
+One session, one issue after another, with no person reading the diff between the claim and the
+merge. It is the loop above with a pick rule, a merge rule, and a rule for `main` afterwards. **It is
+not open yet**: #184 is the survey of what the suite can and cannot fail without a person, and until
+the decisions on it are made a session runs the loop as far as step 7 and stops there, however many
+issues it takes in a row.
+
+### Pick
+
+The oldest `status:ready` whose newest CLAIM has expired or does not exist. There is no priority
+axis, so age is the one rule a reader can check afterwards. Skip — do not even claim — anything
+carrying `security`, `area:proto` or `area:release`; the merge rule below says why.
+
+### Each issue
+
+1. **A fresh worktree from the current `main`.** Reusing the last one means the second pull request
+   is based on a `main` that has moved, and the merge is what finds out.
+2. Steps 2 to 5 exactly as above.
+3. `/code-review xhigh --fix`, then the review's diff read against the issue, then the gate — step 6
+   with the table's row if the change touches it — on the code the review left.
+4. Step 7, labels included.
+5. **Merge** when all of these are true and none of them is a judgement: every check green, every
+   review finding answered in the pull request, no `status:needs-decision`, base is the current
+   `main`. Squash — that is what the history is made of. Then step 8, and the invariant command.
+6. **Watch `main`.** `load` and `budget` run only now (§6), so this is the first native run of the
+   change. A red job is re-run once. Red again: revert the merge (`gh pr revert`, or
+   `git revert -m 1`), reopen the issue with the failing job's output in a comment, set it
+   `status:ready`, and stop. Fixing forward is not the default because the next issue's pull request
+   would then be based on a red `main`, and two changes would own one failure.
+7. A problem seen anywhere in this is step 5: filed with all three axes and linked both ways. That
+   is how the tracker grows from the loop, and it is the only way it may.
+
+### What is never merged unattended
+
+A pull request carrying `security`, `area:proto` or `area:release`: the trust boundary, the wire
+(a wire change is a flag day for the live hub and its nodes), and the signing key. These stop at
+step 7 with `status:in-review` and wait for a person. The pick rule keeps the session off them from
+the start; the merge rule is for the label that was added on the way.
+
+### Stop
+
+- Nothing left that the pick rule allows.
+- The gate failed twice on the same issue: `🤖 RELEASE`, `status:ready`, and the failure in the
+  comment.
+- A revert on `main`.
+- The context was summarised. What the session knows about the issue in hand is now a summary of
+  it; finish that issue and stop rather than start the next on a summary.
+
+Every stop leaves the tracker true — nothing claimed, every pull request merged, `status:in-review`
+or `status:needs-decision` — because the next session starts by reading it.
+
 ## What this does not do
 
 It is advisory. Nothing enforces it, two sessions that both ignore it collide exactly as before,
@@ -241,6 +314,6 @@ and a session that claims an issue and works on something else is invisible to i
 having anyway for the same reason the exclusions in `spotbugs-exclude.xml` carry reasons: the cost
 is one comment, and the failure it prevents is discovered late and expensive.
 
-It is also a loop for one issue at a time. Nothing here describes two sessions deliberately
-splitting one issue, because nothing here can keep two branches from diverging; split the issue
-first, and then it is two claims.
+It is a loop for one issue at a time, and the unattended form runs them in series, not in
+parallel. Nothing here describes two sessions deliberately splitting one issue, because nothing here
+can keep two branches from diverging; split the issue first, and then it is two claims.

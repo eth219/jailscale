@@ -16,6 +16,7 @@ problem costs, what the options are, and **what a measurement does not cover**, 
 person can act on it without rediscovering it. The templates ask for that shape.
 
 Every issue carries three label axes: one **type**, one or more **areas**, exactly one **status**.
+A pull request carries the type and area of the issue it closes, and no status.
 [docs/issue-workflow.md](docs/issue-workflow.md) defines them, and also defines how a session says
 it is working on something.
 

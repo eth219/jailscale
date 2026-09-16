@@ -1,5 +1,9 @@
 Closes #
 
+<!-- Labels: the type and area labels of the issue above, and none from the status axis — the
+     issue carries that. `status:needs-decision` on a PR means a question is waiting on a person;
+     docs/issue-workflow.md step 7 says when. -->
+
 ## What changed, and why it was worth changing
 
 <!-- The problem first. A reviewer who has to infer the problem from the diff is reviewing the
