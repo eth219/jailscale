@@ -26,6 +26,7 @@ import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /** ARCHITECTURE.md §6.3: the admin page, logged in with a link the admin node obtained over the control channel. */
 @Timeout(90)
@@ -74,9 +75,7 @@ class AdminWebTest {
     void adminNodeLogsInAndApprovesAKnock() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jw");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();

@@ -10,6 +10,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The socket to the local app holds no more in the kernel than the stream may hold on the wire
@@ -41,7 +42,7 @@ class LocalSocketTest {
 
     @Test
     void localAppSocketBuffersArePinnedToTheStreamWindow() throws Exception {
-        try (ServerSocket app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket app = TestPorts.listen(8)) {
             NodeState.LinkRec rec = new NodeState.LinkRec(Message.LinkOpen.HTTPS, "127.0.0.1", app.getLocalPort(), "demo");
             try (Socket untouched = new Socket()) {
                 untouched.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), app.getLocalPort()));

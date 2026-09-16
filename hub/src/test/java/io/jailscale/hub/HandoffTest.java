@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * ARCHITECTURE.md §13 hand-off and §5.3 multi-connection: a second hub takes over the same state
@@ -68,7 +69,7 @@ class HandoffTest {
 
     /** A local app whose response body trickles out over ~1.5 s. */
     private void startSlowApp() throws IOException {
-        localApp = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        localApp = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {
             while (!localApp.isClosed()) {
                 try {
@@ -112,9 +113,7 @@ class HandoffTest {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jh");
         int port;
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test");
         old = new Hub(cfg);

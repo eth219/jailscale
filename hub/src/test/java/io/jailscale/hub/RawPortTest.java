@@ -28,6 +28,7 @@ import java.util.Random;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /** ARCHITECTURE.md §8.4: raw TCP and UDP through hub-assigned ports. */
 @Timeout(90)
@@ -59,12 +60,6 @@ class RawPortTest {
         }
     }
 
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            return s.getLocalPort();
-        }
-    }
-
     /** The {@code ?from=} value in a directory page's "next" link. */
     private static String cursorOf(String html) {
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("/links\\?from=([^\"]+)").matcher(html);
@@ -72,37 +67,19 @@ class RawPortTest {
         return m.group(1);
     }
 
-    /** First port of {@code n} consecutive ports that are free for both TCP and UDP on loopback. */
-    private static int freeRange(int n) {
-        outer:
-        for (int base = 20000; base < 60000; base += n) {
-            for (int p = base; p < base + n; p++) {
-                try (ServerSocket t = new ServerSocket(); DatagramSocket u = new DatagramSocket(null)) {
-                    t.setReuseAddress(true);
-                    t.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), p));
-                    u.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), p));
-                } catch (IOException e) {
-                    continue outer;
-                }
-            }
-            return base;
-        }
-        throw new IllegalStateException("no free port range");
-    }
-
     @Test
     void tcpAndUdpThroughAssignedPorts() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jr");
-        port = freePort();
-        int lo = freeRange(4);
+        port = TestPorts.reserve();
+        int lo = TestPorts.reserveRange(4);
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withPortRange(lo, lo + 3);
         hub = new Hub(cfg);
         hub.start();
 
         // Local echo servers.
-        echoTcp = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        echoTcp = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {
             try {
                 while (true) {

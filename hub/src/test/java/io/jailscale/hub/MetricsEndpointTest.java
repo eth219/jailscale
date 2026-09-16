@@ -21,6 +21,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * What a monitor reads (ARCHITECTURE.md §6.3), and from where. {@code /v1/status} is liveness on the
@@ -41,9 +42,7 @@ class MetricsEndpointTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("metrics");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         // Port 0: the fixed default would collide with a second test JVM, and with whatever else
         // on this machine happens to own 9090.
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,

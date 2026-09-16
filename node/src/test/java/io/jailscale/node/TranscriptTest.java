@@ -46,6 +46,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * ARCHITECTURE.md §9.2: at the moment JSSE asks for a CertificateVerify signature, the node must be
@@ -182,7 +183,7 @@ class TranscriptTest {
         SSLContext server = SSLContext.getInstance("TLS");
         server.init(new KeyManager[] {new LocalKeyManager()}, null, RemoteSigning.RANDOM);
         SIGNED.set(null);
-        try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket ss = TestPorts.listen(1)) {
             Thread node = Thread.ofVirtual().start(() -> {
                 try (Socket s = ss.accept()) {
                     TlsEndpoint tls = new TlsEndpoint(server, s.getInputStream(), s.getOutputStream());

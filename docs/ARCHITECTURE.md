@@ -147,6 +147,19 @@ Maven multi-module, dependencies flowing one way only. Packages are `io.jailscal
 Two binaries so server code never lands in the client artifact; the module boundary turns a
 dependency inversion into a compile error rather than a review comment.
 
+**The tests take their ports from one place.** `proto` publishes a test-jar for a single class,
+`TestPorts`, and every port in every suite comes from it. The idiom it replaces was to open a socket
+on port 0, read the number, close it, and bind that number later: between the close and the bind the
+port belongs to nobody, and the next thing in the same JVM to ask the kernel for an ephemeral one can
+be handed it. That failed three times in one day, in three test classes, on two operating systems --
+and once on `main` in the `budget` job, which pull requests do not run, so it arrived after a merge
+that was green. `reserve()` remembers what it has given out and `listen()` re-rolls when the kernel
+offers a port already promised, which is the half that matters: the failure was never this class
+handing out the same number twice, it was an echo server being given the number a hub was about to
+bind. Surefire runs one JVM per module with no parallelism, so that pair covers every collision the
+suite can have with itself; a port taken by another process on the machine still fails the bind, and
+says so.
+
 ### 3.1 GraalVM Native Image rules
 
 Followed from the start, not retrofitted. Together they are why the binaries are one file with no

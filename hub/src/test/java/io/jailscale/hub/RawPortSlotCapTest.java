@@ -21,6 +21,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * ARCHITECTURE.md §8.1's per-network cap, on the raw ports of §8.4.
@@ -57,23 +58,17 @@ class RawPortSlotCapTest {
         }
     }
 
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            return s.getLocalPort();
-        }
-    }
-
     /** A hub with one raw tcp port open on a node, and no PROXY headers: every visitor is 127.0.0.1. */
     private void start() throws Exception {
         root = TestDirs.newRoot("rpc");
-        int port = freePort();
-        int lo = freePort();
+        int port = TestPorts.reserve();
+        int lo = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withPortRange(lo, lo);
         hub = new Hub(cfg);
         hub.start();
 
-        echo = new ServerSocket(0, 128, InetAddress.getLoopbackAddress());
+        echo = TestPorts.listen(128);
         Thread.ofVirtual().start(() -> {
             try {
                 while (true) {

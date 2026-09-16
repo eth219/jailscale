@@ -20,6 +20,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * Adding a second machine to a user that already exists (ARCHITECTURE.md §10): the hub refuses a
@@ -41,9 +42,7 @@ class SecondMachineJoinTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("2nd");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();

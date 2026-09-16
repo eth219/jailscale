@@ -27,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The three responses the node writes to a visitor itself -- the gate's redirect, the gate's
@@ -60,20 +61,16 @@ class VisitorHeadHasNoBodyTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("vhead");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
-        app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        app = TestPorts.listen(8);
         // After the live app is bound, and not before: a port picked by binding and closing is
         // free for the kernel to hand straight back to the next bind of 0, and if that bind is the
         // app's then every link below points at a server that answers and three cases assert 502
         // against a 200.
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            deadPort = s.getLocalPort();
-        }
+            deadPort = TestPorts.reserve();
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {

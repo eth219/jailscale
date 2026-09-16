@@ -28,6 +28,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /** ARCHITECTURE.md §9.3: the visitor gate, and Upgrade/bidirectional passthrough. */
 @Timeout(90)
@@ -47,14 +48,12 @@ class GateAndUpgradeTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jg");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
         // Local app: plain GET -> text; "Upgrade: echo" -> 101 then a byte echo until EOF.
-        app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        app = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {

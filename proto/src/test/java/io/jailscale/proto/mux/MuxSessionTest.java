@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.jailscale.proto.net.TestPorts;
 
 @Timeout(30)
 class MuxSessionTest {
@@ -90,7 +91,7 @@ class MuxSessionTest {
     private static Pair pair(FlowBudget budget) throws Exception {
         X25519.Keypair hk = X25519.generate();
         X25519.Keypair nk = X25519.generate();
-        ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        ServerSocket ss = TestPorts.listen(1);
         Socket a = new Socket(InetAddress.getLoopbackAddress(), ss.getLocalPort());
         Socket b = ss.accept();
         ss.close();

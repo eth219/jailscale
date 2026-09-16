@@ -14,6 +14,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The per-address connection counter of ARCHITECTURE.md §8.1. It is keyed by visitor address and
@@ -45,9 +46,7 @@ class SniRouterCountersTest {
 
     private void startHub() throws Exception {
         root = TestDirs.newRoot("jsc");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withProxyProtocol(true, List.of()).withPortRange(0, 0));

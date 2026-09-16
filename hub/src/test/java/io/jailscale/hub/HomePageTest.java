@@ -32,6 +32,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The hub's own page. Counts and resource use are public because they describe the service; the
@@ -52,9 +53,7 @@ class HomePageTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("home");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
@@ -570,9 +569,7 @@ class HomePageTest {
             .toJson());
 
         int port2;
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port2 = s.getLocalPort();
-        }
+            port2 = TestPorts.reserve();
         Hub down = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port2), state, "127.0.0.1", port2,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         down.start();

@@ -38,6 +38,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import java.nio.charset.StandardCharsets;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * M2 data path (ARCHITECTURE.md §14): {@code jailscale open} publishes a local HTTP server as
@@ -62,15 +63,13 @@ class LinkEndToEndTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jl");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test");
         hub = new Hub(cfg);
         hub.start();
         // A tiny local HTTP app the node will publish.
-        localApp = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        localApp = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {
             while (!localApp.isClosed()) {
                 try {

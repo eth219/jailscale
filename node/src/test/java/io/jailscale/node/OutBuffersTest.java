@@ -29,6 +29,7 @@ import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The shared wrap buffers of {@link TlsEndpoint} (ARCHITECTURE.md §15). A buffer that moves between
@@ -64,7 +65,7 @@ class OutBuffersTest {
      * The sizes straddle a TLS record, so a session writes several records through the buffer.
      */
     private String roundTrip(String tag, int bodySize) throws Exception {
-        try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket ss = TestPorts.listen(1)) {
             Thread node = Thread.ofVirtual().start(() -> {
                 try (Socket s = ss.accept()) {
                     TlsEndpoint tls = new TlsEndpoint(server, s.getInputStream(), s.getOutputStream());

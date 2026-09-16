@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * {@code jailhub <words>} to the request that goes down the admin socket
@@ -274,9 +275,7 @@ class AdminCommandTest {
     private static Hub startedHub() throws Exception {
         Path root = TestDirs.newRoot("ja");
         int port;
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath(),
             Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath(),

@@ -30,6 +30,7 @@ import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /** ARCHITECTURE.md §8.3: a user domain, certified with the node's own key via http-01 relayed by the hub. */
 @Timeout(120)
@@ -74,9 +75,7 @@ class UserDomainTest {
     void ownDomainIsIssuedRelayedAndPassedThrough() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jd");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+            port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withHttp("127.0.0.1", 0).withUserDomainCa(CERT));
         hub.start();
