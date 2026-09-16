@@ -601,6 +601,22 @@ plainly as trust on first use, because that is what it is. The note under the st
 the same two steps of it, rather than leaving the hub's own binary compared against an unchecked
 checksum list.
 
+**A hub run for other people can say who runs it**, in three settings rather than three flags:
+`jailhub setting operator "..."`, `contact https://... | mailto:...`, `terms https://...`. Settings,
+because they are the kind that changes while a hub is running -- a contact address outlives the
+process that first printed it -- which is the line this section already draws, and because the store
+replicates, so a standby serves the same answer without being configured twice. The scheme of the
+two URLs is checked where they are set: they end up in an `href` on a page anyone can load, and
+`javascript:` in an operator's typo is not a thing to learn about from a visitor. Empty clears.
+
+**The whole section is drawn only when one of the three is set**, and with it the only honest
+retention sentence the hub has: what the *process* keeps -- the node list while a node is
+registered, the barred addresses, thirty days of uptime record -- and that a visit to a link is
+relayed and not recorded, counted and not listed. It ends by saying what it cannot answer for: the
+journal, a proxy in front, a backup of the state directory. A hub somebody runs for themselves has
+nobody to name and no terms to point at, and a section that appeared everywhere to say "not
+configured" would be a worse page for the case that needs it least.
+
 **One line above the table says whether any of it is a problem.** The rows were all the same weight:
 a certificate with 85 days left and one with 5 read as the same sentence in the same grey, though
 the second takes every name under the hub down within the week. Three rows have a threshold and are

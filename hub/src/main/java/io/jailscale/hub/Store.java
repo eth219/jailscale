@@ -91,6 +91,16 @@ final class Store implements AutoCloseable {
     static final String SETTING_KNOCK = "knock";
     /** §13.5: whether a standby may promote itself when no node can reach the primary. */
     static final String SETTING_AUTO_PROMOTE = "autoPromote";
+    /**
+     * Who runs this hub, where to write to them, and what they allow (#99). Settings and not flags:
+     * they are the kind that change while a hub is running -- a contact address outlives the
+     * process that first printed it -- which is the line §6.3 already draws, and being in the store
+     * means a standby serves the same answer without being configured twice. Empty is the default
+     * and means the page says nothing at all, so a hub somebody runs for themselves is unchanged.
+     */
+    static final String SETTING_OPERATOR = "operator";
+    static final String SETTING_CONTACT = "contact";
+    static final String SETTING_TERMS = "terms";
     private String nextHubKey; // hkey: text of the next public key during rotation, or null
     private long hubKeyActivatesAt;
 

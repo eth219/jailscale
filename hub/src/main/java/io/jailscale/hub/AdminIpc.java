@@ -18,6 +18,27 @@ final class AdminIpc implements Ipc.Handler {
         Store.SETTING_KNOCK, List.of("on", "off"),
         Store.SETTING_AUTO_PROMOTE, List.of("on", "off"));
 
+    /**
+     * The settings whose value is text rather than one of a fixed few (#99), and what each will
+     * take. A URL is checked for its scheme rather than parsed into a link and hoped for: this
+     * value ends up in an {@code href} on a page anyone can load, and {@code javascript:} in an
+     * operator's typo is not something to find out about from a visitor. Empty clears.
+     */
+    static final Map<String, java.util.function.Predicate<String>> SETTING_TEXT = Map.of(
+        Store.SETTING_OPERATOR, v -> v.length() <= 120,
+        Store.SETTING_CONTACT, v -> v.length() <= 200 && (v.startsWith("https://") || v.startsWith("mailto:")),
+        Store.SETTING_TERMS, v -> v.length() <= 200 && v.startsWith("https://"));
+
+    /** What to say when one of the above refuses a value. */
+    private static String textSettingRule(String key) {
+        if (key.equals(Store.SETTING_OPERATOR)) {
+            return "a name, up to 120 characters, or empty to clear";
+        }
+        return key.equals(Store.SETTING_CONTACT)
+            ? "an https:// or mailto: URL, up to 200 characters, or empty to clear"
+            : "an https:// URL, up to 200 characters, or empty to clear";
+    }
+
     private final Hub hub;
 
     AdminIpc(Hub hub) {
@@ -229,9 +250,23 @@ final class AdminIpc implements Ipc.Handler {
             case "setting" -> {
                 String key = req.string("key");
                 String value = req.string("value");
+                java.util.function.Predicate<String> text = SETTING_TEXT.get(key);
+                if (text != null) {
+                    // Empty is how a value is taken back off the page, so it is allowed past the
+                    // rule rather than being a rule every one of them has to remember to permit.
+                    if (!value.isEmpty() && !text.test(value)) {
+                        reply.error(key + " takes " + textSettingRule(key));
+                        return;
+                    }
+                    store.setSetting(key, value);
+                    reply.ok();
+                    return;
+                }
                 List<String> allowed = SETTING_VALUES.get(key);
                 if (allowed == null) {
-                    reply.error("no such setting " + key + " (" + String.join(", ", new java.util.TreeSet<>(SETTING_VALUES.keySet())) + ")");
+                    java.util.TreeSet<String> known = new java.util.TreeSet<>(SETTING_VALUES.keySet());
+                    known.addAll(SETTING_TEXT.keySet());
+                    reply.error("no such setting " + key + " (" + String.join(", ", known) + ")");
                     return;
                 }
                 // Unchecked, a typo did not fail here: it was stored, and every reader asks

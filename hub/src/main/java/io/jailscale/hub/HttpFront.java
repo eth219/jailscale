@@ -746,6 +746,42 @@ final class HttpFront {
             .append(" re-checks on its own every half hour. A domain you bring yourself never involves this")
             .append(" hub's key at all.</p>");
 
+        // Who runs this hub, and what it keeps. Drawn only when the operator has said so: a hub
+        // somebody runs for themselves has nobody to name and no terms to point at, and a section
+        // that appeared on every hub to say "not configured" would be a worse page for the case
+        // that needs it least (#99).
+        String operator = hub.store().setting(Store.SETTING_OPERATOR, "");
+        String contact = hub.store().setting(Store.SETTING_CONTACT, "");
+        String terms = hub.store().setting(Store.SETTING_TERMS, "");
+        if (!operator.isEmpty() || !contact.isEmpty() || !terms.isEmpty()) {
+            b.append("<h2>Who runs this hub</h2><p>");
+            if (!operator.isEmpty()) {
+                b.append("Run by <b>").append(escape(operator)).append("</b>. ");
+            }
+            if (!contact.isEmpty()) {
+                // The scheme was checked when it was set (AdminIpc.SETTING_TEXT), which is what
+                // makes it safe to put in an href; escaped here as well, for the quotes.
+                b.append("<a href=\"").append(escape(contact)).append("\">Contact</a>");
+            }
+            if (!contact.isEmpty() && !terms.isEmpty()) {
+                b.append(" &middot; ");
+            }
+            if (!terms.isEmpty()) {
+                b.append("<a href=\"").append(escape(terms)).append("\">What is allowed here</a>");
+            }
+            b.append("</p>");
+            // The retention sentence belongs here and not in "What this hub can see", which is
+            // about the traffic while it is moving. These are what stays afterwards, and the last
+            // line is the important one: the process can speak for the process and no further.
+            b.append("<p>What it keeps: the node list -- who joined, the names they hold and when --")
+                .append(" for as long as a node is registered; the addresses the operator has barred;")
+                .append(" and thirty days of the uptime record above. A visit to a link is relayed and")
+                .append(" not recorded: the hub counts visitors and keeps no list of them, and at its")
+                .append(" default log level it names nodes, not visitors. What the machine underneath")
+                .append(" keeps -- the system journal, a proxy in front, a backup of the state")
+                .append(" directory -- is the operator's and not something this page can answer for.</p>");
+        }
+
         int online = hub.registry().size();
         int registered = hub.store().nodes().size();
         long rss = Resources.rssBytes();

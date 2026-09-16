@@ -638,4 +638,40 @@ class HomePageTest {
         // until review; the two are one step apart and the page has to get the step right.
         assertTrue(page.contains("RELEASE.txt"), page);
     }
+
+    /**
+     * The operator block, and the half that matters more: a hub nobody has configured says nothing
+     * at all. The alternative shape -- a section on every hub reading "operator: not set" -- is a
+     * worse page for the case that needs it least, and it is what this would quietly become if the
+     * condition were ever dropped.
+     */
+    @Test
+    void whoRunsThisHubAppearsOnlyWhenSomebodyHasSaidSo() throws Exception {
+        String bare = http("GET", "/", null, null).bodyText();
+        assertFalse(bare.contains("Who runs this hub"), "nothing was configured: " + bare);
+        assertFalse(bare.contains("What it keeps"), bare);
+
+        hub.store().setSetting(Store.SETTING_OPERATOR, "Example Ltd");
+        hub.store().setSetting(Store.SETTING_CONTACT, "mailto:abuse@example.com");
+        hub.store().setSetting(Store.SETTING_TERMS, "https://example.com/aup");
+        String named = http("GET", "/", null, null).bodyText();
+        assertTrue(named.contains("<h2>Who runs this hub</h2>"), named);
+        assertTrue(named.contains("Run by <b>Example Ltd</b>"), named);
+        assertTrue(named.contains("<a href=\"mailto:abuse@example.com\">Contact</a>"), named);
+        assertTrue(named.contains("<a href=\"https://example.com/aup\">What is allowed here</a>"), named);
+        // The retention sentence is the part an operator cannot write for themselves, so it is not
+        // theirs to configure: it says what the process does, and where that stops.
+        assertTrue(named.contains("thirty days of the uptime record"), named);
+        assertTrue(named.contains("keeps no list of them"), named);
+        assertTrue(named.contains("is the operator's and not something this page can answer for"), named);
+
+        // One of the three is enough to draw it, since a hub that names only where to write has
+        // said the thing that matters most.
+        hub.store().setSetting(Store.SETTING_OPERATOR, "");
+        hub.store().setSetting(Store.SETTING_TERMS, "");
+        String contactOnly = http("GET", "/", null, null).bodyText();
+        assertTrue(contactOnly.contains("Who runs this hub"), contactOnly);
+        assertFalse(contactOnly.contains("Run by <b>"), contactOnly);
+        assertFalse(contactOnly.contains("What is allowed here"), contactOnly);
+    }
 }
