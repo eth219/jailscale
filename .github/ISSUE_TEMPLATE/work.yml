@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: >
-        Retitle to `documentation` at triage if that is what it is. Area labels and a final status
-        are set at triage - leave them.
+        Swap `enhancement` for `documentation` at triage if that is what it is. Area labels and a
+        final status are set at triage - leave them.
   - type: textarea
     id: problem
     attributes:
@@ -39,8 +39,8 @@ body:
     id: ready
     attributes:
       label: Can a session start on this as written?
+      description: Advice to whoever triages it; the status label is set there, not here.
       options:
-        - "Yes - scoped well enough to start (status:ready)"
-        - "No - somebody has to choose the approach first (status:needs-decision)"
-        - "No - a number has to exist first (status:needs-measurement)"
-    validations: { required: true }
+        - "Yes - scoped well enough to start (suggests status:ready)"
+        - "No - somebody has to choose the approach first (suggests status:needs-decision)"
+        - "No - a number has to exist first (suggests status:needs-measurement)"

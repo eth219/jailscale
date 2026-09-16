@@ -9,9 +9,10 @@ port. Zero third-party runtime dependencies, four native targets, signed release
 Read [docs/issue-workflow.md](docs/issue-workflow.md). It is short and it is the procedure, not a
 suggestion. The part that cannot be skipped:
 
-- Work only on `status:ready`, and **claim it first** — the `status:claimed` label *and* a `🤖 CLAIM`
-  comment carrying a session name and a four-hour expiry. Several sessions read this tracker at once
-  and an agent session has no GitHub account, so the assignee field cannot do this job.
+- Work on `status:ready` (or `status:needs-measurement`, if you are taking the measurement), and
+  **claim it first** — a `🤖 CLAIM` comment carrying a session name and a four-hour expiry, then
+  the `status:claimed` label. Several sessions read this tracker at once and an agent session has
+  no GitHub account, so the assignee field cannot do this job.
 - Read the issue's comments before claiming. The label goes stale; the newest CLAIM is what is true.
 - A decision that is not yours to make (which approach, whether a cost is worth paying): leave the
   question on the issue, comment `🤖 RELEASE`, move it to `status:needs-decision`, and go do
@@ -25,7 +26,8 @@ suggestion. The part that cannot be skipped:
 ./mvnw package                            # the tests. JDK 25, but NOT 25.0.0-25.0.2 (§3.2)
 ./mvnw -Panalyze verify -DskipTests       # SpotBugs. Its own CI job, so it is easy to forget
 ./native.sh -DskipTests                   # the native binaries, GraalVM CE 25.3
-./measure.sh --check                      # the §14 budget, against binaries native.sh just built
+LOAD=1000 SLOW=1000 ./measure.sh --check  # the §14 budget, against binaries native.sh just built.
+                                          # Without LOAD and SLOW it skips the two axes that matter
 ```
 
 ## Five rules that were learned the expensive way
@@ -50,9 +52,10 @@ suggestion. The part that cannot be skipped:
 |---|---|
 | `hub/` `node/` `proto/` `crypto/` | the modules; `proto` is the wire, `crypto` the primitives |
 | `docs/ARCHITECTURE.md` | the design. §14 characteristics, §15 limits |
-| `docs/*/README.md` | one measurement each, with what it does **not** cover |
+| `docs/*/README.md` | the experiments and the design notes; a measurement says what it does **not** cover |
 | `tools/` | release signing, the release index, verification |
 | `measure.sh` `native.sh` | the budget harness and the release toolchain |
 
-Commit messages say what changed and why it was worth changing; end them with
-`Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+Commit messages say what changed and why it was worth changing. A commit a tool wrote part of ends
+with a `Co-Authored-By:` trailer naming the model that wrote it — keep the one your harness
+supplies rather than rewriting it.

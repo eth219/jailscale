@@ -13,8 +13,9 @@ Closes #
 ## Gates
 
 <!-- Tick what you ran. A PR silent about the budget is one a reviewer has to assume was not
-     measured. CI runs the first two on every pull request; it runs the last two only on main, so
-     an unticked box below is a failure that finds main instead of you. -->
+     measured. CI runs `package` and `-Panalyze` on every pull request; the budget and load gates
+     run only on main, so an unticked box for one of those is a failure that finds main instead of
+     you. -->
 
 - [ ] `./mvnw package`
 - [ ] `./mvnw -Panalyze verify -DskipTests`

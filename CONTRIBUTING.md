@@ -72,7 +72,8 @@ to assume was not measured.
   passes just as well when the feature is dead. That is a real open issue here (#80).
 - **A new dependency is a design change**, not an implementation detail, and needs its own argument.
 - **A number in a document says where it came from**, on which platform, and what it does not cover.
-  Every `docs/*/README.md` has a section for exactly that.
+  `docs/jsse-idle-cost/README.md` and `docs/name-starvation/README.md` are the precedent: each ends
+  with a section on exactly that.
 - **An exclusion carries its reason.** `spotbugs-exclude.xml` is the precedent: an exclusion with no
   reason and a finding nobody answered look identical six months later.
 

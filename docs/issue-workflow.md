@@ -4,7 +4,7 @@ Several sessions — people and agents — read this tracker at once, and more t
 a checkout ([§3.2](ARCHITECTURE.md) is not where that is written down; it is a fact of how this
 project is worked on). Two of them starting the same issue costs a wasted branch and a merge
 nobody wanted. GitHub's own answer is the assignee field, which needs a GitHub account per worker,
-and an agent session does not have one. So the claim is a label plus a comment.
+and an agent session does not have one. So the claim is a comment, plus a label that indexes it.
 
 ## The three axes
 
@@ -32,7 +32,7 @@ delegated signing is `area:tls` and `area:node` both.
 | `status:ready` | Scoped well enough to start without asking | Anyone, by claiming it |
 | `status:claimed` | A session is on it **now** | Only the claimant |
 | `status:in-review` | A pull request is open and linked | Only the claimant |
-| `status:blocked` | Waiting on something outside this repository | Nobody |
+| `status:blocked` | Waiting on another issue, or on something outside this repository | Nobody |
 | `status:parked` | Open, and deliberately not being worked on | Nobody, until it is moved back |
 
 `status:parked` is not `wontfix`. Parked issues stay open because the alternative is that the
@@ -40,10 +40,12 @@ same limitation is rediscovered from the docs every few months and filed again.
 
 ## Claiming
 
-A claim is two things, and neither alone counts:
-
-1. the `status:claimed` label, replacing whatever status was there, and
-2. a comment in exactly this form, so it can be found by grep and read by a machine:
+A claim is a comment, and a label that indexes it. The comment is what is true; the
+`status:claimed` label, replacing whatever status was there, is what lets
+`gh issue list --label status:claimed` find it without reading every thread. Post the comment
+first: it carries its own expiry, so a session that dies between the two steps leaves something
+that expires rather than a bare label. The comment is in exactly this form, so it can be found by
+grep and read by a machine:
 
 ```
 🤖 CLAIM
@@ -54,11 +56,19 @@ expires: <ISO-8601 UTC, started + 4h>
 ```
 
 ```sh
-gh issue edit 42 --remove-label status:ready --add-label status:claimed
+fmt=%Y-%m-%dT%H:%M:%SZ
+expires=$(date -u -d '+4 hours' +$fmt 2>/dev/null || date -u -v+4H +$fmt)   # GNU date, then BSD
 gh issue comment 42 --body "$(printf '🤖 CLAIM\nsession: %s\nbranch: %s\nstarted: %s\nexpires: %s\n' \
-  "bridge-cse_019PN" "$(git branch --show-current)" \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date -u -v+4H +%Y-%m-%dT%H:%M:%SZ)")"
+  "<session name>" "$(git branch --show-current)" "$(date -u +$fmt)" "$expires")"
+gh issue edit 42 --add-label status:claimed --remove-label \
+  "$(gh issue view 42 --json labels --jq '[.labels[].name | select(startswith("status:"))] | join(",")')"
 ```
+
+The `expires` line must not be empty — check the comment after posting. `date -v` is BSD-only and
+`date -d` is GNU-only, which is why the snippet tries both. The last line removes whatever status
+the issue carried, not a guessed one, so claiming a `status:needs-measurement` issue leaves one
+status and not two. `git branch --show-current` prints nothing on a detached HEAD; write the
+worktree path in that case.
 
 **Read the comments before you claim.** The label can be stale; the newest CLAIM comment is what
 is true.
@@ -66,19 +76,22 @@ is true.
 **The expiry is the point.** A session dies without cleaning up — a window closed, a context
 exhausted, a machine asleep — and a claim with no expiry is a permanent lock held by nobody. Four
 hours is long enough for real work and short enough that a dead session does not hold an issue
-overnight. Renew by posting a fresh CLAIM; there is no other renewal.
+overnight. Renew by posting a fresh CLAIM from the same `session:`; that is a renewal, not a
+takeover, and needs no TAKEOVER block. There is no other renewal.
 
 ## Releasing, and taking over
 
 Finished, or a pull request is open: move to `status:in-review` and link the PR. The PR closing
 the issue is what ends the claim, so no comment is needed.
 
-Giving up: comment `🤖 RELEASE` with one line on how far you got, and move the status back to
-whatever it should be now — often `status:ready`, sometimes `status:needs-decision` because the
-work found a question.
+Giving up, for any reason: comment `🤖 RELEASE` with one line on how far you got and, if a
+question stopped you, the question. Then set the status to what is true now — `status:ready` if
+the work can simply continue, `status:needs-decision` if it found a choice, `status:blocked` if it
+found a wall. Every later step that says "release" means exactly this.
 
-Taking over an expired claim: check that `expires` has passed **and** that no open PR links the
-issue, then comment
+Taking over an expired claim: check that `expires` has passed. An open PR linking the issue means
+the claimant skipped step 7 — move it to `status:in-review` instead of taking over. Otherwise
+comment
 
 ```
 🤖 TAKEOVER
@@ -112,15 +125,14 @@ not written down is a step somebody skips the first time it is inconvenient.
 
 ### 1. Pick
 
-Only `status:ready`. `status:needs-decision` and `status:needs-measurement` are not ready by
-definition, `status:blocked` and `status:parked` are waiting on something that is not you, and
-`status:triage` has not been classified yet — classifying it is itself a small piece of work, and a
-worthwhile one.
+`status:ready`, or `status:needs-measurement` when you are the one taking the measurement.
+`status:needs-decision` is not ready by definition, `status:blocked` and `status:parked` are waiting
+on something that is not you, and `status:triage` has not been classified yet — classifying it is
+itself a small piece of work, and a worthwhile one.
 
 ### 2. Claim
 
-The label and the comment, as above. **Read the existing comments first**: the label can be stale
-and the newest CLAIM is what is true.
+The comment and then the label, as above — and the existing comments first.
 
 ### 3. Work, and not in the shared checkout
 
@@ -136,8 +148,7 @@ Some things are not the session's call: which of three approaches, whether a con
 cost, whether a limit is accepted. **Do not guess and do not hold the issue.**
 
 Leave the question on the issue in the form the reader needs — what the options are, what each
-costs, what tips it — comment `🤖 RELEASE` naming the question, and move the status to
-`status:needs-decision`. Then go and do something else.
+costs, what tips it — and release to `status:needs-decision`. Then go and do something else.
 
 Holding `status:claimed` while waiting looks like progress and is not: the decision may take days,
 the claim expires in four hours, and in between the issue is neither being worked on nor available.
@@ -145,15 +156,15 @@ Releasing costs re-reading the issue later; holding costs everyone else.
 
 ### 5. When work uncovers a different problem
 
-File it. Title, the three axes, and a link both ways — this is exactly how #66 through #86 came to
-exist, and an observation that stays in a branch is an observation nobody else has.
+File it. Title, the three axes, and a link both ways. An observation that stays in a branch is an
+observation nobody else has.
 
 Then choose, honestly:
 
 - **It does not block this issue.** File it, link it, keep going. Widening the change to cover it is
   the most common way a small PR becomes unreviewable.
-- **It blocks this issue.** Move the issue you hold to `status:blocked`, link the new one, comment
-  `🤖 RELEASE`. The new issue is now the work.
+- **It blocks this issue.** Link the new one and release to `status:blocked`. The new issue is now
+  the work.
 
 ### 6. The gate, before any pull request
 
@@ -174,7 +185,7 @@ jobs are skipped on pull requests and will find your change on main instead:
 
 | If the change touches | Run before the PR | Because CI runs it only on main |
 |---|---|---|
-| the multiplexer, the relay, the visitor path, anything per-connection | `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` | `budget` — it needs a native build |
+| the multiplexer, the relay, the visitor path, anything per-connection | `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` | `budget` — it needs a native build; the step in `ci.yml` is the definition, if the two ever differ |
 | the hub's admission or fan-out | `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` | `load` — it holds a thousand sockets open |
 
 Read the header of `measure.sh` before trusting a surprising number from it. It carries a list of
@@ -188,8 +199,8 @@ that is silent about the budget run is one the reviewer has to assume was not me
 
 ### 8. Merged
 
-The issue closes itself. If the PR was merged without closing it, or was abandoned, release the
-claim by hand: `🤖 RELEASE` and a status that reflects what is true now.
+The issue closes itself. If the PR was merged without closing it, or was abandoned, release by
+hand, as above.
 
 ## What this does not do
 
