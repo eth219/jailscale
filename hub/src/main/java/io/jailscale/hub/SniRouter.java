@@ -8,6 +8,7 @@ import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,22 +66,32 @@ final class SniRouter {
     }
 
     /**
-     * Takes a visitor slot for {@code ip} on behalf of a listener that is not 443 -- the raw tcp
-     * ports of §8.4, which accept on their own sockets and so never reached the cap above. False
-     * when that network is already at {@link #MAX_PER_IP}, and then nothing was taken.
+     * Takes a visitor slot on behalf of a listener that is not 443 -- the raw tcp ports of §8.4,
+     * which accept on their own sockets and so never reached the cap above. Returns the key it took,
+     * to be handed back to {@link #giveSlot}, or null when that network is already at
+     * {@link #MAX_PER_IP} and nothing was taken.
+     *
+     * <p>{@code attributed} is whether a PROXY header said who the visitor is, and {@code peer} is
+     * what the socket says whether it did or not, because both of the rules above apply here too
+     * and for the same reasons: the key is the address the hub can believe, and a connection it
+     * cannot attribute *and* that arrives on loopback is exempt. A forwarder on this host without
+     * the PROXY protocol folds every visitor onto one address, and a raw port that capped that at
+     * {@link #MAX_PER_IP} would cap the world at 64 -- which is what it did, while 443 behind the
+     * same forwarder capped nobody.
      */
-    boolean takeSlot(String ip) {
-        String key = NetKey.of(ip);
-        if (acquire(perIp, key) > MAX_PER_IP) {
+    String takeSlot(String ip, InetAddress peer, boolean attributed) {
+        String key = attributed ? NetKey.of(ip) : NetKey.of(peer);
+        boolean unattributedLocal = !attributed && peer.isLoopbackAddress();
+        if (acquire(perIp, key) > MAX_PER_IP && !unattributedLocal) {
             release(perIp, key);
-            return false;
+            return null;
         }
-        return true;
+        return key;
     }
 
-    /** Gives back what {@link #takeSlot} took. */
-    void giveSlot(String ip) {
-        release(perIp, NetKey.of(ip));
+    /** Gives back what {@link #takeSlot} took, which is why it is the key and not the address. */
+    void giveSlot(String key) {
+        release(perIp, key);
     }
 
     /** Gives a slot back, dropping the entry when it was the last one. */
