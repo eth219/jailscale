@@ -14,6 +14,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
@@ -65,9 +66,18 @@ class MetricsEndpointTest {
 
     /** The metrics listener: plain HTTP, loopback, no name and no certificate involved. */
     private HttpResponse scrape(String path) throws Exception {
+        return scrape("GET", path, null);
+    }
+
+    /**
+     * The same, with the method a scraper got wrong. An empty body rather than none: this listener
+     * is plaintext, and a request left half-read on the socket is one the close turns into an RST.
+     */
+    private HttpResponse scrape(String method, String path, String form) throws Exception {
         try (Socket s = new Socket("127.0.0.1", hub.metricsPort())) {
             s.setSoTimeout(10_000);
-            Http.writeRequest(s.getOutputStream(), "GET", "127.0.0.1", path, null, null);
+            byte[] body = form == null ? null : form.getBytes(StandardCharsets.UTF_8);
+            Http.writeRequest(s.getOutputStream(), method, "127.0.0.1", path, null, body);
             return Http.readResponse(s.getInputStream(), 1 << 20);
         }
     }
@@ -115,6 +125,20 @@ class MetricsEndpointTest {
         assertEquals(404, scrape("/").status());
         assertEquals(404, scrape("/v1/status").status());
         assertEquals(404, scrape("/admin").status());
+    }
+
+    /**
+     * A 405 with no {@code Allow} is missing the one field RFC 9110 §15.5.6 makes mandatory for the
+     * status, and it is what a scraper pointed here with the wrong method reads to find out what to
+     * send instead. This listener builds its own 405 rather than going through {@link HttpFront},
+     * so the assertion on that front (HomePageTest) stayed green while this answer had no field
+     * at all.
+     */
+    @Test
+    void theWrongMethodOnTheScrapeSaysWhichOnesAreAllowed() throws Exception {
+        HttpResponse r = scrape("POST", "/metrics", "");
+        assertEquals(405, r.status(), r.bodyText());
+        assertEquals("GET, HEAD", r.headers().get("Allow"));
     }
 
     /** Nothing that names a person, a node or a link may be in what a stranger can scrape. */
