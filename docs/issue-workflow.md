@@ -259,9 +259,14 @@ it starts at step 1.
 
 One session, one issue after another, with no person reading the diff between the claim and the
 merge. It is the loop above with a pick rule, a merge rule, and a rule for `main` afterwards. **It is
-not open yet**: #184 is the survey of what the suite can and cannot fail without a person, and until
-the decisions on it are made a session runs the loop as far as step 7 and stops there, however many
-issues it takes in a row.
+not open yet**: #184 is the survey of what the suite can and cannot fail without a person, and it is
+blocked on the three things that survey decided are the gate (#187, #188, #183). Until #184 is
+closed a session runs the loop as far as step 7 and stops there, however many issues it takes in a
+row.
+
+The session is started with a **count**: how many issues to take before stopping, and one if
+nothing is said. It is a ceiling, not a target — every stop below fires first — and it is what lets
+a person say "three, then I will look" instead of finding out in the morning how far it got.
 
 ### Pick
 
@@ -297,6 +302,7 @@ the start; the merge rule is for the label that was added on the way.
 
 ### Stop
 
+- The count is reached.
 - Nothing left that the pick rule allows.
 - The gate failed twice on the same issue: `🤖 RELEASE`, `status:ready`, and the failure in the
   comment.
