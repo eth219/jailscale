@@ -638,4 +638,69 @@ class HomePageTest {
         // until review; the two are one step apart and the page has to get the step right.
         assertTrue(page.contains("RELEASE.txt"), page);
     }
+
+    /**
+     * The operator block, and the half that matters more: a hub nobody has configured says nothing
+     * at all. The alternative shape -- a section on every hub reading "operator: not set" -- is a
+     * worse page for the case that needs it least, and it is what this would quietly become if the
+     * condition were ever dropped.
+     */
+    @Test
+    void whoRunsThisHubAppearsOnlyWhenSomebodyHasSaidSo() throws Exception {
+        String bare = http("GET", "/", null, null).bodyText();
+        assertFalse(bare.contains("Who runs this hub"), "nothing was configured: " + bare);
+        assertFalse(bare.contains("What it keeps"), bare);
+        // And the sentence this issue exists to replace stays on the hub that has not replaced it.
+        assertTrue(bare.contains("rather than one to depend on"), bare);
+
+        hub.store().setSetting(Store.SETTING_OPERATOR, "Example Ltd");
+        hub.store().setSetting(Store.SETTING_CONTACT, "mailto:abuse@example.com");
+        hub.store().setSetting(Store.SETTING_TERMS, "https://example.com/aup");
+        String named = http("GET", "/", null, null).bodyText();
+        // With an id, because the closing line below links back to it.
+        assertTrue(named.contains("<h2 id=\"who\">Who runs this hub</h2>"), named);
+        assertTrue(named.contains("Run by <b>Example Ltd</b>"), named);
+        assertTrue(named.contains("<a href=\"mailto:abuse@example.com\">Contact</a>"), named);
+        assertTrue(named.contains("<a href=\"https://example.com/aup\">What is allowed here</a>"), named);
+        // The retention sentence is the part an operator cannot write for themselves, so it is not
+        // theirs to configure: it says what the process does, and where that stops.
+        assertTrue(named.contains("thirty days of uptime record"), named);
+        assertTrue(named.contains("keeps no list of them"), named);
+        assertTrue(named.contains("is the operator's and not something this page can answer for"), named);
+        // A pending join holds the address it knocked from until somebody decides; the list of
+        // what is kept is only worth printing if it is the whole list -- which is also why the
+        // hostname and system in both records are named, since a record holding them is not
+        // described by the address alone.
+        assertTrue(named.contains("the address a machine knocked from"), named);
+        assertTrue(named.contains("the hostname and system it gave"), named);
+        assertTrue(named.contains("the hostname and system each machine reported"), named);
+        // The closing line is the point of the issue: a hub that has named an operator stops
+        // telling visitors not to depend on it and points at who to ask instead.
+        assertFalse(named.contains("rather than one to depend on"), named);
+        assertTrue(named.contains("Who that is, and on what terms"), named);
+
+        // One of the three is enough to draw it, since a hub that names only where to write has
+        // said the thing that matters most.
+        hub.store().setSetting(Store.SETTING_OPERATOR, "");
+        hub.store().setSetting(Store.SETTING_TERMS, "");
+        String contactOnly = http("GET", "/", null, null).bodyText();
+        assertTrue(contactOnly.contains("Who runs this hub"), contactOnly);
+        assertFalse(contactOnly.contains("Run by <b>"), contactOnly);
+        assertFalse(contactOnly.contains("What is allowed here"), contactOnly);
+        // And the closing line goes with the section and not with the operator name: one of the
+        // three is what draws the block, so one of the three is what has to replace the warning.
+        // This is the case where two separately written conditions would part, leaving a link to
+        // an anchor that was never drawn.
+        assertTrue(contactOnly.contains("<a href=\"#who\">Who runs this hub</a>"), contactOnly);
+        assertFalse(contactOnly.contains("rather than one to depend on"), contactOnly);
+
+        // A setting also arrives from the replication stream, where AdminIpc's rule never ran, so
+        // the page cannot assume it was stripped on the way in: the store is written directly here
+        // to stand for a primary that strips nothing. Blank has to be unset on this side too, or
+        // the block is drawn around an empty name and the warning is dropped on the strength of it.
+        hub.store().setSetting(Store.SETTING_CONTACT, "   ");
+        String blank = http("GET", "/", null, null).bodyText();
+        assertFalse(blank.contains("Who runs this hub"), blank);
+        assertTrue(blank.contains("rather than one to depend on"), blank);
+    }
 }

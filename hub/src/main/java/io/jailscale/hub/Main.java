@@ -46,6 +46,8 @@ public final class Main {
         jailhub admin add <user> | remove <user> | login-link
         jailhub key rotate [--grace 30d]
         jailhub setting invitePolicy members|admins | registration invite|open | knock on|off | autoPromote on|off
+        jailhub setting operator "NAME" | contact https://...|mailto:... | terms https://...
+                                            who runs this hub, shown on its page; empty clears (#99)
         Admin commands talk to the running server through <state>/jailhub.sock (--state or $JAILHUB_STATE).
         """;
 
