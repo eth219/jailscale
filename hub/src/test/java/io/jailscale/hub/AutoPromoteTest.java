@@ -9,6 +9,7 @@ import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.net.InetAddress;
@@ -146,6 +147,21 @@ class AutoPromoteTest {
         waitFor("the demoted hub never synced from the new primary", () -> a.peerClient() != null && a.peerClient().isSynced());
         assertTrue(a.store().node(alice.machineKey()) != null);
         assertEquals("primary", b.role());
+    }
+
+    @Test
+    void theFirstPromotionIsNotHeldBackByAnIntervalNothingHasElapsedAgainst() throws Exception {
+        pair();
+        // The rest of this class runs with no interval at all, so the term this asserts is dead in
+        // every other test. An interval longer than the monotonic clock has been running is what
+        // the default ten minutes looks like to a host that booted nine minutes ago -- the
+        // mass-reboot case -- and a hub that has never promoted has no reading to compare against
+        // it. Read as a reading, the zero it holds instead blocks the promotion entirely.
+        Hub.autoPromoteIntervalMs = Clock.millis() + 60_000;
+        a.close();
+        a = null;
+        waitFor("the standby never promoted itself", () -> "primary".equals(b.role()));
+        assertEquals(1, b.epoch(), "one promotion: epoch 0 to 1");
     }
 
     @Test
