@@ -364,4 +364,62 @@ class HomePageTest {
         String home = http("GET", "/", null, null).bodyText();
         assertFalse(home.contains("name=\"robots\""), home);
     }
+
+    /**
+     * The half of the grading that has to hold for the other half to mean anything: a hub with
+     * nothing wrong says so, in one line, and carries no warning on any row. A page that graded
+     * everything, or a verdict hard-coded to "Degraded", passes every assertion in the test below
+     * and fails here.
+     */
+    @Test
+    void aHubWithNothingWrongSaysSoInOneLineAndMarksNoRow() throws Exception {
+        String page = http("GET", "/", null, null).bodyText();
+        assertTrue(page.contains("All systems operational"), page);
+        assertFalse(page.contains("<b>Warning</b>"), "nothing here is wrong: " + page);
+        assertFalse(page.contains("<b>Critical</b>"), "nothing here is wrong: " + page);
+        // The dot is beside the words and never instead of them (the rule the strips follow).
+        assertTrue(page.contains("class=\"verdict\""), page);
+    }
+
+    /**
+     * And the direction it fails in: a hub whose only node has gone is degraded, the line says which
+     * row to look at, and that row is marked. The node is registered throughout -- what changed is
+     * that it is not online -- so this cannot pass by the hub simply forgetting it.
+     */
+    @Test
+    void aRegisteredNodeThatIsOfflineIsNamedInTheVerdictAndMarkedOnItsRow() throws Exception {
+        loginAsAdmin();
+        assertEquals(1, hub.store().nodes().size());
+        assertTrue(http("GET", "/", null, null).bodyText().contains("All systems operational"));
+
+        alice.close();
+        alice = null;
+        waitFor(() -> hub.registry().size() == 0);
+
+        String page = http("GET", "/", null, null).bodyText();
+        assertEquals(1, hub.store().nodes().size(), "still registered, just not online");
+        assertTrue(page.contains("Degraded &mdash; the one registered node is offline"), page);
+        assertTrue(page.contains("<b>Warning</b>: 0 online of 1 registered"), page);
+        assertFalse(page.contains("All systems operational"), page);
+    }
+
+    /**
+     * The thresholds, at values no fixture can hold: a certificate six days from expiry cannot be a
+     * test resource, because it would have to be reissued every week to stay six days away. The
+     * boundaries are asserted on both sides, since an off-by-one here is the difference between
+     * being told on the last day and being told on the day after.
+     */
+    @Test
+    void theCertificateIsGradedByHowMuchLifeIsLeft() {
+        long day = 86_400_000L;
+        assertEquals(HttpFront.Health.OK, HttpFront.certificateHealth(true, 90 * day));
+        assertEquals(HttpFront.Health.OK, HttpFront.certificateHealth(true, 14 * day));
+        assertEquals(HttpFront.Health.WARNING, HttpFront.certificateHealth(true, 14 * day - 1));
+        assertEquals(HttpFront.Health.WARNING, HttpFront.certificateHealth(true, 3 * day));
+        assertEquals(HttpFront.Health.CRITICAL, HttpFront.certificateHealth(true, 3 * day - 1));
+        assertEquals(HttpFront.Health.CRITICAL, HttpFront.certificateHealth(true, 0));
+        assertEquals(HttpFront.Health.CRITICAL, HttpFront.certificateHealth(true, -5 * day));
+        // Not loaded is not the same as expired: nothing is being served, and nothing has failed.
+        assertEquals(HttpFront.Health.WARNING, HttpFront.certificateHealth(false, 0));
+    }
 }

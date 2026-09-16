@@ -325,6 +325,109 @@ final class HttpFront {
         return s.append("</svg>").toString();
     }
 
+    /**
+     * What a graded row is: one of the three states the strip's colours already name. A row with no
+     * threshold has no {@code Health} at all rather than a permanent {@link #OK}, because "this row
+     * cannot be wrong" and "this row is currently right" are different claims.
+     */
+    enum Health {
+        OK(GOOD, ""),
+        WARNING(HttpFront.WARNING, "Warning"),
+        CRITICAL(HttpFront.CRITICAL, "Critical");
+
+        private final String colour;
+        private final String word;
+
+        Health(String colour, String word) {
+            this.colour = colour;
+            this.word = word;
+        }
+
+        /** The dot, and the word beside it, because colour is never the only channel (§13.2). */
+        String mark() {
+            return this == OK ? "" : "<span class=\"sw\" style=\"background:" + colour + "\"></span><b>" + word + "</b>: ";
+        }
+    }
+
+    /** A thing the page grades: its state, and how the verdict line says it in words. */
+    private record Problem(Health level, String says) {}
+
+    /**
+     * The wildcard's remaining life as a grade. It is the one row on this page whose number decides
+     * whether every name under the hub keeps working, and until now 85 days left and 5 days left
+     * were the same sentence in the same grey. Fourteen days is roughly two renewal attempts plus a
+     * weekend; three is little enough that a person has to be told now.
+     *
+     * <p>Package-private and taking the milliseconds rather than reading the hub, so the thresholds
+     * can be tested at values no fixture can hold: a certificate that expires in six days is not
+     * something a test resource can be, since it would have to be reissued to stay six days away.
+     */
+    static Health certificateHealth(boolean loaded, long msLeft) {
+        if (!loaded) {
+            return Health.WARNING;
+        }
+        long day = 86_400_000L;
+        if (msLeft <= 0 || msLeft < 3 * day) {
+            return Health.CRITICAL;
+        }
+        return msLeft < 14 * day ? Health.WARNING : Health.OK;
+    }
+
+    /**
+     * The one line above the table, and the reason the table is worth grading at all: a reader who
+     * does not know that 85 days of certificate is fine and 5 is not can now be told which this is
+     * without reading a row. The worst grade decides the word and the dot; every problem at that
+     * grade and below is named, because "Degraded" without saying what is degraded sends the reader
+     * back to the table this line exists to save them from.
+     */
+    private static String verdict(List<Problem> checks) {
+        Health worst = Health.OK;
+        StringBuilder says = new StringBuilder();
+        for (Health h : List.of(Health.CRITICAL, Health.WARNING)) {
+            for (Problem p : checks) {
+                if (p.level() == h) {
+                    if (worst == Health.OK) {
+                        worst = h;
+                    }
+                    says.append(says.length() > 0 ? "; " : "").append(p.says());
+                }
+            }
+        }
+        String word = worst == Health.OK ? "All systems operational"
+            : (worst == Health.CRITICAL ? "Critical" : "Degraded") + " &mdash; " + says;
+        return "<p class=\"verdict\"><span class=\"sw\" style=\"background:" + worst.colour + "\"></span>" + word + "</p>";
+    }
+
+    /** The certificate's grade and how the verdict says it. {@link #certificateRow} says it in the row. */
+    private Problem certificateProblem() {
+        boolean loaded = hub.tls().isLoaded();
+        long left = loaded ? hub.tls().leaf().getNotAfter().getTime() - System.currentTimeMillis() : 0;
+        Health h = certificateHealth(loaded, left);
+        if (h == Health.OK) {
+            return new Problem(h, "");
+        }
+        return new Problem(h, !loaded ? "no certificate is loaded yet"
+            : left <= 0 ? "the certificate expired " + Resources.humanDuration(-left) + " ago"
+            : "the certificate expires in " + Resources.humanDuration(left));
+    }
+
+    /**
+     * Redundancy as a grade. A primary that was never given a peer is a single hub **by choice**
+     * and is not missing anything, so it is not graded at all -- a status line that says "Degraded"
+     * about every one-host deployment is one an operator learns to ignore, which costs more than
+     * the row it was meant to explain. Being given a peer and not having it is the fault.
+     */
+    private Problem roleProblem(PeerClient pc) {
+        if (hub.isStandby() && pc != null) {
+            return pc.isSynced() ? new Problem(Health.OK, "")
+                : new Problem(Health.WARNING, pc.isConnected()
+                    ? "not in sync with the primary yet" : "not connected to the primary");
+        }
+        return hub.config().peer() != null && hub.peers().all().isEmpty()
+            ? new Problem(Health.WARNING, "no standby is connected")
+            : new Problem(Health.OK, "");
+    }
+
     /** The line under a strip: how far back it reaches, the figure for that window, and where it ends. */
     private static String ends(String from, Double fraction, String to) {
         return "<small class=\"ends\"><span>" + from + "</span><span>" + Availability.percent(fraction) + " uptime</span><span>" + to + "</span></small>";
@@ -396,8 +499,21 @@ final class HttpFront {
             .append(" hub's key at all.</p>");
 
         int online = hub.registry().size();
+        int registered = hub.store().nodes().size();
         long rss = Resources.rssBytes();
-        b.append("<h2>Status</h2><table>");
+
+        // The rows that have a threshold, graded before any of them is written, because the verdict
+        // goes above the table and is the worst of them. Everything else on this page is a fact with
+        // no good or bad about it -- a version, a key, a memory figure -- and stays ungraded.
+        PeerClient pc = hub.peerClient();
+        Problem cert = certificateProblem();
+        Problem role = roleProblem(pc);
+        // A hub nobody has joined yet is not a hub in trouble; one whose nodes have all gone is.
+        Problem nodes = registered > 0 && online == 0
+            ? new Problem(Health.WARNING, registered == 1 ? "the one registered node is offline"
+                : "none of the " + registered + " registered nodes are online")
+            : new Problem(Health.OK, "");
+        b.append("<h2>Status</h2>").append(verdict(List.of(cert, role, nodes))).append("<table>");
         // Said plainly when it is not a release, because the string alone does not say so to
         // anyone who does not read Maven: a hub built from main reports the pom's version, which
         // only a tag build replaces (`versions:set` in release.yml), so every source, `edge` and
@@ -437,9 +553,8 @@ final class HttpFront {
                     "The channel to " + peer + " per day, last 30 days")
                 + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today"));
         }
-        PeerClient pc = hub.peerClient();
         if (hub.isStandby() && pc != null) {
-            row(b, "Role", "standby of <code>" + escape(pc.primaryHost()) + "</code>, "
+            row(b, "Role", role.level().mark() + "standby of <code>" + escape(pc.primaryHost()) + "</code>, "
                 + (pc.isSynced() ? "in sync" : pc.isConnected() ? "connected, not yet in sync" : "not connected"
                     + (pc.lastError() == null ? "" : " (" + escape(pc.lastError()) + ")"))
                 + ", epoch " + hub.epoch());
@@ -456,10 +571,10 @@ final class HttpFront {
                 r.append(" in sync");
             }
             r.append(", epoch ").append(hub.epoch());
-            row(b, "Role", r.toString());
+            row(b, "Role", role.level().mark() + r);
         }
-        row(b, "Nodes", online + " online of " + hub.store().nodes().size() + " registered");
-        row(b, "Certificate", certificateRow());
+        row(b, "Nodes", nodes.level().mark() + online + " online of " + registered + " registered");
+        row(b, "Certificate", cert.level().mark() + certificateRow());
         // Heap is a small part of what a native image occupies, so where RSS is unavailable say
         // that rather than let a two-megabyte heap read as the process footprint.
         row(b, "Memory", rss < 0
@@ -786,6 +901,7 @@ final class HttpFront {
             + "h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);"
             + "font-weight:600;margin:2.75rem 0 .5rem}"
             + "p{margin:.75rem 0}a{color:var(--link)}"
+            + "p.verdict{font-weight:600;margin:.25rem 0 1rem}"
             + "nav{display:flex;gap:1.25rem;margin:-.25rem 0 2rem;font-size:.9rem}"
             + "nav [aria-current]{color:var(--ink);font-weight:600}"
             + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"

@@ -583,6 +583,20 @@ trusted from the cookie. Resident set size is read from `/proc/self/status` wher
 omitted elsewhere rather than guessed at, because a native image's heap is a small part of what it
 occupies.
 
+**One line above the table says whether any of it is a problem.** The rows were all the same weight:
+a certificate with 85 days left and one with 5 read as the same sentence in the same grey, though
+the second takes every name under the hub down within the week. Three rows have a threshold and are
+graded with the strips' own three colours, the word beside the dot as always -- the certificate
+(warning under a fortnight, critical under three days or expired), the peer (a standby not in sync
+or not connected, a primary that was **given** a peer and has none), and the nodes (registered but
+none online). The verdict is the worst of them and names it, because "Degraded" alone sends the
+reader back to the table the line exists to save them from. What is deliberately not graded: a
+primary with no peer configured, which is a single-host deployment by choice and not a hub missing
+a host; and the availability figure, because a deliberate restart counts as down and a status line
+that says "Degraded" for a day after every upgrade is one an operator learns to ignore, which costs
+more than the row it explains. Everything else on the page -- a version, a key, a memory figure --
+is a fact with no good or bad about it and stays ungraded.
+
 **The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
 open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
 -- so the front page shows the first eight and points at the directory for the rest, and the pair

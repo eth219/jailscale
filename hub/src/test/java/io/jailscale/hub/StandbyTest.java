@@ -220,6 +220,11 @@ class StandbyTest {
         assertTrue(prPage.contains("standby <code>127.0.0.1</code> in sync"), prPage);
         assertTrue(prPage.contains("Seen from here"), prPage);
         assertTrue(page("hub.test", portB).contains("standby of <code>hub.test</code>, in sync"));
+        // A pair that is doing its job is not graded as a problem on either side. This is the
+        // assertion that makes the two below mean something: without it they would also pass on a
+        // page that called every hub degraded.
+        assertTrue(prPage.contains("All systems operational"), prPage);
+        assertTrue(page("hub.test", portB).contains("All systems operational"), page("hub.test", portB));
         JsonObject ipcStatus = Ipc.call(root.resolve("a/jailhub.sock"), JsonObject.builder().put("cmd", "status").build());
         assertEquals(1, ipcStatus.array("standbys").size(), ipcStatus.toString());
 
@@ -251,6 +256,10 @@ class StandbyTest {
         assertEquals(List.of(), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000), "no primary, nothing to point the apex at");
         assertEquals(200, visit("web.hub.test", portB).status());
         assertEquals("hello", visit("web.hub.test", portB).bodyText());
+        // The standby is serving and its own page says what is wrong anyway: it is following
+        // nobody. Four rows down, that was "not connected" in the same grey as the uptime.
+        waitFor("the standby's page never said it had lost the primary",
+            () -> page("hub.test", portB).contains("Degraded &mdash; not connected to the primary"));
 
         // Promotion: the standby stops following and takes nodes, and the apex is itself.
         JsonObject promoted = Ipc.call(root.resolve("b/jailhub.sock"), JsonObject.builder().put("cmd", "promote").build());
@@ -258,6 +267,11 @@ class StandbyTest {
         assertEquals("primary", promoted.string("role"));
         assertEquals("primary", status("hub.test", portB).string("role"));
         assertEquals(List.of("203.0.113.2"), DnsQuery.a("127.0.0.1", standby.dnsPort(), "hub.test", 2000));
+        // Promoted, and alone: a hub that was given a peer and has none is short one host, which is
+        // a different thing from a single-hub deployment that never had one and is not graded.
+        String promotedPage = page("hub.test", portB);
+        assertTrue(promotedPage.contains("Degraded &mdash; no standby is connected"), promotedPage);
+        assertTrue(promotedPage.contains("<b>Warning</b>: primary, no standby connected"), promotedPage);
         JsonObject again = Ipc.call(root.resolve("b/jailhub.sock"), JsonObject.builder().put("cmd", "promote").build());
         assertFalse(again.optBool("ok", false), "promoting a primary is an error, not a no-op: " + again);
 
