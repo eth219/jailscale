@@ -1,5 +1,6 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.net.NetKey;
@@ -264,7 +265,7 @@ final class SniRouter {
             s.setSoTimeout(HELLO_TIMEOUT_MS);
             s.startHandshake();
             // Drain the request line so the client gets a clean response.
-            io.jailscale.proto.http.Http.readRequest(s.getInputStream(), 4096);
+            HttpRequest req = io.jailscale.proto.http.Http.readRequest(s.getInputStream(), 4096);
             // noindex,nofollow like every other page the hub writes (HttpFront.NOINDEX): this one
             // is served under the wildcard for any name at all, so it says of whatever name a
             // crawler was handed that this hub knows it, which is the thing /links is kept out of
@@ -274,7 +275,7 @@ final class SniRouter {
             // widest surface the hub has.
             HttpFront.secured(HttpResponse.html(404, "<!doctype html><meta charset=utf-8>" + HttpFront.NOINDEX
                 + "<title>jailscale</title><p><b>" + HttpFront.escape(name) + "</b> is not open right now.</p>"))
-                .writeTo(s.getOutputStream());
+                .writeTo(s.getOutputStream(), req.method().equals("HEAD"));
         } catch (io.jailscale.proto.http.HttpException e) {
             // not HTTP; nothing to say
         }

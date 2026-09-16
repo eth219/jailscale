@@ -6,13 +6,30 @@ public final class HttpException extends Exception {
     private static final long serialVersionUID = 1L;
 
     private final int status;
+    private final String method;
 
     public HttpException(int status, String message) {
+        this(status, message, null);
+    }
+
+    /**
+     * {@code method} is the request method, when the request line had already been parsed when this
+     * was thrown. The error response is still a response to that method, so a server that answers a
+     * rejected HEAD has to know not to write a body (RFC 9110 §9.3.2); without this the method is
+     * lost with the request that was never built.
+     */
+    public HttpException(int status, String message, String method) {
         super(message);
         this.status = status;
+        this.method = method;
     }
 
     public int status() {
         return status;
+    }
+
+    /** The method of the request that failed, or null if it was not read before the failure. */
+    public String method() {
+        return method;
     }
 }

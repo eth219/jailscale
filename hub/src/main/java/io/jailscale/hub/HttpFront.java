@@ -148,21 +148,24 @@ final class HttpFront {
             try {
                 req = Http.readRequest(in, MAX_BODY);
             } catch (HttpException e) {
-                write(HttpResponse.text(e.status(), e.getMessage()), out);
+                // The request never became one, so the method comes off the exception: it was read
+                // before the line that was rejected, and an error is still an answer to a HEAD.
+                write(HttpResponse.text(e.status(), e.getMessage()), out, "HEAD".equals(e.method()));
                 return;
             } catch (EOFException e) {
                 return;
             }
             LOG.debug("{} {} from {}", req.method(), req.path(), ip);
+            boolean headOnly = req.method().equals("HEAD");
             String path = req.path();
             if (path.equals("/v1/noise")) {
                 if (!req.method().equals("POST") || !req.wantsUpgrade(UPGRADE_PROTOCOL)) {
-                    write(HttpResponse.text(426, "expected Upgrade: " + UPGRADE_PROTOCOL), out);
+                    write(HttpResponse.text(426, "expected Upgrade: " + UPGRADE_PROTOCOL), out, headOnly);
                     return;
                 }
                 if (!handshakes.allow(ip)) {
                     LOG.warn("too many handshakes from {}, refusing", ip);
-                    write(HttpResponse.text(429, "too many handshakes"), out);
+                    write(HttpResponse.text(429, "too many handshakes"), out, headOnly);
                     return;
                 }
                 HttpResponse.upgrade(UPGRADE_PROTOCOL).writeTo(out);
@@ -187,7 +190,7 @@ final class HttpFront {
                 // cannot be the second thing to fail on the same connection.
                 resp = HttpResponse.html(500, ERROR_PAGE);
             }
-            write(resp, out);
+            write(resp, out, headOnly);
         } catch (IOException e) {
             LOG.debug("connection error: {}", e.toString());
         }
@@ -198,8 +201,11 @@ final class HttpFront {
      * Every answer goes out through here, so a route added later cannot be written without the
      * headers, which is the point of applying them at the write and not at each handler.
      */
-    private static void write(HttpResponse r, OutputStream out) throws IOException {
-        secured(r).writeTo(out);
+    private static void write(HttpResponse r, OutputStream out, boolean headOnly) throws IOException {
+        // headOnly rather than each route dropping its own body: the response to a HEAD carries the
+        // header fields a GET would have, Content-Length included (RFC 9110 §9.3.2), so the body has
+        // to exist here to be described and not be written.
+        secured(r).writeTo(out, headOnly);
     }
 
     /**

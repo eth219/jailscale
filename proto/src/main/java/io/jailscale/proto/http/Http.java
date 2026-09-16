@@ -40,8 +40,16 @@ public final class Http {
         if (!target.startsWith("/")) {
             throw new HttpException(400, "bad request target");
         }
-        Headers headers = readHeaders(in);
-        byte[] body = readBody(in, headers, maxBody);
+        Headers headers;
+        byte[] body;
+        try {
+            headers = readHeaders(in);
+            body = readBody(in, headers, maxBody);
+        } catch (HttpException e) {
+            // Carry the method into the error: everything above here has already read it, and the
+            // front that answers 431 or 413 needs it to frame the answer to a HEAD.
+            throw new HttpException(e.status(), e.getMessage(), method);
+        }
         return new HttpRequest(method, target, parts[2], headers, body);
     }
 
