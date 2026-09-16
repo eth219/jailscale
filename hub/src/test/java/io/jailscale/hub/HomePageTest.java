@@ -13,6 +13,8 @@ import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
+import java.nio.file.Files;
+import io.jailscale.proto.json.Json;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.net.InetAddress;
@@ -539,5 +541,66 @@ class HomePageTest {
         assertEquals(404, moved.status());
         assertTrue(moved.headers().get("Content-Type").startsWith("text/plain"), moved.bodyText());
         assertTrue(moved.bodyText().contains("--metrics-listen"), moved.bodyText());
+    }
+
+    /**
+     * The numbers the strip draws, in text. A hub that was down for 42 minutes three days ago has to
+     * say so somewhere a phone, a keyboard and a screen reader can reach -- the tooltip is none of
+     * those -- and the number has to be the one {@code /v1/status} reports, or the picture and the
+     * table behind it have quietly come apart.
+     *
+     * <p>The record is written to disk before the hub starts, because that is how a real gap is
+     * made: {@link Availability} books the interval between the last stamp and the start as down,
+     * and a gap in the file is a period a previous process recorded and this one inherits.
+     */
+    @Test
+    void theDaysThatWereNotGreenAreNamedInTextAndMatchTheJson() throws Exception {
+        Path root2 = TestDirs.newRoot("avail");
+        Path state = root2.resolve("hub");
+        Files.createDirectories(state);
+        long now = System.currentTimeMillis();
+        long day = 86_400_000L;
+        long downFrom = now - 3 * day - 12 * 3_600_000L;
+        Files.writeString(state.resolve("availability.json"), JsonObject.builder()
+            .put("since", now - 30 * day)
+            .put("lastStamp", now)
+            .put("gaps", java.util.List.of(java.util.List.of(downFrom, downFrom + 42 * 60_000L)))
+            .put("peers", JsonObject.builder().build())
+            .toJson());
+
+        int port2;
+        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            port2 = s.getLocalPort();
+        }
+        Hub down = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port2), state, "127.0.0.1", port2,
+            CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
+        down.start();
+        try {
+            String page = get(port2, "/").bodyText();
+            assertTrue(page.contains("<details>"), "the numbers have to be reachable without a hover: " + page);
+            assertTrue(page.contains("1 was not green (of the last 30 days)"), page);
+            assertTrue(page.contains("42 min down"), page);
+
+            // The same number, from the same array, in the answer a monitor reads. The tooltip and
+            // this list and the JSON are three renderings of one thing, and this is what says so.
+            JsonObject status = Json.parseObject(get(port2, "/v1/status").bodyText());
+            assertTrue(status.object("availability").object("process").array("downMinutesPerDay").toString().contains("42"),
+                status.toString());
+        } finally {
+            down.close();
+        }
+
+        // And the other direction: the hub this class starts has nothing to report, so it says
+        // nothing. Without this, a page that printed an empty details element on every hub -- or
+        // thirty rows of "no record" -- would pass everything above.
+        assertFalse(http("GET", "/", null, null).bodyText().contains("<details>"), "nothing was down here");
+    }
+
+    /** A page or a JSON answer from a hub other than the one this class starts. */
+    private HttpResponse get(int p, String path) throws Exception {
+        try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), "hub.test", "127.0.0.1", p, true, 10_000)) {
+            Http.writeRequest(s.getOutputStream(), "GET", "hub.test", path, new Headers(), null);
+            return Http.readResponse(s.getInputStream(), 1 << 20);
+        }
     }
 }

@@ -418,8 +418,7 @@ final class HttpFront {
         for (int i = 0; i < minutes.length; i++) {
             int x = i * slot + 1;
             long end = now - (minutes.length - 1 - i) * bucketMs;
-            String when = escape(java.time.Instant.ofEpochMilli(end - bucketMs).toString().substring(0, bucketMs >= 86_400_000L ? 10 : 16)
-                .replace('T', ' '));
+            String when = bucketLabel(end, bucketMs);
             s.append("<g><title>").append(when).append(": ");
             String fill;
             int bar;
@@ -583,6 +582,45 @@ final class HttpFront {
     private record Peer(boolean following, boolean connected, boolean synced, String primary,
                         String lastError, List<Peers.Session> standbys) {}
 
+    /**
+     * What a bucket is called: the day, or the hour within the day. Used by the picture and by the
+     * list under it, so the two cannot come to disagree about which bucket a number belongs to.
+     */
+    private static String bucketLabel(long end, long bucketMs) {
+        return escape(java.time.Instant.ofEpochMilli(end - bucketMs).toString()
+            .substring(0, bucketMs >= 86_400_000L ? 10 : 16).replace('T', ' '));
+    }
+
+    /**
+     * The same numbers as the strip, in text, for every reader the tooltip has nothing for: there is
+     * no hover on a phone, nothing in the strip can be reached by keyboard, and {@code role="img"}
+     * with a label is a reason for an assistive reader not to descend into the bars at all. The
+     * sentence under the strip says "each bar says its minutes", and until now that was true of one
+     * kind of reader.
+     *
+     * <p>Only the buckets that were not green, which is what anybody is looking for and which keeps
+     * this bounded at 30 or 24 rows while usually being empty. A bucket from before the record
+     * began is not listed: it is not a bucket this hub was down for, it is one it cannot speak
+     * about, and thirty rows of "no record" on a new hub would bury the two rows that matter.
+     */
+    private static String notGreen(long[] minutes, long now, long bucketMs, String what) {
+        StringBuilder rows = new StringBuilder();
+        int n = 0;
+        for (int i = 0; i < minutes.length; i++) {
+            if (minutes[i] <= 0) {
+                continue;
+            }
+            n++;
+            rows.append("<tr><td>").append(bucketLabel(now - (minutes.length - 1 - i) * bucketMs, bucketMs))
+                .append("</td><td>").append(minutes[i]).append(" min down</td></tr>");
+        }
+        if (n == 0) {
+            return "";
+        }
+        return "<details><summary>" + n + (n == 1 ? " was" : " were") + " not green (" + escape(what)
+            + ")</summary><table>" + rows + "</table></details>";
+    }
+
     /** The line under a strip: how far back it reaches, the figure for that window, and where it ends. */
     private static String ends(String from, Double fraction, String to) {
         return "<small class=\"ends\"><span>" + from + "</span><span>" + Availability.percent(fraction) + " uptime</span><span>" + to + "</span></small>";
@@ -718,16 +756,23 @@ final class HttpFront {
             ? " (record since " + escape(java.time.Instant.ofEpochMilli(avail.since()).toString().substring(0, 10)) + ")" : "";
         long day = 86_400_000L;
         long hour = 3_600_000L;
+        // The arrays are built once and used twice over: the picture, and the list of what is in
+        // it that a tooltip cannot tell anybody.
+        long[] byDay = downMinutes(avail::processDownBetween, now, day, 30);
+        long[] byHour = downMinutes(avail::processDownBetween, now, hour, 24);
         row(b, "Availability", "by this process's own record" + sinceNote
-            + strip(downMinutes(avail::processDownBetween, now, day, 30), now, day, 60, "Uptime per day, last 30 days")
+            + strip(byDay, now, day, 60, "Uptime per day, last 30 days")
             + ends("30 days ago", avail.processFraction(30 * day, now), "Today")
-            + strip(downMinutes(avail::processDownBetween, now, hour, 24), now, hour, 15, "Uptime per hour, last 24 hours")
-            + ends("24 hours ago", avail.processFraction(day, now), "Now") + LEGEND);
+            + strip(byHour, now, hour, 15, "Uptime per hour, last 24 hours")
+            + ends("24 hours ago", avail.processFraction(day, now), "Now") + LEGEND
+            + notGreen(byDay, now, day, "of the last 30 days")
+            + notGreen(byHour, now, hour, "of the last 24 hours"));
         for (String peer : avail.peerNames()) {
+            long[] peerByDay = downMinutes((f, t) -> avail.peerDownBetween(peer, f, t), now, day, 30);
             row(b, "Seen from here", "<code>" + escape(peer) + "</code>"
-                + strip(downMinutes((f, t) -> avail.peerDownBetween(peer, f, t), now, day, 30), now, day, 60,
-                    "The channel to " + peer + " per day, last 30 days")
-                + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today"));
+                + strip(peerByDay, now, day, 60, "The channel to " + peer + " per day, last 30 days")
+                + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today")
+                + notGreen(peerByDay, now, day, "of the last 30 days on this channel"));
         }
         if (peerState.following()) {
             row(b, "Role", role.level().mark()
@@ -1083,6 +1128,8 @@ final class HttpFront {
             + "font-weight:600;margin:2.75rem 0 .5rem}"
             + "p{margin:.75rem 0}a{color:var(--link)}"
             + "p.verdict{font-weight:600;margin:.25rem 0 1rem}"
+            + "details{margin:.5rem 0;font-size:.85rem}summary{cursor:pointer;color:var(--dim)}"
+            + "details table{margin:.25rem 0 .5rem}details td:first-child{width:9rem}"
             + "nav{display:flex;gap:1.25rem;margin:-.25rem 0 2rem;font-size:.9rem}"
             + "nav [aria-current]{color:var(--ink);font-weight:600}"
             + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"
