@@ -606,22 +606,33 @@ counts as down and a status line that says "Degraded" for a day after every upgr
 operator learns to ignore, which costs more than the row it explains. Everything else on the page --
 a version, a key, a memory figure -- is a fact with no good or bad about it and stays ungraded.
 
-**Every answer on this name carries the same four headers**, added where the response is written
+**Every answer on this name carries the same three headers**, added where the response is written
 and not in each handler, so a route nobody thought about gets them too. The front end's own shape is
 what makes the policy exact rather than aspirational -- no script, no external stylesheet, no font,
 and nothing ever fetched from a node -- so `default-src 'none'` is the truth: with `style-src
 'unsafe-inline'` for the one inline stylesheet, `img-src 'self'` for the icon, and `form-action`
 and `frame-ancestors` for `/admin`, whose forms are the only things here that change state. Then
-`X-Content-Type-Options: nosniff`; `Referrer-Policy: no-referrer`, because an invitation URL and an
-admin login URL are credentials in a path and a `Referer` is how a path travels somewhere nobody
-chose to send it; and HSTS for a year **without `includeSubDomains`**, which would be a promise
-about every name a node serves, made by the hub's operator on behalf of whoever owns the name, and
-not withdrawable inside the max-age. Not preloaded, for the same reason and more so.
+`X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`, because an invitation URL and
+an admin login URL are credentials in a path and a `Referer` is how a path travels somewhere nobody
+chose to send it. `set` and not `add`, so a handler that sets one of these itself is replaced rather
+than doubled: two policies on one response are intersected by the browser, and the looser one a
+handler asked for would silently not apply.
+
+**There is no HSTS**, and that is a decision rather than an omission. It would be the obvious fourth
+header -- everything here is HTTPS and the hub holds the key -- but HSTS is scoped to a **host**,
+not to a host and port (RFC 6797 §8.3), and a raw TCP port (§8.4) is published on the hub's own
+name. A browser that has loaded this page once would rewrite `http://<hub>:10042/` to `https://`
+before sending anything, and a raw port relays bytes with no TLS at all: the link is unreachable
+from that browser, there is no click-through, it lasts as long as the max-age, and the operator
+cannot withdraw it. That cost was not visible when the header was proposed, so the header is not
+here and the question is.
 
 **What a browser asks for, the hub now answers.** An icon -- two nodes and the hop between them,
 drawn in the markup rather than served from a file, so there is no build step and no byte array in
 the binary, and it follows the reader's colour scheme, which no `.ico` does -- under `/favicon.svg`
-and `/favicon.ico` both, and linked from every page. A description and `og:` tags on `/` and **only**
+and `/favicon.ico` both, and linked from every page on the hub's own name -- not from the wildcard's
+"not open" page, whose `/favicon.svg` is a different origin that `img-src 'self'` refuses and whose
+own name answers that path with the same page. A description and `og:` tags on `/` and **only**
 there, so the hub introduces itself when its address is pasted into a chat: an invitation's URL is a
 credential and the directory carries other people's names, and neither wants a card made of it. And
 the answers a person can arrive at by mistyping -- 404, and 405 on a page -- go through the same

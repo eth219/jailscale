@@ -3,6 +3,7 @@ package io.jailscale.hub;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -626,6 +627,6 @@ class LinkEndToEndTest {
         assertTrue(csp.contains("default-src 'none'"), csp);
         assertEquals("nosniff", r.headers().get("X-Content-Type-Options"));
         assertEquals("no-referrer", r.headers().get("Referrer-Policy"));
-        assertEquals("max-age=31536000", r.headers().get("Strict-Transport-Security"));
+        assertNull(r.headers().get("Strict-Transport-Security"), "no HSTS here either (#98)");
     }
 }

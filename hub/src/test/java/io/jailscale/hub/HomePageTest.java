@@ -3,6 +3,7 @@ package io.jailscale.hub;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
@@ -464,11 +465,11 @@ class HomePageTest {
             assertTrue(csp.contains("form-action 'self'"), path + ": " + csp);
             assertEquals("nosniff", r.headers().get("X-Content-Type-Options"), path);
             assertEquals("no-referrer", r.headers().get("Referrer-Policy"), path);
-            assertEquals("max-age=31536000", r.headers().get("Strict-Transport-Security"), path);
+            // And no HSTS, which is a decision and not an omission (#98): it is scoped to the host
+            // and not the port, so it would pin this hub's raw TCP ports to https as well, and
+            // those speak no TLS. A year, and nobody can take it back.
+            assertNull(r.headers().get("Strict-Transport-Security"), path);
         }
-        // A year, and not a word more: includeSubDomains would be a promise about every name a node
-        // serves, made by the operator of the hub and not by whoever owns the name.
-        assertFalse(http("GET", "/", null, null).headers().get("Strict-Transport-Security").contains("includeSubDomains"));
     }
 
     /** The icon, under both names, and linked from the frame so the second name is rarely asked for. */
@@ -480,7 +481,12 @@ class HomePageTest {
             assertEquals("image/svg+xml", r.headers().get("Content-Type"), path);
             assertTrue(r.bodyText().startsWith("<svg"), path);
         }
-        assertTrue(http("GET", "/", null, null).bodyText().contains("<link rel=\"icon\" href=\"/favicon.svg\">"));
+        String link = "<link rel=\"icon\" href=\"/favicon.svg\">";
+        assertTrue(http("GET", "/", null, null).bodyText().contains(link));
+        // The admin front builds a frame of its own, which is how it came to be the half of the hub
+        // without an icon. Its 403 is that frame with no session needed to reach it, so dropping the
+        // link there fails here rather than passing on the strength of the pages out front.
+        assertTrue(http("GET", "/admin", null, null).bodyText().contains(link), "the admin frame links it too");
     }
 
     /**
@@ -520,5 +526,18 @@ class HomePageTest {
         HttpResponse machine = http("POST", "/v1/noise", null, "");
         assertEquals(426, machine.status());
         assertTrue(machine.headers().get("Content-Type").startsWith("text/plain"), machine.bodyText());
+        // The paths a scraper or a crawler holds are answered the same way, on both the method
+        // they got wrong and the path that moved: a poll every fifteen seconds should not be
+        // downloading a page to discard.
+        for (String path : new String[] {"/metrics", "/robots.txt", "/v1/key"}) {
+            HttpResponse wrongMethod = http("POST", path, null, "");
+            assertEquals(405, wrongMethod.status(), path);
+            assertEquals("GET, HEAD", wrongMethod.headers().get("Allow"), path);
+            assertTrue(wrongMethod.headers().get("Content-Type").startsWith("text/plain"), path);
+        }
+        HttpResponse moved = http("GET", "/metrics", null, null);
+        assertEquals(404, moved.status());
+        assertTrue(moved.headers().get("Content-Type").startsWith("text/plain"), moved.bodyText());
+        assertTrue(moved.bodyText().contains("--metrics-listen"), moved.bodyText());
     }
 }

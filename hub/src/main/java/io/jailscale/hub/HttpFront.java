@@ -89,18 +89,19 @@ final class HttpFront {
      * becomes one this has to say {@code data:} instead. {@code Referrer-Policy: no-referrer}
      * because an invitation URL and an admin login URL are credentials in a path, and a Referer
      * header is the one way a path travels somewhere nobody chose to send it.
-     *
-     * <p>HSTS is a year, and deliberately **without** {@code includeSubDomains}: every
-     * {@code <name>.<hub>} is HTTPS by construction, which is an argument for it, but it is a
-     * promise made on behalf of names belonging to other people and no operator can take it back
-     * inside the max-age. Not preloaded, for the same reason and more so.
      */
     private static final String[][] SECURITY_HEADERS = {
         {"Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; "
             + "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"},
         {"X-Content-Type-Options", "nosniff"},
         {"Referrer-Policy", "no-referrer"},
-        {"Strict-Transport-Security", "max-age=31536000"},
+        // No HSTS. It was in this table and came out: HSTS is scoped to a host and not to a host
+        // and port (RFC 6797 §8.3), so sending it from this page pins every raw TCP port published
+        // on the same name (§8.4) to https as well -- and a raw port relays bytes with no TLS at
+        // all, so a visitor whose browser has loaded this page once cannot reach one from a browser
+        // for a year, with no click-through and no way for the operator to withdraw it. #98 holds
+        // the question; it is not a line of code but a promise about names, and somebody has to
+        // decide it is worth that.
     };
 
     /**
@@ -114,6 +115,14 @@ final class HttpFront {
         + "<style>*{fill:#0b57d0}@media(prefers-color-scheme:dark){*{fill:#8ab4f8}}</style>"
         + "<circle cx=\"6\" cy=\"16\" r=\"5\"/><rect x=\"9\" y=\"13\" width=\"14\" height=\"6\" rx=\"3\"/>"
         + "<circle cx=\"26\" cy=\"16\" r=\"5\"/></svg>";
+
+    /**
+     * How a page asks for {@link #FAVICON}. A constant and not a literal in each frame because there
+     * are two frames on this name -- {@link #page} here and {@link AdminWeb}'s own -- and the second
+     * one is how the icon came to be missing from half the hub in the first place, exactly as
+     * {@link #NOINDEX} is shared for the same reason.
+     */
+    static final String ICON = "<link rel=\"icon\" href=\"/favicon.svg\">";
 
     private final Hub hub;
     private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
@@ -139,7 +148,7 @@ final class HttpFront {
             try {
                 req = Http.readRequest(in, MAX_BODY);
             } catch (HttpException e) {
-                secured(HttpResponse.text(e.status(), e.getMessage())).writeTo(out);
+                write(HttpResponse.text(e.status(), e.getMessage()), out);
                 return;
             } catch (EOFException e) {
                 return;
@@ -148,20 +157,25 @@ final class HttpFront {
             String path = req.path();
             if (path.equals("/v1/noise")) {
                 if (!req.method().equals("POST") || !req.wantsUpgrade(UPGRADE_PROTOCOL)) {
-                    secured(HttpResponse.text(426, "expected Upgrade: " + UPGRADE_PROTOCOL)).writeTo(out);
+                    write(HttpResponse.text(426, "expected Upgrade: " + UPGRADE_PROTOCOL), out);
                     return;
                 }
                 if (!handshakes.allow(ip)) {
                     LOG.warn("too many handshakes from {}, refusing", ip);
-                    secured(HttpResponse.text(429, "too many handshakes")).writeTo(out);
+                    write(HttpResponse.text(429, "too many handshakes"), out);
                     return;
                 }
                 HttpResponse.upgrade(UPGRADE_PROTOCOL).writeTo(out);
                 new NodeSession(hub, socket, ip).run(in, out);
                 return;
             }
+            HttpResponse resp;
             try {
-                secured(route(req)).writeTo(out);
+                // Only the building is guarded, not the write: a throw here has put no byte on the
+                // wire yet, so the answer below is the connection's first and only response. With
+                // the write inside the try, an unchecked throw partway through one would append a
+                // second whole response to the first and the client would read the pair as one.
+                resp = route(req);
             } catch (RuntimeException e) {
                 // Every handler below here runs on this connection's virtual thread, and nothing
                 // above catches anything but IOException: an unchecked throw used to close the
@@ -171,20 +185,44 @@ final class HttpFront {
                 // Through the frame, like the other answers a person can arrive at -- but not
                 // through page(), which is what may have just thrown. A literal, so this handler
                 // cannot be the second thing to fail on the same connection.
-                secured(HttpResponse.html(500, ERROR_PAGE)).writeTo(out);
+                resp = HttpResponse.html(500, ERROR_PAGE);
             }
+            write(resp, out);
         } catch (IOException e) {
             LOG.debug("connection error: {}", e.toString());
         }
     }
 
     /**
-     * Every response on this name goes through here. A new route cannot be added without the
+     * The one place a response leaves this front, the 101 that hands the connection to Noise aside.
+     * Every answer goes out through here, so a route added later cannot be written without the
      * headers, which is the point of applying them at the write and not at each handler.
+     */
+    private static void write(HttpResponse r, OutputStream out) throws IOException {
+        secured(r).writeTo(out);
+    }
+
+    /**
+     * Whether what asked for this path is a machine rather than somebody with a browser: the JSON
+     * under {@code /v1}, the metrics path a scraper may still be pointed at, and the file a crawler
+     * fetches. Those are answered in text, because a frame is bytes each of them has to skip. It is
+     * a list here and not a property of the route because the method guard runs above the dispatch;
+     * a path added to {@link #route} is a path this has to be told about.
+     */
+    private static boolean machinePath(String path) {
+        return path.startsWith("/v1/") || path.equals("/metrics") || path.equals("/robots.txt");
+    }
+
+    /**
+     * The headers themselves, for the one answer on this hub that is not written by {@link #write}:
+     * {@link SniRouter} writes the wildcard's page on a socket of its own. {@code set} and not
+     * {@code add}, so this says the same thing whether it runs once or twice and a handler that has
+     * set one of these itself gets replaced rather than doubled -- two policies on one response are
+     * intersected by the browser, so the looser one a handler asked for would silently not apply.
      */
     static HttpResponse secured(HttpResponse r) {
         for (String[] h : SECURITY_HEADERS) {
-            r.header(h[0], h[1]);
+            r.headers().set(h[0], h[1]);
         }
         return r;
     }
@@ -195,7 +233,7 @@ final class HttpFront {
      * just failed is a handler that fails twice and answers nothing.
      */
     private static final String ERROR_PAGE = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        + "<meta name=\"robots\" content=\"noindex,nofollow\"><title>Something went wrong</title>"
+        + NOINDEX + ICON + "<title>Something went wrong</title>"
         + "<style>body{font-family:system-ui,sans-serif;max-width:48rem;margin:4rem auto;padding:0 1.5rem;"
         + "line-height:1.65;color-scheme:light dark}</style></head><body><h1>Something went wrong</h1>"
         + "<p>The hub could not answer that. It is still running: <a href=\"/\">the hub's page</a> says"
@@ -210,9 +248,11 @@ final class HttpFront {
             // The guard is above the dispatch, so it answers for paths of both kinds and has to
             // pick the shape the way each of them would: a POST to /v1/key is a client that got
             // the method wrong, and a page is bytes it has to skip to find that out.
-            return path.startsWith("/v1/") ? HttpResponse.text(405, "method not allowed")
+            // Allow, because a 405 without it is the one thing RFC 9110 §15.5.6 requires of this
+            // status, and /admin -- the only path here that takes anything else -- never arrives.
+            return (machinePath(path) ? HttpResponse.text(405, "method not allowed")
                 : errorPage(405, "Not that way", "That method is not one this page answers."
-                    + " Everything here is a GET.");
+                    + " Everything here is a GET.")).header("Allow", "GET, HEAD");
         }
         if (path.equals("/favicon.svg") || path.equals("/favicon.ico")) {
             // Both names: the link element in the frame asks for the first, and a browser that was
@@ -237,8 +277,10 @@ final class HttpFront {
         if (path.equals("/metrics")) {
             // Moved off the public name rather than deleted (§6.3). Saying where it went would be
             // saying an address that is deliberately not this one, so it says which flag instead.
-            return errorPage(404, "Not here", "Metrics are not served on this name; see"
-                + " <code>--metrics-listen</code>.");
+            // In text, and not through the frame: what polls this path is a scraper still pointed
+            // at where metrics used to be, and four kilobytes of HTML per poll to say "not here" is
+            // exactly the machine answer this branch's own rule says not to frame.
+            return HttpResponse.text(404, "metrics are not served on this name; see --metrics-listen");
         }
         if (path.equals("/robots.txt")) {
             return HttpResponse.text(200, ROBOTS);
@@ -1030,7 +1072,7 @@ final class HttpFront {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             + (indexable ? "" : NOINDEX)
-            + "<link rel=\"icon\" href=\"/favicon.svg\">"
+            + ICON
             + head
             + "<title>" + escape(title) + "</title><style>"
             + ":root{color-scheme:light dark;--bg:#fff;--ink:#15171a;--dim:#70757c;--rule:#e7e8ea;--wash:#f5f6f7;--link:#0b57d0}"
@@ -1077,7 +1119,10 @@ final class HttpFront {
             + "<meta property=\"og:type\" content=\"website\">"
             + "<meta property=\"og:title\" content=\"" + host + "\">"
             + "<meta property=\"og:description\" content=\"" + desc + "\">"
-            + "<meta property=\"og:url\" content=\"" + escape(hub.config().baseUrl().toString()) + "/\">"
+            // resolve("/") and not the base URL with a slash stuck on: --base-url is taken as given
+            // as long as it is https with a host, so an operator who wrote a trailing slash would
+            // otherwise have this hub name itself with a doubled one.
+            + "<meta property=\"og:url\" content=\"" + escape(hub.config().baseUrl().resolve("/").toString()) + "\">"
             + "<meta name=\"twitter:card\" content=\"summary\">";
     }
 
