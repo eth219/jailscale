@@ -417,16 +417,27 @@ final class HttpFront {
      * about every one-host deployment is one an operator learns to ignore, which costs more than
      * the row it was meant to explain. Being given a peer and not having it is the fault.
      */
-    private Problem roleProblem(PeerClient pc) {
-        if (hub.isStandby() && pc != null) {
-            return pc.isSynced() ? new Problem(Health.OK, "")
-                : new Problem(Health.WARNING, pc.isConnected()
+    private Problem roleProblem(Peer peer) {
+        if (peer.following()) {
+            return peer.synced() ? new Problem(Health.OK, "")
+                : new Problem(Health.WARNING, peer.connected()
                     ? "not in sync with the primary yet" : "not connected to the primary");
         }
-        return hub.config().peer() != null && hub.peers().all().isEmpty()
+        // Connected, and not more: the primary has no acknowledgement to grade, and a standby that
+        // stops reading is dropped by Peers at MAX_QUEUED and becomes the absence this does grade.
+        // Between those two it reads as connected, which is the limit of what this side knows.
+        return hub.config().peer() != null && peer.standbys().isEmpty()
             ? new Problem(Health.WARNING, "no standby is connected")
             : new Problem(Health.OK, "");
     }
+
+    /**
+     * One reading of the hub-to-hub state, taken once per page. {@code following} is this hub being
+     * a standby: then the other fields describe the primary it follows, and {@code standbys} is
+     * empty. Otherwise it holds the sessions standbys have open to this one.
+     */
+    private record Peer(boolean following, boolean connected, boolean synced, String primary,
+                        String lastError, List<Peers.Session> standbys) {}
 
     /** The line under a strip: how far back it reaches, the figure for that window, and where it ends. */
     private static String ends(String from, Double fraction, String to) {
@@ -506,8 +517,14 @@ final class HttpFront {
         // goes above the table and is the worst of them. Everything else on this page is a fact with
         // no good or bad about it -- a version, a key, a memory figure -- and stays ungraded.
         PeerClient pc = hub.peerClient();
+        // Sampled once. The grade and the Role row are two readings of the same live state, and
+        // taken separately a standby that connects or drops between them puts a verdict on the page
+        // that contradicts the row directly under it.
+        Peer peerState = hub.isStandby() && pc != null
+            ? new Peer(true, pc.isConnected(), pc.isSynced(), pc.primaryHost(), pc.lastError(), List.of())
+            : new Peer(false, false, false, null, null, hub.peers().all());
         Problem cert = certificateProblem();
-        Problem role = roleProblem(pc);
+        Problem role = roleProblem(peerState);
         // A hub nobody has joined yet is not a hub in trouble; one whose nodes have all gone is.
         Problem nodes = registered > 0 && online == 0
             ? new Problem(Health.WARNING, registered == 1 ? "the one registered node is offline"
@@ -553,22 +570,24 @@ final class HttpFront {
                     "The channel to " + peer + " per day, last 30 days")
                 + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today"));
         }
-        if (hub.isStandby() && pc != null) {
-            row(b, "Role", role.level().mark() + "standby of <code>" + escape(pc.primaryHost()) + "</code>, "
-                + (pc.isSynced() ? "in sync" : pc.isConnected() ? "connected, not yet in sync" : "not connected"
-                    + (pc.lastError() == null ? "" : " (" + escape(pc.lastError()) + ")"))
+        if (peerState.following()) {
+            row(b, "Role", role.level().mark() + "standby of <code>" + escape(peerState.primary()) + "</code>, "
+                + (peerState.synced() ? "in sync" : peerState.connected() ? "connected, not yet in sync" : "not connected"
+                    + (peerState.lastError() == null ? "" : " (" + escape(peerState.lastError()) + ")"))
                 + ", epoch " + hub.epoch());
         } else {
-            List<Peers.Session> standbys = hub.peers().all();
             StringBuilder r = new StringBuilder("primary");
-            if (standbys.isEmpty()) {
+            if (peerState.standbys().isEmpty()) {
                 r.append(", no standby connected");
             } else {
                 r.append(", standby");
-                for (Peers.Session ps : standbys) {
+                for (Peers.Session ps : peerState.standbys()) {
                     r.append(" <code>").append(escape(ps.name())).append("</code>");
                 }
-                r.append(" in sync");
+                // Not "in sync", which this side cannot say: a standby acknowledges nothing, so all
+                // the primary knows is that the channel is open and what it has written to it. The
+                // standby is the side that knows, and its own page is where it says so.
+                r.append(" connected");
             }
             r.append(", epoch ").append(hub.epoch());
             row(b, "Role", role.level().mark() + r);

@@ -217,7 +217,10 @@ class StandbyTest {
         assertTrue(sbStatus.object("availability").object("peers").has("hub.test"), sbStatus.toString());
         assertTrue(sbStatus.object("availability").object("process").has("24h"), sbStatus.toString());
         String prPage = page("hub.test", portA);
-        assertTrue(prPage.contains("standby <code>127.0.0.1</code> in sync"), prPage);
+        // "connected" and not "in sync": a standby acknowledges nothing, so that is the whole of
+        // what the primary can say about it. The standby's own page below is where "in sync" is
+        // claimed, by the side that knows.
+        assertTrue(prPage.contains("standby <code>127.0.0.1</code> connected"), prPage);
         assertTrue(prPage.contains("Seen from here"), prPage);
         assertTrue(page("hub.test", portB).contains("standby of <code>hub.test</code>, in sync"));
         // A pair that is doing its job is not graded as a problem on either side. This is the

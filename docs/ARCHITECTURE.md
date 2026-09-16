@@ -587,9 +587,13 @@ occupies.
 a certificate with 85 days left and one with 5 read as the same sentence in the same grey, though
 the second takes every name under the hub down within the week. Three rows have a threshold and are
 graded with the strips' own three colours, the word beside the dot as always -- the certificate
-(warning under a fortnight, critical under three days or expired), the peer (a standby not in sync
-or not connected, a primary that was **given** a peer and has none), and the nodes (registered but
-none online). The verdict is the worst of them and names it, because "Degraded" alone sends the
+(warning under a fortnight, critical under three days or expired), the peer, and the nodes
+(registered but none online). The two sides of the peer row do not grade the same thing, because
+they do not know the same thing: a standby knows whether it is in sync and says so, while a primary
+has no acknowledgement to read -- a standby replies to nothing -- so all it grades is whether the
+channel is open, and its row says "connected" rather than the "in sync" it used to claim. A standby
+that stops reading is dropped at `MAX_QUEUED` (§13.1) and becomes the absence the primary does
+grade; between those two it reads as connected, which is the limit of what that side can say. The verdict is the worst of them and names it, because "Degraded" alone sends the
 reader back to the table the line exists to save them from. What is deliberately not graded: a
 primary with no peer configured, which is a single-host deployment by choice and not a hub missing
 a host; and the availability figure, because a deliberate restart counts as down and a status line
