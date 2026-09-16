@@ -131,6 +131,30 @@ class VisitorStallTest {
         // The node serves before anything is stalled, so a failure below is the stall and not the setup.
         assertEquals(200, visit("/first").status());
 
+        // And the slot that visit took has to be back before the next one asks for it. The response
+        // above is read on this thread; the slot is given back on others, and there are two of them
+        // because there are two ceilings, each with its own counter and its own way of saying no:
+        //
+        //   the hub's   NodeGroup.visitors, which SniRouter admits against -- Relay.closeQuietly
+        //   the node's  Visitors.inFlight, which Visitors.refuse admits against -- RST_NO_CAPACITY
+        //
+        // Both arrive at this socket as a close with nothing in it, so the read below returns -1
+        // and the assertion reports it as the node never having answered. It is what took main red
+        // five times on two platforms (#125), and the node's is the one that did it -- the CI log
+        // carries `[visitor] at the visitor ceiling (1), refusing new visitors` nine milliseconds
+        // after the link opened.
+        //
+        // Measured here: the hub's count is still occupied at this line 40 times out of 40, and
+        // clears in a mean of 86 us. The node's is still occupied *after the hub's has cleared*
+        // once in every 30 visits, taking up to 2,186 us. Waiting for the hub's alone is therefore
+        // not enough, and was tried: it left this test failing on ubuntu exactly as before.
+        //
+        // What has been standing in for this wait is an accident of cost -- building the ClientHello
+        // below takes about 877 us, so on an idle machine the slot usually frees itself while the
+        // test is busy. On a runner where that margin closes, it does not.
+        waitFor(() -> hub.links().byName("myapp").group().visitorsInFlight() == 0
+            && ok(cli("alice", JsonObject.builder().put("cmd", "status"))).lng("visitorsInFlight") == 0);
+
         try (Socket stalled = new Socket(InetAddress.getLoopbackAddress(), port)) {
             stalled.setSoTimeout(30_000);
             stalled.getOutputStream().write(clientHello("myapp.hub.test"));
