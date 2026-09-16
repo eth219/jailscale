@@ -125,35 +125,16 @@ class VisitorStallTest {
         Daemon alice = oneVisitorNode("alice");
         ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
             .put("user", "alice").put("caFile", CERT.toString())));
-        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        waitFor("the node never got the hub's certificate", () -> alice.hasCert(hub.tls().keyId()));
         ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
 
         // The node serves before anything is stalled, so a failure below is the stall and not the setup.
         assertEquals(200, visit("/first").status());
 
-        // And the slot that visit took has to be back before the next one asks for it. The response
-        // above is read on this thread; the slot is given back on others, and there are two of them
-        // because there are two ceilings, each with its own counter and its own way of saying no:
-        //
-        //   the hub's   NodeGroup.visitors, which SniRouter admits against -- Relay.closeQuietly
-        //   the node's  Visitors.inFlight, which Visitors.refuse admits against -- RST_NO_CAPACITY
-        //
-        // Both arrive at this socket as a close with nothing in it, so the read below returns -1
-        // and the assertion reports it as the node never having answered. It is what took main red
-        // five times on two platforms (#125), and the node's is the one that did it -- the CI log
-        // carries `[visitor] at the visitor ceiling (1), refusing new visitors` nine milliseconds
-        // after the link opened.
-        //
-        // Measured here: the hub's count is still occupied at this line 40 times out of 40, and
-        // clears in a mean of 86 us. The node's is still occupied *after the hub's has cleared*
-        // once in every 30 visits, taking up to 2,186 us. Waiting for the hub's alone is therefore
-        // not enough, and was tried: it left this test failing on ubuntu exactly as before.
-        //
-        // What has been standing in for this wait is an accident of cost -- building the ClientHello
-        // below takes about 877 us, so on an idle machine the slot usually frees itself while the
-        // test is busy. On a runner where that margin closes, it does not.
-        waitFor(() -> hub.links().byName("myapp").group().visitorsInFlight() == 0
-            && ok(cli("alice", JsonObject.builder().put("cmd", "status"))).lng("visitorsInFlight") == 0);
+        // And the slot that visit took has to be back before the next one asks for it: the
+        // response above is read on this thread and the slot is given back on others, so without
+        // this the ClientHello below meets a node that is still full (see `slotIsBack`).
+        slotIsBack("myapp");
 
         try (Socket stalled = new Socket(InetAddress.getLoopbackAddress(), port)) {
             stalled.setSoTimeout(30_000);
@@ -182,17 +163,20 @@ class VisitorStallTest {
             assertEquals(-1, n, "the stalled visitor should have been dropped, not left connected");
         }
 
-        // And the slot is back: the same node serves again, having done nothing but wait out one
-        // visitor. A retry loop rather than one attempt, because the reset, the hub's teardown and
-        // the counter going back down are three things on three threads.
-        waitFor(() -> served("/after"));
-
         // The node counted it as what it was. Without this the test would pass on a node that lost
         // the visitor some other way -- an exception in the handshake, the hub giving up -- and say
         // nothing about the deadline having been the thing that acted.
-        // Nothing here asserts visitorsInFlight is back to zero: the visit above has only just
+        //
+        // Read here rather than after the visit below, which is not a matter of taste: the node
+        // increments `visitorsStalled` before the reset the read above just saw, so it is already
+        // true, while `visitorsRefused` stops being safe to assert the moment another visitor is
+        // sent. The retry below is allowed to be turned away once -- the node decrements its count
+        // in a finally *after* that reset, so the hub can clear its own first, admit a retry and
+        // have the node refuse it -- and that refusal would land on this counter.
+        //
+        // Nothing here asserts visitorsInFlight is back to zero: the visitor above has only just
         // closed and its relay is still unwinding, so that number races this read. That the slot
-        // came back is what the visit itself proves -- a node bounded at one could not have served
+        // came back is what the visit below proves -- a node bounded at one could not have served
         // it otherwise.
         JsonObject status = ok(cli("alice", JsonObject.builder().put("cmd", "status")));
         assertEquals(1L, status.lng("visitorsStalled"), status.toString());
@@ -202,6 +186,11 @@ class VisitorStallTest {
         // (§9.3). It is here so that the slot being held is measured on the path it is really held
         // on -- the node's own bound -- and not mistaken for the hub's.
         assertEquals(0L, status.lng("visitorsRefused"), status.toString());
+
+        // And the slot is back: the same node serves again, having done nothing but wait out one
+        // visitor. A retry loop rather than one attempt, because the reset, the hub's teardown and
+        // the counter going back down are three things on three threads.
+        waitFor("the node never served again after the stalled visitor was dropped", () -> served("/after"));
     }
 
     /**
@@ -222,15 +211,16 @@ class VisitorStallTest {
         Daemon alice = oneVisitorNode("alice");
         ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
             .put("user", "alice").put("caFile", CERT.toString())));
-        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        waitFor("the node never got the hub's certificate", () -> alice.hasCert(hub.tls().keyId()));
         ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", deadPort).put("name", "dead")));
 
         // The page arrives for a visitor that says its whole request, so a failure below is the
         // half-spoken one and not the link.
         assertEquals(502, visit("dead.hub.test", "/first").status());
-        // And its slot is back before the next one asks for it: the relay unwinds on another
-        // thread, and a node bounded at one would otherwise refuse the connection this test holds.
-        waitFor(() -> ok(cli("alice", JsonObject.builder().put("cmd", "status"))).lng("visitorsInFlight") == 0);
+        // And its slot is back before the next one asks for it -- both halves of it, for the
+        // reason `slotIsBack` gives: the relay unwinds on another thread, and either ceiling still
+        // holding the last visitor closes the connection below before a byte of TLS reaches it.
+        slotIsBack("dead");
 
         try (SSLSocket held = Tls.connect(Tls.clientContext(CERT, false), "dead.hub.test", "127.0.0.1", port, true, 60_000)) {
             held.startHandshake();
@@ -249,8 +239,13 @@ class VisitorStallTest {
             assertTrue(r.body().length > 0, "the half-spoken request was answered with an empty page");
         }
 
-        // And the slot is back, from a node that did nothing but wait one visitor out.
-        waitFor(() -> visit("dead.hub.test", "/after").status() == 502);
+        // And the slot is back, from a node that did nothing but wait one visitor out. Through
+        // `served` rather than `visit`, because the slot comes back on other threads than this one
+        // and a visitor that arrives before it does is closed rather than answered: `visit` throws
+        // that out of the check, which ends the wait instead of retrying it, and this is the line
+        // that took this branch red on ubuntu, on the run that was meant to close #125.
+        waitFor("the node never served again after the half-spoken request was answered",
+            () -> served("dead.hub.test", "/after", 502));
     }
 
     /**
@@ -298,10 +293,79 @@ class VisitorStallTest {
     }
 
     private boolean served(String path) {
+        return served("myapp.hub.test", path, 200);
+    }
+
+    /**
+     * One visit as a condition rather than an assertion. A visitor either ceiling turns away gets a
+     * closed connection, which arrives here as an exception and not as a status, and inside a
+     * {@link #waitFor} that has to read as "not yet" rather than as the end of the test.
+     */
+    private boolean served(String host, String path, int status) {
         try {
-            return visit(path).status() == 200;
+            return visit(host, path).status() == status;
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    /**
+     * Waits until both ceilings have given the last visitor's slot back. A visit's response is read
+     * on the test's thread and its slot is released on others, and there are two of them, because
+     * there are two ceilings, each with its own counter and its own way of saying no:
+     *
+     * <ul>
+     *   <li>the hub's, {@code NodeGroup.visitors}, which {@code SniRouter} admits against: a
+     *       visitor over it is closed without an answer ({@code Relay.closeQuietly});
+     *   <li>the node's, {@code Visitors.inFlight}, which {@code Visitors.refuse} admits against:
+     *       {@code RST_NO_CAPACITY}, which reaches the visitor as the same bare close.
+     * </ul>
+     *
+     * <p>So either one still holding the slot arrives at the next visitor's socket as a close with
+     * nothing in it, which reads as the node never having answered. That is what took main red five
+     * times on two platforms (#125), and the node's is the one that did it -- the CI log carries
+     * {@code [visitor] at the visitor ceiling (1), refusing new visitors} nine milliseconds after
+     * the link opened.
+     *
+     * <p>Measured on an idle darwin-arm64 laptop, on the JVM, which is the only place this test
+     * runs: the hub's count is still occupied at the line that opens the next socket 40 times out
+     * of 40 and clears in a mean of 86 us; the node's is still occupied <i>after the hub's has
+     * cleared</i> once in every 30 visits, taking up to 2,186 us. Waiting for the hub's alone is
+     * therefore not enough, and was tried: it left
+     * {@link #aVisitorThatNeverFinishesItsHandshakeLosesItsSlot} failing on ubuntu, at the same
+     * line and with the same message as before.
+     * What had been standing in for the wait is an accident of cost -- building a ClientHello takes
+     * about 877 us, so on an idle machine the slot frees itself while the test is busy. On a runner
+     * where that margin closes, it does not.
+     */
+    private void slotIsBack(String link) throws Exception {
+        try {
+            waitFor("the slot the last visitor took never came back", () -> hubInFlight(link) == 0 && nodeInFlight() == 0);
+        } catch (AssertionError e) {
+            // Which of the two was still holding it is the whole diagnosis, and a message that does
+            // not say leaves the next reader where #125 started.
+            throw new AssertionError(e.getMessage() + ": the hub holds " + hubInFlight(link)
+                + " for " + link + " and the node reports " + nodeInFlight());
+        }
+    }
+
+    /** The hub's count for one link's node, or -1 when the link is not there at all. */
+    private int hubInFlight(String link) {
+        Links.Link l = hub.links().byName(link);
+        return l == null ? -1 : l.group().visitorsInFlight();
+    }
+
+    /**
+     * The node's own count, or -1 when the daemon did not answer. A value rather than an assertion
+     * because this is polled: one status call that fails has to read as "not yet", since ending the
+     * wait on it would report an IPC hiccup as the slot never having come back.
+     */
+    private long nodeInFlight() {
+        try {
+            JsonObject r = cli("alice", JsonObject.builder().put("cmd", "status"));
+            return r.optBool("ok", false) ? r.lng("visitorsInFlight") : -1;
+        } catch (IOException e) {
+            return -1;
         }
     }
 
@@ -318,7 +382,13 @@ class VisitorStallTest {
         boolean ok() throws Exception;
     }
 
-    private static void waitFor(Check c) throws Exception {
+    /**
+     * As in {@code StandbyTest} and {@code AutoPromoteTest}: the message is the condition, because
+     * five waits in one file that all fail as "condition not met in time" say nothing about which
+     * of them gave out -- and a test that exists because a flake was hard to diagnose should not
+     * cost the next reader the same hour.
+     */
+    private static void waitFor(String what, Check c) throws Exception {
         long deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {
             if (c.ok()) {
@@ -326,6 +396,6 @@ class VisitorStallTest {
             }
             Thread.sleep(50);
         }
-        throw new AssertionError("condition not met in time");
+        throw new AssertionError(what);
     }
 }
