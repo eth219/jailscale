@@ -34,6 +34,10 @@ class DnsFuzzTest {
             query("ns1.hub.test", 1),
             query("_jailhub-self.hub.test", 16),
             query("hub.test", 255),
+            // A name this parser accepts and a datagram cannot echo: labels are bounded by the
+            // packet here, not by the 255 bytes RFC 1035 allows a name, so this is the seed that
+            // reaches the branch where the TC answer drops the question too.
+            query(LONG_LABELS + "hub.test", 1),
         };
         Random rng = new Random(53);
         for (int i = 0; i < 20_000; i++) {
@@ -91,6 +95,9 @@ class DnsFuzzTest {
         }
         return b;
     }
+
+    /** Sixty labels: 960 bytes of name before the hub's own, which arrives in one datagram and cannot be echoed in one. */
+    static final String LONG_LABELS = "aaaaaaaaaaaaaaa.".repeat(60);
 
     /** A plain query packet: header, one question. */
     static byte[] query(String name, int type) {

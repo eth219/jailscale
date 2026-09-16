@@ -130,6 +130,41 @@ class DnsAmplificationTest {
         assertTrue(d.respond(q).length > DnsResponder.MAX_UDP, "TCP should still carry the whole answer");
     }
 
+    @Test
+    void aQuestionTooLongToEchoLeavesTheHeaderAlone() throws Exception {
+        // The TC answer echoes the question, and nothing used to check that the echo fit either. A
+        // name here is bounded by the packet and not by the 255 bytes RFC 1035 allows one, so this
+        // query -- 60 labels under the hub name, 998 bytes, which arrives in one datagram -- was
+        // answered by cutting to the question's end, which is a 998-byte datagram: over the 512
+        // that §11.5 states, broken by the one path that existed to keep it. Not amplification, an
+        // answer no larger than the query that asked for it, but an oversized datagram is discarded
+        // by a resolver rather than reported, which is the failure the bound is there to prevent.
+        DnsResponder d = fullest();
+        byte[] q = DnsFuzzTest.query(DnsFuzzTest.LONG_LABELS + HUB, 1);
+        assertTrue(q.length > DnsResponder.MAX_UDP, "the question itself has to be what does not fit, was " + q.length);
+
+        byte[] r = d.answerForUdp(q, java.net.InetAddress.getByName("198.51.100.7"), 1_000_000);
+        assertEquals(12, r.length, "a question too long to echo leaves the header alone, was " + r.length);
+        assertTrue((r[2] & 0x02) != 0, "TC should still be set");
+        for (int i = 4; i < 12; i++) {
+            assertEquals(0, r[i], "nothing should be counted at byte " + i);
+        }
+    }
+
+    @Test
+    void aBudgetSmallerThanADatagramBoundsTheEchoToo() {
+        // No caller passes one today -- both budgets that reach the encoder are a datagram's -- so
+        // this is the parameter's own promise rather than a live path. It is worth pinning because
+        // the next budget is where an echo measured against the constant instead of against what
+        // was asked for would put an oversized answer back on the wire, which is the failure the
+        // commit above closed.
+        DnsResponder d = fullest();
+        byte[] q = DnsFuzzTest.query("myapp." + HUB, 1);
+        assertTrue(d.respond(q).length > q.length, "the whole answer has to be the thing that does not fit");
+        assertEquals(q.length, d.respond(q, q.length).length, "room for the echo exactly, and it is kept");
+        assertEquals(12, d.respond(q, q.length - 1).length, "one byte less and the header goes alone");
+    }
+
     /** The zone at its largest: two hosts, both name servers, an issuance in flight. */
     private static DnsResponder fullest() {
         return fullest(HUB);

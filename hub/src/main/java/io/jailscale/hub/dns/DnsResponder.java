@@ -368,8 +368,9 @@ public final class DnsResponder implements AutoCloseable {
 
     /**
      * The same, within a budget: how many bytes the answer may take on its way out. {@link #MAX_UDP}
-     * for a datagram, {@link #NO_RECORDS} for the answer rate's slip, {@link #WHOLE} for TCP. An answer
-     * that does not fit comes back as the {@code TC} form, written by the same encoder.
+     * for a datagram, {@link #NO_RECORDS} for the answer rate's slip, {@link #WHOLE} for TCP. An
+     * answer that does not fit comes back as the {@code TC} form, written by the same encoder: the
+     * header, and the question with it where the budget has room for the echo.
      */
     byte[] respond(byte[] q, int budget) {
         if (!isQuery(q)) {
@@ -590,12 +591,29 @@ public final class DnsResponder implements AutoCloseable {
      * read — which under {@code _acme-challenge} is a certificate that stops renewing and says so
      * nowhere. Over the answer rate it is the polite half of the refusal
      * ({@code ResponseRate.SLIP}), and it arrives here as a budget of {@link #NO_RECORDS}.
+     *
+     * <p>What the echo has to fit, <b>and it does have to fit</b>. Truncating belongs to UDP alone —
+     * TCP's length prefix carries whatever the answer is — so a datagram is the ceiling, and a
+     * budget that is a size lowers it as far as it goes; {@link #NO_RECORDS} is not one, so it does
+     * not. A question too long for what is left is dropped with the records, leaving the header,
+     * which is still a well-formed {@code TC} answer.
+     *
+     * <p>That branch is not hypothetical. A name here is bounded by the packet and not by the 255
+     * bytes RFC 1035 allows one, so a query of nearly a kilobyte is accepted, and the pass that used
+     * to cut the answer down had no idea what it was cutting it to: it echoed the question whatever
+     * its size, and the answer left at the size of the query — 998 bytes in
+     * {@code DnsAmplificationTest}, over the §11.5 bound, broken by the one path that existed to
+     * keep it.
      */
     private static byte[] truncated(Question qn, int rcode) {
         byte[] q = qn.query();
-        ByteArrayOutputStream out = new ByteArrayOutputStream(qn.end());
-        header(out, q, 0x8600 | (q[2] & 0x01) << 8 | rcode, 1, 0, 0, 0);
-        out.write(q, 12, qn.end() - 12);
+        int cap = qn.budget() == NO_RECORDS ? MAX_UDP : Math.min(qn.budget(), MAX_UDP);
+        boolean echo = qn.end() <= cap;
+        ByteArrayOutputStream out = new ByteArrayOutputStream(echo ? qn.end() : 12);
+        header(out, q, 0x8600 | (q[2] & 0x01) << 8 | rcode, echo ? 1 : 0, 0, 0, 0);
+        if (echo) {
+            out.write(q, 12, qn.end() - 12);
+        }
         return out.toByteArray();
     }
 
