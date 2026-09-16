@@ -1,0 +1,51 @@
+name: Decision
+description: A question that has to be answered before anyone can work on it
+labels: ["question", "status:needs-decision"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Use this when the options are known and the choice is not yours - or when a session hit one
+        mid-issue and released it. #61 and #65 are the shape.
+  - type: textarea
+    id: question
+    attributes:
+      label: The question, in one sentence
+    validations: { required: true }
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it has to be decided rather than just done
+      description: >
+        Because the options are not equivalent, because it sets a precedent the next person will
+        follow, or because it trades one property for another. Say which.
+    validations: { required: true }
+  - type: textarea
+    id: options
+    attributes:
+      label: The options, each with what it costs
+      description: >
+        Include "leave it" when leaving it is defensible - #65 does, and it is not a straw man there.
+      value: |
+        **A.** 
+
+        Cost:
+
+        **B.** 
+
+        Cost:
+
+        **C. Leave it.**
+
+        Cost:
+    validations: { required: true }
+  - type: textarea
+    id: tips
+    attributes:
+      label: What tips it
+      description: The fact that decides it, if you know one. Not a recommendation - the fact.
+  - type: textarea
+    id: blocking
+    attributes:
+      label: What is waiting on this
+      description: Issues or branches blocked by the answer. Link them.

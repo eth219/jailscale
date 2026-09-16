@@ -1,0 +1,46 @@
+name: Work
+description: Something to build, change, or write down
+labels: ["enhancement", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Swap `enhancement` for `documentation` at triage if that is what it is. Area labels and a
+        final status are set at triage - leave them.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem, before any solution
+      description: >
+        What is not possible, or is possible only awkwardly, today. If ARCHITECTURE.md §15 already
+        states it, quote the entry - this issue is then the work behind it.
+    validations: { required: true }
+  - type: textarea
+    id: shape
+    attributes:
+      label: The shape it would take
+      description: Files, classes, the seam it goes through. A sentence each is enough.
+    validations: { required: true }
+  - type: textarea
+    id: cost
+    attributes:
+      label: What it costs
+      description: >
+        Complexity, a dependency, a platform that stops working, a number that gets worse. A change
+        with no cost named usually means the cost has not been found yet.
+    validations: { required: true }
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What was considered and rejected
+      description: >
+        And why. This is what stops the same discarded approach being proposed again next quarter.
+  - type: dropdown
+    id: ready
+    attributes:
+      label: Can a session start on this as written?
+      description: Advice to whoever triages it; the status label is set there, not here.
+      options:
+        - "Yes - scoped well enough to start (suggests status:ready)"
+        - "No - somebody has to choose the approach first (suggests status:needs-decision)"
+        - "No - a number has to exist first (suggests status:needs-measurement)"
