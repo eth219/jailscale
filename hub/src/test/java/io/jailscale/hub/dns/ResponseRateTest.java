@@ -181,10 +181,10 @@ class ResponseRateTest {
     @Test
     void whatIsAnsweredIsCountedEvenWhereTheMeterNeverSawIt() throws Exception {
         // The counter behind jailhub_dns_answers_total, which said "DNS queries answered on UDP 53"
-        // while counting only the ones that spent budget. The two exemptions are answered without
-        // the meter seeing them -- and on a hub whose resolvers arrive through a forwarder on this
-        // host, the exempt ones are all of them, so the metric could read zero while the zone was
-        // being served normally.
+        // while counting only the ones that spent budget. A loopback source is answered without the
+        // meter seeing it -- and on a hub whose resolvers arrive through a forwarder on this host
+        // that is every query, so the metric could read zero while the zone was being served
+        // normally.
         DnsResponder d = new DnsResponder("hub.test", "token");
         d.setZone(new DnsResponder.Zone() {
             @Override public java.util.List<String> serving() {
@@ -205,10 +205,10 @@ class ResponseRateTest {
         assertTrue(d.answerForUdp(ordinary, InetAddress.getLoopbackAddress(), now) != null);
         assertEquals(2, d.answered(), "an answer to a loopback source, which the meter exempts");
         assertTrue(d.answerForUdp(selfProbe, InetAddress.getByName("198.51.100.8"), now) != null);
-        assertEquals(3, d.answered(), "an answer to a self-probe, which never reaches the meter");
+        assertEquals(3, d.answered(), "and the self name, metered like any other and counted like any other");
 
-        // A query that is not one is not an answer, and neither is a drop: the four counters
-        // partition what arrives rather than overlapping.
+        // A query that is not one is not an answer, and neither is a drop: answered, dropped and
+        // truncated partition what arrives.
         assertEquals(null, d.answerForUdp(new byte[5], InetAddress.getLoopbackAddress(), now));
         InetAddress far = InetAddress.getByName("198.51.100.9");
         long before = d.answered();
@@ -223,6 +223,29 @@ class ResponseRateTest {
             "answered, dropped and truncated should add up to what arrived");
         assertTrue(d.refusedByGlobalBudget() <= d.dropped() + d.truncatedByRate(),
             "the table-wide count says which refusals it was, and is a subset of them rather than a fourth kind");
+    }
+
+    @Test
+    void theSelfProbeNameIsMeteredLikeEveryOther() throws Exception {
+        // It was exempt, because the lookup that asks for it had no TCP fallback: anyone able to
+        // forge a source into the hub's own network could empty that bucket and stop a hub
+        // identifying itself. One unmetered name is one name's worth of unbounded egress, and
+        // GLOBAL_PER_SECOND exists to make what leaves on :53 a number. DnsQuery follows a drop to
+        // TCP now, so the flood buys nothing and the name is nobody special here.
+        DnsResponder d = new DnsResponder("hub.test", "token");
+        byte[] q = DnsFuzzTest.query(DnsResponder.SELF_LABEL + ".hub.test", 16);
+        InetAddress far = InetAddress.getByName("198.51.100.7");
+        long now = 1_000_000;
+        assertTrue(d.answerForUdp(q, far, now) != null, "an ordinary rate is answered");
+        int refused = 0;
+        for (int i = 0; i < 500; i++) {
+            byte[] r = d.answerForUdp(q, far, now);
+            if (r == null || (r[2] & 0x02) != 0) {
+                refused++;
+            }
+        }
+        assertTrue(refused > 0, "a flood of the self name should be metered like any other");
+        assertTrue(d.dropped() > 0, "and counted where §11.5 counts refusals");
     }
 
     @Test

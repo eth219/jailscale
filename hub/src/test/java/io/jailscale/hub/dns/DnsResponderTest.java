@@ -319,11 +319,14 @@ class DnsResponderTest {
             byte[] q = DnsFuzzTest.query("_acme-challenge.hub.example.com", 16);
             assertTrue(d.respond(q).length > DnsResponder.MAX_UDP, "the fixture has to overflow a datagram");
 
-            IOException tc = assertThrows(IOException.class,
-                () -> DnsQuery.txt("127.0.0.1", d.port(), "_acme-challenge.hub.example.com", 2000));
-            assertTrue(tc.getMessage().contains("TC"), "the datagram should say come back over TCP, said " + tc.getMessage());
+            // DnsQuery follows the TC to TCP, so asking it is the assertion: an answer too large
+            // for a datagram comes back whole, which it can only do from the other socket of the
+            // pair, on the number UDP was bound to.
+            List<String> got = DnsQuery.txt("127.0.0.1", d.port(), "_acme-challenge.hub.example.com", 2000);
+            assertEquals(2, got.size(), "both records, which needed the TCP half: " + got);
+            assertTrue(got.contains("a".repeat(300)) && got.contains("b".repeat(300)), got.toString());
 
-            // And on that same number, over TCP, the whole answer is there.
+            // And byte for byte what the responder would build.
             assertArrayEquals(d.respond(q), overTcp("127.0.0.1", d.port(), q));
         }
     }

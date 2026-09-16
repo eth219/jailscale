@@ -1829,9 +1829,17 @@ every bucket's budget at once, so the per-network figure is not what a victim re
 is the table size times the per-bucket rate, which was 2,048 x 20 = about 41,000 answers a second,
 11.7 MB/s. A second budget for the whole table -- 500 at once, 200 a second -- is what makes the
 total a number rather than a function of how many source networks an attacker can be bothered to
-forge, and puts a victim at about 57 KB/s. The hub's own `_jailhub-self` probe (§13.3) is exempt
-from both, because it leaves from a public address and metering it handed an attacker a way to stop
-a hub identifying itself; its answer is the lowest-ratio one the zone has.
+forge, and puts a victim at about 57 KB/s. No name is exempt from either, and one was:
+the hub's own `_jailhub-self` probe (§13.3) leaves from a public address and was metered like
+anyone's, which handed an attacker who can forge a source into the hub's own network a way to stop a
+hub identifying itself -- empty that bucket with about twenty packets a second and the probe is
+dropped, the lookup gives up, and a hub that never learns its address serves an empty zone. The
+answer was to exempt the name, and the cost of that was the sentence above: with one name unmetered
+the total is not a number. The lookup asks over TCP when a datagram does not come back, so the
+flood costs an attacker a flood and buys nothing, and the exemption is gone. What is left of that
+attack is on TCP, where it costs a handshake per attempt from an address the attacker really holds
+and the operator can really see -- and where this server has no meter and no connection bound at
+all, which is #146.
 
 One over-limit query in two is answered `TC=1` instead of being dropped, which is the difference
 between a limit and a way to take the zone down: a resolver behind a forged address, or sharing a
@@ -2232,6 +2240,9 @@ parent, and is not asked again: the hub finds the parent zone's name servers thr
 resolver, asks one of them -- without recursion -- for `ns1.<hub>`, and reads the glue out of the
 referral it answers with; then it asks each glue address directly on port 53 for `_jailhub-self`
 and takes as its own the one that answers with its token. A peer answers with a different token.
+Every one of those lookups asks over UDP and then, if the datagram does not come back or comes back
+truncated or carrying somebody else's id, over TCP -- which is what lets §11.5 meter this name like
+any other, and what keeps a flood on the path from deciding whether a hub knows its own address.
 **Not from a recursive resolver**, which was the first version: once the subdomain is delegated, a
 resolver asked for `ns2.<hub>` asks the hubs, and a hub that did not yet know the glue answered from
 the wildcard with itself, the resolver cached that, and the lookup meant to find the glue read it
