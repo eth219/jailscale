@@ -7,15 +7,23 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `labeled` is here so that `ci:full` (below) can be added to a pull request that is already
+    # open and have it mean something: without it the label is only ever read at open or push
+    # time, and `gh pr create --label` attaches labels after the pull request exists, so the
+    # `opened` payload never carries one.
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: '17 18 * * *'   # 03:17 KST: it catches drift in the runner images and in what the
                             # pinned toolchain lines resolve to, and it is what watches the signed
                             # release index for its expiry (the `index` job below).
   workflow_dispatch:
 
-# A newer push supersedes an older one on the same ref; a tag build is never cancelled.
+# A newer push supersedes an older one on the same ref; a tag build is never cancelled. The
+# action is part of the group so that labelling a pull request does not cancel the suite already
+# running on it: those are different runs doing different work, and before this was here, adding
+# any label -- the type and area ones every pull request now carries -- killed the tests.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event.action }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -61,6 +69,9 @@ jobs:
   # cause, all in docs/windows-virtual-thread-stall. The Windows job costs 1.5 min against the other
   # two at 1.2, so holding it back to nightly bought nothing but a slower signal.
   test:
+    # A label says nothing about the code, so labelling does not re-run this. On a push or a
+    # schedule `github.event.action` is empty and the condition holds.
+    if: github.event.action != 'labeled'
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +94,7 @@ jobs:
   # from source with nothing but a JDK, which §3.2 argues for. Every exclusion in
   # spotbugs-exclude.xml carries its reason, so a red gate here means a finding nobody has answered.
   analyze:
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -97,10 +109,12 @@ jobs:
   # and which nothing else ran: `-Dgroups=load` appeared in no workflow, so LoadTest only ever ran
   # when somebody remembered to type it. measure.sh LOAD= is not a substitute -- it samples RSS
   # against the budget and never asks whether each of the 1,000 visitors got its own answer, which
-  # is what this asserts. On the JVM, so it needs no native build; off pull requests only because
-  # it holds a thousand sockets open and that is a poor use of every push.
+  # is what this asserts. On the JVM, so it needs no native build; off pull requests by
+  # default only because it holds a thousand sockets open and that is a poor use of every push. A
+  # pull request that touches the hub's admission or fan-out asks for it with the `ci:full` label,
+  # which is what docs/issue-workflow.md's gate table points at now instead of somebody's laptop.
   load:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -114,9 +128,11 @@ jobs:
         shell: bash
 
   # The lightweight budget of §14. It needs the native binaries, so it costs a native-image build
-  # and does not belong on a pull request; main and the nightly run are enough to catch a drift.
+  # and does not belong on every pull request; main and the nightly run are enough to catch a
+  # drift. A pull request that touches the multiplexer, the relay or anything per-connection asks
+  # for it with `ci:full` -- seven minutes, against finding it on main after the merge.
   budget:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
