@@ -2154,7 +2154,11 @@ challenge name exactly as before; `_jailhub-self` as a TXT token this process al
 with a 30-second TTL, the apex and every name under it -- any label, at any depth -- as **the
 hosts serving right now**: a primary answers itself, a standby answers the primary while its
 channel to it is up, and nothing otherwise. Whether a name is open is the SNI router's question,
-not DNS's. AAAA, MX and the rest are NODATA with the apex SOA; names outside the zone are REFUSED;
+not DNS's. A question is matched against those names label by label and byte for byte, folding
+only ASCII case as DNS does, rather than as one joined string: a label may hold a dot, and a byte
+over 0x7F is not a character, so the string form makes names that differ on the wire into one --
+which is how a single label reading `ns1.<hub>` was once answered with `ns1`'s glue. AAAA, MX and
+the rest are NODATA with the apex SOA; names outside the zone are REFUSED;
 recursion is never offered; and what is answered is small enough to be a poor amplifier — 287 bytes
 at the largest, 5.3 times the query at the worst, measured and gated rather than asserted, and
 metered per network on UDP because poor is not the same as harmless (§11.5).
