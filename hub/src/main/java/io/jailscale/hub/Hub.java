@@ -79,6 +79,14 @@ public final class Hub implements AutoCloseable {
     private volatile boolean standby;
     /** §13.5: when the channel to the primary was last seen up, or 0 while it is; the watch reads it. */
     private volatile long primaryLostAt;
+    /**
+     * When this hub last promoted itself, and zero for never -- which is not a reading. {@link Clock}
+     * has no defined origin, so {@code now - 0} is however long that clock has been running, which
+     * where it counts from boot is the host's uptime; compared against the interval below it
+     * suppressed automatic promotion for the first ten minutes of it. That is the case this exists
+     * for -- the machines come back together and the primary does not -- so the sentinel is read as
+     * the sentinel, the rule {@code Throttle} states for the same arithmetic.
+     */
     private volatile long lastAutoPromoteAt;
     /** Nonces out to witnesses right now, and whether a valid answer came back for the round. */
     private final java.util.Set<String> probeNonces = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -810,7 +818,7 @@ public final class Hub implements AutoCloseable {
             return;
         }
         if (now - primaryLostAt < promoteAfterMs || !probeNonces.isEmpty() || !autoPromote()
-            || now - lastAutoPromoteAt < autoPromoteIntervalMs) {
+            || (lastAutoPromoteAt != 0 && now - lastAutoPromoteAt < autoPromoteIntervalMs)) {
             return;
         }
         // One round: a nonce to every witness, then a window to answer in.
