@@ -93,7 +93,9 @@ final class MetricsFront implements AutoCloseable {
 
     HttpResponse route(HttpRequest req) {
         if (!req.method().equals("GET") && !req.method().equals("HEAD")) {
-            return HttpResponse.text(405, "method not allowed");
+            // Allow is the one field RFC 9110 §15.5.6 requires of a 405, and it is what a scraper
+            // pointed at this port with the wrong method reads to find out what to send instead.
+            return HttpResponse.text(405, "method not allowed").header("Allow", "GET, HEAD");
         }
         if (!req.path().equals("/metrics")) {
             return HttpResponse.text(404, "not found");

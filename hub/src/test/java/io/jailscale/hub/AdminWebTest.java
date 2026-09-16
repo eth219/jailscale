@@ -109,8 +109,14 @@ class AdminWebTest {
         // browser prefetch never reads -- so the methods that cannot be a person clicking are
         // refused instead of consuming the token. These come before the GET below on purpose: if
         // either of them spent it, the GET would be the one-time second fetch and fail with 403.
-        assertEquals(405, http("HEAD", loginPath, null, null).status());
-        assertEquals(405, http("POST", loginPath, null, "").status());
+        // Allow names GET alone, and not the GET, HEAD every other 405 on this hub says: a HEAD
+        // here is the case the guard exists for, and RFC 9110 §15.5.6 requires the field to say
+        // what would work -- which is the method that spends the token, not the one just refused.
+        for (HttpResponse refused : new HttpResponse[] {
+            http("HEAD", loginPath, null, null), http("POST", loginPath, null, "")}) {
+            assertEquals(405, refused.status());
+            assertEquals("GET", refused.headers().get("Allow"));
+        }
 
         HttpResponse login = http("GET", loginPath, null, null);
         assertEquals(302, login.status());

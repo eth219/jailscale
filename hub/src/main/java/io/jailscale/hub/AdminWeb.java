@@ -73,7 +73,10 @@ final class AdminWeb {
             // prefetch does not read it; refusing the methods that cannot be a person clicking is
             // the part that does not depend on the other end being polite.
             if (!req.method().equals("GET")) {
-                return HttpResponse.text(405, "method not allowed");
+                // GET and not "GET, HEAD": the HEAD is the case this guard exists for, so the one
+                // field RFC 9110 §15.5.6 requires of a 405 has to name the method that spends the
+                // token and not the one that was just refused for spending it.
+                return HttpResponse.text(405, "method not allowed").header("Allow", "GET");
             }
             Login l = logins.remove(path.substring("/admin/login/".length()));
             if (l == null || System.currentTimeMillis() > l.expiresAt()) {
