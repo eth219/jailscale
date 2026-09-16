@@ -435,14 +435,14 @@ final class Visitors {
                     case Gate.Decision.SetCookie sc -> {
                         HttpResponse.redirect(sc.location())
                             .header("Set-Cookie", Gate.COOKIE + "=" + sc.token() + "; Path=/; Secure; HttpOnly; SameSite=Lax")
-                            .writeTo(tls.plainOut());
+                            .writeTo(tls.plainOut(), sc.headOnly());
                         tls.close();
                         stream.close();
                         return;
                     }
                     case Gate.Decision.Refuse r -> {
                         HttpResponse.html(403, "<!doctype html><meta charset=utf-8><title>jailscale</title>"
-                            + "<p>This link needs a visit link to open.</p>").writeTo(tls.plainOut());
+                            + "<p>This link needs a visit link to open.</p>").writeTo(tls.plainOut(), r.headOnly());
                         tls.close();
                         stream.close();
                         return;
@@ -462,7 +462,7 @@ final class Visitors {
             local = connectLocal(target);
         } catch (IOException e) {
             LOG.warn("{}: local target {}:{} unreachable: {}", sni, target.host(), target.port(), e.getMessage());
-            badGateway(tls, plain, target);
+            badGateway(tls, plain, replay, stream, target);
             try {
                 stream.close();
             } catch (IOException ignored) {
@@ -702,17 +702,63 @@ final class Visitors {
         }
     }
 
-    private static void badGateway(TlsEndpoint tls, InputStream plain, NodeState.LinkRec target) {
+    /**
+     * The local app is not there, so this is the answer instead of a relay. {@code head} is the
+     * request head the gate already read, on a gated link, and null when there is no gate and
+     * nothing on this path has read a byte yet.
+     *
+     * <p>Which of the two it is decides whether to read: a gated link's head is already consumed,
+     * and reading again here waits for a body that a GET is never going to send -- past the read
+     * deadline the Pass lifted, so the visitor would wait for the connection to die rather than see
+     * this page. It also decides where the method comes from, and the method is what says whether
+     * the page is written at all (RFC 9110 §9.3.2).
+     */
+    private void badGateway(TlsEndpoint tls, InputStream plain, byte[] head, MuxStream stream,
+        NodeState.LinkRec target) {
         try {
-            // Consume the request head so the browser sees a clean response, then answer.
-            byte[] buf = new byte[4096];
-            int n = plain.read(buf);
-            if (n < 0) {
-                return;
+            boolean headOnly;
+            if (head != null) {
+                headOnly = Gate.isHead(head, head.length);
+            } else {
+                // Consume the request head so the browser sees a clean response, then answer. One
+                // read returns one TLS record's plaintext and nothing obliges a client to put the
+                // whole request line in the first, so keep reading until the method is there: a
+                // short first record must not make this look like anything other than what it is.
+                //
+                // Every one of those reads is under a deadline again, because the first of them is
+                // what takes the old one off: serveVisitor's callback clears it on the first
+                // application byte of an ungated link, and the reads underneath then wait for as
+                // long as the visitor likes. Two plaintext bytes and silence would hold a slot of
+                // maxInFlight, and the visitor's TLS state, for the life of the process -- the gap
+                // FIRST_BYTE_MS exists to close (§9.3), reopened one byte later. One moment for the
+                // whole loop and not one per read, so that a byte at a time buys no more time than
+                // saying nothing does.
+                long until = Clock.millis() + firstByteMs;
+                byte[] buf = new byte[4096];
+                int n = 0;
+                try {
+                    while (n < Gate.METHOD_BYTES) {
+                        stream.readDeadlineIn(until - Clock.millis());
+                        int r = plain.read(buf, n, buf.length - n);
+                        if (r < 0) {
+                            break;
+                        }
+                        n += r;
+                    }
+                } catch (MuxTimeoutException ignored) {
+                    // The visitor stopped part-way through its request line. Answer with what it
+                    // did say rather than hold the slot: fewer bytes than the method is not a
+                    // HEAD, so the page goes out whole, which is what a client that said nothing
+                    // recognisable is owed.
+                }
+                if (n == 0) {
+                    return;
+                }
+                headOnly = Gate.isHead(buf, n);
             }
             HttpResponse.html(502, "<!doctype html><meta charset=utf-8><title>jailscale</title>"
                 + "<p>The node cannot reach <b>" + target.host() + ":" + target.port() + "</b>.</p>")
-                .writeTo(tls.plainOut());
+                .writeTo(tls.plainOut(), headOnly);
             tls.close();
         } catch (IOException ignored) {
             // visitor gone

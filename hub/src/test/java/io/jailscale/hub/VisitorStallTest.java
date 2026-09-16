@@ -20,6 +20,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -68,6 +69,8 @@ class VisitorStallTest {
     private int port;
     private final List<Daemon> daemons = new ArrayList<>();
     private ServerSocket localApp;
+    /** A port nothing is listening on, for the one case whose link has to answer 502 instead. */
+    private int deadPort;
 
     @BeforeEach
     void start() throws Exception {
@@ -81,6 +84,12 @@ class VisitorStallTest {
         hub = new Hub(cfg);
         hub.start();
         localApp = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        // After localApp is bound, not before: a port picked by binding and closing is free for
+        // the kernel to hand straight back to the next bind of 0, and if that were localApp's the
+        // "dead" link below would reach a server that answers.
+        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            deadPort = s.getLocalPort();
+        }
         Thread.ofVirtual().start(() -> {
             while (!localApp.isClosed()) {
                 try {
@@ -172,6 +181,55 @@ class VisitorStallTest {
     }
 
     /**
+     * The same slot, held one byte later. The deadline above comes off the moment a visitor says
+     * anything at all, and one answer the node writes itself reads on past that: the bad gateway,
+     * on a link with no gate, has no parsed request to take a method from and so reads until the
+     * method is there (RFC 9110 §9.3.2). A visitor that sends two plaintext bytes and stops is past
+     * the deadline and short of the method, so an unbounded read there holds a slot of the node's
+     * bound -- and the visitor's TLS state -- for the life of the process, which is the defect
+     * above with one byte in front of it.
+     *
+     * <p>The link points at a port nothing is listening on, because that read happens only when the
+     * local app is not there. Without the bound the read below blocks until this client's own
+     * socket timeout and the test fails there.
+     */
+    @Test
+    void aVisitorThatSaysTwoBytesAndStopsLosesItsSlotAsWell() throws Exception {
+        Daemon alice = oneVisitorNode("alice");
+        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
+            .put("user", "alice").put("caFile", CERT.toString())));
+        waitFor(() -> alice.hasCert(hub.tls().keyId()));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", deadPort).put("name", "dead")));
+
+        // The page arrives for a visitor that says its whole request, so a failure below is the
+        // half-spoken one and not the link.
+        assertEquals(502, visit("dead.hub.test", "/first").status());
+        // And its slot is back before the next one asks for it: the relay unwinds on another
+        // thread, and a node bounded at one would otherwise refuse the connection this test holds.
+        waitFor(() -> ok(cli("alice", JsonObject.builder().put("cmd", "status"))).lng("visitorsInFlight") == 0);
+
+        try (SSLSocket held = Tls.connect(Tls.clientContext(CERT, false), "dead.hub.test", "127.0.0.1", port, true, 60_000)) {
+            held.startHandshake();
+            held.getOutputStream().write("HE".getBytes(StandardCharsets.ISO_8859_1));
+            held.getOutputStream().flush();
+
+            // While the node waits for the rest of that request line it has nothing for anyone
+            // else, so this is what says the slot really is taken.
+            assertThrows(IOException.class, () -> visit("dead.hub.test", "/refused"),
+                "a node waiting out a half-spoken request should turn the next visitor away");
+
+            // Past the deadline the node answers with what it was told rather than waiting for the
+            // rest for ever. Two bytes are not a method, so the page comes whole.
+            HttpResponse r = Http.readResponse(held.getInputStream(), 65536);
+            assertEquals(502, r.status());
+            assertTrue(r.body().length > 0, "the half-spoken request was answered with an empty page");
+        }
+
+        // And the slot is back, from a node that did nothing but wait one visitor out.
+        waitFor(() -> visit("dead.hub.test", "/after").status() == 502);
+    }
+
+    /**
      * A real ClientHello for {@code sni} and nothing else. Written by an {@code SSLEngine} rather
      * than assembled here so that it is the same bytes a browser's first flight would be -- the hub
      * has to be able to read the SNI out of it and route, or this measures the hub refusing a
@@ -204,9 +262,13 @@ class VisitorStallTest {
     }
 
     private HttpResponse visit(String path) throws Exception {
+        return visit("myapp.hub.test", path);
+    }
+
+    private HttpResponse visit(String host, String path) throws Exception {
         SSLContext ctx = Tls.clientContext(CERT, false);
-        try (SSLSocket s = Tls.connect(ctx, "myapp.hub.test", "127.0.0.1", port, true, 10_000)) {
-            Http.writeRequest(s.getOutputStream(), "GET", "myapp.hub.test", path, null, null);
+        try (SSLSocket s = Tls.connect(ctx, host, "127.0.0.1", port, true, 10_000)) {
+            Http.writeRequest(s.getOutputStream(), "GET", host, path, null, null);
             return Http.readResponse(s.getInputStream(), 65536);
         }
     }
