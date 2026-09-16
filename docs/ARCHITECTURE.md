@@ -619,18 +619,24 @@ checksum list.
 because they are the kind that changes while a hub is running -- a contact address outlives the
 process that first printed it -- which is the line this section already draws, and because the store
 replicates, so a standby serves the same answer without being configured twice. The scheme of the
-two URLs is checked where they are set: they end up in an `href` on a page anyone can load, and
-`javascript:` in an operator's typo is not a thing to learn about from a visitor. Empty clears, and
+two URLs is checked where they are set **and again where they are read**: they end up in an `href`
+on a page anyone can load, `javascript:` in an operator's typo is not a thing to learn about from a
+visitor, and the store is written by replication as well as by an admin on this host, so a check
+that guards only the front door is not a check. Case-insensitively, because `HTTPS://` is a URL and
+refusing it would be an error whose difference from the value typed is invisible. Empty clears, and
 so does a value that is only spaces: the value is stripped before either test, so a blank name is
 never a third state between set and cleared.
 
 **The whole section is drawn only when one of the three is set**, and with it the only honest
-retention sentence the hub has: what the *process* keeps -- the node list, with the hostname and
-system each machine reported, while a node is registered; the address a pending join knocked from,
-and the same two facts about it, until an admin approves or denies it; the barred addresses; thirty
-days of uptime record -- and that a visit to a link is relayed and not recorded, counted and not
-listed. The list is only worth printing if it is the whole list, which is what makes every one of
-those clauses load-bearing. It ends by saying what it cannot answer for: the journal, a proxy in
+retention sentence the hub has -- which is deliberately **not an inventory**. Three attempts at one
+were each found short: the pending record's address, then the hostname and system in both records,
+then the invites, auth keys, domains, raw-port targets and notices. A list that has to be complete
+to be honest goes stale the next time anything is added to the store, so the page says the shape
+instead: what an operator administers stays until they remove it, including what a machine said
+about itself when it joined -- its hostname, its system, the address it knocked from -- beside
+thirty days of uptime record and the barred addresses. Then, on its own line because it is the part
+a visitor is asking about, that a visit to a link is relayed and not recorded, counted and not
+listed. It ends by saying what it cannot answer for: the journal, a proxy in
 front, a backup of the state directory. The closing line of the page changes with it: a hub that has
 named nobody keeps "treat an open hub you do not run as a place to try this rather than one to
 depend on", which for that hub is still true, and one that has named an operator points at them
