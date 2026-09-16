@@ -2119,9 +2119,13 @@ are the status set validated for colour-vision separation, and each bar's toolti
 which the JSON repeats (`downMinutesPerDay`, `downMinutesPerHour`) as the table behind the picture.
 **A tooltip is one kind of reader**, though: there is no hover on a phone, nothing in the strip can
 be reached by keyboard, and the `role="img"` and label that let an assistive reader announce the
-strip are a reason for it not to descend into the bars at all. So the buckets that were not green
-are listed in text under each strip, in a `<details>` that needs no script -- the bucket and its
-minutes, the same numbers the JSON carries. Only those: a bucket from before the record began is
+strip are a reason for it not to descend into the bars at all. So the buckets with downtime in them
+are listed in text under their own strip, in a `<details>` that needs no script -- the bucket and
+its minutes, the same numbers the JSON carries, and a summary line that says how many rather than
+what colour they were. A bucket is named by when it starts and how wide it is (`2026-09-12 08:05
++24h`), because these are measured back from the moment the page was built and not from midnight:
+naming a day-wide one by its date alone puts an outage on the day before it, which a tooltip can
+get away with and a printed list cannot. Only those: a bucket from before the record began is
 not one the hub was down for but one it cannot speak about, and thirty rows of "no record" on a new
 hub would bury the two that matter. Usually the list is empty and nothing is drawn.
 Under each strip: how far back it reaches, the figure for that window, and where it ends. A bucket

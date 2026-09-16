@@ -578,8 +578,11 @@ class HomePageTest {
         try {
             String page = get(port2, "/").bodyText();
             assertTrue(page.contains("<details>"), "the numbers have to be reachable without a hover: " + page);
-            assertTrue(page.contains("1 was not green (of the last 30 days)"), page);
+            // The row, not the count: Availability books the interval between the written lastStamp
+            // and this process starting as down too, and on a slow enough machine that rounds to a
+            // minute and becomes a second row. What has to be there is the outage that was written.
             assertTrue(page.contains("42 min down"), page);
+            assertTrue(page.contains("with downtime, of the last 30"), "the summary says what, not what colour: " + page);
 
             // The same number, from the same array, in the answer a monitor reads. The tooltip and
             // this list and the JSON are three renderings of one thing, and this is what says so.

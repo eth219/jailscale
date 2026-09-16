@@ -583,12 +583,16 @@ final class HttpFront {
                         String lastError, List<Peers.Session> standbys) {}
 
     /**
-     * What a bucket is called: the day, or the hour within the day. Used by the picture and by the
-     * list under it, so the two cannot come to disagree about which bucket a number belongs to.
+     * What a bucket is called, with the hour on it even for a day-wide one. Buckets are measured
+     * back from the moment the page was built, not from midnight, so a day bucket runs from
+     * 08:05 to 08:05 and naming it by date alone puts an outage on the wrong date for anyone
+     * reading a printed list -- tolerable in a tooltip, not in a table of dates. Used by the
+     * picture and by the list under it, so the two cannot disagree about which bucket a number
+     * belongs to.
      */
     private static String bucketLabel(long end, long bucketMs) {
         return escape(java.time.Instant.ofEpochMilli(end - bucketMs).toString()
-            .substring(0, bucketMs >= 86_400_000L ? 10 : 16).replace('T', ' '));
+            .substring(0, 16).replace('T', ' ')) + (bucketMs >= 86_400_000L ? " +24h" : "");
     }
 
     /**
@@ -603,7 +607,7 @@ final class HttpFront {
      * began is not listed: it is not a bucket this hub was down for, it is one it cannot speak
      * about, and thirty rows of "no record" on a new hub would bury the two rows that matter.
      */
-    private static String notGreen(long[] minutes, long now, long bucketMs, String what) {
+    private static String notGreen(long[] minutes, long now, long bucketMs, String unit, String of) {
         StringBuilder rows = new StringBuilder();
         int n = 0;
         for (int i = 0; i < minutes.length; i++) {
@@ -617,8 +621,10 @@ final class HttpFront {
         if (n == 0) {
             return "";
         }
-        return "<details><summary>" + n + (n == 1 ? " was" : " were") + " not green (" + escape(what)
-            + ")</summary><table>" + rows + "</table></details>";
+        // "not green" would put the state in the colour alone, on the line that is collapsed --
+        // which is the one channel §13.2 says never to rely on, and the reason this list exists.
+        return "<details><summary>" + n + " " + unit + (n == 1 ? "" : "s") + " with " + escape(of)
+            + ", of the last " + minutes.length + "</summary><table>" + rows + "</table></details>";
     }
 
     /** The line under a strip: how far back it reaches, the figure for that window, and where it ends. */
@@ -763,16 +769,16 @@ final class HttpFront {
         row(b, "Availability", "by this process's own record" + sinceNote
             + strip(byDay, now, day, 60, "Uptime per day, last 30 days")
             + ends("30 days ago", avail.processFraction(30 * day, now), "Today")
+            + notGreen(byDay, now, day, "day", "downtime")
             + strip(byHour, now, hour, 15, "Uptime per hour, last 24 hours")
-            + ends("24 hours ago", avail.processFraction(day, now), "Now") + LEGEND
-            + notGreen(byDay, now, day, "of the last 30 days")
-            + notGreen(byHour, now, hour, "of the last 24 hours"));
+            + ends("24 hours ago", avail.processFraction(day, now), "Now")
+            + notGreen(byHour, now, hour, "hour", "downtime") + LEGEND);
         for (String peer : avail.peerNames()) {
             long[] peerByDay = downMinutes((f, t) -> avail.peerDownBetween(peer, f, t), now, day, 30);
             row(b, "Seen from here", "<code>" + escape(peer) + "</code>"
                 + strip(peerByDay, now, day, 60, "The channel to " + peer + " per day, last 30 days")
                 + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today")
-                + notGreen(peerByDay, now, day, "of the last 30 days on this channel"));
+                + notGreen(peerByDay, now, day, "day", "the channel down"));
         }
         if (peerState.following()) {
             row(b, "Role", role.level().mark()
