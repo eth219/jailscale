@@ -51,9 +51,16 @@ machines, of which Funnel is this one job.
 Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or
 frp, reading the visitor's HTTP — neither end parses it, so no routing on paths
 or headers, no rewriting, no per-request log — HTTP/2 and HTTP/3 on the visitor
-side, more than one node behind a name, mobile clients, and an external identity
-provider ([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)). There is no hosted
-service either: you run the hub, and there is nothing to sign up for.
+side, more than one node behind a name, active-active hubs, latency-sensitive
+raw UDP such as game netcode, notification channels of any kind, mobile clients,
+and an external identity provider ([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)).
+There is no hosted service either: you run the hub, and there is nothing to sign
+up for.
+
+Each of those is a thing given up for something, and
+[ARCHITECTURE.md §1](docs/ARCHITECTURE.md) is the full boundary: what is
+supported and under what condition, what is decided and not yet built, and what
+will stay unsupported and why.
 
 ## Install
 
@@ -248,16 +255,20 @@ What a compromised hub can and cannot do is written out in
 
 - No production track record. The hub above is the only instance with any
   uptime behind it, and it serves one person's names.
-- Two hubs is the most there can be, and streams in flight on a host that dies
-  are cut. Raw TCP and UDP ports live on the primary alone. Replacing the
-  binary without dropping nodes works with `serve --takeover`, but not under a
-  systemd unit, where an upgrade is a restart.
+- Two hubs is the most built, and streams in flight on a host that dies are
+  cut. Raw TCP and UDP ports live on the primary alone. Replacing the binary
+  without dropping nodes works with `serve --takeover`, but not under a systemd
+  unit, where an upgrade is a restart. A third, store-less hub and systemd
+  socket activation are both decided work, not accepted limits
+  ([§1.2](docs/ARCHITECTURE.md)).
 - Upgrading stops one step short of automatic: `update --download` verifies,
   you run the `install` it prints. Which release is *current* comes from a signed
   pointer that expires, and a node refuses one older than the newest it has seen,
   so being held back on an old release is visible and cannot be repeated. A node
   installed fresh has nothing to compare with yet, which is the gap that remains.
-  It is never moved below what it runs.
+  It is never moved below what it runs. An opt-in install and a floor compiled
+  into the binary are decided work ([§1.2](docs/ARCHITECTURE.md)); installing
+  by default is not.
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).

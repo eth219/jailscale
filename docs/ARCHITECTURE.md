@@ -31,8 +31,71 @@ what ngrok, Cloudflare Tunnel and Tailscale Funnel do, with no third party in th
    connection is all the node needs on the wire; a published UDP port (§8.4) rides that same
    connection. A pure-JVM fallback JAR ships beside the native binaries.
 
-Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or frp, HTTP/2 and HTTP/3
-on the visitor side, mobile clients, an external identity provider (§10).
+The three points above say what is aimed at. The three tables below say what is answered yes to,
+and they are the boundary: a capability is here, or it is deliberately not. They were settled in
+one pass on 2026-09-16, because until then the answer was spread across a one-line "out of scope"
+here, seventeen entries in §15 and eight open issues, and those three did not agree on which
+things were accepted limits and which were unfinished work.
+
+### 1.1 Supported
+
+Works, and is meant to keep working. A condition in the right-hand column is **part of** what is
+supported rather than a complaint about it; §15 has the detail and the measurement behind each one.
+
+| | Supported | Its condition |
+|---|---|---|
+| Visitor protocols | HTTP/1.1, WebSocket, SSE, chunked bodies, and anything else the app speaks | the node copies bytes, and the only HTTP it reads is the gate's first request head (§9.3), so nothing routes on a path or a header |
+| Visitor TLS | TLS 1.3 with X25519, terminated on the node, signed by the hub (§9.2) | that pair only, because the signature binding reconstructs what JSSE wrote (§11.1) |
+| Names | `<name>.<hub-domain>` (§8.2), up to `MAX_LINKS_PER_NODE` = 20 links on one node | exactly one node behind a name, and that node's 450 visitor slots are first come, first served across all of them (§15) |
+| Your own domains | brought by the operator, verified by the hub (§8.3) | the hub holds port 80 as well as 443, since http-01 is the only verification path built |
+| Raw TCP ports | one assigned port per link, no SNI and no TLS (§8.4) | end to end only if the app encrypts itself; otherwise plaintext exists inside the hub process |
+| Raw UDP ports | request–reply protocols — DNS, and anything that tolerates reliable delivery (§8.4) | the carrier is the node's one TCP connection, so delivery is stronger and timing weaker than UDP promises |
+| IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
+| Behind a TCP proxy | nginx or HAProxy in front, PROXY protocol v1 and v2 (§8.5) | the proxy forwards bytes without opening TLS, and `--proxy-protocol` needs loopback or `--trusted-proxy` |
+| Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2), and `service install` is verified on macOS only |
+| Availability | two hubs, a delegated subdomain, the standby serving throughout, promotion without a person (§13) | promotion is automatic only with a witness node attached to the standby (§13.5) |
+| Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
+| Upgrading | a signed release index, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
+| Joining | invite links, machine keys, no account anywhere (§10) | the hub is what decides name ownership, and a compromised one can impersonate every name under its domain (§11.2) |
+
+### 1.2 Decided, and not built
+
+These are in scope. Each was an open question on 2026-09-16 and is now a decision with an issue
+behind it, so that "not built" is never read as "not wanted".
+
+| What | Why | Issue |
+|---|---|---|
+| The hub answering AAAA itself | under delegation the hub *is* the authoritative server, so v6 has nowhere else to come from | [#63](https://github.com/eth219/jailscale/issues/63) |
+| tls-alpn-01, so port 80 stops being required for your own domains | it makes 80 a preference; http-01 stays, since not every CA offers the alternative | [#70](https://github.com/eth219/jailscale/issues/70) |
+| A third hub in a store-less relay role | designed in [docs/ha-design](ha-design/README.md) and unbuilt; two hubs is the current ceiling, not the intended one | [#72](https://github.com/eth219/jailscale/issues/72) |
+| systemd socket activation | it is the one mechanism that also helps the single-hub operator, who is most deployments | [#71](https://github.com/eth219/jailscale/issues/71) |
+| Installing a verified upgrade, opt-in and off by default | a fleet should not need somebody to type something on every node; the default stays manual | [#74](https://github.com/eth219/jailscale/issues/74) |
+| A minimum release-index sequence compiled into the binary | a CLI-only install has no stored floor and never will, so the floor has to arrive with the binary | [#65](https://github.com/eth219/jailscale/issues/65) |
+| A gauge for the soonest certificate expiry among absent nodes | the lapse the node cannot report is one the hub can already see, and alerting can watch a gauge | [#75](https://github.com/eth219/jailscale/issues/75) |
+
+### 1.3 Not supported
+
+Not oversights. Each is a thing this design gives up, and the right-hand column is what it is
+given up for.
+
+| | Because |
+|---|---|
+| A peer mesh VPN | Tailscale is the larger system; Funnel is the one job of it this does |
+| Wire compatibility with Tailscale, ngrok or frp | the control channel is Noise IK inside TLS (§5) and the gain would be someone else's client |
+| HTTP/2 and HTTP/3 on the visitor side | the node copies bytes to a local port, so speaking either would make it a protocol translator; h3 also wants UDP the hub does not route by name |
+| Routing on paths or headers, rewriting, per-request logs | the hub has only ciphertext to route on, and parsing on the node would put the request where the design keeps it out of |
+| More than one node behind a name | a name resolves to the node that owns it; sharing one needs a load balancer the hub is not |
+| Active-active hubs, and merging writes made on the losing side of a partition | a merge needs a lineage the two stores do not share; the loser's writes are dropped and named (§13.5) |
+| Latency-sensitive raw UDP — game netcode, WireGuard roaming | it needs a carrier that is not TCP, and one dialled-out TCP connection is the design (§5), not a detail of it |
+| Probing a name from another node's vantage point | the hub chooses which nodes exist, so it would choose the prober; the control would be probabilistic, and this project says what it cannot do instead (§11.3) |
+| Any notification channel — email, webhooks | an address per node is personal data the hub does not hold, and a webhook is one more thing that fails quietly; the status page and the metrics are where an expiry shows |
+| Installing an upgrade by default | replacing a running binary is the operator's act; a process that can overwrite its own executable is one whose compromise is permanent |
+| Mobile clients, and an external identity provider | joining is a machine key and an invite (§10) |
+| A hosted service | you run the hub; there is nothing to sign up for |
+
+A row moves between these tables the way anything else here changes: an issue, a decision recorded
+on it, and this section edited in the same change ([docs/issue-workflow.md](issue-workflow.md)).
+§1.2 is what was decided, not when it will land.
 
 ---
 
@@ -2587,13 +2650,19 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 ## 15. Limits
 
+Everything below is true of the system as it stands, and §1 is where each entry was sorted into
+one of two kinds. Most are the condition on something §1.1 supports, or a §1.3 row spelled out in
+full — accepted, and not going to change. Seven are decisions to build something (§1.2), and those
+say so and name the issue. An entry that does neither has not been through that pass.
+
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
 - **The self-probe leaves this node's own address** (§11.3), so a hub that singles those connections
   out and routes only them to the node that owns the name is not caught by it, however often it
   runs. Doing that means discriminating between visitors, which is itself detectable, and the schedule
   is not what bounds this one: a probe that came from somewhere else -- another node, checking a name
-  on its owner's behalf -- is what would, and nothing does that today.
+  on its owner's behalf -- is what would, and that is out of scope (§1.3): the hub chooses which nodes exist, so it would
+  choose the prober.
 - **The address check is one vantage point, and an hour behind** (§7.2). It repeats hourly and the
   verdict is kept, so a record edited after boot is noticed and can be looked up afterwards -- but
   within an hour rather than at once, and only as far as two public resolvers and this host can see.
@@ -2612,13 +2681,16 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   one TCP connection, so a lost packet holds up every stream sharing it until the retransmit lands,
   and a sender out of window credits waits instead of dropping. Request-reply protocols over UDP are
   fine; latency-sensitive ones -- game netcode, WireGuard roaming -- get delivery they can rely on
-  and a delay distribution they cannot.
+  and a delay distribution they cannot, and are out of scope (§1.3): a second carrier that is not
+  TCP is a second transport to get through every NAT the one connection was chosen for.
 - **User domains require port 80 on the hub.** The http-01 relay is the only verification path
-  implemented; tls-alpn-01 would remove that requirement.
+  implemented; tls-alpn-01 would remove that requirement, and is decided work
+  (§1.2, [#70](https://github.com/eth219/jailscale/issues/70)).
 - **Upgrading stops one step short of automatic.** `jailscale update`, and the daemon's daily check
   behind `status`, say that a newer release exists; `update --download` fetches it and checks it
   against a signed `RELEASE.txt` (§9.4); the command that puts it in place is printed for the
-  operator to run. A binary released before the signing key existed carries no key and refuses to
+  operator to run. An opt-in install, off by default, is decided work
+  (§1.2, [#74](https://github.com/eth219/jailscale/issues/74)); installing by default is not (§1.3). A binary released before the signing key existed carries no key and refuses to
   download at all, so the first release able to verify another is the one after the key was
   compiled in.
 - **Withholding an upgrade is bounded now, not impossible.** Which release is current comes from a
@@ -2631,13 +2703,17 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   there until that pointer expires. What bounds the damage throughout is that a node is never moved
   below what it runs (`newer` is strictly above the running version) and the binary installed is
   always the version announced, so this withholds an upgrade rather than forcing a downgrade, and
-  the same party could equally delete the newer release.
+  the same party could equally delete the newer release. A minimum sequence compiled into the binary,
+  which gives a fresh install and a CLI-only one a floor, is decided work
+  (§1.2, [#65](https://github.com/eth219/jailscale/issues/65)).
 - **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
   sides at a third of the lifetime remaining. When it does not happen the node logs the name and
   the time left once a day inside the last fortnight, the hub says how long the installed wildcard
   has next to every issuance failure and on its status page, and `ls` marks the link. None of that
   helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
-  nobody hears from, and its domain goes dark when the certificate runs out.
+  nobody hears from, and its domain goes dark when the certificate runs out. The hub can see that
+  coming, so a gauge for the soonest expiry among absent nodes is decided work
+  (§1.2, [#75](https://github.com/eth219/jailscale/issues/75)); a notification channel is not (§1.3).
 - **Promotion is automatic only with a witness** (§13.5). With the subdomain delegated to both hubs
   and the standby serving (§13.4), losing the primary stops nothing a visitor sees; joining, opening
   new names, administering and raw ports come back when the standby promotes itself, which it does
@@ -2646,10 +2722,11 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   three records at the parent instead, the DNS change is the operator's too.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
   is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
-  calls the unit started; the listening sockets are still rebound rather than handed over.
+  calls the unit started; the listening sockets are still rebound rather than handed over. Socket
+  activation is decided work (§1.2, [#71](https://github.com/eth219/jailscale/issues/71)).
 - **Two hubs, not more.** The standby holds the store, so it can serve and be promoted; a third
-  host would need a role without the store, which is designed and not built
-  ([docs/ha-design](ha-design/README.md)). Streams in flight on a host that dies are cut with its
+  host would need a role without the store, which is designed, not built, and decided work
+  (§1.2, [#72](https://github.com/eth219/jailscale/issues/72), [docs/ha-design](ha-design/README.md)). Streams in flight on a host that dies are cut with its
   sockets, raw TCP and UDP ports live on the primary alone, and a promotion with no node attached
   to the standby waits for a person (§13.5).
   Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
@@ -2663,7 +2740,8 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   the operator cannot make up the difference — in the delegated mode of §13.3 the hub *is* the
   authoritative server for the subdomain, so there is nowhere else to put an AAAA record. So: v6
   ingress on the operator's own records, no v6 under delegation, and nothing in either direction for
-  the raw ports of §8.4, whose addresses come from the same zone view.
+  the raw ports of §8.4, whose addresses come from the same zone view. **Answering AAAA is decided
+  work** (§1.2, [#63](https://github.com/eth219/jailscale/issues/63)).
 - **Writes made on the losing side of a partition are discarded when it heals, not merged** (§13.5).
   Both hubs serve throughout, so a node that reaches only the hub that turns out to have the lower
   epoch can join, claim a name, bring a domain or take a raw port, and every one of those is gone
@@ -2672,7 +2750,7 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
   promote (30 s plus the witness window) and that these writes are rare; what makes it survivable is
   that the hub says what it dropped and keeps a readable copy of the state it dropped it from. A
   real merge needs a lineage the two stores do not share, which is the piece of a replicated log
-  this design does not have and does not claim to.
+  this design does not have, does not claim to, and is not going to grow (§1.3).
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
   loses events when one socket is parked for read and for write together (JDK-8334574), so one side
   of each of those sockets is kept off the poller there. Measured at about 60 KB per concurrent
