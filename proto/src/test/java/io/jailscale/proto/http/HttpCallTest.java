@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -17,6 +16,7 @@ import java.nio.file.Path;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The client side of a release download (ARCHITECTURE.md §9.4): one redirect hop, a body that is
@@ -26,7 +26,7 @@ class HttpCallTest {
 
     /** A loopback server that answers each request from {@code handler}, keyed on its path. */
     private static ServerSocket serve(Function<String, String> handler) throws IOException {
-        ServerSocket ss = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        ServerSocket ss = TestPorts.listen(50);
         Thread t = new Thread(() -> {
             while (!ss.isClosed()) {
                 try (Socket s = ss.accept()) {

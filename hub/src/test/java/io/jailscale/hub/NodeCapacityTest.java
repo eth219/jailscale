@@ -13,7 +13,6 @@ import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -29,6 +28,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The node tells the hub how many visitors it will hold, and the hub stops there
@@ -70,16 +70,14 @@ class NodeCapacityTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.INFO);
         root = TestDirs.newRoot("jcap");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
         // An app that answers only once released, so visitors stay in flight and the node stays at
         // its bound while the assertions run. A responding app would free slots as fast as they
         // filled and the test would measure nothing.
-        app = new ServerSocket(0, 64, InetAddress.getLoopbackAddress());
+        app = TestPorts.listen(64);
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {

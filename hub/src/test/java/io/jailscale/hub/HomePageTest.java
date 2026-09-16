@@ -18,8 +18,6 @@ import java.nio.file.Files;
 import io.jailscale.proto.json.Json;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -32,6 +30,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The hub's own page. Counts and resource use are public because they describe the service; the
@@ -52,9 +51,7 @@ class HomePageTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("home");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
@@ -569,10 +566,7 @@ class HomePageTest {
             .put("peers", JsonObject.builder().build())
             .toJson());
 
-        int port2;
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port2 = s.getLocalPort();
-        }
+        int port2 = TestPorts.reserve();
         Hub down = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port2), state, "127.0.0.1", port2,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         down.start();
@@ -675,15 +669,15 @@ class HomePageTest {
         // The retention sentence is the part an operator cannot write for themselves, so it is not
         // theirs to configure: it says what the process does, and where that stops.
         assertTrue(named.contains("thirty days of uptime record"), named);
-        assertTrue(named.contains("keeps no list of them"), named);
+        assertTrue(named.contains("keeps no list"), named);
         assertTrue(named.contains("is the operator's and not something this page can answer for"), named);
-        // A pending join holds the address it knocked from until somebody decides; the list of
-        // what is kept is only worth printing if it is the whole list -- which is also why the
-        // hostname and system in both records are named, since a record holding them is not
-        // described by the address alone.
-        assertTrue(named.contains("the address a machine knocked from"), named);
-        assertTrue(named.contains("the hostname and system it gave"), named);
-        assertTrue(named.contains("the hostname and system each machine reported"), named);
+        // Three attempts at an inventory were each found short, so the sentence says the shape of
+        // what is kept rather than a list that goes stale the next time the store grows -- and
+        // names the two parts a visitor is actually asking about: what a machine said about itself,
+        // and that it stays until somebody removes it.
+        assertTrue(named.contains("its hostname, its system, and the address it knocked from"), named);
+        assertTrue(named.contains("stays until the"), named);
+        assertTrue(named.contains("<b>Not the visitors.</b>"), named);
         // The closing line is the point of the issue: a hub that has named an operator stops
         // telling visitors not to depend on it and points at who to ask instead.
         assertFalse(named.contains("rather than one to depend on"), named);
@@ -712,5 +706,24 @@ class HomePageTest {
         String blank = http("GET", "/", null, null).bodyText();
         assertFalse(blank.contains("Who runs this hub"), blank);
         assertTrue(blank.contains("rather than one to depend on"), blank);
+
+        // And the scheme, for the same reason and by the same route: written straight to the store
+        // to stand for a peer running a build from before the rule. A check that guards only the
+        // door an admin knocks on is not a check, so this is what says the read side has one --
+        // drop it and every assertion above still passes.
+        hub.store().setSetting(Store.SETTING_CONTACT, "javascript:alert(1)");
+        String hostile = http("GET", "/", null, null).bodyText();
+        assertFalse(hostile.contains("javascript:"), hostile);
+        assertFalse(hostile.contains("Who runs this hub"), hostile);
+        assertTrue(hostile.contains("rather than one to depend on"), hostile);
+
+        // The two settings do not take the same values -- terms refuses mailto: where it is set --
+        // so the page has to read each one against its own rule rather than against "is this a
+        // link at all", or an address a peer replicated in is published as terms of use.
+        hub.store().setSetting(Store.SETTING_CONTACT, "");
+        hub.store().setSetting(Store.SETTING_TERMS, "mailto:legal@example.com");
+        String wrongTerms = http("GET", "/", null, null).bodyText();
+        assertFalse(wrongTerms.contains("What is allowed here"), wrongTerms);
+        assertFalse(wrongTerms.contains("Who runs this hub"), wrongTerms);
     }
 }

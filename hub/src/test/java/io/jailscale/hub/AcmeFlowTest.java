@@ -54,6 +54,7 @@ import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The whole certificate loop offline: the hub, configured with no certificate, talks ACME to a
@@ -93,10 +94,7 @@ class AcmeFlowTest {
     void hubObtainsWildcardCertificateAndServesALink() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("ja");
-        int port;
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+        int port = TestPorts.reserve();
         Hub[] hubRef = new Hub[1];
         ca = new MockCa(() -> hubRef[0].dnsPort());
         HubConfig cfg = new HubConfig(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
@@ -115,7 +113,7 @@ class AcmeFlowTest {
         assertTrue(ca.validatedNames.contains("hub.test") && ca.validatedNames.contains("*.hub.test"), ca.validatedNames.toString());
 
         // A local app, a node, a link, a visitor trusting only the test CA.
-        localApp = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        localApp = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {
             while (!localApp.isClosed()) {
                 try (Socket c = localApp.accept()) {

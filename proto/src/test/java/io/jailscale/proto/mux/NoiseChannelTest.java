@@ -22,6 +22,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 @Timeout(10)
 class NoiseChannelTest {
@@ -31,7 +32,7 @@ class NoiseChannelTest {
     /** A loopback socket pair: unlike piped streams it has no thread affinity and closes like a real peer. */
     private record Duplex(Socket a, Socket b) implements AutoCloseable {
         static Duplex create() throws IOException {
-            try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            try (ServerSocket ss = TestPorts.listen(1)) {
                 Socket a = new Socket(InetAddress.getLoopbackAddress(), ss.getLocalPort());
                 Socket b = ss.accept();
                 a.setTcpNoDelay(true);

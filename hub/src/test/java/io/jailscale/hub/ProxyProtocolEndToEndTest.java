@@ -17,7 +17,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -29,6 +28,7 @@ import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /** ARCHITECTURE.md §8.5 (hub behind a TCP proxy sending PROXY headers) and §9.3 (node prepends one for the local app). */
 @Timeout(90)
@@ -102,18 +102,13 @@ class ProxyProtocolEndToEndTest {
     void visitorAddressSurvivesTheProxyAndReachesTheApp() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jp");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
-        int rawLo;
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            rawLo = s.getLocalPort();
-        }
+        port = TestPorts.reserve();
+        int rawLo = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withProxyProtocol(true, List.of()).withPortRange(rawLo, rawLo));
         hub.start();
-        app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        app = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {
@@ -125,7 +120,7 @@ class ProxyProtocolEndToEndTest {
             }
         });
         // The "proxy": a loopback forwarder that prepends a PROXY v1 line, as nginx stream / HAProxy would.
-        proxy = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        proxy = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {
             while (!proxy.isClosed()) {
                 try {

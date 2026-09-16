@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The bound on what stalled readers can make a receiver hold (ARCHITECTURE.md §5.3).
@@ -555,7 +556,7 @@ class FlowBudgetTest {
     private static Wire wire() throws Exception {
         X25519.Keypair hk = X25519.generate();
         X25519.Keypair nk = X25519.generate();
-        ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        ServerSocket ss = TestPorts.listen(1);
         Socket a = new Socket(InetAddress.getLoopbackAddress(), ss.getLocalPort());
         Socket b = ss.accept();
         ss.close();

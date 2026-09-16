@@ -11,7 +11,6 @@ import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.json.Json;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -25,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The signed pointer that says which release is current (docs/update-freshness), against one this
@@ -48,7 +48,7 @@ class UpdateIndexTest {
 
     /** The two assets on loopback, under the fixed pre-release the client compiles in. */
     private static ServerSocket serve(Map<String, byte[]> files) throws IOException {
-        ServerSocket ss = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        ServerSocket ss = TestPorts.listen(50);
         Thread t = new Thread(() -> {
             while (!ss.isClosed()) {
                 try (Socket s = ss.accept()) {

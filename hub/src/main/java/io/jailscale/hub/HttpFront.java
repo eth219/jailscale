@@ -606,6 +606,37 @@ final class HttpFront {
                         String lastError, List<Peers.Session> standbys) {}
 
     /**
+     * Whether a stored URL is a page this hub will link to. Schemes are case-insensitive, so
+     * {@code HTTPS://} is a URL and refusing it would be an error whose difference from what the
+     * operator typed is invisible.
+     */
+    static boolean https(String url) {
+        return url.toLowerCase(java.util.Locale.ROOT).startsWith("https://");
+    }
+
+    /**
+     * Whether a stored URL may be put in an {@code href}: a page, or an address to write to. Used
+     * where the value is set ({@link AdminIpc}) <b>and</b> where it is read: a value arrives by
+     * replication too, from a peer that may be running a build older than this rule, and a check
+     * that only guards the front door is not a check.
+     */
+    static boolean linkable(String url) {
+        return https(url) || url.toLowerCase(java.util.Locale.ROOT).startsWith("mailto:");
+    }
+
+    /**
+     * A stored setting, or nothing at all when it is not a value this page will link to. The rule
+     * is {@link AdminIpc#SETTING_TEXT}'s own and not a second reading of it: a rule written twice
+     * is a rule that parts, and it had -- {@code terms} refuses {@code mailto:} where it is set,
+     * so a page that asked only "is this linkable" would have published as terms of use an
+     * address a peer replicated in. Empty is not a URL, so a cleared setting falls out here too.
+     */
+    private String linkOrNothing(String key) {
+        String url = hub.store().setting(key, "").strip();
+        return AdminIpc.SETTING_TEXT.get(key).test(url) ? url : "";
+    }
+
+    /**
      * What a bucket is called, with the hour on it even for a day-wide one. Buckets are measured
      * back from the moment the page was built, not from midnight, so a day bucket runs from
      * 08:05 to 08:05 and naming it by date alone puts an outage on the wrong date for anyone
@@ -774,8 +805,10 @@ final class HttpFront {
         // would otherwise have this page draw the section around a blank name -- and, worse, drop
         // the closing warning below on the strength of it.
         String operator = hub.store().setting(Store.SETTING_OPERATOR, "").strip();
-        String contact = hub.store().setting(Store.SETTING_CONTACT, "").strip();
-        String terms = hub.store().setting(Store.SETTING_TERMS, "").strip();
+        // And checked again here, not only where they are set: these two go into an href, and the
+        // store is written by replication as well as by an admin on this host.
+        String contact = linkOrNothing(Store.SETTING_CONTACT);
+        String terms = linkOrNothing(Store.SETTING_TERMS);
         // One boolean and not the same three tests written twice: the closing sentence under
         // Limits turns on exactly this, and a hand-written negation of it down there is a link to
         // an anchor that was never drawn, waiting for somebody to edit one of the two.
@@ -786,8 +819,6 @@ final class HttpFront {
                 b.append("Run by <b>").append(escape(operator)).append("</b>. ");
             }
             if (!contact.isEmpty()) {
-                // The scheme was checked when it was set (AdminIpc.SETTING_TEXT), which is what
-                // makes it safe to put in an href; escaped here as well, for the quotes.
                 b.append("<a href=\"").append(escape(contact)).append("\">Contact</a>");
             }
             if (!contact.isEmpty() && !terms.isEmpty()) {
@@ -800,15 +831,22 @@ final class HttpFront {
             // The retention sentence belongs here and not in "What this hub can see", which is
             // about the traffic while it is moving. These are what stays afterwards, and the last
             // line is the important one: the process can speak for the process and no further.
-            b.append("<p>What it keeps: the node list -- who joined, the hostname and system each")
-                .append(" machine reported, the names they hold and when -- for as long as a node is")
-                .append(" registered; the address a machine knocked from, and the hostname and system")
-                .append(" it gave, while its join is waiting to be approved or denied; the addresses the")
-                .append(" operator has barred; and thirty days of uptime record. A visit to a link is relayed and")
-                .append(" not recorded: the hub counts visitors and keeps no list of them, and at its")
-                .append(" default log level it names nodes, not visitors. What the machine underneath")
-                .append(" keeps -- the system journal, a proxy in front, a backup of the state")
-                .append(" directory -- is the operator's and not something this page can answer for.</p>");
+            // Not an inventory. Three attempts at one were each found short -- the pending
+            // record's address, then the hostname and system, then the invites, auth keys,
+            // domains, raw-port targets and notices -- and a list that has to be complete to be
+            // honest is a list that goes stale the next time anything is added to the store. So:
+            // the shape of it, the part a visitor is actually asking about, and where it stops.
+            b.append("<p>What it keeps is what an operator administers: the nodes and who owns them,")
+                .append(" the names, domains and ports they hold, the invitations and keys that let")
+                .append(" them in, and what each machine said about itself when it joined -- its")
+                .append(" hostname, its system, and the address it knocked from. That stays until the")
+                .append(" operator removes it. Beside it, thirty days of uptime record and the")
+                .append(" addresses they have barred.</p>");
+            b.append("<p><b>Not the visitors.</b> A visit to a link is relayed and not recorded: the")
+                .append(" hub counts them and keeps no list, and at its default log level it names")
+                .append(" nodes, not visitors. And what the machine underneath keeps -- the system")
+                .append(" journal, a proxy in front, a backup of the state directory -- is the")
+                .append(" operator's and not something this page can answer for.</p>");
         }
 
         int online = hub.registry().size();

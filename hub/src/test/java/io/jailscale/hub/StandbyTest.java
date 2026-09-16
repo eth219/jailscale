@@ -16,7 +16,6 @@ import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Files;
@@ -27,6 +26,7 @@ import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * ARCHITECTURE.md §13.1 end to end: a second hub given the primary's {@code hub.key} follows it --
@@ -52,12 +52,6 @@ class StandbyTest {
             if (c != null) {
                 c.close();
             }
-        }
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            return s.getLocalPort();
         }
     }
 
@@ -126,8 +120,7 @@ class StandbyTest {
     void aStandbyFollowsThePrimaryTurnsNodesAwayAndServesThemOncePromoted() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("sb");
-        int portA = freePort();
-        int portB = freePort();
+        int portA = TestPorts.reserve();
         primary = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + portA), root.resolve("a"), "127.0.0.1", portA,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1"));
         // Both hubs share the loopback address here and differ by port, so what a node dials is
@@ -139,7 +132,7 @@ class StandbyTest {
         assertEquals(List.of("203.0.113.1"), DnsQuery.a("127.0.0.1", primary.dnsPort(), "web.hub.test", 2000));
 
         // A member with a name, before the standby exists: the snapshot has to carry it.
-        app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        app = TestPorts.listen(8);
         serveApp(app);
         alice = new Daemon(NodeConfig.in(root.resolve("alice")));
         alice.start();
@@ -154,6 +147,12 @@ class StandbyTest {
         // all have to come over the channel. What it is given is hub.key, which is the whole
         // provisioning act. Without it, starting is refused with the file named. Its base URL is
         // the primary's own name, as deployed: that is the name it serves once promoted.
+        //
+        // Its port is drawn here and not beside portA: TestPorts keeps two of its own callers
+        // apart, but a hub binds its DNS pair, /metrics and the plain-HTTP front on port 0, and
+        // those draws know nothing of its register. Reserved before the primary starts, this
+        // number is one of the numbers the primary could be handed.
+        int portB = TestPorts.reserve();
         HubConfig sbConfig = HubConfig.withCert(URI.create("https://hub.test:" + portB), root.resolve("b"), "127.0.0.1", portB,
             null, null, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1").withAdvertise("203.0.113.2");

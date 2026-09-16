@@ -8,14 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.proto.json.JsonObject;
-import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * What the address check leaves behind (ARCHITECTURE.md §7.2). The decision itself is
@@ -196,10 +195,7 @@ class AddressCheckStatusTest {
      */
     private static Hub hub(boolean addressCheck) throws Exception {
         Path root = TestDirs.newRoot("ac");
-        int port;
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+        int port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath(),
             Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath(),

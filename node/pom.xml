@@ -26,6 +26,14 @@
       <groupId>io.jailscale</groupId>
       <artifactId>proto</artifactId>
     </dependency>
+    <!-- TestPorts, so the tests here hand out ports the way proto's do (jailscale#108). -->
+    <dependency>
+      <groupId>io.jailscale</groupId>
+      <artifactId>proto</artifactId>
+      <version>${project.version}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

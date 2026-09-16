@@ -12,8 +12,6 @@ import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
-import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.file.Files;
@@ -24,6 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * ARCHITECTURE.md §13.5: the nodes as witnesses. A standby that has lost its primary asks its
@@ -66,12 +65,6 @@ class AutoPromoteTest {
         }
     }
 
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            return s.getLocalPort();
-        }
-    }
-
     private interface Check {
         boolean ok() throws Exception;
     }
@@ -91,15 +84,14 @@ class AutoPromoteTest {
     private void pair() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("ap");
-        portA = freePort();
-        portB = freePort();
+        portA = TestPorts.reserve();
         // Both units name the other (§13.5): the role file, not the flag, says which is which.
         cfgA = HubConfig.withCert(URI.create("https://hub.test:" + portA), root.resolve("a"), "127.0.0.1", portA,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1");
         a = new Hub(cfgA);
         a.relayEndpointOverride = "127.0.0.1:" + portA;
         a.start();
-        app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        app = TestPorts.listen(8);
         alice = new Daemon(NodeConfig.in(root.resolve("alice")));
         alice.start();
         Path aliceSock = root.resolve("alice/jailscale.sock");
@@ -109,6 +101,11 @@ class AutoPromoteTest {
         assertTrue(up.optBool("ok", false), up.toString());
         assertTrue(Ipc.call(aliceSock, JsonObject.builder().put("cmd", "open").put("port", app.getLocalPort()).put("name", "web").build()).optBool("ok", false));
 
+        // Drawn here and not beside portA: TestPorts keeps two of its own callers apart, but a hub
+        // binds its DNS pair, /metrics and the plain-HTTP front on port 0, and those draws know
+        // nothing of its register. Reserved before A starts, B's number is one of the numbers A
+        // could be handed.
+        portB = TestPorts.reserve();
         cfgB = HubConfig.withCert(URI.create("https://hub.test:" + portB), root.resolve("b"), "127.0.0.1", portB,
             null, null, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1").withAdvertise("203.0.113.2");

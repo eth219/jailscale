@@ -26,8 +26,8 @@ final class AdminIpc implements Ipc.Handler {
      */
     static final Map<String, java.util.function.Predicate<String>> SETTING_TEXT = Map.of(
         Store.SETTING_OPERATOR, v -> v.length() <= 120,
-        Store.SETTING_CONTACT, v -> v.length() <= 200 && (v.startsWith("https://") || v.startsWith("mailto:")),
-        Store.SETTING_TERMS, v -> v.length() <= 200 && v.startsWith("https://"));
+        Store.SETTING_CONTACT, v -> v.length() <= 200 && HttpFront.linkable(v),
+        Store.SETTING_TERMS, v -> v.length() <= 200 && HttpFront.https(v));
 
     /** What to say when one of the above refuses a value. */
     private static String textSettingRule(String key) {
@@ -385,7 +385,21 @@ final class AdminIpc implements Ipc.Handler {
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null);
             case "admin-add", "admin-remove" -> b.put("user", need(a.positional(2), "<user>"));
             case "key-rotate" -> b.put("grace", a.has("grace") ? a.seconds("grace", 0) : null);
-            case "setting" -> b.put("key", need(a.positional(1), "<key>")).put("value", need(a.positional(2), "<value>"));
+            case "setting" -> {
+                // A value with a space in it is several positionals, and taking the first was
+                // silent: `jailhub setting operator Example Ltd` stored "Example" and replied ok.
+                // The first setting whose value is prose is the first one that could hit this.
+                // The line it suggests is the whole value and not the first two words of it: an
+                // error that shows something other than what was typed is one more thing to work
+                // out, and the words are all right here.
+                List<String> words = a.positional();
+                if (words.size() > 3) {
+                    throw new IllegalArgumentException("a value with spaces has to be quoted: "
+                        + "jailhub setting " + words.get(1) + " \""
+                        + String.join(" ", words.subList(2, words.size())) + "\"");
+                }
+                b.put("key", need(a.positional(1), "<key>")).put("value", need(a.positional(2), "<value>"));
+            }
             default -> { }
         }
         return b.build();

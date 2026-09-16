@@ -13,7 +13,6 @@ import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -28,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * ARCHITECTURE.md §14: 1,000 concurrent visitors through hub → node → local app, all holding their
@@ -96,13 +96,11 @@ class LoadTest {
     void thousandConcurrentVisitors() throws Exception {
         Log.setLevel(Log.Level.INFO);
         root = TestDirs.newRoot("jload");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
-        app = new ServerSocket(0, 1024, InetAddress.getLoopbackAddress());
+        app = TestPorts.listen(1024);
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {

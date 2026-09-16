@@ -16,7 +16,6 @@ import io.jailscale.proto.util.Log;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -27,6 +26,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * The three responses the node writes to a visitor itself -- the gate's redirect, the gate's
@@ -60,20 +60,16 @@ class VisitorHeadHasNoBodyTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("vhead");
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            port = s.getLocalPort();
-        }
+        port = TestPorts.reserve();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.start();
-        app = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
-        // After the live app is bound, and not before: a port picked by binding and closing is
-        // free for the kernel to hand straight back to the next bind of 0, and if that bind is the
-        // app's then every link below points at a server that answers and three cases assert 502
-        // against a 200.
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            deadPort = s.getLocalPort();
-        }
+        app = TestPorts.listen(8);
+        // A number nothing listens on, and nothing in this suite will be given later either:
+        // reserve() registers it, so the app cannot come to be bound on it and leave three cases
+        // asserting 502 against a 200. That is the whole point of taking it from here rather than
+        // binding and closing.
+        deadPort = TestPorts.reserve();
         Thread.ofVirtual().start(() -> {
             while (!app.isClosed()) {
                 try {

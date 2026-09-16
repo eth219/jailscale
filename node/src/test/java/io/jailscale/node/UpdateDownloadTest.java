@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -23,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import io.jailscale.proto.net.TestPorts;
 
 /**
  * {@code update --download} end to end against a release this test publishes itself
@@ -42,7 +42,7 @@ class UpdateDownloadTest {
 
     /** A release served on loopback: paths under /v0.2.0/ to bytes. */
     private static ServerSocket serve(Map<String, byte[]> files) throws IOException {
-        ServerSocket ss = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        ServerSocket ss = TestPorts.listen(50);
         Thread t = new Thread(() -> {
             while (!ss.isClosed()) {
                 try (Socket s = ss.accept()) {
@@ -314,7 +314,7 @@ class UpdateDownloadTest {
         // An unsigned release and a server that was briefly unhappy are different situations with
         // different advice, and the second must not be dressed up as the first.
         Release rel = honest(binary("jailscale"));
-        try (ServerSocket ss = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket ss = TestPorts.listen(50)) {
             Thread t = new Thread(() -> {
                 while (!ss.isClosed()) {
                     try (Socket s = ss.accept()) {

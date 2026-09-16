@@ -18,4 +18,23 @@
       <artifactId>crypto</artifactId>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!-- The test classes are published so hub and node can use TestPorts (jailscale#108) rather
+           than carry a copy of it each. It is the only thing in here anything else reads. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>test-jar</id>
+            <goals>
+              <goal>test-jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

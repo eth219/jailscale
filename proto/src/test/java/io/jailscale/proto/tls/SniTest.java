@@ -18,6 +18,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.Test;
+import io.jailscale.proto.net.TestPorts;
 
 class SniTest {
 
@@ -143,7 +144,7 @@ class SniTest {
 
     @Test
     void parsesARealJdkClientHello() throws Exception {
-        try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket ss = TestPorts.listen(1)) {
             Thread client = Thread.ofVirtual().start(() -> {
                 try {
                     SSLSocket s = (SSLSocket) SSLContext.getDefault().getSocketFactory().createSocket();
