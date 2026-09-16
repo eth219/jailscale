@@ -698,7 +698,18 @@ final class HttpFront {
             .append(Message.PROTO).append("</b> and takes ").append(TAKES)
             .append(". One that is too old is turned away at the handshake with a line saying so and")
             .append(" which version this hub runs, rather than half-working; a jailscale newer than")
-            .append(" this hub decides for itself whether it will still talk to it.</p>");
+            .append(" this hub decides for itself whether it will still talk to it.")
+            // Naming the number is only half of it: the reader also has to get the same number out
+            // of the copy they hold. #140 gave them the command; this names it, because the
+            // paragraph is the only place the two numbers meet and it stated one of them (#168).
+            // "a current copy", not "your copy": every jailscale released before #140 prints the
+            // build alone, and that reader -- holding an existing copy, checking it against this
+            // hub's floor -- is this paragraph's whole audience. Telling them their binary does
+            // something it does not is the mistake the comment above is about, in the other
+            // direction: this page can only speak for its own end.
+            .append(" <code>jailscale version</code> prints the protocol a current copy speaks,")
+            .append(" beside its build. A copy that prints no protocol is older than the release")
+            .append(" this hub came from.</p>");
         // The page already says how to check the hub's binary. It said nothing about the file the
         // reader is about to download, which is the one they can actually do something about.
         b.append("<p>The releases are signed. Once you have <code>jailscale</code>,")

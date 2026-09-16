@@ -628,6 +628,16 @@ class HomePageTest {
         } else {
             assertTrue(page.contains("protocol " + NodeSession.MIN_PROTO + " and newer"), page);
         }
+        // A number the reader cannot get out of their own copy is one they can only check by
+        // attempting a join, which is what this paragraph exists to spare them (#168). Held against
+        // the paragraph and not the page: eight other places say <code>jailscale ...</code>, so a
+        // whole-page contains() would stay green with this sentence moved somewhere it answers
+        // nothing -- which is the move worth catching, the clause going away being the obvious one.
+        int protocolPara = page.indexOf("<p>This hub speaks");
+        assertTrue(protocolPara >= 0, page);
+        String paragraph = page.substring(protocolPara, page.indexOf("</p>", protocolPara));
+        assertTrue(paragraph.contains("<code>jailscale version</code>"),
+            "the paragraph naming this hub's protocol does not say where to get the reader's own: " + paragraph);
 
         // And the file the reader is about to download, which is the one they can do something
         // about -- the paragraph further down is about the hub's own binary and is not this.
