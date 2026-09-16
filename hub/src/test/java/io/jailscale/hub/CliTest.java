@@ -237,19 +237,23 @@ class CliTest {
      * comparison. A literal here would pass a flag day while the CLI lied about it. Both were
      * checked by making them happen.
      *
-     * <p>What it cannot catch: {@code PROTO} is a compile-time constant, so this class and
-     * {@code Main} both carry a folded copy of it, and a build that recompiled {@code proto}
-     * without recompiling either would compare two stale numbers and pass. Only a clean build
-     * makes this assertion mean what it says -- which is the build CI and every release run.
+     * <p>The number is read from {@code Message.PROTO} reflectively, and that is not decoration.
+     * {@code PROTO} is a compile-time constant: written as {@code Message.PROTO}, javac folds it
+     * into this class exactly as it folds it into {@code Main}, and the assertion would compare
+     * two copies of the same vintage -- a tree that recompiled {@code proto} alone would print a
+     * stale number and pass. A reflective read goes to the loaded {@code proto} class instead, so
+     * the child's folded copy is checked against what the protocol holds now. Falsified by doing
+     * it: bumping {@code PROTO} and rebuilding only {@code proto} fails this test.
      */
     @Test
     void versionIsTheBinaryNameItsVersionAndTheProtocolItSpeaks() throws Exception {
         Run r = ok(cli("version"));
-        Matcher m = Pattern.compile("^jailscale (\\S+) \\(protocol (\\d+)\\)$").matcher(r.out().strip());
+        Matcher m = Pattern.compile("^jailscale \\S+ \\(protocol (\\d+)\\)$").matcher(r.out().strip());
         // The shape carries the old assertion too: a line with the version missing is
         // `jailscale (protocol 1)`, which this does not match.
         assertTrue(m.matches(), "not the version line: " + r.all());
-        assertEquals(String.valueOf(Message.PROTO), m.group(2),
+        int proto = Message.class.getField("PROTO").getInt(null);
+        assertEquals(String.valueOf(proto), m.group(1),
             "the CLI names a protocol this build does not speak: " + r.out());
     }
 

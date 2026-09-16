@@ -141,7 +141,8 @@ jobs:
 
           # Does each one run at all? Asserted on the output as well as the exit status, so a
           # runtime that swallows the exec failure still fails here. The binary is named after the
-          # image: jailhub prints "jailhub <v>", jailscale likewise.
+          # image, so the name is what is asserted and not the whole line: jailhub prints
+          # "jailhub <v>" and jailscale "jailscale <v> (protocol N)".
           for pair in "jailhub@${{ steps.hub.outputs.digest }}" "jailscale@${{ steps.node.outputs.digest }}"; do
             docker run --rm "$owner/$pair" version | tee /tmp/version.txt
             grep -q "^${pair%@*} " /tmp/version.txt
