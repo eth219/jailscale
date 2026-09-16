@@ -46,6 +46,20 @@ final class HttpFront {
      */
     private static final int LINKS_SHOWN = 200;
 
+    /**
+     * What a crawler is asked to leave alone. The directory and the invitation pages are served to
+     * anyone holding the URL, because that is how a visitor reaches a link and how an invitee
+     * reaches an invitation; being in a search index is a different thing. It hands the whole list
+     * to somebody who has never heard of this hub, it outlives the link -- a cached row still says
+     * "open 3 days" after the node has gone -- and an indexed invitation is a live one, since the
+     * token is in the path. {@code /admin} is here for the same reason and not because it is
+     * secret. The hub's own page is left out: it is the page the operator wants found.
+     *
+     * <p>Advice a crawler may choose to ignore, so this raises the floor and is not a control; the
+     * control would be listing a link only when the node asks for it (#99).
+     */
+    private static final String ROBOTS = "User-agent: *\nDisallow: /links\nDisallow: /join/\nDisallow: /admin\n";
+
     private final Hub hub;
     private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
 
@@ -132,6 +146,9 @@ final class HttpFront {
             // saying an address that is deliberately not this one, so it says which flag instead.
             return HttpResponse.text(404, "metrics are not served on this name; see --metrics-listen");
         }
+        if (path.equals("/robots.txt")) {
+            return HttpResponse.text(200, ROBOTS);
+        }
         if (path.startsWith("/join/")) {
             String token = path.substring("/join/".length());
             if (token.isEmpty() || token.contains("/")) {
@@ -143,13 +160,13 @@ final class HttpFront {
                 "<p>Run this on the machine you want to join:</p>"
                 + "<pre>jailscale up --invite " + url + "</pre>"
                 + "<p>Install jailscale first if you do not have it. Opening this page does not use "
-                + "the invitation up.</p>"));
+                + "the invitation up.</p>", false));
         }
         if (path.equals("/")) {
             return HttpResponse.html(200, page("jailscale hub", home(req))).header("Cache-Control", "no-store");
         }
         if (path.equals("/links")) {
-            return HttpResponse.html(200, page("Open links", directory(req))).header("Cache-Control", "no-store");
+            return HttpResponse.html(200, page("Open links", directory(req), false)).header("Cache-Control", "no-store");
         }
         return HttpResponse.text(404, "not found");
     }
@@ -714,8 +731,19 @@ final class HttpFront {
      * to remember a preference with.
      */
     private static String page(String title, String body) {
+        return page(title, body, true);
+    }
+
+    /**
+     * {@code indexable} is false for the pages {@link #ROBOTS} asks a crawler to leave alone. Both
+     * are needed and neither replaces the other: robots.txt is fetched once for the site and says
+     * what not to visit, the meta travels with the page and says what not to keep, which is the one
+     * that covers a URL somebody was handed directly.
+     */
+    private static String page(String title, String body, boolean indexable) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            + (indexable ? "" : "<meta name=\"robots\" content=\"noindex\">")
             + "<title>" + escape(title) + "</title><style>"
             + ":root{color-scheme:light dark;--bg:#fff;--ink:#15171a;--dim:#70757c;--rule:#e7e8ea;--wash:#f5f6f7;--link:#0b57d0}"
             + "body{font-family:system-ui,-apple-system,sans-serif;max-width:48rem;margin:4rem auto 6rem;"

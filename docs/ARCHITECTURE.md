@@ -217,7 +217,7 @@ TCP 443, SNI = hub.example.com
 ```
 
 Both HTTP ends are hand-written (§3.1): the hub's front is about 750 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*`, a root page and the link directory, the node's client
+`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, a root page and the link directory, the node's client
 about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier because its
 4-byte client-to-server masking would touch every visitor byte again, frame headers and close
 semantics come with it, and it would only help behind proxies passing `Upgrade: websocket` when SNI
@@ -542,7 +542,15 @@ audience than a page on 443. The reader loses little: someone deciding whether t
 learns more by clicking it. "Open" is since the *link* opened, so
 a node that restarts or hands its name on starts the clock again -- it counts the current link, not
 the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
-list does. The directory renders at most 200 rows at a time, like every other unauthenticated
+list does. **And none of it is for a search index.** That a link's address is public because a
+visitor reaches it by typing it is an argument about that visitor, not about a result that hands the
+whole list to somebody who never heard of this hub and keeps saying "open 3 days" after the node has
+gone; an indexed `/join/<token>` is a live invitation, and an indexed `/admin/login/<token>` a live
+credential. So `/robots.txt` names `/links`, `/join/` and `/admin`, and those pages carry `noindex`
+themselves, because robots.txt is fetched once for a site and the meta is what covers a URL somebody
+was handed directly. `/` is left indexable: it is the page an operator wants found. Both are advice
+a crawler may ignore rather than a control -- the control would be listing a link only when the node
+asks to be listed, which is a change to what `jailscale open` means and is not decided. The directory renders at most 200 rows at a time, like every other unauthenticated
 answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
 reachable -- the sentence at the top counts every open link, so every one of them has to be. A
 row's address carries the port the hub answers on, the same `portSuffix` the node was told when the

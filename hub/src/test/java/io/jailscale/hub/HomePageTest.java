@@ -326,4 +326,34 @@ class HomePageTest {
         // if the pom ever carries a release version this assertion is what says the other one is.
         assertFalse(release, "expected the test build to be a snapshot, not " + Hub.version());
     }
+
+    /**
+     * Two mechanisms and one rule: the pages that are served to whoever holds their URL are not
+     * for a search index, and the hub's own page is. The second half is what gives this test a
+     * direction to fail in -- a blanket noindex, or a robots.txt that disallowed everything, would
+     * satisfy every assertion about /links and /join and is exactly the mistake worth catching.
+     */
+    @Test
+    void whatIsServedToWhoeverHoldsTheUrlIsKeptOutOfSearchAndTheHubPageIsNot() throws Exception {
+        HttpResponse robots = http("GET", "/robots.txt", null, null);
+        assertEquals(200, robots.status());
+        assertEquals("text/plain; charset=utf-8", robots.headers().get("Content-Type"));
+        String txt = robots.bodyText();
+        assertTrue(txt.contains("User-agent: *"), txt);
+        assertTrue(txt.contains("Disallow: /links"), txt);
+        assertTrue(txt.contains("Disallow: /join/"), txt);
+        assertTrue(txt.contains("Disallow: /admin"), txt);
+        assertFalse(txt.contains("Disallow: /\n"), "the hub's own page is what the operator wants found: " + txt);
+
+        String meta = "<meta name=\"robots\" content=\"noindex\">";
+        // robots.txt is fetched once for the site; the meta is what covers a URL somebody was
+        // handed. An invitation renders for any token because viewing one never spends it.
+        assertTrue(http("GET", "/links", null, null).bodyText().contains(meta));
+        assertTrue(http("GET", "/join/" + enc("not-a-real-token"), null, null)
+            .bodyText().contains(meta));
+        assertTrue(http("GET", "/admin", null, null).bodyText().contains(meta));
+
+        String home = http("GET", "/", null, null).bodyText();
+        assertFalse(home.contains("name=\"robots\""), home);
+    }
 }
