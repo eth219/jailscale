@@ -65,6 +65,16 @@ final class AdminWeb {
         String path = req.path();
         prune();
         if (path.startsWith("/admin/login/")) {
+            // Only a GET spends it. HttpFront hands every method under /admin straight here,
+            // ahead of its own GET/HEAD check, so a HEAD from a link preview or an OPTIONS from
+            // anything probing the URL used to consume the token and leave the person who was
+            // actually sent the link an expired page. robots.txt asks a crawler not to fetch
+            // /admin at all (HttpFront.ROBOTS), but that is advice and an unfurler or a browser
+            // prefetch does not read it; refusing the methods that cannot be a person clicking is
+            // the part that does not depend on the other end being polite.
+            if (!req.method().equals("GET")) {
+                return HttpResponse.text(405, "method not allowed");
+            }
             Login l = logins.remove(path.substring("/admin/login/".length()));
             if (l == null || System.currentTimeMillis() > l.expiresAt()) {
                 return HttpResponse.html(403, page("login link expired", "<p>Run <code>jailscale admin</code> on the node again.</p>"));
@@ -424,8 +434,16 @@ final class AdminWeb {
         return "<label><input type=radio name=" + name + " value=" + value + (value.equals(current) ? " checked" : "") + "> " + label + "</label> ";
     }
 
+    /**
+     * These pages are never for a crawler: {@code /admin/login/<token>} is a one-shot credential in
+     * a path, and the page behind it prints invitation URLs, which are credentials too. They take
+     * the same {@code noindex,nofollow} the invitation page does, and robots.txt asks for
+     * {@code /admin} not to be fetched at all, because fetching a login link spends it.
+     */
     private static String page(String title, String body) {
-        return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>" + HttpFront.escape(title) + "</title>"
+        return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            + HttpFront.NOINDEX
+            + "<title>" + HttpFront.escape(title) + "</title>"
             + "<style>body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #ddd}"
             + "form{display:inline}form.row{display:block;margin:.25rem 0}.new{background:#eef;padding:.5rem}"

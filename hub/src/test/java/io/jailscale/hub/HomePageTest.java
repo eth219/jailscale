@@ -326,4 +326,42 @@ class HomePageTest {
         // if the pom ever carries a release version this assertion is what says the other one is.
         assertFalse(release, "expected the test build to be a snapshot, not " + Hub.version());
     }
+
+    /**
+     * Two mechanisms that pull in opposite directions, and the rule that decides which goes where.
+     * A page that is disallowed is never fetched, so its {@code noindex} is never read -- which is
+     * why the pages that must stay out of an index are the ones robots.txt does *not* name. The
+     * assertions that give this test a direction to fail in are the negative ones: a robots.txt
+     * that disallowed /links and /join, which is the intuitive and wrong thing to write, satisfies
+     * every positive assertion here.
+     */
+    @Test
+    void whatIsServedToWhoeverHoldsTheUrlIsKeptOutOfSearchAndTheHubPageIsNot() throws Exception {
+        HttpResponse robots = http("GET", "/robots.txt", null, null);
+        assertEquals(200, robots.status());
+        assertEquals("text/plain; charset=utf-8", robots.headers().get("Content-Type"));
+        String txt = robots.bodyText();
+        assertTrue(txt.contains("User-agent: *"), txt);
+        // Fetching a login link spends it, so that one is asked for by name.
+        assertTrue(txt.contains("Disallow: /admin"), txt);
+        // And these are not, on purpose: a crawler that is turned away at robots.txt never reads
+        // the noindex, and a URL linked from somewhere else gets listed on the link alone -- which
+        // for an invitation would publish the token.
+        assertFalse(txt.contains("Disallow: /links"), "disallowing it is what stops the noindex being read: " + txt);
+        assertFalse(txt.contains("Disallow: /join"), "an invitation must be fetchable for its noindex to count: " + txt);
+        assertFalse(txt.contains("Disallow: /\n"), "the hub's own page is what the operator wants found: " + txt);
+
+        String meta = "<meta name=\"robots\" content=\"noindex,nofollow\">";
+        // An invitation renders for any token, because viewing one never spends it.
+        assertTrue(http("GET", "/links", null, null).bodyText().contains(meta));
+        HttpResponse invite = http("GET", "/join/" + enc("not-a-real-token"), null, null);
+        assertTrue(invite.bodyText().contains(meta));
+        // The one page here whose body is a credential is also the one that must not be kept: the
+        // two that carry nothing secret said no-store while this one did not.
+        assertEquals("no-store", invite.headers().get("Cache-Control"));
+        assertTrue(http("GET", "/admin", null, null).bodyText().contains(meta));
+
+        String home = http("GET", "/", null, null).bodyText();
+        assertFalse(home.contains("name=\"robots\""), home);
+    }
 }

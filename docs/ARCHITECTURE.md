@@ -217,11 +217,11 @@ TCP 443, SNI = hub.example.com
 ```
 
 Both HTTP ends are hand-written (§3.1): the hub's front is about 750 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*`, a root page and the link directory, the node's client
-about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier because its
-4-byte client-to-server masking would touch every visitor byte again, frame headers and close
-semantics come with it, and it would only help behind proxies passing `Upgrade: websocket` when SNI
-passthrough already rules out an HTTP proxy in front of the hub (§7.2). ALPN is pinned to
+`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, a root page and the link directory, the
+node's client about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier
+because its 4-byte client-to-server masking would touch every visitor byte again, frame headers and
+close semantics come with it, and it would only help behind proxies passing `Upgrade: websocket`
+when SNI passthrough already rules out an HTTP proxy in front of the hub (§7.2). ALPN is pinned to
 `http/1.1`, because HTTP/2 has no Upgrade.
 
 **Noise parameters.** `Noise_IK_25519_ChaChaPoly_BLAKE2s`, prologue `jailscale-control-v1`. The
@@ -542,7 +542,31 @@ audience than a page on 443. The reader loses little: someone deciding whether t
 learns more by clicking it. "Open" is since the *link* opened, so
 a node that restarts or hands its name on starts the clock again -- it counts the current link, not
 the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
-list does. The directory renders at most 200 rows at a time, like every other unauthenticated
+list does. **And none of it is for a search index.** That a link's address is public because a
+visitor reaches it by typing it is an argument about that visitor, not about a result that hands the
+whole list to somebody who never heard of this hub and keeps saying "open 3 days" after the node has
+gone; an indexed `/join/<token>` would be a live invitation, the token in the result. The two
+mechanisms for saying so pull in opposite directions and only one of them works: a page named in
+`Disallow` is never fetched, so its `noindex` is never read, and a URL linked from anywhere else can
+be listed on the strength of that link alone -- for an invitation, exactly the outcome being
+avoided. **So the pages that must stay out of an index are deliberately left crawlable** and say
+`noindex,nofollow` themselves; being fetched costs them nothing, since opening an invitation has
+never spent it, and the page-level `nofollow` keeps a crawler from walking the directory into other
+people's machines or paging it one `?from=` at a time. `/robots.txt` names only `/admin`, and for a
+different reason than secrecy: a login link is one-shot and consumed on the GET, so a machine that
+fetches one to see what is there burns it -- and because that is advice, `/admin/login/<token>` also
+refuses every method but GET, so a link preview or a prefetch cannot spend it by looking.
+
+`/` stays indexable -- it is the page an operator wants found -- and its eight preview rows carry
+`rel=nofollow`. **That is the weaker half and it is the known gap**: the robots meta's `nofollow` is
+a directive, while the `rel` attribute has been a hint since 2020, and neither keeps the eight
+addresses out of an index in the first place, because they are text on a page that says it may be
+listed. The whole directory is out; a preview of it is not. Closing that means either taking the
+addresses off `/` or listing a link only when the node asks to be listed, which changes what
+`jailscale open` means and is not decided (#99). All of it is advice a crawler may ignore rather
+than a control.
+
+The directory renders at most 200 rows at a time, like every other unauthenticated
 answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
 reachable -- the sentence at the top counts every open link, so every one of them has to be. A
 row's address carries the port the hub answers on, the same `portSuffix` the node was told when the

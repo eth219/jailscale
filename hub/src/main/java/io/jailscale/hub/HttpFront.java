@@ -18,8 +18,9 @@ import java.util.List;
 
 /**
  * The hub's own HTTP endpoints on its name (ARCHITECTURE.md §5.1): {@code /v1/key}, {@code /v1/noise}
- * (Upgrade), {@code /join/<token>}, and a root page. {@link SniRouter} hands over connections
- * whose SNI is the hub's own name, already wrapped in TLS.
+ * (Upgrade), {@code /join/<token>}, {@code /robots.txt}, a root page and the link directory at
+ * {@code /links}. {@link SniRouter} hands over connections whose SNI is the hub's own name,
+ * already wrapped in TLS.
  */
 final class HttpFront {
 
@@ -45,6 +46,36 @@ final class HttpFront {
      * anyone who asks, so it has a ceiling like every other unauthenticated answer here.
      */
     private static final int LINKS_SHOWN = 200;
+
+    /**
+     * The one path a crawler is asked not to fetch, and it is not the obvious one.
+     *
+     * <p>{@code Disallow} and {@code noindex} do opposite things and only one of them keeps a page
+     * out of a search index. A disallowed page is never fetched, so its {@code noindex} is never
+     * read, and a URL somebody linked from elsewhere can still be listed on the strength of that
+     * link alone -- which for {@code /join/<token>} would publish the token, the very thing the
+     * page is protecting. So the pages that must not be indexed are deliberately left fetchable and
+     * say {@code noindex} themselves ({@link #NOINDEX}); being crawled costs them nothing, since
+     * opening an invitation has never spent it.
+     *
+     * <p>{@code /admin} is the exception and is here for a different reason than secrecy: a login
+     * link is one-shot and {@code AdminWeb} consumes it on the GET, so a machine that fetches one
+     * to see what is there burns it. Nothing under it is indexable anyway -- without a session it
+     * answers 403 -- so the meta stays on those pages as the second layer.
+     *
+     * <p>All of it is advice a crawler may ignore, so this raises the floor and is not a control;
+     * the control would be listing a link only when the node asks to be listed (#99).
+     */
+    private static final String ROBOTS = "User-agent: *\nDisallow: /admin\n";
+
+    /**
+     * {@code nofollow} as well as {@code noindex}, because these two pages are the ones carrying
+     * addresses that lead to other people's machines: without it a crawler that has read the
+     * directory walks into every app behind it, which is a heavier version of the thing the
+     * directory refuses to do itself. It also keeps a crawler from paging through the whole list
+     * one {@code ?from=} at a time.
+     */
+    static final String NOINDEX = "<meta name=\"robots\" content=\"noindex,nofollow\">";
 
     private final Hub hub;
     private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
@@ -132,6 +163,9 @@ final class HttpFront {
             // saying an address that is deliberately not this one, so it says which flag instead.
             return HttpResponse.text(404, "metrics are not served on this name; see --metrics-listen");
         }
+        if (path.equals("/robots.txt")) {
+            return HttpResponse.text(200, ROBOTS);
+        }
         if (path.startsWith("/join/")) {
             String token = path.substring("/join/".length());
             if (token.isEmpty() || token.contains("/")) {
@@ -143,13 +177,17 @@ final class HttpFront {
                 "<p>Run this on the machine you want to join:</p>"
                 + "<pre>jailscale up --invite " + url + "</pre>"
                 + "<p>Install jailscale first if you do not have it. Opening this page does not use "
-                + "the invitation up.</p>"));
+                + "the invitation up.</p>", false))
+                // The one page here whose body is a credential, and until now the only 200 on this
+                // route without it: the two pages that carry nothing secret said no-store and the
+                // invitation did not.
+                .header("Cache-Control", "no-store");
         }
         if (path.equals("/")) {
             return HttpResponse.html(200, page("jailscale hub", home(req))).header("Cache-Control", "no-store");
         }
         if (path.equals("/links")) {
-            return HttpResponse.html(200, page("Open links", directory(req))).header("Cache-Control", "no-store");
+            return HttpResponse.html(200, page("Open links", directory(req), false)).header("Cache-Control", "no-store");
         }
         return HttpResponse.text(404, "not found");
     }
@@ -498,6 +536,12 @@ final class HttpFront {
      * reaches it by typing it; its kind; and how long it has been open. Nothing here is fetched
      * from the link itself.
      *
+     * <p><b>And none of it is for a search index.</b> "Public by construction" is an argument
+     * about the visitor who types the address, not about a result that hands the whole list to
+     * somebody who never heard of this hub and keeps saying "open 3 days" after the node has gone,
+     * so this page says {@link #NOINDEX} and {@link #ROBOTS} deliberately leaves it fetchable --
+     * a page named in {@code Disallow} is never fetched, so its {@code noindex} is never read.
+     *
      * <p><b>Not how many visitors a link is serving</b>, although the hub has that number and this
      * page carried it for a while. That the name exists was already public; that somebody is using
      * it right now was not, and a page anyone can poll turns it into a live activity feed for a
@@ -681,7 +725,14 @@ final class HttpFront {
         // opened (Links.portSuffix). Without it every row on a hub that is not on 443 is a link
         // to nothing, which matters more now that the rows are a page meant to be handed around.
         String suffix = hub.links().portSuffix();
-        return "<a href=\"https://" + host + suffix + "\">" + host + suffix + "</a>";
+        // rel=nofollow, not for ranking but because the other end is somebody else's machine and
+        // the hub does not fetch what is behind a link (§6.3). The directory says nofollow for the
+        // whole page; the home page is indexable, so its eight rows have to say it themselves --
+        // and say it more weakly, since the robots meta's nofollow is a directive while the rel
+        // attribute has been a hint since 2020, and neither keeps the eight addresses themselves
+        // out of an index, because they are text on a page that says it may be listed. §5.1 names
+        // that as the gap this leaves rather than one it closes.
+        return "<a rel=\"nofollow\" href=\"https://" + host + suffix + "\">" + host + suffix + "</a>";
     }
 
     /**
@@ -703,6 +754,11 @@ final class HttpFront {
         b.append("<tr><td>").append(label).append("</td><td>").append(value).append("</td></tr>");
     }
 
+    /** The frame, for a page a search engine is welcome to list. Only {@code /} is one. */
+    private static String page(String title, String body) {
+        return page(title, body, true);
+    }
+
     /**
      * The frame every page shares. One stylesheet, inline, because a second request for a file that
      * never changes is a second thing to serve and to cache-bust; it is under a kilobyte.
@@ -712,10 +768,16 @@ final class HttpFront {
      * headings are small and muted because on this page they are labels between blocks rather than
      * titles anyone reads. Dark is the system's choice, not a toggle, since there is nothing here
      * to remember a preference with.
+     *
+     * <p>{@code indexable} is false for the pages that are served to whoever holds their URL -- the
+     * directory and an invitation. {@link #ROBOTS} explains why those are left fetchable rather
+     * than disallowed: this meta is the thing that actually keeps them out of an index, and a
+     * crawler has to be allowed to read it.
      */
-    private static String page(String title, String body) {
+    private static String page(String title, String body, boolean indexable) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            + (indexable ? "" : NOINDEX)
             + "<title>" + escape(title) + "</title><style>"
             + ":root{color-scheme:light dark;--bg:#fff;--ink:#15171a;--dim:#70757c;--rule:#e7e8ea;--wash:#f5f6f7;--link:#0b57d0}"
             + "body{font-family:system-ui,-apple-system,sans-serif;max-width:48rem;margin:4rem auto 6rem;"

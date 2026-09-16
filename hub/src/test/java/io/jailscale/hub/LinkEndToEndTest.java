@@ -219,7 +219,7 @@ class LinkEndToEndTest {
         String after = visit("hub.test", "/").bodyText();
         // With the hub's own port, which is what `open` told the node. Without it every row on a
         // hub that is not on 443 links to nothing.
-        assertTrue(after.contains("<a href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), after);
+        assertTrue(after.contains("<a rel=\"nofollow\" href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), after);
         assertFalse(after.contains("alice"), "the owner must not be on the public page: " + after);
         assertFalse(after.contains("127.0.0.1:" + localApp.getLocalPort()),
             "the local target must not be on the public page: " + after);
@@ -245,7 +245,7 @@ class LinkEndToEndTest {
         waitFor(() -> hub.links().byName("myapp") != null);
 
         String idle = visit("hub.test", "/links").bodyText();
-        assertTrue(idle.contains("<a href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), idle);
+        assertTrue(idle.contains("<a rel=\"nofollow\" href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), idle);
         assertTrue(idle.contains("&middot; open "), "how long it has been open: " + idle);
         assertFalse(idle.contains("alice"), "the owner must not be on the public page: " + idle);
         assertFalse(idle.contains("127.0.0.1:" + localApp.getLocalPort()),
@@ -265,7 +265,7 @@ class LinkEndToEndTest {
             assertFalse(busy.contains("visitor"), "how busy a link is is the operator's, not the page's: " + busy);
             assertFalse(busy.matches("(?s).*&middot; [0-9]+ .*"), "no per-link figure at all: " + busy);
             // The row itself is still there, so this is not passing because the page went blank.
-            assertTrue(busy.contains("<a href=\"https://myapp.hub.test:" + port + "\">"), busy);
+            assertTrue(busy.contains("<a rel=\"nofollow\" href=\"https://myapp.hub.test:" + port + "\">"), busy);
         }
     }
 
@@ -298,6 +298,12 @@ class LinkEndToEndTest {
         for (int i = 0; i < 9; i++) {
             assertTrue(directory.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + directory);
         }
+
+        // Each of these rows is an address on somebody else's machine. The directory says
+        // nofollow once for the whole page; the front page is the one page a crawler is asked to
+        // index, so its rows have to say it themselves or being indexed means being walked into.
+        assertTrue(directory.contains("content=\"noindex,nofollow\""), directory);
+        assertTrue(home.contains("<a rel=\"nofollow\" href=\"https://app0.hub.test"), home);
 
         // A page of the directory is capped, and the cap counted rows the page then had no way to
         // show: the sentence at the top says how many there are, so every one of them has to be
