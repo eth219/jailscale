@@ -22,7 +22,7 @@ Closes #
 - [ ] A review pass over the diff (`/code-review` if you have it), and every finding answered — including the ones answered with "no, and here is why"
 - [ ] `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` — required if this touches the multiplexer, the relay, the visitor path, or anything per-connection
 - [ ] `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` — required if this touches the hub's admission or fan-out
-- [ ] `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false` **on the new toolchain**, naming the build — required if this moves the JDK or GraalVM pin (CONTRIBUTING.md says why)
+- [ ] `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false` **on the new toolchain** — required if this moves the JDK or GraalVM pin. Paste the `Tests run:` line and name the build; `BUILD SUCCESS` alone does not tell a typo from a pass (CONTRIBUTING.md says why)
 - [ ] Not applicable, because: <!-- say so rather than leaving boxes unticked -->
 
 ## Tests

@@ -958,9 +958,13 @@ that writes these messages differently fails the handshake locally with a clear 
 `TranscriptTest` runs the reconstruction against JSSE itself, retry included, so such a JDK fails the
 build first. That test also asks for the transcript of a handshake JSSE negotiated exactly as it did,
 written differently -- the ServerHello's extensions in the other order, a legacy version that is not
-0x0303, EncryptedExtensions that acknowledge SNI -- and requires each to be refused, so it fails in
-the direction it claims rather than only when the handshake itself changes; CONTRIBUTING.md puts
-running it against the new toolchain on the list for a JDK or GraalVM bump, which is when this
+0x0303, EncryptedExtensions that acknowledge SNI -- and requires each to be refused. What that pins
+is the *strictness* of the reconstruction, one direction each: a reconstruction lenient about any one
+of those pairs passes every other test in the class and fails this one, which is how the gap was
+found. What it does **not** pin is the prediction itself, since each variant is built from `Tls13`'s
+own output -- reverse the order `Tls13.serverHello` writes and the variant reverses the new order and
+is refused just the same. Only the live handshakes fail for that, and they do. CONTRIBUTING.md puts
+running the class against the new toolchain on the list for a JDK or GraalVM bump, which is when this
 arrives. The hub trusts none of this: it recomputes from its own copy of the ClientHello.
 
 **What this binds.** Conditions 2 and 3 bind the *request* to a stream the hub delivered for a name

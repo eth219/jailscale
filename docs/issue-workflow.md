@@ -188,7 +188,7 @@ so each of these finds your change on main instead:
 |---|---|---|
 | the multiplexer, the relay, the visitor path, anything per-connection | `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` | `budget` runs on main only — it needs a native build; the step in `ci.yml` is the definition, if the two ever differ |
 | the hub's admission or fan-out | `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` | `load` runs on main only — it holds a thousand sockets open |
-| the JDK or GraalVM pin | `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false`, on the new toolchain | `test` runs on Liberica, not on the pin, and the job that does (`budget`) is one of the two above. Delegated signing predicts the bytes JSSE writes (§9.2); a JDK that writes them otherwise takes every hub-signed handshake down. CONTRIBUTING.md has the long form |
+| the JDK or GraalVM pin | `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false`, on the new toolchain, pasting the `Tests run:` line — that flag means a mistyped class prints `BUILD SUCCESS` and runs nothing | `test` runs on Liberica, not on the pin, and the job that does (`budget`) is one of the two above. Delegated signing predicts the bytes JSSE writes (§9.2); a JDK that writes them otherwise takes every hub-signed handshake down. CONTRIBUTING.md has the long form |
 
 Read the header of `measure.sh` before trusting a surprising number from it. It carries a list of
 the conclusions this harness has produced that were confident, plausible and wrong.

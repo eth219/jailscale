@@ -51,7 +51,11 @@ So before the pin moves, on the new toolchain:
 ./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
-and say in the PR that it was run and against which build. The pins are `native.sh` and the
+and paste the `Tests run:` line for `TranscriptTest` into the PR along with the build. **`BUILD
+SUCCESS` is not the evidence.** `-Dsurefire.failIfNoSpecifiedTests=false` is load-bearing — `-am`
+pulls in `crypto` and `proto`, which have no `TranscriptTest` and would otherwise fail the run — but
+it suppresses the same error in `node` too, so a mistyped or renamed class prints `BUILD SUCCESS`
+having run nothing at all, and a reviewer cannot tell that from a pass. The pins are `native.sh` and the
 `graalvm/setup-graalvm` steps in `.github/workflows/{ci,images,release}.yml`, alongside the
 `setup-java` steps that fix what the `test` job runs on; the JDK floor is the paragraph above.
 
@@ -71,12 +75,14 @@ simplifying it away.
 ```
 
 **A green local build is not the gate.** CI runs the suite on ubuntu, macOS and Windows and SpotBugs
-on its own, and two more jobs that **pull requests do not run**:
+on its own, and two more jobs that **pull requests do not run** — and one axis no pull-request job
+covers at all, because `test` runs on Liberica rather than on the pinned toolchain:
 
 | Job | What it does | Run it yourself when your change touches |
 |---|---|---|
 | `budget` | `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` | the multiplexer, the relay, the visitor path, anything per-connection |
 | `load` | `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` | the hub's admission or fan-out |
+| none, before `budget` on main | `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false` on the new toolchain, pasting the `Tests run:` line | the JDK or GraalVM pin — [Moving the JDK or GraalVM pin](#moving-the-jdk-or-graalvm-pin) says why, and why `BUILD SUCCESS` is not the evidence |
 
 Say in the PR body which of those you ran. A PR that is silent about the budget is one a reviewer has
 to assume was not measured.

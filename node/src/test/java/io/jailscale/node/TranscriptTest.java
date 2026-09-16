@@ -220,17 +220,29 @@ class TranscriptTest {
         return signed;
     }
 
-    /** What the hub does with the request: its own copy of the ClientHello(s) plus what the node sent. */
-    private static byte[] hubSide(List<byte[]> clientHellos, Transcript.Reconstructed t, byte[] content) throws Exception {
-        return Tls13.transcriptHash(Tls13.hashAlgorithmOf(content), clientHellos, t.helloRetryRequest(), t.serverHello(),
-            t.encryptedExtensions(), certificateMessage);
+    /**
+     * What the hub does with the request: its own copy of the ClientHello(s) plus what the node
+     * sent. The two server messages are parameters because the refusal test below asks for the same
+     * recipe with a differently written pair, and the hub's transcript should exist here once.
+     */
+    private static byte[] hubSide(List<byte[]> clientHellos, byte[] hrr, byte[] serverHello, byte[] encryptedExtensions,
+        byte[] content) throws GeneralSecurityException {
+        return Tls13.transcriptHash(Tls13.hashAlgorithmOf(content), clientHellos, hrr, serverHello, encryptedExtensions,
+            certificateMessage);
+    }
+
+    private static byte[] hubSide(List<byte[]> clientHellos, Transcript.Reconstructed t, byte[] content)
+        throws GeneralSecurityException {
+        return hubSide(clientHellos, t.helloRetryRequest(), t.serverHello(), t.encryptedExtensions(), content);
     }
 
     @Test
     void plainHandshakeIsReconstructedAndTheHubGetsTheSameHash() throws Exception {
         Signed s = handshake(p -> { }, new String[] {"h2", "http/1.1"});
         assertNull(s.failure(), ENCODING_CHANGED + s.failure());
-        assertEquals(1, s.clientMessages().size());
+        assertEquals(1, s.clientMessages().size(),
+            "more than one ClientHello without a retry being asked for. That is a changed handshake and not a changed "
+                + "encoding: this JDK's client is negotiating differently, so fix the expectation, not Tls13");
         assertNull(s.t().helloRetryRequest());
         assertArrayEquals(Tls13.transcriptHashIn(s.content()), hubSide(s.clientMessages(), s.t(), s.content()));
         // the EncryptedExtensions carried the one group and the ALPN choice
@@ -280,18 +292,23 @@ class TranscriptTest {
         assertThrows(GeneralSecurityException.class, () -> Transcript.reconstruct(a.clientMessages(), List.of(), List.of(new byte[32]),
             "TLS_AES_256_GCM_SHA384", certificateMessage, b.content()));
     }
+
     @Test
     void aChangedEncodingOfTheSameHandshakeIsWhatThisFails() throws Exception {
         // The direction the tests above cannot show. They run against one JDK and assert that its
         // encoding was predicted; none of them says what happens when a JDK predicts it *wrongly*,
         // and a reconstruction that had quietly stopped comparing would pass every one of them.
         // So: keep this handshake exactly as JSSE negotiated it -- same ClientHello, same random
-        // draws, same suite -- and change only how the server's two messages are written, which is
-        // the whole of the risk in issue #78. Each variant must be refused.
+        // draws, same suite -- and ask for the transcript of the same handshake written some other
+        // way. Each must be refused.
         Signed s = handshake(p -> { }, new String[] {"http/1.1"});
         assertNull(s.failure(), ENCODING_CHANGED + s.failure());
         byte[] sh = s.t().serverHello();
         byte[] ee = s.t().encryptedExtensions();
+        // Both variants below reorder a pair, so a parser that found fewer than two would make the
+        // reordering a no-op and the refusal vacuous. This is the same guard `refuses` applies to
+        // the bytes, one level up, and it is what stops a mis-parse from reading as a pass.
+        assertEquals(2, extensionsOf(sh).size(), "the ServerHello should carry supported_versions and key_share");
         assertEquals(2, extensionsOf(ee).size(), "EncryptedExtensions should carry supported_groups and ALPN here");
 
         // The control. Synthesising a CertificateVerify content from the reconstruction JSSE itself
@@ -299,9 +316,17 @@ class TranscriptTest {
         // this test builds its inputs wrongly.
         assertNotNull(reconstructAsIf(s, sh, ee), "the unperturbed encoding must still reconstruct");
 
-        // Each of these is a way a JDK could write this same handshake differently. Tls13 predicts
-        // an exact byte layout -- "the order JSSE writes them in", "nothing else, SNI
-        // acknowledgement included" -- and these are what hold those claims to their word.
+        // What these hold to their word is the strictness of Transcript.reconstruct, one direction
+        // each. A single perturbed hash byte would show that it compares *at all*; it would not
+        // show that it refuses an EncryptedExtensions with an SNI acknowledgement, because against
+        // a corrupted hash a reconstruction lenient in exactly that way still finds nothing and
+        // still throws. Measured, by making Transcript accept that one pair: the bit-flip version
+        // of this test passes and the fourth line below fails.
+        //
+        // What they do NOT do, since each is derived from Tls13's own output: say that the
+        // prediction is right. Reverse the order in Tls13.serverHello and the first variant simply
+        // reverses the new order and is refused just the same. Only the live handshakes above can
+        // fail for that, and they do.
         refuses(s, rewriteExtensions(sh, TranscriptTest::reversed), ee, "the ServerHello's extensions in the other order");
         refuses(s, legacyVersion(sh, 0x0304), ee, "a ServerHello carrying 0x0304 rather than the legacy 0x0303");
         refuses(s, sh, rewriteExtensions(ee, TranscriptTest::reversed), "EncryptedExtensions with ALPN before supported_groups");
@@ -309,10 +334,15 @@ class TranscriptTest {
             "EncryptedExtensions that acknowledge SNI with an empty server_name");
     }
 
-    /** {@link Transcript#reconstruct} against the content a JDK writing {@code sh} and {@code ee} would hand over. */
+    /**
+     * {@link Transcript#reconstruct} against the content a JDK writing {@code sh} and {@code ee}
+     * would hand over. The HelloRetryRequest comes from the server messages rather than from the
+     * reconstruction, because that is where {@code reconstruct} will read it from: taking it from
+     * two places makes the control compare transcripts built from different retries, which is
+     * invisible today only because this test's handshake has none.
+     */
     private static Transcript.Reconstructed reconstructAsIf(Signed s, byte[] sh, byte[] ee) throws GeneralSecurityException {
-        byte[] hash = Tls13.transcriptHash(Tls13.hashAlgorithmOf(s.content()), s.clientMessages(), s.t().helloRetryRequest(),
-            sh, ee, certificateMessage);
+        byte[] hash = hubSide(s.clientMessages(), helloRetryRequestIn(s.serverMessages()), sh, ee, s.content());
         byte[] content = Arrays.copyOf(Tls13.CERT_VERIFY_CONTEXT, Tls13.CERT_VERIFY_CONTEXT.length + hash.length);
         System.arraycopy(hash, 0, content, Tls13.CERT_VERIFY_CONTEXT.length, hash.length);
         return Transcript.reconstruct(s.clientMessages(), s.serverMessages(), s.randomChunks(), s.cipherSuite(),
@@ -329,6 +359,17 @@ class TranscriptTest {
 
     // --- writing the same handshake differently ----------------------------------------------
 
+    /** The HelloRetryRequest among the node's messages, found the way {@link Transcript#reconstruct} finds it. */
+    private static byte[] helloRetryRequestIn(List<byte[]> serverMessages) {
+        byte[] hrr = null;
+        for (byte[] m : serverMessages) {
+            if (Tls13.isHelloRetryRequest(m)) {
+                hrr = m;
+            }
+        }
+        return hrr;
+    }
+
     /**
      * The extensions of a ServerHello or EncryptedExtensions, each with its own four-byte header.
      * Both message bodies end in a {@code u16} length and that block; what differs is the prefix
@@ -337,10 +378,13 @@ class TranscriptTest {
      */
     private static List<byte[]> extensionsOf(byte[] message) {
         byte[] body = Arrays.copyOfRange(message, 4, message.length);
-        int i = prefixLength(message[0] & 0xff, body);
-        int end = i + 2 + u16(body, i);
+        return extensionsIn(body, prefixLength(message[0] & 0xff, body));
+    }
+
+    private static List<byte[]> extensionsIn(byte[] body, int from) {
+        int end = from + 2 + u16(body, from);
         List<byte[]> exts = new ArrayList<>();
-        for (i += 2; i + 4 <= end; ) {
+        for (int i = from + 2; i + 4 <= end; ) {
             int len = u16(body, i + 2);
             exts.add(Arrays.copyOfRange(body, i, i + 4 + len));
             i += 4 + len;
@@ -353,7 +397,7 @@ class TranscriptTest {
         byte[] body = Arrays.copyOfRange(message, 4, message.length);
         int prefix = prefixLength(message[0] & 0xff, body);
         ByteArrayOutputStream block = new ByteArrayOutputStream();
-        for (byte[] e : f.apply(extensionsOf(message))) {
+        for (byte[] e : f.apply(extensionsIn(body, prefix))) {
             block.writeBytes(e);
         }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
