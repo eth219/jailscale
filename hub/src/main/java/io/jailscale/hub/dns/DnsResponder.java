@@ -195,24 +195,49 @@ public final class DnsResponder implements AutoCloseable {
 
     public void start(String bindHost, int port) throws IOException {
         // UDP and TCP on the same port number. With a fixed port that either binds or fails; with
-        // port 0 the number UDP was given may already be a TCP port someone else holds -- the two
-        // spaces are separate, and on Windows a test run made that collision ordinary -- so the
-        // pair is retried with a fresh number rather than reported as a bind failure.
+        // port 0 one of the two draws the number and the other asks for its twin, which somebody
+        // else may already hold -- the two spaces are separate, and on Windows a test run made
+        // that collision ordinary -- so the pair is retried with a fresh number rather than
+        // reported as a bind failure.
+        //
+        // TCP draws and UDP asks for the twin, not the other way round (#102). TCP is the
+        // contended space: a closed connection holds its port for 2MSL, which is four minutes on
+        // Windows by default, and this suite opens hundreds of short-lived ones, while a closed
+        // UDP socket holds nothing at all. Drawing from the crowded side and asking the empty one
+        // for the twin is what makes the retry rare; the other order makes the retry the thing
+        // that decides whether the hub starts, and eight of them ran out twice in one run.
         IOException last = null;
         for (int attempt = 0; attempt < (port == 0 ? 8 : 1); attempt++) {
-            udp = new DatagramSocket(null);
-            udp.setReuseAddress(true);
-            udp.bind(new InetSocketAddress(bindHost, port));
-            tcp = new ServerSocket();
-            tcp.setReuseAddress(true);
+            ServerSocket t = new ServerSocket();
+            DatagramSocket u = null;
             try {
-                tcp.bind(new InetSocketAddress(bindHost, udp.getLocalPort()), 16);
+                t.setReuseAddress(true);
+                t.bind(new InetSocketAddress(bindHost, port), 16);
+                u = new DatagramSocket(null);
+                u.setReuseAddress(true);
+                u.bind(new InetSocketAddress(bindHost, t.getLocalPort()));
+                tcp = t;
+                udp = u;
                 last = null;
                 break;
             } catch (IOException e) {
+                // Both binds are in here now, and which of them failed is the thing worth saying.
+                // With port 0 it is the UDP side, which asks for a number rather than drawing one,
+                // and that is the failure this retry was written for -- the UDP bind used to sit
+                // outside the try and so was not retried at all. With a fixed port it is TCP that
+                // fails, and a refused 53 is a refusal to report rather than a number to redraw,
+                // which is why the loop runs once there.
                 last = e;
-                udp.close();
-                tcp.close();
+                if (t.isBound()) {
+                    LOG.debug("attempt {}: tcp drew {}:{}, udp could not have the twin: {}",
+                        attempt, bindHost, t.getLocalPort(), e.getMessage());
+                } else {
+                    LOG.debug("attempt {}: tcp could not have {}:{}: {}", attempt, bindHost, port, e.getMessage());
+                }
+                if (u != null) {
+                    u.close();
+                }
+                closeQuietly(t);
             }
         }
         if (last != null) {
@@ -222,6 +247,15 @@ public final class DnsResponder implements AutoCloseable {
         Thread.ofPlatform().name("dns-udp").daemon(true).start(this::udpLoop);
         Thread.ofVirtual().name("dns-tcp").start(this::tcpLoop);
         LOG.info("answering for {} and {} on {}:{}", hubName, zone, bindHost, udp.getLocalPort());
+    }
+
+    /** Giving a listening socket back: the close throws only when it is already gone. */
+    private static void closeQuietly(ServerSocket s) {
+        try {
+            s.close();
+        } catch (IOException ignored) {
+            // already given back
+        }
     }
 
     public int port() {
@@ -805,11 +839,7 @@ public final class DnsResponder implements AutoCloseable {
             udp.close();
         }
         if (tcp != null) {
-            try {
-                tcp.close();
-            } catch (IOException ignored) {
-                // closing
-            }
+            closeQuietly(tcp);
         }
     }
 }
