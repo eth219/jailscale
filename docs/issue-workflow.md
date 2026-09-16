@@ -8,7 +8,9 @@ and an agent session does not have one. So the claim is a comment, plus a label 
 
 ## The three axes
 
-An issue carries **one type**, **one or more areas**, and **exactly one status**.
+An issue carries **one type**, **one or more areas**, and — while it is open — **exactly one
+status**. A closed issue carries none: the status axis says where something is in the process,
+and a closed issue is not in it. Step 8 is where that comes off.
 
 **Type** — what kind of work it is. `bug`, `enhancement`, `documentation`, `question`, plus:
 
@@ -142,6 +144,12 @@ not compile someone else's half-finished edit, and so that a failure is yours.
 Stay inside the issue. The scope in the issue is the deliverable; a change that grows past it is
 harder to review, harder to revert, and it is the shape a PR gets stuck in.
 
+A document the change makes untrue is inside the issue, not past it. Fixing behaviour that
+`ARCHITECTURE.md` §15 lists as a limit, or moving a number §14 states, leaves that section
+asserting something this branch just falsified — and §15 is what `CLAUDE.md` points a reader at
+to find out what the system cannot do. CONTRIBUTING.md's "What a change should look like" says the
+same thing from the other end, and the pull request template asks which sentence you checked.
+
 ### 4. When a decision turns up that is not yours to make
 
 Some things are not the session's call: which of three approaches, whether a control is worth its
@@ -203,6 +211,28 @@ that is silent about the budget run is one the reviewer has to assume was not me
 
 The issue closes itself. If the PR was merged without closing it, or was abandoned, release by
 hand, as above.
+
+Then take the status label off — `gh issue edit N --remove-label status:in-review`. `Closes #N`
+closes the issue and leaves its labels alone, so nothing does this for you, and nothing did: on
+2026-09-16 sixteen closed issues were carrying `status:in-review`, and seventy minutes after those
+were swept there were eight more.
+
+What it costs is not the query a reviewer runs — `gh issue list` is `--state open` unless told
+otherwise, so a stale label is invisible there. It is everything that spans both states: the label's
+own page on GitHub, its count, and any `--state all` or `--state closed` search. A label that says
+`in-review` about something merged in June is a label that has to be checked against the issue
+before it can be believed, which is the whole of what the axis was for.
+
+Two invariants, and the one command that checks them both:
+
+```sh
+gh issue list --state all --limit 300 --json number,state,labels --jq '
+  [.[] | select((.state == "CLOSED") == ([.labels[].name] | any(startswith("status:"))))
+   | .number] | "wrong: \(.)"'      # closed with a status, or open without one
+```
+
+If the work needs looking at again, reopen the issue — that is what asks for the process again, and
+it starts at step 1.
 
 ## What this does not do
 
