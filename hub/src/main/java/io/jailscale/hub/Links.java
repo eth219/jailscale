@@ -84,6 +84,18 @@ final class Links {
         return all;
     }
 
+    /**
+     * How many links are open, without building the list of them. Exactly {@code all().size()} and
+     * not an approximation of it: {@link #all} is the concatenation of these same three maps, so
+     * the sum of their sizes is its length whatever they hold. The front page wants this number on
+     * every request from anyone visiting the hub's own name, and copying every live link into an
+     * {@code ArrayList} to call {@code size()} on it is the allocation that buys. A map added to
+     * {@code all} has to be added here too, which is what {@code LinkEndToEndTest} pins.
+     */
+    int count() {
+        return byName.size() + byDomain.size() + byPort.size();
+    }
+
     /** True if {@code host} is {@code <name>.<hub>}; returns the name part or null. */
     String nameOf(String host) {
         String suffix = "." + config.hostname();

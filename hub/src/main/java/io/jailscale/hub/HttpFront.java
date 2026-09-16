@@ -46,8 +46,6 @@ final class HttpFront {
      */
     private static final String TAKES = NodeSession.MIN_PROTO == Message.PROTO
         ? "nothing older" : "protocol " + NodeSession.MIN_PROTO + " and newer";
-    /** How many open links the front page shows before it hands over to the directory at /links. */
-    private static final int LINKS_ON_HOME = 8;
     /**
      * How many the directory itself lists before it stops and says how many are left. Of everything
      * these pages print this is the only part with no fixed length -- twenty links per node
@@ -933,20 +931,26 @@ final class HttpFront {
             .append(" what this hub says about itself, so they tell you an operator is running what they think they")
             .append(" are; a dishonest hub prints whatever it likes here.</small></p>");
 
-        // A taste of what this hub is serving, and the directory for the rest. The whole list used
-        // to be here, which made the one section that grows without bound the one a visitor
-        // scrolled through to reach the limits: every other section on this page has a fixed
-        // length. The rows are the directory's rows, so the two pages are one list and not two
-        // designs; what /links adds is the rest of them and what they mean.
+        // How many, and where the list is. Not the list, and not the first eight rows of it either:
+        // this page is the one page here a crawler is asked to index (ROBOTS, NOINDEX), and an
+        // address on it is text on a page that says it may be listed. rel=nofollow on each row did
+        // not change that -- it is a hint about where a crawler goes next, not about what it keeps
+        // -- so the rows are gone rather than annotated, and dropping only the href would have left
+        // exactly the same text behind. The count is not a name and /links says noindex, so no name
+        // under this hub is reachable from an indexable page. §6.3 is the argument in full; the
+        // cost is that the at-a-glance view is a click away instead of here.
         b.append("<h2>Open links</h2>");
-        List<Keyed> links = sortedLinks();
-        if (links.isEmpty()) {
+        // count() and not sortedLinks(): a count needs neither the order nor the list. sortedLinks
+        // builds a sort key per link and sorts them, and all() copies every live link into a new
+        // ArrayList; this page is served to everyone who visits the hub's own name, so either of
+        // those is per-request allocation proportional to the hub, for a number the three maps
+        // already know.
+        int open = hub.links().count();
+        if (open == 0) {
             b.append("<p>None open right now.</p>");
         } else {
-            linkRows(b, links.subList(0, Math.min(links.size(), LINKS_ON_HOME)));
-            if (links.size() > LINKS_ON_HOME) {
-                b.append("<p><a href=\"/links\">All ").append(links.size()).append(" open links &rarr;</a></p>");
-            }
+            b.append("<p>").append(open).append(open == 1 ? " link is" : " links are")
+                .append(" open right now. <a href=\"/links\">See them &rarr;</a></p>");
         }
 
         b.append("<h2>Limits</h2><table>");
@@ -1109,8 +1113,9 @@ final class HttpFront {
      * Every live link, in the order a directory wants them: the order the rows read in. The key is
      * built once per link and sorted alongside it, because {@code Comparator.comparing} would build
      * it afresh on both sides of every comparison -- on a hub holding thousands of links that is
-     * hundreds of thousands of short-lived strings per request, on a page that shows eight rows,
-     * in the process relaying every visitor's bytes.
+     * hundreds of thousands of short-lived strings per request, on a page that shows 200 rows at
+     * most, in the process relaying every visitor's bytes. Only {@link #directory} needs this now;
+     * the home page wants a count and takes it from {@code all()} directly.
      */
     private List<Keyed> sortedLinks() {
         List<Keyed> keyed = new ArrayList<>();
@@ -1191,12 +1196,10 @@ final class HttpFront {
         // to nothing, which matters more now that the rows are a page meant to be handed around.
         String suffix = hub.links().portSuffix();
         // rel=nofollow, not for ranking but because the other end is somebody else's machine and
-        // the hub does not fetch what is behind a link (§6.3). The directory says nofollow for the
-        // whole page; the home page is indexable, so its eight rows have to say it themselves --
-        // and say it more weakly, since the robots meta's nofollow is a directive while the rel
-        // attribute has been a hint since 2020, and neither keeps the eight addresses themselves
-        // out of an index, because they are text on a page that says it may be listed. §5.1 names
-        // that as the gap this leaves rather than one it closes.
+        // the hub does not fetch what is behind a link (§6.3). Rows are only ever rendered on
+        // /links now, which says noindex,nofollow for the whole page, so this is the belt to that
+        // page's braces rather than the only thing said: it was load-bearing while the home page
+        // showed eight of these, and it was not enough there, which is why it no longer does.
         return "<a rel=\"nofollow\" href=\"https://" + host + suffix + "\">" + host + suffix + "</a>";
     }
 
