@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.hub.dns.DnsQuery;
@@ -162,6 +163,31 @@ class AutoPromoteTest {
         a = null;
         waitFor("the standby never promoted itself", () -> "primary".equals(b.role()));
         assertEquals(1, b.epoch(), "one promotion: epoch 0 to 1");
+    }
+
+    @Test
+    void aNameARelayIsStillServingIsProbedRatherThanCalledNotOpen() throws Exception {
+        // §11.3 answers `link not open` for a name nothing here serves, and leaves that verdict out
+        // of what `jailscale verify` exits on -- so the test for it has to be "is this node serving
+        // the name", not "is the hub it joined connected". A relay serves these names while the
+        // primary is away (§13.4), which is exactly the window §11.4 says names change hands in:
+        // an all-clear there would be the check silent when it matters most.
+        pair();
+        Path aliceSock = root.resolve("alice/jailscale.sock");
+        a.close();
+        a = null;
+        waitFor("alice never lost the primary", () -> !alice.isHubConnected());
+        assertTrue(alice.connectedRelays().contains("127.0.0.1:" + portB), "the relay is what is still serving");
+
+        JsonObject verified = Ipc.call(aliceSock, JsonObject.builder().put("cmd", "verify").build());
+        assertTrue(verified.optBool("ok", false), verified.toString());
+        for (Object o : verified.array("results")) {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+            assertNotEquals("link not open", row.get("verdict"),
+                "a name a relay is serving is not a name nothing serves: " + verified);
+        }
+        assertEquals(1, verified.integer("checked"), "and it counts as looked at: " + verified);
     }
 
     @Test
