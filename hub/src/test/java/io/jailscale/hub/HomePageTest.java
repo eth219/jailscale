@@ -445,4 +445,80 @@ class HomePageTest {
         // The dot never carries it alone, on this line as on the strips (§13.2).
         assertTrue(both.contains("class=\"sw\""), both);
     }
+
+    /**
+     * The headers every answer on this name carries, checked on the four shapes of answer there
+     * are: a page, the JSON, an error, and the admin front. They are applied at the write and not
+     * in each handler precisely so that this holds for a route nobody thought about, which is why
+     * the admin 403 is in the list -- its forms are what {@code form-action} and
+     * {@code frame-ancestors} are for.
+     */
+    @Test
+    void everyAnswerOnThisNameCarriesTheSameSecurityHeaders() throws Exception {
+        for (String path : new String[] {"/", "/links", "/v1/status", "/admin", "/no-such-page"}) {
+            HttpResponse r = http("GET", path, null, null);
+            String csp = r.headers().get("Content-Security-Policy");
+            assertNotNull(csp, path);
+            assertTrue(csp.contains("default-src 'none'"), path + ": " + csp);
+            assertTrue(csp.contains("frame-ancestors 'none'"), path + ": " + csp);
+            assertTrue(csp.contains("form-action 'self'"), path + ": " + csp);
+            assertEquals("nosniff", r.headers().get("X-Content-Type-Options"), path);
+            assertEquals("no-referrer", r.headers().get("Referrer-Policy"), path);
+            assertEquals("max-age=31536000", r.headers().get("Strict-Transport-Security"), path);
+        }
+        // A year, and not a word more: includeSubDomains would be a promise about every name a node
+        // serves, made by the operator of the hub and not by whoever owns the name.
+        assertFalse(http("GET", "/", null, null).headers().get("Strict-Transport-Security").contains("includeSubDomains"));
+    }
+
+    /** The icon, under both names, and linked from the frame so the second name is rarely asked for. */
+    @Test
+    void theHubHasAnIconAndServesItUnderBothNames() throws Exception {
+        for (String path : new String[] {"/favicon.svg", "/favicon.ico"}) {
+            HttpResponse r = http("GET", path, null, null);
+            assertEquals(200, r.status(), path);
+            assertEquals("image/svg+xml", r.headers().get("Content-Type"), path);
+            assertTrue(r.bodyText().startsWith("<svg"), path);
+        }
+        assertTrue(http("GET", "/", null, null).bodyText().contains("<link rel=\"icon\" href=\"/favicon.svg\">"));
+    }
+
+    /**
+     * The hub's own page introduces itself to whatever unfurls it; the other two do not, and that
+     * is the half that can fail. A block of meta tags added to the shared frame would give an
+     * invitation -- whose URL is a credential -- a card in a chat window, and would put other
+     * people's names in a preview of the directory.
+     */
+    @Test
+    void onlyTheHubsOwnPageOffersItselfForAPreview() throws Exception {
+        String home = http("GET", "/", null, null).bodyText();
+        assertTrue(home.contains("<meta property=\"og:title\" content=\"hub.test\">"), home);
+        assertTrue(home.contains("<meta name=\"description\""), home);
+        assertTrue(home.contains("<meta name=\"twitter:card\" content=\"summary\">"), home);
+
+        assertFalse(http("GET", "/links", null, null).bodyText().contains("og:"), "the directory is not a card");
+        assertFalse(http("GET", "/join/" + enc("not-a-real-token"), null, null).bodyText().contains("og:"),
+            "an invitation is not a card");
+    }
+
+    /**
+     * A person who mistypes gets the page, with the way back on it. A node's client does not: the
+     * 426 that answers a control connection without an Upgrade is for a machine, and framing it
+     * would be bytes that reader has to skip. That second assertion is what stops this from being
+     * satisfied by wrapping everything.
+     */
+    @Test
+    void whatAPersonCanMistypeIsAPageAndWhatAMachineAsksForIsNot() throws Exception {
+        HttpResponse missing = http("GET", "/no-such-page", null, null);
+        assertEquals(404, missing.status());
+        assertTrue(missing.headers().get("Content-Type").startsWith("text/html"), missing.headers().get("Content-Type"));
+        String body = missing.bodyText();
+        assertTrue(body.contains("<a href=\"/\">Hub</a>"), "a way back: " + body);
+        assertTrue(body.contains("/no-such-page"), body);
+        assertTrue(body.contains("noindex"), "an error page is not for an index: " + body);
+
+        HttpResponse machine = http("POST", "/v1/noise", null, "");
+        assertEquals(426, machine.status());
+        assertTrue(machine.headers().get("Content-Type").startsWith("text/plain"), machine.bodyText());
+    }
 }

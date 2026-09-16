@@ -280,7 +280,7 @@ TCP 443, SNI = hub.example.com
 ```
 
 Both HTTP ends are hand-written (§3.1): the hub's front is about 750 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, a root page and the link directory, the
+`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, `/favicon.svg`, a root page and the link directory, the
 node's client about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier
 because its 4-byte client-to-server masking would touch every visitor byte again, frame headers and
 close semantics come with it, and it would only help behind proxies passing `Upgrade: websocket`
@@ -605,6 +605,31 @@ choice and not a hub missing a host; and the availability figure, because a deli
 counts as down and a status line that says "Degraded" for a day after every upgrade is one an
 operator learns to ignore, which costs more than the row it explains. Everything else on the page --
 a version, a key, a memory figure -- is a fact with no good or bad about it and stays ungraded.
+
+**Every answer on this name carries the same four headers**, added where the response is written
+and not in each handler, so a route nobody thought about gets them too. The front end's own shape is
+what makes the policy exact rather than aspirational -- no script, no external stylesheet, no font,
+and nothing ever fetched from a node -- so `default-src 'none'` is the truth: with `style-src
+'unsafe-inline'` for the one inline stylesheet, `img-src 'self'` for the icon, and `form-action`
+and `frame-ancestors` for `/admin`, whose forms are the only things here that change state. Then
+`X-Content-Type-Options: nosniff`; `Referrer-Policy: no-referrer`, because an invitation URL and an
+admin login URL are credentials in a path and a `Referer` is how a path travels somewhere nobody
+chose to send it; and HSTS for a year **without `includeSubDomains`**, which would be a promise
+about every name a node serves, made by the hub's operator on behalf of whoever owns the name, and
+not withdrawable inside the max-age. Not preloaded, for the same reason and more so.
+
+**What a browser asks for, the hub now answers.** An icon -- two nodes and the hop between them,
+drawn in the markup rather than served from a file, so there is no build step and no byte array in
+the binary, and it follows the reader's colour scheme, which no `.ico` does -- under `/favicon.svg`
+and `/favicon.ico` both, and linked from every page. A description and `og:` tags on `/` and **only**
+there, so the hub introduces itself when its address is pasted into a chat: an invitation's URL is a
+credential and the directory carries other people's names, and neither wants a card made of it. And
+the answers a person can arrive at by mistyping -- 404, and 405 on a page -- go through the same
+frame as everything else, with the nav on them, instead of `not found` in the browser's default
+serif with no way back. The machine answers do not: the 426 and 429 that answer a control
+connection, and the JSON under `/v1`, are read by something that is not a browser, and a frame would
+be bytes it has to skip. The 500 is the one page held as a literal, because it is written when
+something else has just thrown and a handler that calls the machinery that failed fails twice.
 
 **The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
 open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
