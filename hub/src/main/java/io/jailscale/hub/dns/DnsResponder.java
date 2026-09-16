@@ -129,12 +129,17 @@ public final class DnsResponder implements AutoCloseable {
     /** Per-network answer rate on UDP (§11.5); TCP is not metered, having proved its address. */
     private final ResponseRate rate = new ResponseRate();
     /**
-     * Full answers sent on UDP 53, for the metrics endpoint (§6.3). Counted here rather than inside
+     * Answers sent on UDP 53, for the metrics endpoint (§6.3). Counted here rather than inside
      * {@link ResponseRate} because two kinds of query are answered without that meter ever seeing
      * them -- a loopback source, and the self-probe -- so a count taken there is the metered traffic
      * under a name that says it is all of it, and reads zero on a hub whose resolvers all arrive
-     * through a forwarder on this host. The slip is not counted here: it is a truncation, it has its
-     * own counter, and the four together should partition the queries rather than overlap.
+     * through a forwarder on this host.
+     *
+     * <p>Every answer, not only the ones carrying records: a refusal and a datagram-sized truncation
+     * are both answers that left. What is not counted here is the slip, which has its own counter --
+     * so what arrives on UDP is answered, dropped or truncated, exactly once each. The fourth
+     * counter is not part of that: {@code globalRefused} says which of the refusals were the
+     * table-wide budget rather than one network's own, and is a subset by design.
      */
     private final java.util.concurrent.atomic.AtomicLong answered = new java.util.concurrent.atomic.AtomicLong();
     /**

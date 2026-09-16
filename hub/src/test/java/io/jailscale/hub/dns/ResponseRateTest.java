@@ -221,6 +221,8 @@ class ResponseRateTest {
         assertTrue(dropped > 0, "a flood should be dropped");
         assertEquals(200 - dropped - d.truncatedByRate(), d.answered() - before,
             "answered, dropped and truncated should add up to what arrived");
+        assertTrue(d.refusedByGlobalBudget() <= d.dropped() + d.truncatedByRate(),
+            "the table-wide count says which refusals it was, and is a subset of them rather than a fourth kind");
     }
 
     @Test
