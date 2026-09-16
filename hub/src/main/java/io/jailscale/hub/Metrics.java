@@ -63,7 +63,7 @@ final class Metrics {
         counter(b, "jailhub_relay_bytes_total", "Bytes copied between visitors and nodes.", RELAY_BYTES.sum());
         gauge(b, "jailhub_nodes_registered", "Nodes with a registration on this hub.", hub.store().nodes().size());
         gauge(b, "jailhub_nodes_online", "Nodes with a control connection right now.", hub.registry().size());
-        gauge(b, "jailhub_links_open", "Links open right now.", hub.links().all().size());
+        gauge(b, "jailhub_links_open", "Links open right now.", hub.links().count());
         gauge(b, "jailhub_visitors_in_flight", "Visitors being relayed to a node right now.",
             hub.router().visitorsInFlight());
         // What the nodes online right now say they will hold, and what they are holding. Nodes from

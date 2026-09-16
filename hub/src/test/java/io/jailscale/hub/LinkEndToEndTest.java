@@ -202,12 +202,17 @@ class LinkEndToEndTest {
     }
 
     /**
-     * The hub's own page lists what it is serving. The addresses are public by construction -- a
-     * visitor reaches one by typing it -- but who opened it and which local port it reaches are not,
-     * and the page is fetched here the way a stranger fetches it: no session, over the real router.
+     * The hub's own page counts what it is serving and names none of it. An address is public by
+     * construction -- a visitor reaches one by typing it -- but `/` is the one page here meant to be
+     * indexed, and a name on it is text an indexer keeps (ARCHITECTURE.md §6.3); {@code /links}
+     * says `noindex` and is where the addresses are. Who opened a link and which local port it
+     * reaches are on neither. Fetched the way a stranger fetches it: no session, over the real router.
+     *
+     * <p>One link, so this is also the singular branch of the sentence; the nine-link case below is
+     * the plural one.
      */
     @Test
-    void theOpenLinksAreListedOnTheHubsOwnPageWithoutTheirOwners() throws Exception {
+    void theFrontPageCountsWhatIsServedAndNamesNoneOfIt() throws Exception {
         Daemon alice = node("alice");
         ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
             .put("user", "alice").put("caFile", CERT.toString())));
@@ -216,12 +221,15 @@ class LinkEndToEndTest {
         String before = visit("hub.test", "/").bodyText();
         assertTrue(before.contains("None open right now"), before);
 
-        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
+        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "onlylink")));
 
         String after = visit("hub.test", "/").bodyText();
-        // With the hub's own port, which is what `open` told the node. Without it every row on a
-        // hub that is not on 443 links to nothing.
-        assertTrue(after.contains("<a rel=\"nofollow\" href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), after);
+        assertTrue(after.contains("1 link is open right now"), after);
+        assertTrue(after.contains("<a href=\"/links\">See them"), after);
+        // Not the name in any form -- with the hub's port, without it, or as the bare label. The
+        // link is not called "myapp" like the one below, because the page's own instructions use
+        // `--name myapp` as their example and the bare-label assertion would match that instead.
+        assertFalse(after.contains("onlylink"), "the name is on an indexable page: " + after);
         assertFalse(after.contains("alice"), "the owner must not be on the public page: " + after);
         assertFalse(after.contains("127.0.0.1:" + localApp.getLocalPort()),
             "the local target must not be on the public page: " + after);
@@ -272,12 +280,14 @@ class LinkEndToEndTest {
     }
 
     /**
-     * Why the directory exists: the link list is the only part of the front page with no fixed
-     * length, so the front page keeps a few and the rest is one click away rather than something
-     * a visitor scrolls past to reach the limits.
+     * Why the directory exists, and why the front page is not a preview of it. The link list is the
+     * only part of the front page with no fixed length, so it lives at {@code /links} -- and the
+     * front page names none of it, because {@code /} is the one page here a crawler is asked to
+     * index and an address on it is text that can be indexed whatever the row says about itself
+     * (ARCHITECTURE.md §6.3). What is left is the count and a way through.
      */
     @Test
-    void theFrontPageKeepsAFewLinksAndSendsTheRestToTheDirectory() throws Exception {
+    void theFrontPageNamesNoLinkAndSendsEveryOneOfThemToTheDirectory() throws Exception {
         Daemon alice = node("alice");
         ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
             .put("user", "alice").put("caFile", CERT.toString())));
@@ -286,26 +296,38 @@ class LinkEndToEndTest {
             ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "app" + i)));
         }
         waitFor(() -> hub.links().all().size() == 9);
+        // The page's number comes from count() and the directory's from all(). They walk one
+        // shared list of maps, so this cannot drift and this assertion is not what stops it
+        // drifting -- with only named links open it would pass just as well if count() had been
+        // written out by hand and dropped byDomain and byPort. It is here as the smoke test that
+        // the two agree at all, and Links.live is what makes them agree for the maps this test
+        // never fills.
+        assertEquals(hub.links().all().size(), hub.links().count(), "count() and all() disagree");
 
         String home = visit("hub.test", "/").bodyText();
-        // Both ends of the cut, not just the far one: asserting only that app0 is there and app8
-        // is not would hold just as well if the front page had kept a single row.
-        for (int i = 0; i < 8; i++) {
-            assertTrue(home.contains(">app" + i + ".hub.test"), "app" + i + " should be on the front page: " + home);
+        // Every one of the nine, not just the ones that used to be past the cut: this used to show
+        // the first eight, so asserting only that app8 is absent would pass unchanged against the
+        // page that named the other eight. The bare name and not the ">app0" the rows used to be
+        // written as, because the point is that the address is not on the page in any form -- an
+        // <a> with the href removed would still be text a crawler keeps.
+        for (int i = 0; i < 9; i++) {
+            assertFalse(home.contains("app" + i + ".hub.test"), "app" + i + " is named on an indexable page: " + home);
         }
-        assertFalse(home.contains(">app8.hub.test"), "the ninth belongs on the directory: " + home);
-        assertTrue(home.contains("All 9 open links"), home);
+        // What replaces them: how many there are, and the way to the list.
+        assertTrue(home.contains("9 links are open right now"), home);
+        assertTrue(home.contains("<a href=\"/links\">See them"), home);
 
         String directory = visit("hub.test", "/links").bodyText();
         for (int i = 0; i < 9; i++) {
             assertTrue(directory.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + directory);
         }
 
-        // Each of these rows is an address on somebody else's machine. The directory says
-        // nofollow once for the whole page; the front page is the one page a crawler is asked to
-        // index, so its rows have to say it themselves or being indexed means being walked into.
+        // The addresses live on the page that asks not to be indexed, and only there. That meta is
+        // what the front page could not have: `/` is meant to be found, which is why the rows are
+        // not on it rather than being on it with a hint attached.
         assertTrue(directory.contains("content=\"noindex,nofollow\""), directory);
-        assertTrue(home.contains("<a rel=\"nofollow\" href=\"https://app0.hub.test"), home);
+        assertTrue(directory.contains("<a rel=\"nofollow\" href=\"https://app0.hub.test"), directory);
+        assertFalse(home.contains("rel=\"nofollow\""), "nothing on the front page needs it now: " + home);
 
         // A page of the directory is capped, and the cap counted rows the page then had no way to
         // show: the sentence at the top says how many there are, so every one of them has to be

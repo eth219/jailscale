@@ -693,17 +693,18 @@ something else has just thrown and a handler that calls the machinery that faile
 
 **The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
 open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
--- so the front page shows the first eight and points at the directory for the rest, and the pair
-are two real URLs with a nav between them rather than one page with scripted tabs, so either half
-can be sent to someone and neither needs a script to arrive at. The status went nowhere: the
-availability record is what tells a first visitor this hub is real, and it belongs where they land.
+-- so the front page says how many are open and points at the directory, and names none of them
+(the indexing paragraphs below are why). The pair are two real URLs with a nav between them rather
+than one page with scripted tabs, so either half can be sent to someone and neither needs a script
+to arrive at. The status went nowhere: the availability record is what tells a first visitor this
+hub is real, and it belongs where they land.
 
-Each row carries the address, the kind and how long the link has been open -- every one of them
-something the hub already holds for its own routing. **Nothing on the page is fetched from the
-link.** A thumbnail or a favicon would mean the hub connecting to a node's
-app as a visitor and republishing what came back on its own front page, which is the one thing that
-page tells people it does not do, and it would put whatever anyone who can join chooses to serve on
-the operator's name. **Nor how many visitors a link is serving**, though the hub has that number and
+Each row of the directory carries the address, the kind and how long the link has been open -- every
+one of them something the hub already holds for its own routing. **Nothing on either page is fetched
+from the link.** A thumbnail or a favicon would mean the hub connecting to a node's app as a visitor
+and republishing what came back under its own name, which is the one thing the front page tells
+people it does not do, and it would put whatever anyone who can join chooses to serve on the
+operator's name. **Nor how many visitors a link is serving**, though the hub has that number and
 this page carried it briefly: that a name is open was already public, that somebody is on it right
 now was not, and a page anyone can poll turns the second into a live activity feed for a machine
 belonging to somebody else. It is also the figure `AdminWeb` keeps for the operator in as many words
@@ -728,13 +729,18 @@ different reason than secrecy: a login link is one-shot and consumed on the GET,
 fetches one to see what is there burns it -- and because that is advice, `/admin/login/<token>` also
 refuses every method but GET, so a link preview or a prefetch cannot spend it by looking.
 
-`/` stays indexable -- it is the page an operator wants found -- and its eight preview rows carry
-`rel=nofollow`. **That is the weaker half and it is the known gap**: the robots meta's `nofollow` is
-a directive, while the `rel` attribute has been a hint since 2020, and neither keeps the eight
-addresses out of an index in the first place, because they are text on a page that says it may be
-listed. The whole directory is out; a preview of it is not. Closing that means either taking the
-addresses off `/` or listing a link only when the node asks to be listed, which changes what
-`jailscale open` means and is not decided (#99). All of it is advice a crawler may ignore rather
+`/` stays indexable -- it is the page an operator wants found -- and **names no link at all**: the
+section says how many are open and links to the directory. It showed the first eight as rows for a
+while, each carrying `rel=nofollow`, and that was the weaker half and the known gap. The robots
+meta's `nofollow` is a directive and the `rel` attribute has been a hint since 2020, but neither was
+the problem: an address on that page is *text on a page that asks to be indexed*, and no annotation
+on the row around it changes what an indexer keeps. Dropping only the `href` would have left the
+same text behind, which is why the rows went rather than their links. A count is not a name, and the
+one link out of the section goes to a page that says `noindex`, so no name under this hub is now
+reachable from an indexable page here. What it costs is the at-a-glance view of what is open, which
+is one click away at `/links`; the alternative considered and rejected was listing a link only when
+the node asks to be, which leaves an opted-in link exactly as indexable as before and makes the
+directory incomplete by default. Everything on `/links` is still advice a crawler may ignore rather
 than a control.
 
 The directory renders at most 200 rows at a time, like every other unauthenticated
@@ -811,15 +817,16 @@ lives in `Metrics`, six `LongAdder`s written from every visitor thread and read 
 the signature counter sits at the one point that decides, so a refusal added later cannot forget to
 be counted.
 
-It shows the first of the open links as well -- the address a visitor would type and whether it is
-https, tcp or udp -- because a hub that serves nothing and a hub that is busy look identical without
-it, and points at `/links` for the rest. The count that used to sit in the status table is gone with
-it: the list is the count, and saying both invited them to disagree. Those addresses are public by
-construction: a visitor reaches one by typing it. (Not because "a DNS lookup finds it either way",
-which this document used to say and which `DnsResponder` makes false -- a held name and a name
-nobody holds are answered identically, so DNS neither confirms nor enumerates.) What stays behind
-the admin session is the part that is nobody else's business: who opened a name and which local port
-it reaches.
+It says how many links are open as well -- the number and not one of the addresses -- because a hub
+that serves nothing and a hub that is busy look identical without it, and points at `/links` for the
+rest. It showed the first few of them as rows for a while and does not any more, for the reason
+above: `/` is the page that asks to be indexed. The number sits under "Open links" beside the way
+through to them rather than in the status table, so it is where a reader looking for links is
+already looking. The addresses `/links` carries are public by construction: a visitor reaches one by
+typing it. (Not because "a DNS lookup finds it either way", which this document used to say and
+which `DnsResponder` makes false -- a held name and a name nobody holds are answered identically, so
+DNS neither confirms nor enumerates.) What stays behind the admin session is the part that is nobody
+else's business: who opened a name and which local port it reaches.
 
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's
