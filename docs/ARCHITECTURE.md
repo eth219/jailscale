@@ -1831,8 +1831,8 @@ with the encoder by hand, and the change that adds EDNS or question compression 
 would make its truncation malformed. That pass also had no idea what it was truncating *to*, so
 the question it echoed was never measured against the 512, and it cut to the question's end
 whatever that was: a 998-byte query under the wildcard came back as a 998-byte datagram, the bound
-above broken by the only path that existed to keep it. A question too long to echo leaves the
-header alone, which is still a well-formed `TC` answer.
+above broken by the only path that existed to keep it. A question too long to echo left the header
+alone, which is a well-formed `TC` answer and was the whole of the fix until the bound below.
 
 **And a question is bounded before any of that.** The parser refuses a name over the 255 octets RFC
 1035 §2.3.4 allows one — `FORMERR`, twelve bytes, the cheapest thing this server sends — so the
@@ -2186,7 +2186,8 @@ only ASCII case as DNS does, rather than as one joined string: a label may hold 
 over 0x7F is not a character, so the string form makes names that differ on the wire into one --
 which is how a single label reading `ns1.<hub>` was once answered with `ns1`'s glue. AAAA, MX and
 the rest are NODATA with the apex SOA; names outside the zone are REFUSED;
-a name over the 255 octets RFC 1035 allows one is FORMERR before any of that;
+a name longer than the 255 octets RFC 1035 allows one is FORMERR at the
+parser, before the zone is consulted at all;
 recursion is never offered; and what is answered is small enough to be a poor amplifier — 287 bytes
 at the largest, 5.3 times the query at the worst, measured and gated rather than asserted, and
 metered per network on UDP because poor is not the same as harmless (§11.5).

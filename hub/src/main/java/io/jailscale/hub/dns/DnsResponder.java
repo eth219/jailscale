@@ -112,7 +112,7 @@ public final class DnsResponder implements AutoCloseable {
      * outstanding query by the question section, so a truncation that had to leave the question out
      * is one it drops as unsolicited — it never follows the {@code TC} to TCP and simply times
      * out. Bounded here, the longest question is {@code 12 + MAX_NAME + 4} bytes, which fits every
-     * budget that reaches {@link #truncated}.
+     * budget a live caller passes, so the echo is never the thing {@link #truncated} drops.
      */
     static final int MAX_NAME = 255;
 

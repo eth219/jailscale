@@ -157,6 +157,13 @@ class DnsResponderTest {
         byte[] answer = d.respond(longest);
         assertEquals(0, rcode(answer), "which is a question this zone answers like any other");
         assertEquals(List.of("203.0.113.9"), addresses(DnsQuery.parse(answer, 8, 1)));
+        // And in a datagram, which is the property the bound exists for: the longest question there
+        // is fits the 512 a resolver with no EDNS may be sent, so the TC form never has to drop it
+        // -- a truncation with no question in it is one a resolver discards as unsolicited.
+        byte[] datagram = d.respond(longest, DnsResponder.Budget.DATAGRAM);
+        assertTrue(datagram.length <= DnsResponder.MAX_UDP, "the longest name and its answer in one datagram, was " + datagram.length);
+        assertEquals(0, datagram[2] & 0x02, "with room to spare, so not even truncated");
+        assertEquals(1, datagram[5], "and the question echoed");
 
         byte[] tooLong = rawQuery(9, 1, labelsFilling(239, "hub", "example", "com"));
         assertEquals(DnsResponder.MAX_NAME + 1, wireNameLength(tooLong), "one octet past it");
@@ -170,11 +177,19 @@ class DnsResponderTest {
     /**
      * Labels that fill exactly {@code octets} of wire, each label's own length byte included,
      * followed by {@code apex}. Longest first, so the fill is the fewest labels that can make it.
+     *
+     * <p>Not every amount can be filled: a label costs its length byte, so one octet left over is
+     * one no label can spend, and an empty label is a zero byte -- which {@code rawQuery} writes as
+     * the end of the name, quietly building a shorter question than the caller asked for. It throws
+     * rather than do that.
      */
     private static String[] labelsFilling(int octets, String... apex) {
         List<String> labels = new java.util.ArrayList<>();
         for (int left = octets; left > 0; ) {
             int label = Math.min(63, left - 1);     // the label's own length byte is the other one
+            if (label < 1) {
+                throw new IllegalArgumentException(octets + " octets is not a whole number of labels");
+            }
             labels.add("a".repeat(label));
             left -= label + 1;
         }
@@ -182,7 +197,10 @@ class DnsResponderTest {
         return labels.toArray(new String[0]);
     }
 
-    /** What the question's name measures on the wire: the query, less its header and its type and class. */
+    /**
+     * What the question's name measures on the wire: the query, less its header and its type and
+     * class. A query {@code rawQuery} wrote, therefore -- one question, and nothing behind it.
+     */
     private static int wireNameLength(byte[] query) {
         return query.length - 12 - 4;
     }
