@@ -1905,8 +1905,25 @@ answer was to exempt the name, and the cost of that was the sentence above: with
 the total is not a number. The lookup asks over TCP when a datagram does not come back, so the
 flood costs an attacker a flood and buys nothing, and the exemption is gone. What is left of that
 attack is on TCP, where it costs a handshake per attempt from an address the attacker really holds
-and the operator can really see -- and where this server has no meter and no connection bound at
-all, which is #146.
+and the operator can really see.
+
+TCP 53 is **not** rate-metered, and deliberately: the whole of `ResponseRate` rests on a datagram's
+source being a claim, and a completed handshake makes it a fact, so there is no reflection here to
+meter. What it does have is a bound on **256 connections at once**, and three counters
+(`jailhub_dns_tcp_connections_total`, `_refused_total`, `_in_flight`) where there were none. What
+that bounds is the descriptor, not the traffic: descriptors are process-wide, so an unbounded
+listener on :53 spends the hub's TLS, its node sessions and its relay as readily as its own zone --
+one laptop held 16,126 connections open against it and stopped because *it* ran out of ephemeral
+ports, not because the hub refused anything.
+
+No measurement produced 256. Twenty minutes of the live hub's port 53 saw zero TCP connections, so
+what the measurement says is that a cap is free, not which one; the number is argued from far above
+anything this zone sends to TCP and far below a descriptor budget that a host which never raised it
+sets at 1,024. A connection over the bound is **closed unread**, which to a resolver just sent here
+by `TC` is indistinguishable from the hub being down -- the politer answer means reading the query
+first, which is the work the bound exists to refuse. The operator sees it in the counter and a line
+a minute instead. Per-network rather than global, the way §8.1 treats a visitor's /64, is the better
+control and waits on those counters having run: #172.
 
 One over-limit query in two is answered `TC=1` instead of being dropped, which is the difference
 between a limit and a way to take the zone down: a resolver behind a forged address, or sharing a

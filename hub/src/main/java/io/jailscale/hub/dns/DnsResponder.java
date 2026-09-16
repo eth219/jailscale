@@ -140,9 +140,62 @@ public final class DnsResponder implements AutoCloseable {
     }
     private static final long RATE_LOG_MS = 60_000;
     private final Throttle rateLog = new Throttle(RATE_LOG_MS);
+    private final Throttle tcpLog = new Throttle(RATE_LOG_MS);
 
-    /** Per-network answer rate on UDP (§11.5); TCP is not metered, having proved its address. */
+    /**
+     * Connections TCP 53 will hold at once (#114). Not a rate: a TCP source has completed a
+     * handshake and so is a fact rather than a claim, which is the whole argument {@link
+     * ResponseRate} rests on and none of it applies here. What this bounds is the descriptor.
+     *
+     * <p><b>No measurement produced this number, and one should not be read into it.</b> Twenty
+     * minutes of the live hub's port 53 saw <em>zero</em> TCP connections, so the measurement says
+     * only that a cap of almost any size is free; it cannot say which. The number is argued from
+     * two ends instead:
+     *
+     * <ul>
+     *   <li><b>Far above legitimate use.</b> This zone's largest answer is 287 bytes, well inside a
+     *       datagram, so nothing here sends a resolver to TCP for size. What arrives is the answer
+     *       rate's slip and resolvers that prefer TCP by policy, and 256 at once is orders of
+     *       magnitude past either.
+     *   <li><b>Far below a descriptor budget the whole process shares.</b> One held connection is
+     *       one descriptor, and they are not this listener's to spend -- exhausting them takes TLS
+     *       443, the node sessions and the relay with them. The live hub's limit is 65,536, but a
+     *       host that never raised it has 1,024, and a quarter of that is as much as an
+     *       unauthenticated port should be able to take.
+     * </ul>
+     *
+     * <p>Per-network rather than global would be the better control -- the {@code NetKey} shape
+     * {@code SniRouter} already uses for visitors, which treats an IPv6 /64 as one source. It is
+     * deliberately not built yet: choosing its number today would mean picking a second figure with
+     * nothing behind it, and the counters below are what will produce the first one.
+     */
+    public static final int MAX_TCP_IN_FLIGHT = 256;
+
+    /**
+     * How long one TCP connection may take, start to finish. A query and its answer is one round
+     * trip on a socket that has already completed a handshake, so five seconds is generous for
+     * anything honest and is what bounds the slot: with it, holding {@link #MAX_TCP_IN_FLIGHT} means
+     * opening about fifty connections a second and keeping it up, which costs an attacker real
+     * addresses at a rate the counters below will show. Without it -- with only the per-read
+     * {@code SO_TIMEOUT} this used to have -- the same slots are held for hours at 64 bytes a
+     * second. See {@link #readFully}.
+     */
+    static final long TCP_DEADLINE_MS = 5_000;
+
+    /** Per-network answer rate on UDP (§11.5); TCP is not rate-metered, having proved its address. */
     private final ResponseRate rate = new ResponseRate();
+    /**
+     * What TCP 53 is doing, which until #114 nothing could be asked. The four DNS counters that
+     * existed were all the UDP path, so the only way to measure this one was {@code ss} from
+     * outside the process -- which is how a 2,400-sample run came back all zeros because its filter
+     * missed the IPv6-mapped form of the hub's own address, and could not tell that from a quiet
+     * port. These are what the per-network bound above will be sized from.
+     */
+    private final int maxTcpInFlight;
+    private final long tcpDeadlineMs;
+    private final java.util.concurrent.atomic.AtomicInteger tcpInFlight = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicLong tcpAccepted = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong tcpRefused = new java.util.concurrent.atomic.AtomicLong();
     /**
      * Answers sent on UDP 53, for the metrics endpoint (§6.3). Counted here rather than inside
      * {@link ResponseRate} because a query from a loopback source is answered without that
@@ -176,10 +229,27 @@ public final class DnsResponder implements AutoCloseable {
 
     /** With a chosen token (tests): two responders on one machine can then be told apart. */
     public DnsResponder(String hubName, String selfToken) {
+        this(hubName, selfToken, MAX_TCP_IN_FLIGHT, TCP_DEADLINE_MS);
+    }
+
+    /**
+     * With a smaller connection bound and a longer deadline (tests), the way {@code Daemon} takes
+     * both a smaller visitor ceiling and its own first-byte deadline for {@code VisitorStallTest}.
+     *
+     * <p>Both knobs are needed and for opposite reasons. A test that filled the shipped 256 would
+     * spend its time finding out whether 256 loopback connects beat a clock. A test that holds even
+     * four connections open to prove the bound is full is racing {@link #TCP_DEADLINE_MS}, which
+     * exists precisely to stop anyone holding a slot -- so it has to be told to wait longer than the
+     * test will take. Leaving either as the shipped value makes the margin the thing under test
+     * rather than the bound, which is the shape of the flake #125 was.
+     */
+    DnsResponder(String hubName, String selfToken, int maxTcpInFlight, long tcpDeadlineMs) {
         this.hubName = hubName.toLowerCase(Locale.ROOT);
         this.hubLabels = labels(this.hubName);
         this.zone = CHALLENGE_LABEL + "." + this.hubName;
         this.selfToken = selfToken;
+        this.maxTcpInFlight = maxTcpInFlight;
+        this.tcpDeadlineMs = tcpDeadlineMs;
     }
 
     private static String randomToken() {
@@ -374,6 +444,26 @@ public final class DnsResponder implements AutoCloseable {
         return rate.globalRefused();
     }
 
+    /** Connections being served on TCP 53 right now, against the bound this responder was given (#114). */
+    public int tcpInFlight() {
+        return tcpInFlight.get();
+    }
+
+    /** That bound: {@link #MAX_TCP_IN_FLIGHT}, unless a test asked for a smaller one. */
+    public int maxTcpInFlight() {
+        return maxTcpInFlight;
+    }
+
+    /** Every connection this listener accepted, refused ones included: the denominator for the next. */
+    public long tcpAccepted() {
+        return tcpAccepted.get();
+    }
+
+    /** Of those, the ones closed unread because the bound was already full. */
+    public long tcpRefused() {
+        return tcpRefused.get();
+    }
+
     /**
      * One line a minute while a flood lasts, the way the node reports a visitor ceiling: per query
      * it would be a line per packet under exactly the load that makes the limit matter.
@@ -389,7 +479,19 @@ public final class DnsResponder implements AutoCloseable {
         while (running) {
             try {
                 Socket s = tcp.accept();
-                Thread.ofVirtual().start(() -> serveTcp(s));
+                tcpAccepted.incrementAndGet();
+                if (tcpInFlight.incrementAndGet() > maxTcpInFlight) {
+                    tcpInFlight.decrementAndGet();
+                    refuseTcp(s);
+                    continue;
+                }
+                Thread.ofVirtual().start(() -> {
+                    try {
+                        serveTcp(s);
+                    } finally {
+                        tcpInFlight.decrementAndGet();
+                    }
+                });
             } catch (IOException e) {
                 if (running) {
                     LOG.debug("tcp: {}", e.getMessage());
@@ -398,17 +500,47 @@ public final class DnsResponder implements AutoCloseable {
         }
     }
 
+    /**
+     * One connection over {@link #MAX_TCP_IN_FLIGHT}, closed without being read.
+     *
+     * <p><b>It is closed rather than answered, and that is indistinguishable from this hub being
+     * down</b> -- which matters, because a resolver arriving here has usually just been told
+     * {@code TC} and sent away from a working datagram. The alternative is to read the query and
+     * answer it with {@code SERVFAIL}, which is politer and is exactly the work this bound exists
+     * to refuse: a message read is up to 4,096 bytes and a slot held to {@link #TCP_DEADLINE_MS},
+     * per connection, under precisely the load that makes the bound matter. {@code Visitors.refuse}
+     * makes the same trade on the node for the same reason -- "saying anything politer would mean
+     * completing the handshake that this exists to avoid".
+     *
+     * <p>So what an operator gets instead is the counter and a line a minute, because a resolver
+     * cannot be told and a person can.
+     */
+    private void refuseTcp(Socket s) {
+        tcpRefused.incrementAndGet();
+        try {
+            s.close();
+        } catch (IOException ignored) {
+            // refusing it is the point; it is gone either way
+        }
+        if (tcpLog.ready()) {
+            LOG.warn("at the TCP connection bound ({}) on :53; {} refused so far. A resolver sent here by TC "
+                + "sees this as the hub being unreachable (ARCHITECTURE.md §11.5)", maxTcpInFlight, tcpRefused.get());
+        }
+    }
+
     private void serveTcp(Socket s) {
+        long deadline = Clock.millis() + tcpDeadlineMs;
         try (s) {
-            s.setSoTimeout(5000);
-            DataInputStream in = new DataInputStream(s.getInputStream());
+            java.io.InputStream in = s.getInputStream();
             DataOutputStream out = new DataOutputStream(s.getOutputStream());
-            int len = in.readUnsignedShort();
+            byte[] prefix = new byte[2];
+            readFully(s, in, prefix, deadline);
+            int len = ((prefix[0] & 0xff) << 8) | (prefix[1] & 0xff);
             if (len > 4096) {
                 return;
             }
             byte[] q = new byte[len];
-            in.readFully(q);
+            readFully(s, in, q, deadline);
             byte[] r = respond(q);
             if (r != null) {
                 out.writeShort(r.length);
@@ -416,7 +548,36 @@ public final class DnsResponder implements AutoCloseable {
                 out.flush();
             }
         } catch (IOException ignored) {
-            // client gone
+            // client gone, or out of time
+        }
+    }
+
+    /**
+     * Reads exactly {@code buf.length} bytes, or gives up at {@code deadline} — which bounds the
+     * <em>connection</em> and not one read of it.
+     *
+     * <p>This was {@code setSoTimeout(5000)} and {@code DataInputStream.readFully}, and that pair
+     * bounds neither. {@code SO_TIMEOUT} applies to a single blocking read and is restarted by every
+     * byte that arrives, so a client that declares a 4,096-byte message and then sends one byte
+     * every four seconds holds its slot for about four and a half hours at a quarter of a byte per
+     * second. That is the whole of {@link #MAX_TCP_IN_FLIGHT} held indefinitely for roughly 64 bytes
+     * a second, which would have made the bound below a way to take TCP 53 down rather than a way to
+     * keep it up -- and the per-connection cost the 256 was argued from was wrong by four orders of
+     * magnitude. Re-arming against what is left of the deadline is what makes the slot recycle.
+     */
+    private static void readFully(Socket s, java.io.InputStream in, byte[] buf, long deadline) throws IOException {
+        int off = 0;
+        while (off < buf.length) {
+            long left = deadline - Clock.millis();
+            if (left <= 0) {
+                throw new java.net.SocketTimeoutException("past the connection deadline");
+            }
+            s.setSoTimeout((int) Math.min(left, Integer.MAX_VALUE));
+            int n = in.read(buf, off, buf.length - off);
+            if (n < 0) {
+                throw new java.io.EOFException("client gone");
+            }
+            off += n;
         }
     }
 

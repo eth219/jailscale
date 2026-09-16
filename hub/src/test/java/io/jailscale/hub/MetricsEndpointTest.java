@@ -177,7 +177,13 @@ class MetricsEndpointTest {
             // shipped with nothing counting the traffic they bound, so the headroom a real zone has
             // could not be stated -- and the limit biting would have shown up only as a log line.
             "jailhub_dns_answers_total", "jailhub_dns_dropped_total", "jailhub_dns_truncated_total",
-            "jailhub_dns_refused_global_total"}) {
+            "jailhub_dns_refused_global_total",
+            // And the TCP half of :53, which those four do not cover at all. Named here for the
+            // same reason: measuring this path meant reading `ss` from outside the process, and the
+            // run that did reported an idle port for twenty minutes because its filter matched
+            // nothing. Without these three lines, deleting the counters leaves the suite green.
+            "jailhub_dns_tcp_connections_total", "jailhub_dns_tcp_refused_total",
+            "jailhub_dns_tcp_in_flight"}) {
             assertTrue(body.contains("# HELP " + name + " "), name + " has no HELP: " + body);
             assertTrue(body.contains("# TYPE " + name + " "), name + " has no TYPE: " + body);
             assertTrue(body.matches("(?s).*\n" + name + " \\d+\n.*") || body.startsWith(name + " "),

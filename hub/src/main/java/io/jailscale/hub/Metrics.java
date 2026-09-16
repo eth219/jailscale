@@ -124,6 +124,20 @@ final class Metrics {
             counter(b, "jailhub_dns_refused_global_total",
                 "Of the refusals, those the table-wide budget made rather than one network's own share.",
                 hub.dns().refusedByGlobalBudget());
+            // And what :53 does over TCP, which none of the four above cover and nothing could be
+            // asked before (#114). The only way to measure this path was to read `ss` from outside
+            // the process, which is how a 2,400-sample run reported an idle port for twenty minutes
+            // while its filter was quietly matching nothing at all.
+            counter(b, "jailhub_dns_tcp_connections_total",
+                "Connections accepted on TCP 53, including those the bound below then refused.",
+                hub.dns().tcpAccepted());
+            counter(b, "jailhub_dns_tcp_refused_total",
+                "Of those, the ones closed unread because the connection bound was already full. A "
+                    + "resolver sent here by TC sees one of these as the hub being unreachable.",
+                hub.dns().tcpRefused());
+            gauge(b, "jailhub_dns_tcp_in_flight",
+                "Connections being served on TCP 53 right now, out of " + hub.dns().maxTcpInFlight() + ".",
+                hub.dns().tcpInFlight());
         }
         // Where the time goes admitting a visitor (§6.3). The point of having all five is the
         // comparison: first_byte running ahead of peek+resolve+open+reply is time spent in no stage
