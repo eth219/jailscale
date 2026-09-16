@@ -1,10 +1,17 @@
 package io.jailscale.hub.dns;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.net.DatagramSocket;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -235,5 +242,68 @@ class DnsResponderTest {
         byte[] resp = new byte[12];
         resp[2] = (byte) 0x80;
         assertEquals(null, d.respond(resp));
+    }
+
+    @Test
+    void theTcpListenerIsOnTheNumberThePairWasBoundTo() throws Exception {
+        // start() binds two sockets to one number, and until now only one of them was ever asked
+        // a question: DnsQuery is UDP-only and nothing else connected. So the half of the pair
+        // that a resolver reaches after TC -- which is the whole reason TC is worth sending --
+        // could have been bound to any number at all, and every test would still have been green.
+        try (DnsResponder d = new DnsResponder("hub.example.com")) {
+            d.start("127.0.0.1", 0);
+            d.setTxt(List.of("a".repeat(300), "b".repeat(300)));
+            byte[] q = DnsFuzzTest.query("_acme-challenge.hub.example.com", 16);
+            assertTrue(d.respond(q).length > DnsResponder.MAX_UDP, "the fixture has to overflow a datagram");
+
+            IOException tc = assertThrows(IOException.class,
+                () -> DnsQuery.txt("127.0.0.1", d.port(), "_acme-challenge.hub.example.com", 2000));
+            assertTrue(tc.getMessage().contains("TC"), "the datagram should say come back over TCP, said " + tc.getMessage());
+
+            // And on that same number, over TCP, the whole answer is there.
+            assertArrayEquals(d.respond(q), overTcp("127.0.0.1", d.port(), q));
+        }
+    }
+
+    @Test
+    void aNumberUdpCannotHaveLeavesNoListenerBehind() throws Exception {
+        try (DatagramSocket blocker = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
+            int p = blocker.getLocalPort();
+            // The premise, asserted rather than assumed: a DatagramSocket that did not ask for
+            // reuse is exclusive on all three platforms -- SO_EXCLUSIVEADDRUSE is what the JDK
+            // sets on Windows for exactly this. If that stops being true, this line says so
+            // instead of the one below failing as though start() were at fault.
+            DatagramSocket other = new DatagramSocket(null);
+            other.setReuseAddress(true);
+            assertThrows(IOException.class, () -> other.bind(new InetSocketAddress("127.0.0.1", p)),
+                "the blocker is not a blocker on this platform, so nothing below is measured");
+            other.close();
+
+            try (DnsResponder d = new DnsResponder("hub.example.com")) {
+                assertThrows(IOException.class, () -> d.start("127.0.0.1", p), "the pair cannot be had on " + p);
+            }
+            // TCP draws the number now, so the bind that fails is the second one and the listener
+            // the first one opened has to be given back. A hub that failed to start and is still
+            // listening on the number is worse than one that simply did not start.
+            try (ServerSocket s = new ServerSocket()) {
+                s.bind(new InetSocketAddress("127.0.0.1", p), 16);
+            }
+        }
+    }
+
+    /** The same question over TCP, where a resolver goes when a datagram says TC: length-prefixed. */
+    private static byte[] overTcp(String host, int port, byte[] query) throws IOException {
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress(host, port), 2000);
+            s.setSoTimeout(2000);
+            DataOutputStream out = new DataOutputStream(s.getOutputStream());
+            out.writeShort(query.length);
+            out.write(query);
+            out.flush();
+            DataInputStream in = new DataInputStream(s.getInputStream());
+            byte[] answer = new byte[in.readUnsignedShort()];
+            in.readFully(answer);
+            return answer;
+        }
     }
 }
