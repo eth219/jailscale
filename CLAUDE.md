@@ -19,6 +19,9 @@ suggestion. The part that cannot be skipped:
   something else. Do not hold a claim while waiting.
 - A different problem found along the way: file it with all three label axes and link it both ways.
   Do not widen the change to cover it.
+- A pull request carries the issue's type and area labels and no status. Several issues in one
+  session with nobody between claim and merge is "Running the loop unattended" in the same doc,
+  and it is not open yet: #184 says what the suite has to be able to fail first.
 
 ## Build and test
 
