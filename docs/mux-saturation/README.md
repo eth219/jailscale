@@ -84,16 +84,32 @@ predictions for the binaries that ship. A caveat comment depends on being read; 
 This is the same place `docs/windows-virtual-thread-stall/` keeps its probes, outside the source root
 where the build never compiles them and a superseded number cannot be mistaken for a current one.
 
-## The question this tool could still answer
+## The question this tool posed, and the answer
 
-`FlowBudget` counts the payload bytes that enter a receive queue. Nothing verifies that its
-accounting matches what the process actually retains: when it says 24 MB, whether the live set moved
-by 24 MB or by 40. `measure.sh` reports RSS, which varies by 2x on this axis and includes everything
-that is not heap; the unit tests check the counter against itself. `usedHeap()` here is the one
-approach in the repository that could close that gap — run a bounded receiver at a known budget and
-compare the retained heap against what the gauge claims.
+`FlowBudget` counts the payload bytes that enter a receive queue, and until
+[#69](https://github.com/eth219/jailscale/issues/69) nothing verified that the count matched what
+the process actually retains: when it says 24 MB, whether the live set moved by 24 or by 40.
+`measure.sh` reports RSS, which varies by 2x on this axis and includes everything that is not heap;
+the unit tests checked the counter against itself. `usedHeap()` here was the one approach in the
+repository that could close it, and `FlowBudgetHeapTest` is that approach turned into an assertion.
 
-Worth knowing before trying: the node's residency on this axis is mostly not receive queues at all.
-A visitor sends one `GET` line, so the node's queues hold tens of bytes, and its 98 MB is
-`TlsEndpoint`'s per-visitor `netInBuf`, `appInBuf` and `SSLEngine` ([§15](../ARCHITECTURE.md)). Any
-sum that does not account for those will not balance.
+It is **two-point**, which is the part this file did not have. An absolute reading is the queues
+plus the rig, so `FlowBudgetHeapTest` fills the same streams on the same rig to two depths and
+compares the slopes: every fixed cost is in both readings and cancels. At `Frame.MAX_DATA` the
+answer is **1.00** — the gauge is right, and the derived 24 MB is 24 MB of heap.
+
+**It is a JVM measurement** (Temurin 25.0.4.1, darwin-arm64, `MemoryMXBean` after a forced
+collection), which for once is the point rather than the caveat: what it checks is whether the
+counter matches the queues it counts, and that is a property of the accounting and not of the
+runtime. What a *native image* holds for the same queues is not covered, here or anywhere — the
+figure this file got wrong was residency, and this does not revisit it.
+
+It is right in the units it is measured in, and those units are the payload. The chunk that carries
+the payload is not counted, so the ratio is 1.40 at 64-byte frames, 3.86 at 8-byte frames and
+**30.3 at one-byte frames**, which is
+[#154](https://github.com/eth219/jailscale/issues/154) and not something this file predicted either.
+
+Worth knowing before reading any of it as a process total: the node's residency on this axis is
+mostly not receive queues at all. A visitor sends one `GET` line, so the node's queues hold tens of
+bytes, and its 98 MB is `TlsEndpoint`'s per-visitor `netInBuf`, `appInBuf` and `SSLEngine`
+([§15](../ARCHITECTURE.md)). Any sum that does not account for those will not balance.

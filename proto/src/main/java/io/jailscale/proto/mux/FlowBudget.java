@@ -72,6 +72,14 @@ import java.util.concurrent.atomic.LongAdder;
  * Refusing new streams instead would hand an attacker a cheaper denial than the one being fixed --
  * fill the budget and nobody else gets in -- and would not free the bytes already held.
  *
+ * <p><b>What it counts is payload, and that was checked against the heap rather than assumed.</b>
+ * {@code FlowBudgetHeapTest} fills the same streams on one rig to two queue depths and compares the
+ * slopes, so the rig cancels and what is left is the bytes: at a full frame the process retains 1.00
+ * times what this counts, which is what makes the hub's derived 24 MB 24 MB of heap. That is a JVM
+ * heap on Temurin 25 -- an accounting check, not a figure for what a native image holds. The
+ * {@code byte[]} carrying a payload is not counted, though, so the ratio is 1.40 at 64-byte frames
+ * and 30.3 at one-byte ones -- github.com/eth219/jailscale/issues/154, and open.
+ *
  * <p><b>Nothing is advertised on the wire.</b> RST is already in the protocol and a receiver may
  * send one whenever it likes, so the sender's credits are untouched and a node running an older
  * build needs no upgrade for this to protect the hub. Shrinking {@link MuxStream#WINDOW} instead
