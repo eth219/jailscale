@@ -2669,6 +2669,16 @@ anonymous** — the heap, the stacks, everything the process actually owns — a
 26.1 MiB binary's own text and rodata mapped in: clean pages, shared with the page cache, which the
 kernel can take back. macOS's `ps` attributes far fewer of those to the process.
 
+**The column above is `linux-amd64`, and the other Linux target does not do this.** `linux-arm64`,
+which ships too, measures **24.0 MB of node idle RSS with 2.3 MB anonymous** — below macOS's 25.0,
+against amd64's 34.4 with 2.1 anonymous. The two Linux targets own the same memory to within 0.2 MB,
+so the whole of the 10.4 MB between them is file-backed — 32.3 MB against 21.7 — and what the
+paragraph above describes is real and is a property of one architecture rather than of the kernel.
+*Which* file-backed pages is not measured, and 32.3 MB is more of them than the whole 26.4 MiB
+binary, so the sentence above names the binary for more of that figure than anything has taken
+apart. `docs/jsse-idle-cost` has that run at five states; what nothing has taken apart is the 34.4
+itself, which is #216.
+
 The live hub shows what that means under pressure. On a GCP e2-micro with 969 MB of RAM, after a
 day of service, `smaps_rollup` reported 41.1 MB of RSS split into 15.0 MB anonymous and 26.2 MB of
 file-backed pages — and only 25.7 MB of the then-31.6 MiB binary was still resident, the kernel having
@@ -3088,7 +3098,8 @@ say so and name the issue. An entry that does neither has not been through that 
   Nothing gates on either. It was also intermittent at the occupancy that produced it, two of four
   runs on the same binaries, so one clean run says nothing about the next.
 - **Node idle RSS is about 25.0 MB, not the 20 MB originally aimed at**, and about 34.4 MB as
-  Linux counts it (§14: mostly the mapped binary, 2 MB of it anonymous). This entry used to say that
+  `linux-amd64` counts it (§14: mostly the mapped binary, 2 MB of it anonymous; `linux-arm64` is
+  24.0 MB with the same 2 MB anonymous, so that figure is one architecture's). This entry used to say that
   roughly 7.6 MB of it was JSSE standing up one TLS client, and to price two levers against that
   figure. `docs/jsse-idle-cost` took the figure apart, and it is the wrong thing to aim at.
 
