@@ -21,7 +21,8 @@ suggestion. The part that cannot be skipped:
   Do not widen the change to cover it.
 - A pull request carries the issue's type and area labels and no status. Several issues in one
   session with nobody between claim and merge is "Running the loop unattended" in the same doc,
-  and it is not open yet: #184 says what the suite has to be able to fail first.
+  and it is open: a session is started with how many issues to take, and the rule for a red `main`
+  is re-run once, revert on the second.
 
 ## Build and test
 
