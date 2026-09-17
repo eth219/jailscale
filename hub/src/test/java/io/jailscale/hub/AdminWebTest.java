@@ -41,7 +41,13 @@ class AdminWebTest {
 
     @AfterEach
     void stop() throws Exception {
-        TestCloseables.closeAll(alice, bob, hub);
+        if (alice != null) {
+            alice.close();
+        }
+        if (bob != null) {
+            bob.close();
+        }
+        hub.close();
     }
 
     private HttpResponse http(String method, String path, String cookie, String form) throws Exception {

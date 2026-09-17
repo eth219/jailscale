@@ -46,7 +46,18 @@ class RawPortTest {
 
     @AfterEach
     void stop() throws Exception {
-        TestCloseables.closeAll(node, hub, echoTcp, echoUdp);
+        if (node != null) {
+            node.close();
+        }
+        if (hub != null) {
+            hub.close();
+        }
+        if (echoTcp != null) {
+            echoTcp.close();
+        }
+        if (echoUdp != null) {
+            echoUdp.close();
+        }
     }
 
     /** The {@code ?from=} value in a directory page's "next" link. */

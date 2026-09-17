@@ -55,10 +55,11 @@ class NameRevocationTest {
 
     @AfterEach
     void stop() throws Exception {
-        List<AutoCloseable> all = new ArrayList<>(daemons);
-        all.add(localApp);
-        all.add(hub);
-        TestCloseables.closeAll(all.toArray(new AutoCloseable[0]));
+        for (Daemon d : daemons) {
+            d.close();
+        }
+        localApp.close();
+        hub.close();
     }
 
     private Daemon node(String home) throws IOException {

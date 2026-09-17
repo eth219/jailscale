@@ -50,9 +50,10 @@ class SecondMachineJoinTest {
 
     @AfterEach
     void stop() throws Exception {
-        List<AutoCloseable> all = new ArrayList<>(daemons);
-        all.add(hub);
-        TestCloseables.closeAll(all.toArray(new AutoCloseable[0]));
+        for (Daemon d : daemons) {
+            d.close();
+        }
+        hub.close();
     }
 
     private Daemon node(String name) throws IOException {
