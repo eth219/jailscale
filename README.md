@@ -288,8 +288,14 @@ What a compromised hub can and cannot do is written out in
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).
-- `service install` is verified on macOS only. Linux and Windows are untested
-  outside CI.
+- `service install` is verified on macOS and on `linux-arm64` — the
+  `systemctl --user` unit and the root one, each across a reboot
+  ([#81](https://github.com/eth219/jailscale/issues/81) has the run).
+  `linux-amd64` is not measured, and Windows is untested: nothing in CI
+  installs a service, on any platform. That run also found a defect rather
+  than a limit — stopping the unit is recorded as a failure, so after an
+  uninstall `systemctl --failed` still lists it until it is reset by hand
+  ([#235](https://github.com/eth219/jailscale/issues/235)).
 - Idle memory is 25 MB against the 20 MB originally aimed at. Almost all of the
   gap is the binary's own code becoming resident, clean and evictable
   ([docs/jsse-idle-cost](docs/jsse-idle-cost)).
