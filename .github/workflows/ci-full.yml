@@ -22,6 +22,18 @@ on:
   schedule:
     - cron: '17 18 * * *'   # with ci.yml's nightly, so drift in the runner images shows up here too
   workflow_dispatch:
+    inputs:
+      only:
+        # One job at a time, because the two cost very different things and the reason to run one
+        # by hand is usually not a reason to run the other. `load` is thirty seconds on the JVM;
+        # `budget` is a native-image build. Measuring how often `load` is red for no reason (#183)
+        # means running it a dozen times, and doing that through the whole workflow would spend an
+        # hour of runner time on native builds nobody asked for. GitHub will not re-run a single
+        # job that passed, so this is the way to ask for one.
+        description: which job to run
+        type: choice
+        default: all
+        options: [all, load, budget]
 
 # Deliberately no cancel-in-progress. These are opt-in and expensive, and every way of cancelling
 # an older one also cancels a wanted one: runs for the same pull request share a ref, so a second
@@ -39,8 +51,9 @@ jobs:
   # is what this asserts. On the JVM, so it needs no native build; off pull requests by
   # default only because it holds a thousand sockets open and that is a poor use of every push.
   load:
-    if: ${{ github.event_name != 'pull_request'
-        || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+    if: ${{ (github.event_name != 'pull_request'
+          || contains(github.event.pull_request.labels.*.name, 'ci:full'))
+        && (github.event_name != 'workflow_dispatch' || inputs.only != 'budget') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -56,8 +69,9 @@ jobs:
   # The lightweight budget of §14. It needs the native binaries, so it costs a native-image build
   # and does not belong on every pull request; main and the nightly run are enough to catch a drift.
   budget:
-    if: ${{ github.event_name != 'pull_request'
-        || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+    if: ${{ (github.event_name != 'pull_request'
+          || contains(github.event.pull_request.labels.*.name, 'ci:full'))
+        && (github.event_name != 'workflow_dispatch' || inputs.only != 'load') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
