@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Timeout;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.jailscale.proto.net.TestPorts;
@@ -131,6 +132,56 @@ class MuxSessionTest {
                 closed.complete(cause);
             }
         };
+    }
+
+    /**
+     * The opener's own bookkeeping has to be done before the peer can ask about the stream, and
+     * the only place that is true is inside {@code open}, between the id existing and the OPEN
+     * frame going out.
+     *
+     * <p>The hub used to record a visitor stream after {@code open} returned. A node sees the OPEN
+     * frame and starts the visitor's TLS handshake at once, asking the hub to sign inside it, and a
+     * hub that had not reached its own map yet answered "not-your-stream" and failed the handshake:
+     * 238 of them in 155 ms on one run of the load test (#201). Loopback is that quick.
+     *
+     * <p>What this asserts is the ordering itself, not the hub's use of it: the callback runs
+     * before the peer's {@code onOpen}. Move the call after {@code write} and this fails.
+     */
+    @Test
+    void whatTheOpenerRecordsIsRecordedBeforeThePeerHearsOfTheStream() throws Exception {
+        Pair p = pair();
+        MuxStream opened = p.hub().open(JsonObject.builder().put("sni", "race.hub.test").build(), false,
+            s -> {
+                try {
+                    // Half a second of the peer being given every chance. With the callback where
+                    // it belongs the OPEN frame has not been written, so nothing can arrive and
+                    // this times out; move the call after the write and the frame is already on
+                    // the wire, the peer delivers it well inside the window, and this fails.
+                    assertNull(p.nodeOpened().poll(500, TimeUnit.MILLISECONDS),
+                        "the peer had the stream before the opener had recorded it");
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        MuxStream seen = p.nodeOpened().poll(5, TimeUnit.SECONDS);
+        assertNotNull(seen, "the peer never heard about the stream");
+        assertEquals("race.hub.test", seen.meta().string("sni"));
+        opened.close();
+        seen.close();
+        awaitNoStreams(p);
+    }
+
+    /** A stream the callback refuses is never announced, and does not stay on the opener's books. */
+    @Test
+    void aStreamWhoseRecordingThrowsIsNotOpenedAtAll() throws Exception {
+        Pair p = pair();
+        assertThrows(IllegalStateException.class, () -> p.hub().open(
+            JsonObject.builder().put("sni", "doomed.hub.test").build(), false,
+            s -> {
+                throw new IllegalStateException("no");
+            }));
+        assertNull(p.nodeOpened().poll(1, TimeUnit.SECONDS), "the peer was told about a stream that failed to open");
+        awaitNoStreams(p);
     }
 
     @Test

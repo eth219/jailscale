@@ -195,10 +195,29 @@ final class NodeGroup {
         }
         JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("kind", link.kind()).put("sni", sni)
             .put("visitorAddr", visitorAddr).put("visitorPort", visitorPort).put("keyId", keyId).build();
-        MuxStream stream = best.mux().open(meta, dgram);
-        long id = fullId(best.conn(), stream.id());
-        streamIds.put(stream, id);
-        visitors.put(id, new VisitorStream(link.linkId(), sni, 0, new Tls13.Tap()));
+        // Recorded before the OPEN frame goes out, not after. The node begins the visitor's TLS
+        // handshake the moment it sees that frame and asks this hub to sign inside it; a hub that
+        // had not yet reached its own `visitors.put` answered `not-your-stream` and took the
+        // handshake down with it. 238 of them in 155 ms on one run of the load test (#201, #183).
+        long[] opened = {-1};
+        NodeSession on = best;   // the lambda needs it effectively final
+        MuxStream stream;
+        try {
+            stream = on.mux().open(meta, dgram, s -> {
+                long id = fullId(on.conn(), s.id());
+                opened[0] = id;
+                streamIds.put(s, id);
+                visitors.put(id, new VisitorStream(link.linkId(), sni, 0, new Tls13.Tap()));
+            });
+        } catch (IOException | RuntimeException e) {
+            // The OPEN frame never went out, so nothing will ever ask about this stream. Its
+            // registration would otherwise sit in the map until the session detached, counting
+            // against the ceiling that turns visitors away.
+            if (opened[0] >= 0) {
+                visitors.remove(opened[0]);
+            }
+            throw e;
+        }
         return stream;
     }
 

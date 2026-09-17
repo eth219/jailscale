@@ -212,13 +212,38 @@ public final class MuxSession implements AutoCloseable {
 
     /** Opens a stream toward the peer with the given metadata. */
     public MuxStream open(JsonObject meta, boolean dgram) throws IOException {
+        return open(meta, dgram, s -> { });
+    }
+
+    /**
+     * As above, running {@code beforeThePeerKnows} after the stream exists here and before the
+     * OPEN frame that tells the peer about it is written.
+     *
+     * <p>That gap is the whole reason this exists. Whatever the opener has to record about a
+     * stream, the peer can ask about the moment the OPEN frame lands -- and a peer on the other
+     * side of a loopback socket is quick. The hub opened a visitor stream, then recorded it, and a
+     * node that asked the hub to sign for it in between was told {@code not-your-stream}: 238
+     * times in 155 ms on one run of the load test, which is
+     * <a href="https://github.com/eth219/jailscale/issues/201">#201</a>.
+     *
+     * <p>If it throws, the stream is taken back out and the OPEN frame is never written, so the
+     * peer never hears of a stream whose registration failed.
+     */
+    public MuxStream open(JsonObject meta, boolean dgram, java.util.function.Consumer<MuxStream> beforeThePeerKnows)
+        throws IOException {
         long id = nextId.getAndAdd(2);
         if (id > 0xFFFFFFFFL) {
             throw new IOException("stream ids exhausted");
         }
         MuxStream s = new MuxStream(this, budget, id, meta, dgram);
         streams.put(id, s);
-        write(new Frame(id, Frame.OPEN, dgram ? Frame.FLAG_DGRAM : 0, Json.writeUtf8(meta.asMap())));
+        try {
+            beforeThePeerKnows.accept(s);
+            write(new Frame(id, Frame.OPEN, dgram ? Frame.FLAG_DGRAM : 0, Json.writeUtf8(meta.asMap())));
+        } catch (IOException | RuntimeException e) {
+            streams.remove(id);
+            throw e;
+        }
         return s;
     }
 
