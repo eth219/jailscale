@@ -62,7 +62,7 @@ having run nothing at all, and a reviewer cannot tell that from a pass. The pins
 
 **A green pull request does not do this for you.** `test` runs the suite on Liberica rather than on
 the GraalVM pin, and `analyze` skips tests. The two jobs that do run the suite on the pin are
-`budget`, which is skipped on pull requests, and `release`, which runs on a tag — so a reconstruction
+`budget`, which a pull request runs only when it carries the `ci:full` label, and `release`, which runs on a tag — so a reconstruction
 this bump broke is found on main at the earliest and in a release at the latest. The run has to be
 yours, and naming the build is what tells a reviewer it happened on the new toolchain and not the
 old one. `TranscriptTest` is the whole safety net here, which is why its javadoc argues against

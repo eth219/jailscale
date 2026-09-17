@@ -205,11 +205,22 @@ runs the suite on ubuntu, macOS and Windows; a pull request does not run everyth
 jobs are skipped on pull requests, and the toolchain a pull request runs on is not the pinned one,
 so each of these finds your change on main instead:
 
-| If the change touches | Run before the PR | Because a pull request will not |
+**`ci:full` on the pull request runs the first two of these there instead.** The label makes `load`
+and `budget` run on the pull request head, on the runners and with the arguments `main` uses — they
+live in `ci-full.yml` and that file is the one definition, so a pull request and `main` cannot
+measure different things. Add the label and the run starts; it needs no push. That is better
+evidence than the local column below, which measures your laptop, and waiting for it costs you
+nothing but the wait. The local commands stay in the table because a seven-minute round trip is a
+poor way to iterate, and because `measure.sh` prints figures the gate only checks.
+
+The two jobs are not in the ruleset's required checks, so a green merge box does not mean they
+finished. Wait for them by name.
+
+| If the change touches | Run before the PR | Because a pull request will not, unless labelled |
 |---|---|---|
-| the multiplexer, the relay, the visitor path, anything per-connection | `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` | `budget` runs on main only — it needs a native build; the step in `ci.yml` is the definition, if the two ever differ |
-| the hub's admission or fan-out | `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` | `load` runs on main only — it holds a thousand sockets open |
-| the JDK or GraalVM pin | `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false`, on the new toolchain, pasting the `Tests run:` line — that flag means a mistyped class prints `BUILD SUCCESS` and runs nothing | `test` runs on Liberica, not on the pin, and the job that does (`budget`) is one of the two above. Delegated signing predicts the bytes JSSE writes (§9.2); a JDK that writes them otherwise takes every hub-signed handshake down. CONTRIBUTING.md has the long form |
+| the multiplexer, the relay, the visitor path, anything per-connection | `ci:full`, or `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` | `budget` needs a native build, seven minutes, so it is off a pull request by default |
+| the hub's admission or fan-out | `ci:full`, or `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` | `load` holds a thousand sockets open, so it is off a pull request by default |
+| the JDK or GraalVM pin | `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false`, on the new toolchain, pasting the `Tests run:` line — that flag means a mistyped class prints `BUILD SUCCESS` and runs nothing | `test` runs on Liberica, not on the pin. `ci:full` covers half of this row and not the half you might think: `budget` pins GraalVM in `ci-full.yml`, so a pull request moving that pin does run `-Pnative package` — tests included — on the new one. The JDK the `test` matrix uses is not the pin, and no label changes that. Delegated signing predicts the bytes JSSE writes (§9.2); a JDK that writes them otherwise takes every hub-signed handshake down. CONTRIBUTING.md has the long form |
 
 Read the header of `measure.sh` before trusting a surprising number from it. It carries a list of
 the conclusions this harness has produced that were confident, plausible and wrong.
@@ -281,12 +292,15 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
 2. Steps 2 to 5 exactly as above.
 3. `/code-review xhigh --fix`, then the review's diff read against the issue, then the gate — step 6
    with the table's row if the change touches it — on the code the review left.
-4. Step 7, labels included.
+4. Step 7, labels included, and `ci:full` as well when the change touches a row of that table. Then
+   wait for `load` and `budget` by name before merging — they are not required checks, so the merge
+   box goes green without them and `gh pr merge --auto` would not wait. That wait is the whole
+   difference between finding a budget regression here and finding it on `main` afterwards.
 5. **Merge** when all of these are true and none of them is a judgement: every check green, every
    review finding answered in the pull request, no `status:needs-decision`, base is the current
    `main`. Squash — that is what the history is made of. Then step 8, and the invariant command.
-6. **Watch `main`.** `load` and `budget` run only now (§6), so this is the first native run of the
-   change. A red job is re-run once. Red again: revert the merge (`gh pr revert`, or
+6. **Watch `main`.** Unless the pull request carried `ci:full`, this is the first time `load` and
+   `budget` see the change, and so the first native run of it. A red job is re-run once. Red again: revert the merge (`gh pr revert`, or
    `git revert -m 1`), reopen the issue with the failing job's output in a comment, set it
    `status:ready`, and stop. Fixing forward is not the default because the next issue's pull request
    would then be based on a red `main`, and two changes would own one failure.

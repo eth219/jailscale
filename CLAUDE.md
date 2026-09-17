@@ -40,7 +40,8 @@ LOAD=1000 SLOW=1000 ./measure.sh --check  # the §14 budget, against binaries na
 2. **Build in a worktree.** Several sessions share this checkout. Never bare `git stash` — the stack
    is shared too; make a WIP commit instead.
 3. **A green local build is not the CI gate.** CI adds SpotBugs and ubuntu/macOS/Windows, and two
-   more jobs that pull requests do not run at all (`load`, `budget`). This has been mistaken for the
+   more jobs a pull request runs only if it asks, with the `ci:full` label (`load`, `budget`, in
+   `ci-full.yml`). This has been mistaken for the
    gate twice.
 4. **Measure against the native binaries.** A figure from the JVM is a figure about the JVM. The
    header of `measure.sh` lists the conclusions this harness has produced that were plausible and

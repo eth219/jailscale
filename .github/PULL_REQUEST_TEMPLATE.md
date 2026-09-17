@@ -18,14 +18,16 @@ Closes #
 
 <!-- Tick what you ran. A PR silent about the budget is one a reviewer has to assume was not
      measured. CI runs `package` and `-Panalyze` on every pull request; the budget and load gates
-     run only on main, so an unticked box for one of those is a failure that finds main instead of
-     you. -->
+     are off by default, so an unticked box for one of those is a failure that finds main instead
+     of you. The `ci:full` label runs both of them here, on this head, which is better evidence
+     than a local run — but they are not required checks, so nothing stops a merge from beating
+     them. Wait for them by name. -->
 
 - [ ] `./mvnw package`
 - [ ] `./mvnw -Panalyze verify -DskipTests`
 - [ ] A review pass over the diff (`/code-review` if you have it), and every finding answered — including the ones answered with "no, and here is why"
-- [ ] `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` — required if this touches the multiplexer, the relay, the visitor path, or anything per-connection
-- [ ] `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` — required if this touches the hub's admission or fan-out
+- [ ] The `ci:full` label, or `./native.sh -DskipTests && LOAD=1000 SLOW=1000 ./measure.sh --check` — required if this touches the multiplexer, the relay, the visitor path, or anything per-connection
+- [ ] The `ci:full` label, or `./mvnw -pl hub -am test -Dgroups=load -Dtest.excludedGroups=` — required if this touches the hub's admission or fan-out
 - [ ] `./mvnw -pl node -am test -Dtest=TranscriptTest -Dsurefire.failIfNoSpecifiedTests=false` **on the new toolchain** — required if this moves the JDK or GraalVM pin. Paste the `Tests run:` line and name the build; `BUILD SUCCESS` alone does not tell a typo from a pass (CONTRIBUTING.md says why)
 - [ ] Not applicable, because: <!-- say so rather than leaving boxes unticked -->
 

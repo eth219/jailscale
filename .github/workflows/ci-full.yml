@@ -1,0 +1,100 @@
+# The two gates that are too expensive to run on every pull request: the thousand-visitor load test
+# and the §14 budget, which needs a native build. They run on every push to main and every night,
+# and on a pull request that asks for them with the `ci:full` label.
+#
+# They are in their own file, and not in ci.yml behind a label, because of what a label event does
+# to a required check. `main`'s ruleset requires `test (ubuntu-24.04)`, `test (macos-15)`,
+# `test (windows-2025)` and `analyze`. Adding `labeled` to ci.yml's triggers makes GitHub start a
+# whole ci.yml run for every label -- the type and area ones every pull request carries -- in which
+# those four jobs skip, and a skipped check run for a required context leaves the pull request
+# BLOCKED for good. That was measured on #193, whose every real job was green and which could not
+# be merged. Here, a label run can only ever emit `load` and `budget`, and neither is required.
+#
+# The jobs below are the ones that used to live at the end of ci.yml, moved rather than copied:
+# a pull request and main must not be able to measure different things.
+name: ci-full
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '17 18 * * *'   # with ci.yml's nightly, so drift in the runner images shows up here too
+  workflow_dispatch:
+
+# Deliberately no cancel-in-progress. These are opt-in and expensive, and every way of cancelling
+# an older one also cancels a wanted one: runs for the same pull request share a ref, so a second
+# label -- or any label added while a `ci:full` build is going -- would kill it. A superseded run
+# costs runner minutes; a cancelled one costs the evidence somebody asked for.
+concurrency:
+  group: ci-full-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  # The load-tagged tests, which the default build excludes (surefire's excludedGroups in pom.xml)
+  # and which nothing else ran: `-Dgroups=load` appeared in no workflow, so LoadTest only ever ran
+  # when somebody remembered to type it. measure.sh LOAD= is not a substitute -- it samples RSS
+  # against the budget and never asks whether each of the 1,000 visitors got its own answer, which
+  # is what this asserts. On the JVM, so it needs no native build; off pull requests by
+  # default only because it holds a thousand sockets open and that is a poor use of every push.
+  load:
+    if: ${{ github.event_name != 'pull_request'
+        || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '25'
+          distribution: 'liberica'
+      # -Dtest.excludedGroups= empties the pom's property, which is what excludes the tag; surefire's
+      # own -DexcludedGroups would be overridden by the configuration block and do nothing.
+      - run: ./mvnw -B -ntp -pl hub -am test -Dgroups=load -Dtest.excludedGroups=
+        shell: bash
+
+  # The lightweight budget of §14. It needs the native binaries, so it costs a native-image build
+  # and does not belong on every pull request; main and the nightly run are enough to catch a drift.
+  budget:
+    if: ${{ github.event_name != 'pull_request'
+        || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # The same toolchain and options the release uses, so the gate measures what ships. A gate on
+      # a different build than the release is worse than no gate: this once ran on a toolchain
+      # nobody released with, and §14 ended up claiming macOS binaries 4.6 MiB smaller than the
+      # ones v0.1.0 actually published.
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          version: '25.3'
+      - name: measure.sh needs bc, which the runner image does not ship
+        run: sudo apt-get update && sudo apt-get install -y bc
+      - name: Build the binaries
+        run: ./mvnw -B -ntp -Pnative package
+      - name: Budget gate
+        # RATE also measures throughput, which nothing gates: it is only comparable against another
+        # run on the same machine, and it is here so a build that trades CPU for footprint shows up.
+        # 200 handshakes a second rather than the default 400, because a handshake costs this runner
+        # 3.5 to 4.4 ms of hub and node CPU together: at 400 the four cores were three-quarters busy
+        # and the per-operation figure was measuring contention as much as code. It was 5.6 ms when
+        # this was chosen, on the toolchain before the current one, so there is room to revisit it.
+        #
+        # SLOW= is the third axis and the only one that reaches the receive budget of §5.3: LOAD=
+        # holds sessions with no bytes in flight, so the hub's queues are empty and its peak says
+        # nothing about what a stalled reader costs. It was measured by hand and left out of here,
+        # which meant the one axis §14 records as over its budget was also the one axis no run on
+        # main looked at. Both of its gates have teeth -- the node's peak RSS, and the hub's receive
+        # queue high-water, which is exact and reproduces at the budget every run -- and the failure
+        # they exist to catch drove the node past 200 MB.
+        #
+        # SLOW=1000 because the node bounds its concurrent visitors now (§9.3), and this is what
+        # exercises that bound: 450 held, 550 refused, and a node still running afterwards. It ran
+        # at 400 for a day, when a thousand reached the open per-visitor defect instead of a peak.
+        # It was NOT raised for the reason first given -- that a thousand would push the hub's
+        # receive queue to its budget where 400 could not. On this runner it does not, at either
+        # count; measure.sh has the figures. measure.sh's B_NODE_SLOW_AT holds the count the node
+        # budget was measured at and refuses to apply it at any other.
+        run: LOAD=1000 SLOW=1000 RATE=8 RATE_HANDSHAKES=200 ./measure.sh --check
