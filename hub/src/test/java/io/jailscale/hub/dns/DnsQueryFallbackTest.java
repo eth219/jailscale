@@ -75,11 +75,17 @@ class DnsQueryFallbackTest {
     }
 
     /**
-     * A TCP listener and a UDP socket on one number, drawn the way {@code DnsResponder.start} draws
-     * them since #102: the number comes from TCP and UDP is asked for the twin, since the reverse
-     * order lost that race on Windows. Neither socket asks for reuse -- an exclusive bind is what
-     * makes "the twin is free" mean anything, and SO_REUSEADDR on Windows would let this bind on
-     * top of a listener that is already there and then test that listener instead of this one.
+     * A TCP listener and a UDP socket on one number: the number comes from TCP and UDP is asked for
+     * the twin, which is the order #102 settled on because the reverse lost that race on Windows.
+     * Neither socket asks for reuse -- an exclusive bind is what makes "the twin is free" mean
+     * anything, and SO_REUSEADDR on Windows would let this bind on top of a listener that is
+     * already there and then test that listener instead of this one.
+     *
+     * <p>This is no longer what {@code DnsResponder.start} does. Since #181 that one alternates the
+     * two sides and holds its losers, because a stepping loop against a <em>band</em> of held
+     * twins is one chance taken N times a port apart rather than N chances. This helper still
+     * steps and still gives its losers back, so the same band would exhaust its thirty-two tries
+     * the same way -- untidy rather than urgent, since a fixture only needs a number once.
      */
     private static Pair pair() throws IOException {
         IOException last = null;

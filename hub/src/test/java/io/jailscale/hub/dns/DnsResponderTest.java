@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -12,6 +13,7 @@ import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -354,6 +356,78 @@ class DnsResponderTest {
             try (ServerSocket s = new ServerSocket()) {
                 s.bind(new InetSocketAddress("127.0.0.1", p), 16);
             }
+        }
+    }
+
+    /** How wide a band of held UDP ports the test below builds, in ports. */
+    private static final int BAND = 32;
+
+    @Test
+    void aBandOfHeldUdpPortsIsEscapedRatherThanSteppedThrough() throws Exception {
+        // #181. The retry used to step: TCP drew, UDP asked for the twin, and a failure simply
+        // redrew the next number up. Against a *band* of held UDP ports that is not eight chances,
+        // it is one chance taken eight times a port apart, and on windows-2025 it ran out -- eight
+        // adjacent TCP numbers, every one of their UDP twins taken. So this is built as a band and
+        // not as a coin flip, which is what the issue asks any fix to be measured against.
+        List<DatagramSocket> band = new ArrayList<>();
+        try {
+            // Where the TCP allocator is about to go. Drawn and given straight back, so that the
+            // next draw lands on it or just past it wherever the allocator is sequential.
+            int from = drawTcpPort();
+            // The window has to be made of port numbers. An allocator this near the top of the
+            // range is about to wrap, and `from + BAND` is then not a port at all -- which
+            // InetSocketAddress reports as IllegalArgumentException, not as the IOException the
+            // loop below catches, so this would be an error rather than a skip.
+            assumeTrue(from + BAND <= 65_535,
+                "the allocator drew " + from + ", within " + BAND + " of 65535, so the band would run off the end");
+            for (int p = from; p < from + BAND; p++) {
+                DatagramSocket s = new DatagramSocket(null);
+                try {
+                    s.bind(new InetSocketAddress("127.0.0.1", p));
+                    band.add(s);
+                } catch (IOException taken) {
+                    // Somebody else holds this one. It is unavailable now, but it is not this
+                    // test's to keep unavailable, and a number that comes free part-way through is
+                    // one the old stepping loop could have landed on -- so a hole would fail the
+                    // assertion below on the hole rather than on the behaviour. The premise check
+                    // right after this loop is what turns that into a skip.
+                    s.close();
+                }
+            }
+            // The premises, checked rather than assumed, in the style of the test below: without a
+            // band -- an unbroken one, and one the allocator steps into -- there is nothing to
+            // escape and this test would pass against the old stepping loop just as well. A
+            // platform or a machine that says no to either says so here and skips.
+            assumeTrue(band.size() == BAND,
+                "somebody else holds " + (BAND - band.size()) + " of " + from + ".." + (from + BAND - 1)
+                    + ", so the band has holes the old loop could have stepped into");
+            int next = drawTcpPort();
+            assumeTrue(next >= from && next < from + BAND,
+                "this allocator drew " + next + " after " + from + ", so it does not step and there is no band");
+
+            try (DnsResponder d = new DnsResponder("hub.example.com")) {
+                // Stepping from `from`, every attempt the old loop had lands inside BAND and it
+                // threw here. Alternating gives UDP the draw on attempt 1, and a UDP allocator
+                // will not hand out a number it has already given to the band.
+                d.start("127.0.0.1", 0);
+                assertTrue(d.port() < from || d.port() >= from + BAND,
+                    "started on " + d.port() + ", which is inside the band " + from + ".." + (from + BAND - 1));
+                // And it is a working responder on that number, not merely a pair of bound sockets.
+                assertEquals(List.of(), DnsQuery.txt("127.0.0.1", d.port(), "_acme-challenge.hub.example.com", 2000));
+            }
+        } finally {
+            for (DatagramSocket s : band) {
+                s.close();
+            }
+        }
+    }
+
+    /** A TCP port from the ephemeral range, given back before it is returned. */
+    private static int drawTcpPort() throws IOException {
+        try (ServerSocket probe = new ServerSocket()) {
+            probe.setReuseAddress(true);
+            probe.bind(new InetSocketAddress("127.0.0.1", 0), 16);
+            return probe.getLocalPort();
         }
     }
 

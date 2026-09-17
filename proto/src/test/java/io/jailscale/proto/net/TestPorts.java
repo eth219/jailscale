@@ -37,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *       (#196). A hub's listen port is no longer exposed to it: {@link #listen} hands over a bound
  *       socket and {@code Hub.listenOn} takes it, so nothing is ever unheld. Reserving immediately
  *       before the bind does not help when the thing in between is {@code Hub.start()}, which draws
- *       port 0 up to eight times of its own;</li>
+ *       port 0 up to sixteen times of its own;</li>
  *   <li>the DNS suites ({@code DnsResponderTest}, {@code DnsQueryFallbackTest},
  *       {@code ReferralTest}), which draw their own numbers because they are testing that draw;</li>
  *   <li>another process on the machine. The bind still fails, and the message says so rather than
