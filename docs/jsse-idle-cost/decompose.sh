@@ -164,6 +164,9 @@ split_linux() {
   exe=$(readlink "/proc/$2/exe" 2>/dev/null) || return 0
   # Empty would match every anonymous mapping below, which have no path at all.
   [ -n "$exe" ] || return 0
+  # Kept beside the map, because breakdown() reads the map after the daemon is gone and a path it
+  # composed itself is not the path the kernel reported (the reason this line uses readlink at all).
+  printf '%s' "$exe" > "$W/$1.exe"
   tx=$(awk -v exe="$exe" '
         # A mapping header is "start-end perms offset dev inode [path]". The path is the whole of
         # the rest of the line and not $NF: it may contain a space, and a binary replaced under the
@@ -176,6 +179,62 @@ split_linux() {
           code = (p == exe && $2 ~ /x/); next }
         code && /^Rss:/ { s += $2 }
         END { printf "%d", s }' "$W/$1.map")
+}
+
+# breakdown <label> -- which mappings the resident memory of one state is in. Linux only.
+#
+# The five-state table above measures the binary's executable mappings and nothing else: `code` is
+# the summed Rss of the r-xp mappings of /proc/PID/exe. §14 attributes the whole file-backed share
+# to "the binary's own text and rodata mapped in", and on linux-amd64 that left about 19 MB of
+# state A named by nobody (#227). Every byte of it is already in the smaps copy taken at sample
+# time; this is the pass that sorts it.
+#
+# Four buckets, and the third is the point. A mapping of the exe with x in its permissions is the
+# `code` column above; one without is the rodata and the image heap, which is the half of §14's
+# sentence nothing had measured; a mapping with any other path is not the binary at all, whatever
+# §14 says; and no path -- or a kernel pseudo-path in brackets, [heap], [stack], [vvar], [anon:*] --
+# is memory the process owns and is here so the four add up to the whole.
+#
+# It is one state of one run, the last of RUNS, and it is not averaged: this asks where the memory
+# is and not how much, and the run-to-run spread of the table above is under 0.2 MB.
+breakdown() {
+  [ "$OS" = Linux ] || return 0
+  [ -r "$W/$1.map" ] && [ -r "$W/$1.exe" ] || return 0
+  echo
+  printf 'state %s: which mappings the resident memory is in\n' "$1"
+  awk -v exe="$(cat "$W/$1.exe")" '
+    # The same header parse as split_linux above, and the same reason for it: the path is the rest
+    # of the line and not $NF, because it may contain a space and a replaced binary has
+    # " (deleted)" appended to it.
+    /^[0-9a-f]+-[0-9a-f]+ / {
+      p = ""
+      if (match($0, /^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[0-9]+ +/)) p = substr($0, RSTART + RLENGTH)
+      if (p == exe)            b = ($2 ~ /x/) ? "binary, executable" : "binary, not executable"
+      else if (p == "")        b = "anonymous and kernel"
+      else if (p ~ /^\[/)      b = "anonymous and kernel"
+      else                   { b = "other file-backed"; path = p }
+      if (b != "other file-backed") path = ""
+      next
+    }
+    /^Rss:/ { sum[b] += $2; total += $2; if (path != "") per[path] += $2 }
+    END {
+      order[1] = "binary, executable"; order[2] = "binary, not executable"
+      order[3] = "other file-backed";  order[4] = "anonymous and kernel"
+      for (i = 1; i <= 4; i++) printf "  %-24s %9d KB  %5.1f MB\n", order[i], sum[order[i]], sum[order[i]] / 1024
+      printf "  %-24s %9d KB  %5.1f MB\n", "total", total, total / 1024
+      # The largest of the third bucket by name, because "not the binary" is only an answer if it
+      # says what it is instead.
+      n = 0
+      for (q in per) if (per[q] > 256) n++
+      if (n > 0) {
+        printf "  other file-backed over 256 KB:\n"
+        for (q in per) if (per[q] > 256) printf "    %-52s %7d KB\n", q, per[q]
+      }
+    }' "$W/$1.map"
+  # The rollup was read from the same process at the same moment and is a second kernel answer to
+  # the question the sum above asks. They are two reads of two files and need not agree to the
+  # kilobyte; a difference worth noticing is a mapping this pass put in no bucket.
+  awk '/^Rss:/ { printf "  (smaps_rollup said %d KB)\n", $2; exit }' "$W/$1.rollup"
 }
 
 sample() { # sample <label> <pid> <epoch the daemon started>
@@ -295,3 +354,8 @@ if [ "$OS" = Linux ]; then
       END { if (n) printf "%-6s %6.1f %14.1f %16.1f %8.0f\n", s, sr/n, sa/n, (sr-sa)/n, 100*sa/sr }' "$W/t.tsv"
   done
 fi
+
+# A and J: the first state is where the platform gap lives (#227) and the last is what the gate
+# publishes, so the two together say whether the answer is a property of the binary or of the run.
+breakdown A
+breakdown J
