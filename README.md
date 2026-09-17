@@ -174,6 +174,16 @@ _acme-challenge.jailscale.example.com.  NS  jailscale.example.com.
 jailhub serve --base-url https://jailscale.example.com --acme-email you@example.com
 ```
 
+**IPv6 visitors** work today and need two things: `--listen [::]:443`, which binds
+both families, and an `AAAA` beside each `A` above at your DNS provider. The
+brackets are required — `--listen ::443` is an address with a colon in it and no
+port. Per-address limits count a v6 caller per /64, so a visitor with a /64 to
+themselves has one caller's allowance and not a billion.
+
+The one setup this does not cover is the delegated subdomain below: there the
+hub is the authoritative server, it does not answer `AAAA` yet, and there is
+nowhere else to put the record ([#63](https://github.com/eth219/jailscale/issues/63)).
+
 The first run prints an invite. Whoever joins with it becomes the administrator.
 [deploy/](deploy/) has a systemd unit, container files, and the proxy
 configurations for putting the hub behind nginx or HAProxy.

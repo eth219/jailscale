@@ -203,6 +203,34 @@ public record HubConfig(
         return baseUrl.getHost();
     }
 
+    /**
+     * The host half of a {@code host:port} flag, refusing an IPv6 address that is not bracketed.
+     *
+     * <p>An IPv6 literal has colons of its own, so the last colon is the port separator only when
+     * the address is in brackets. Without this, {@code --listen ::443} parses as the host {@code :}
+     * and port 443, binds nothing, and fails later with {@code SocketException: Unresolved
+     * address} -- a sentence that says nothing about brackets, which is the whole of what is wrong
+     * (#63). Four flags parse this way and all four had it.
+     */
+    private static String hostOf(String flag, String value, int colon) {
+        int close = value.indexOf(']');
+        if (value.startsWith("[")) {
+            // The colon that matters is the one after the bracket. `--listen [::]` on its own has
+            // colons and no port, and the last of them is inside the address: without this it
+            // would be refused for the one thing it got right.
+            if (close < 0 || colon < close) {
+                throw new IllegalArgumentException(flag + " must be [address]:port for an IPv6 address");
+            }
+            return value.substring(0, colon);
+        }
+        String host = value.substring(0, colon);
+        if (host.indexOf(':') >= 0) {
+            throw new IllegalArgumentException(flag + " needs an IPv6 address in brackets, as in "
+                + flag + " [::]:443 for every address or " + flag + " [2001:db8::1]:443 for one");
+        }
+        return host;
+    }
+
     public static HubConfig fromArgs(Args a) {
         URI base = URI.create(a.require("base-url"));
         if (base.getHost() == null || !"https".equals(base.getScheme())) {
@@ -213,6 +241,7 @@ public record HubConfig(
         if (colon < 0) {
             throw new IllegalArgumentException("--listen must be host:port");
         }
+        String listenHost = hostOf("--listen", listen, colon);
         String policy = a.get("invite-policy", POLICY_MEMBERS);
         if (!policy.equals(POLICY_MEMBERS) && !policy.equals(POLICY_ADMINS)) {
             throw new IllegalArgumentException("--invite-policy must be members or admins");
@@ -258,7 +287,7 @@ public record HubConfig(
             if (hc < 0) {
                 throw new IllegalArgumentException("--http-listen must be host:port or none");
             }
-            httpHost = httpListen.substring(0, hc);
+            httpHost = hostOf("--http-listen", httpListen, hc);
             httpPort = Integer.parseInt(httpListen.substring(hc + 1));
         }
         // Loopback by default and not on 443 at all: the hub's own name is the public internet,
@@ -271,7 +300,7 @@ public record HubConfig(
             if (mc < 0) {
                 throw new IllegalArgumentException("--metrics-listen must be host:port or none");
             }
-            metricsHost = metricsListen.substring(0, mc);
+            metricsHost = hostOf("--metrics-listen", metricsListen, mc);
             metricsPort = Integer.parseInt(metricsListen.substring(mc + 1));
         }
         boolean proxyProtocol = a.flag("proxy-protocol");
@@ -287,7 +316,7 @@ public record HubConfig(
         if (proxyProtocol && trusted.isEmpty()) {
             boolean loopback;
             try {
-                loopback = InetAddress.getByName(listen.substring(0, colon)).isLoopbackAddress();
+                loopback = InetAddress.getByName(listenHost).isLoopbackAddress();
             } catch (java.net.UnknownHostException e) {
                 loopback = false;
             }
@@ -314,7 +343,7 @@ public record HubConfig(
         return new HubConfig(
             base,
             stateDir(a.get("state")),
-            listen.substring(0, colon),
+            listenHost,
             Integer.parseInt(listen.substring(colon + 1)),
             cert == null ? null : Path.of(cert),
             key == null ? null : Path.of(key),
@@ -324,7 +353,7 @@ public record HubConfig(
             a.get("dns-suffix", base.getHost()),
             acme,
             a.get("acme-email"),
-            dnsListen.substring(0, dc),
+            hostOf("--dns-listen", dnsListen, dc),
             Integer.parseInt(dnsListen.substring(dc + 1)),
             !a.flag("no-selfcheck"),
             !a.flag("no-address-check"),
