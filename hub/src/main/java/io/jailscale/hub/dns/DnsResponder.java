@@ -4,6 +4,7 @@ import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import io.jailscale.proto.util.Throttle;
 import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -285,44 +286,79 @@ public final class DnsResponder implements AutoCloseable {
         // that collision ordinary -- so the pair is retried with a fresh number rather than
         // reported as a bind failure.
         //
-        // TCP draws and UDP asks for the twin, not the other way round (#102). TCP is the
-        // contended space: a closed connection holds its port for 2MSL, which is four minutes on
-        // Windows by default, and this suite opens hundreds of short-lived ones, while a closed
-        // UDP socket holds nothing at all. Drawing from the crowded side and asking the empty one
-        // for the twin is what makes the retry rare; the other order makes the retry the thing
-        // that decides whether the hub starts, and eight of them ran out twice in one run.
+        // TCP draws first and UDP asks for the twin (#102). TCP is the contended space: a closed
+        // connection holds its port for 2MSL, which is four minutes on Windows by default, and
+        // this suite opens hundreds of short-lived ones, while a closed UDP socket holds nothing
+        // at all. Drawing from the crowded side and asking the empty one for the twin is what
+        // makes the retry rare.
+        //
+        // First, and not always, because that reasoning is about which space is crowded and #181
+        // found the other one crowded instead: eight attempts on Windows drew eight *adjacent*
+        // TCP ports and every one of their UDP twins was taken. A band, not eight collisions, and
+        // a stepping allocator walks into a band one number at a time however many attempts it is
+        // given. So the sides alternate: whichever space is the crowded one, every other attempt
+        // asks it to draw, and its own allocator will not hand out a number it has already given
+        // away. Losers are held rather than returned for the same reason -- a returned number is
+        // one the next attempt may be handed again, and holding pushes a sequential allocator
+        // past the band instead of back into it.
+        //
+        // Sixteen attempts and not eight, because alternating halves what either side gets: the
+        // eight TCP draws #102 sized are eight again only if each side is given eight of its own.
         IOException last = null;
-        for (int attempt = 0; attempt < (port == 0 ? 8 : 1); attempt++) {
-            ServerSocket t = new ServerSocket();
-            DatagramSocket u = null;
-            try {
-                t.setReuseAddress(true);
-                t.bind(new InetSocketAddress(bindHost, port), 16);
-                u = new DatagramSocket(null);
-                u.setReuseAddress(true);
-                u.bind(new InetSocketAddress(bindHost, t.getLocalPort()));
-                tcp = t;
-                udp = u;
-                last = null;
-                break;
-            } catch (IOException e) {
-                // Both binds are in here now, and which of them failed is the thing worth saying.
-                // With port 0 it is the UDP side, which asks for a number rather than drawing one,
-                // and that is the failure this retry was written for -- the UDP bind used to sit
-                // outside the try and so was not retried at all. With a fixed port it is TCP that
-                // fails, and a refused 53 is a refusal to report rather than a number to redraw,
-                // which is why the loop runs once there.
-                last = e;
-                if (t.isBound()) {
-                    LOG.debug("attempt {}: tcp drew {}:{}, udp could not have the twin: {}",
-                        attempt, bindHost, t.getLocalPort(), e.getMessage());
-                } else {
-                    LOG.debug("attempt {}: tcp could not have {}:{}: {}", attempt, bindHost, port, e.getMessage());
+        // Every socket this loop opens and does not go on to use, bound or not, so that no path out
+        // of here -- a retry, the throw below, or a RuntimeException from a bind -- leaves one
+        // behind. The unbound ones hold no number and could go back sooner, but the finally is
+        // microseconds away and one list is one thing to get right.
+        List<Closeable> held = new ArrayList<>();
+        try {
+            for (int attempt = 0; attempt < (port == 0 ? 16 : 1); attempt++) {
+                // A fixed port is never drawn by either side: it binds or it is refused, and there
+                // is nothing to alternate. That needs no test of its own here -- such a port only
+                // ever sees attempt 0, where TCP draws anyway.
+                boolean tcpDraws = attempt % 2 == 0;
+                ServerSocket t = new ServerSocket();
+                held.add(t);
+                DatagramSocket u = new DatagramSocket(null);
+                held.add(u);
+                try {
+                    t.setReuseAddress(true);
+                    u.setReuseAddress(true);
+                    if (tcpDraws) {
+                        t.bind(new InetSocketAddress(bindHost, port), 16);
+                        u.bind(new InetSocketAddress(bindHost, t.getLocalPort()));
+                    } else {
+                        u.bind(new InetSocketAddress(bindHost, 0));
+                        t.bind(new InetSocketAddress(bindHost, u.getLocalPort()), 16);
+                    }
+                    tcp = t;
+                    udp = u;
+                    // The winners are the two the finally below must not close.
+                    held.remove(t);
+                    held.remove(u);
+                    last = null;
+                    break;
+                } catch (IOException e) {
+                    // Which side failed is the thing worth saying, and #181 was answered from
+                    // these lines: eight of them naming eight adjacent numbers is a band, where
+                    // eight scattered ones would have been eight collisions.
+                    last = e;
+                    boolean drew = tcpDraws ? t.isBound() : u.isBound();
+                    String side = tcpDraws ? "tcp" : "udp";
+                    if (drew) {
+                        LOG.debug("attempt {}: {} drew {}:{}, the other could not have the twin: {}",
+                            attempt, side, bindHost, tcpDraws ? t.getLocalPort() : u.getLocalPort(), e.getMessage());
+                    } else {
+                        LOG.debug("attempt {}: {} could not have {}:{}: {}",
+                            attempt, side, bindHost, port, e.getMessage());
+                    }
                 }
-                if (u != null) {
-                    u.close();
-                }
-                closeQuietly(t);
+            }
+        } finally {
+            // Before the throw below, not after it. A hub that failed to start and is still
+            // holding the numbers it tried is worse than one that simply did not start, and
+            // aNumberUdpCannotHaveLeavesNoListenerBehind is the test that says so.
+            for (Closeable s : held) {
+                closeQuietly(s);
             }
         }
         if (last != null) {
@@ -334,8 +370,8 @@ public final class DnsResponder implements AutoCloseable {
         LOG.info("answering for {} and {} on {}:{}", hubName, zone, bindHost, udp.getLocalPort());
     }
 
-    /** Giving a listening socket back: the close throws only when it is already gone. */
-    private static void closeQuietly(ServerSocket s) {
+    /** Giving a socket back: the close throws only when it is already gone. */
+    private static void closeQuietly(Closeable s) {
         try {
             s.close();
         } catch (IOException ignored) {
