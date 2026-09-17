@@ -7,9 +7,11 @@
 all three now say something else.
 
 `decompose.sh` beside this file holds one daemon in five states and measures each three ways: RSS,
-the pages the process has actually written, and the resident pages of the binary's own code. Three
+the pages the process has actually written, and the resident pages of the binary's own code — four
+on Linux, which can also report the anonymous resident share §14 publishes beside RSS. Three
 runs, `darwin-arm64`, GraalVM CE 25.3.4.1, `-O2`, the release toolchain. The spread between runs is
-0.1 MB, so the differences below are real at one decimal place.
+0.1 MB, so the differences below are real at one decimal place. The same five states on
+`linux-arm64` are further down, and they say the same thing.
 
 | state | | RSS | written | code |
 |---|---|---|---|---|
@@ -100,6 +102,66 @@ The first of those was in this file, and in §15 and the README, before the seco
 Against the join, which is 2.0 MB the other way, a restarted node on a public-CA hub settles around
 **23.7 MB** against the 25.0 published — below it, not above.
 
+## The same five states on `linux-arm64`
+
+`decompose.sh` takes a sampler per kernel: `vmmap` on darwin, `/proc/PID/smaps_rollup` and
+`/proc/PID/smaps` on Linux. `written` is `Private_Dirty` there and `code` is the summed `Rss` of the
+binary's own executable mappings, which is the nearest thing each kernel has to the other's question;
+the script's header says exactly what each column is on each side. Three runs, `linux-arm64`,
+Ubuntu 24.04 (kernel 6.8, 4 KiB pages), GraalVM CE 25.3.4.1, binaries from `./native.sh`. RSS
+repeats to 0.2 MB and `code` to the kilobyte; `written` is the loose one, moving about 100 KB
+between whole runs, so read that column at the hundred and not at the ten.
+
+| state | | RSS | written | code | anonymous |
+|---|---|---|---|---|---|
+| `A` | fresh home, never joined | 17.3 MB | 856 KB | 7,420 KB | 0.8 MB |
+| `Bpin` | joined with `--ca-file`, hub down | 20.2 | 1,012 | 9,404 | 1.0 |
+| `C` | restarted daemon, connected | 23.0 | 1,640 | 11,260 | 1.6 |
+| `E` | `C` with one link open | 23.2 | 1,792 | 11,260 | 1.8 |
+| `J` | joined **and** opened within one daemon's life | 24.0 | 2,333 | 11,260 | 2.3 |
+
+| | RSS | written | code |
+|---|---|---|---|
+| `A → Bpin` stand JSSE up, no bytes moved | +2.9 MB | +156 KB | +1,984 KB |
+| `Bpin → C` handshake, Noise, mux, registration | +2.8 | +628 | +1,856 |
+| `C → E` open one link | +0.2 | +152 | +0 |
+| `E → J` having performed the join in this process | +0.8 | +541 | +0 |
+| **`A → J`** | **+6.7** | **+1,477** | **+3,840** |
+
+**The conclusion carries, and `written` — the column it rests on — carries with it.** darwin's
+`A → J` is +8.0 MB of RSS for +1,546 KB written and +3,712 KB of code; Linux's is +6.7 MB for
+**+1,477 KB written and +3,840 KB of code**, and three separate runs of it gave 1,477, 1,500 and
+1,581 KB. Two kernels, two architectures, two samplers that do not share a line of code, and the
+memory the process owns after standing JSSE up, connecting, opening a link and joining lands within
+5% of the same figure. There is no megabyte of dirty memory to recover on Linux either.
+
+**The 9 MB was never a Linux figure.** §14 publishes 34.4 MB for the node against darwin's 25.0, and
+that is `linux-amd64`, the one platform the gate runs on. `linux-arm64` — a shipped release target
+too — idles at **24.0 MB**, which is *below* macOS, not 9 MB above it.
+
+| | node idle RSS | anonymous | file-backed |
+|---|---|---|---|
+| `darwin-arm64` | 25.0 MB | — | — |
+| `linux-arm64` | 24.0 | 2.3 MB | 21.7 MB |
+| `linux-amd64` ([§14](../ARCHITECTURE.md)) | 34.4 | 2.1 | 32.3 |
+
+**The two Linux targets own the same memory to within 0.2 MB.** Every one of the 10.4 MB between
+them is file-backed — 32.3 MB against 21.7 — clean pages the kernel can drop and re-read, which is
+what §14 says the difference is made of and is now measured on both sides of it rather than argued
+from one. §14 calls those pages the binary's, and that part is still an attribution: 32.3 MB is more
+of them than the whole 26.4 MiB binary, and nothing here says which mappings they are. What it is
+not is macOS counting differently from Linux, which is how that sentence reads — `linux-arm64` sits
+with macOS and `linux-amd64` is the outlier.
+
+Two smaller differences, neither of which moves anything:
+
+- `code` stops growing at `C` on Linux — 11,260 KB at `C`, `E` and `J` alike — where on darwin it
+  kept creeping, 8,096 to 8,144 to 8,272. The link and the join touch no new text pages there.
+- The absolute `code` figures are higher on Linux (7,420 KB at `A` against darwin's 4,560) for a
+  similar amount of growth, +3.8 MB against darwin's +3.6. The two absolutes are not the same
+  measurement — Linux's column is the binary's executable mappings and darwin's is `__TEXT`, which
+  carries rodata as well — so what carries across is the growth and not the 7,420 against 4,560.
+
 ## What this says about replacing JSSE
 
 The question this was run for was whether writing our own TLS would move the figure, and the
@@ -125,9 +187,23 @@ defence. If this number is ever worth moving, the lever is code layout.
 
 ## What this does not cover
 
-`darwin-arm64` only, because the split rests on `vmmap`. Linux reports the same two quantities as
-`Rss` and `RssAnon` in `smaps_rollup`, and the README already prints the anonymous share beside RSS
-— 2 MB against 34.4, which is the same story this file tells in more detail.
+`darwin-arm64` and `linux-arm64`. **`linux-amd64` is the one that is missing, and it is the one the
+gate measures** — the 34.4 MB in §14 and the README is its figure, and nothing has taken it apart at
+these five states. What the run above establishes is that its extra 10 MB is file-backed and not
+memory the process owns; what it cannot establish is which mappings, because an arm64 machine is not
+where that number comes from. #216 is that run.
+
+Only `decompose.sh`'s five states have been run on Linux. The trust-store half of this file is
+`truststore.sh`, which rests on `vmmap` and on a second image built beside the first, so the 0.55 MB
+the shipped configuration costs and the 1.06 MB ceiling on dropping validation are `darwin-arm64`
+figures and nothing has checked them anywhere else.
+
+The two samplers are not the same measurement, only the same question: darwin has no column that
+means what Linux's anonymous resident means, so the `anonymous` column exists on one side only, and
+the cross-platform claims above are about `written`, `code` and RSS. Those three are comparable
+between the platforms as differences between states and not as absolutes — `written` at `A` is
+2,316 KB on darwin against 856 on Linux — which is why every cross-platform figure above is a
+delta.
 
 It also measures one TLS client and no visitors. Everything about what a *visitor* costs is
 [§15](../ARCHITECTURE.md)'s 99 KB figure and a different measurement.
