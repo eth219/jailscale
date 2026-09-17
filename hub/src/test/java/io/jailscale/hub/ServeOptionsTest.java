@@ -272,6 +272,42 @@ class ServeOptionsTest {
     }
 
     /**
+     * An IPv6 address has colons of its own, so `--listen ::443` parses as the host `:` and binds
+     * nothing -- it used to reach the operator as `SocketException: Unresolved address`, a sentence
+     * that says nothing about brackets (#63). All four host:port flags parse the same way and all
+     * four had it.
+     */
+    @Test
+    void anUnbracketedIpv6ListenerSaysToBracketIt() {
+        String want = " needs an IPv6 address in brackets, as in ";
+        for (String flag : new String[] {"--listen", "--http-listen", "--metrics-listen", "--dns-listen"}) {
+            String msg = refused(flag, "::443");
+            assertTrue(msg.startsWith(flag + want), flag + " said: " + msg);
+        }
+        assertEquals("--listen needs an IPv6 address in brackets, as in --listen [::]:443 for every address"
+            + " or --listen [2001:db8::1]:443 for one", refused("--listen", "2001:db8::1:443"));
+        // Brackets and no port: the last colon is inside the address, so the check has to look for
+        // the one after the bracket or it refuses this for the one thing it got right.
+        assertEquals("--listen must be [address]:port for an IPv6 address", refused("--listen", "[::]"));
+        assertEquals("--dns-listen must be [address]:port for an IPv6 address", refused("--dns-listen", "[2001:db8::1]"));
+    }
+
+    /**
+     * And the bracketed form is still accepted, on every one of them. This guards the check above
+     * and not the parser under it: the brackets already survived {@code substring}, so deleting
+     * the check leaves this green. What it can fail is a check that rejects the valid form too.
+     */
+    @Test
+    void aBracketedIpv6ListenerIsTheForm() {
+        HubConfig c = serve("--listen", "[::]:443", "--http-listen", "[::]:80",
+            "--metrics-listen", "[::1]:9090", "--dns-listen", "[::]:53");
+        assertEquals("[::]", c.listenHost());
+        assertEquals("[::]", c.httpListenHost());
+        assertEquals("[::1]", c.metricsListenHost());
+        assertEquals("[::]", c.dnsListenHost());
+    }
+
+    /**
      * The three options whose readers compare against one spelling. {@code --invite-policy} was
      * always checked; {@code --registration} and {@code --knock} were not, and a typo in either
      * selected the other setting without a word -- a hub the operator had opened staying closed,
