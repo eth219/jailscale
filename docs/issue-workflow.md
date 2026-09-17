@@ -229,7 +229,15 @@ the conclusions this harness has produced that were confident, plausible and wro
 ### 7. Open the pull request
 
 `Closes #N` in the body, so the merge closes the issue and ends the claim. Move the issue to
-`status:in-review`. Say in the body which of the gates above you ran and which you did not — a PR
+`status:in-review`.
+
+**And nowhere else in the body may the word `close` stand next to a number.** GitHub's parser
+matches `close #N` and does not read a `not` in front of it, so the sentence a "What this does not
+do" section invites — *it does not close #183* — closes #183 on merge. That happened twice in one
+afternoon (#207), in two pull requests each saying the opposite of what they did. `fixes`, `fixed`,
+`resolves`, `resolved` and `closed` are the same keyword. Say it another way and the problem is
+gone: **#183 stays open**, or **#183 is parked, not fixed**. Step 8's invariant command is what
+catches it afterwards, and both times it did. Say in the body which of the gates above you ran and which you did not — a PR
 that is silent about the budget run is one the reviewer has to assume was not measured. Give the
 pull request the issue's type and area labels, and nothing from the status axis.
 

@@ -12,7 +12,11 @@ Closes #
 ## What this does not do
 
 <!-- The scope you deliberately did not take, and anything the change leaves open. If it needs a
-     follow-up issue, file it and link it here rather than leaving it in this paragraph. -->
+     follow-up issue, file it and link it here rather than leaving it in this paragraph.
+
+     Do not write "does not close #N" here, or fix/resolve either: GitHub matches the keyword and
+     ignores the "not", so the sentence closes the issue it says it is leaving open. "#N stays
+     open" says the same thing and does not. -->
 
 ## Gates
 
