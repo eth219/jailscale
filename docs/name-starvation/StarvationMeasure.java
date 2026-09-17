@@ -192,7 +192,7 @@ public final class StarvationMeasure {
     /** Joins a node with the given bound and opens two names on it: hot and cold. */
     private void join(App hot, App cold, String hotName, String coldName) throws Exception {
         Path home = root.resolve("n" + System.nanoTime());
-        node = new Daemon(NodeConfig.in(home), CEILING);
+        node = new Daemon(NodeConfig.in(home).withTuning(NodeConfig.Tuning.defaults().visitorCeiling(CEILING)));
         node.start();
         Path sock = home.resolve("jailscale.sock");
         ok(Ipc.call(sock, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1")

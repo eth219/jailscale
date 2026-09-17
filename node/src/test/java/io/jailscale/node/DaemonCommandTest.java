@@ -57,7 +57,7 @@ class DaemonCommandTest {
      */
     @Test
     void theDaemonIsToldTheSocketTheCliWillWaitOn() {
-        NodeConfig cfg = new NodeConfig(Path.of("nodehome"), Path.of("/run/user/501/jailscale.sock"));
+        NodeConfig cfg = new NodeConfig(Path.of("nodehome"), Path.of("/run/user/501/jailscale.sock"), NodeConfig.Tuning.defaults());
         List<String> cmd = Service.daemonCommand(cfg, null);
         String[] tail = cmd.subList(cmd.indexOf("daemon"), cmd.size()).toArray(new String[0]);
 

@@ -99,7 +99,7 @@ class AcmeFlowTest {
         ca = new MockCa(() -> hubRef[0].dnsPort());
         HubConfig cfg = new HubConfig(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             null, null, true, HubConfig.POLICY_MEMBERS, true, "hub.test",
-            URI.create("http://127.0.0.1:" + ca.port() + "/directory"), "ops@hub.test", "127.0.0.1", 0, false, false, 0, 0, null, -1, null, -1, null, false, List.of(), null, null, null, null);
+            URI.create("http://127.0.0.1:" + ca.port() + "/directory"), "ops@hub.test", "127.0.0.1", 0, false, false, 0, 0, null, -1, null, -1, null, false, List.of(), null, null, null, null, HubConfig.Tuning.defaults());
         hub = new Hub(cfg);
         hubRef[0] = hub;
         hub.start(); // issues the certificate through the mock CA before listening

@@ -360,7 +360,7 @@ public final class Main {
             return NodeConfig.defaults();
         }
         Path home = Path.of(a.get("home"));
-        return a.has("socket") ? new NodeConfig(home, Path.of(a.get("socket"))) : NodeConfig.in(home);
+        return a.has("socket") ? new NodeConfig(home, Path.of(a.get("socket")), NodeConfig.Tuning.defaults()) : NodeConfig.in(home);
     }
 
     /** Sends a request to the daemon, starting it if needed. Progress lines are printed as they arrive. */
@@ -408,7 +408,7 @@ public final class Main {
             return null;
         }
         Path path = Path.of(socket);
-        return Ipc.isAlive(path) ? new NodeConfig(cfg.configDir(), path) : null;
+        return Ipc.isAlive(path) ? new NodeConfig(cfg.configDir(), path, cfg.tuning()) : null;
     }
 
     private static void print(JsonObject r) {

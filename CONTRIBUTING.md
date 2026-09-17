@@ -106,6 +106,14 @@ to assume was not measured.
   #75). Building one and leaving §15 stating it is how that document becomes fiction a paragraph at
   a time, and §14 is the same for a number. Nothing can check this — no test can tell that a
   sentence became false — which is why it is asked for at the pull request and not by CI.
+- **A timing a test needs to move goes on the config record, not in a static and not in a new
+  constructor parameter.** `HubConfig.Tuning` and `NodeConfig.Tuning` are where they live, both
+  reachable with `withTuning(...)`. The two idioms this replaced are worth knowing, because both
+  read as reasonable: a `static volatile` field set in a `@BeforeEach` is correct only for as long
+  as surefire runs one test at a time, and a forgotten restore leaks into every later test in the
+  JVM with nothing to say so; a constructor parameter per knob cost the node side three `Daemon`
+  constructors for two knobs, and a third knob would have cost a fourth. A record costs neither, and it is the seam an
+  operator-facing flag would need if one of these ever becomes one. #61 is the decision.
 - **An exclusion carries its reason.** `spotbugs-exclude.xml` is the precedent: an exclusion with no
   reason and a finding nobody answered look identical six months later.
 

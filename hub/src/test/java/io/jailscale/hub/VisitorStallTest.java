@@ -275,7 +275,7 @@ class VisitorStallTest {
 
     /** A node that serves one visitor at a time and waits {@link #DEADLINE_MS} for its first word. */
     private Daemon oneVisitorNode(String name) throws IOException {
-        Daemon d = new Daemon(NodeConfig.in(root.resolve(name)), 1, DEADLINE_MS);
+        Daemon d = new Daemon(NodeConfig.in(root.resolve(name)).withTuning(NodeConfig.Tuning.defaults().visitorCeiling(1).firstByteMs(DEADLINE_MS)));
         d.start();
         daemons.add(d);
         return d;

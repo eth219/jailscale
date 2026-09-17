@@ -1,5 +1,6 @@
 package io.jailscale.hub;
 
+import io.jailscale.proto.util.Clock;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,7 +14,7 @@ class RateLimiterTest {
 
     @Test
     void spendsItsBurstThenRefuses() {
-        RateLimiter r = new RateLimiter(3, 1);
+        RateLimiter r = new RateLimiter(3, 1, RateLimiter.DEFAULT_PRUNE_MS, Clock::millis);
         for (int i = 0; i < 3; i++) {
             assertTrue(r.allow("10.0.0.1"), "burst token " + i + " should be free");
         }
@@ -22,13 +23,18 @@ class RateLimiterTest {
     }
 
     @Test
-    void refillsOverTime() throws Exception {
-        RateLimiter r = new RateLimiter(3, 100); // 100/s: the burst is back within 30 ms
+    void refillsOverTime() {
+        // A clock this test moves, not one it waits for (#61, #197). At 100 tokens a second one
+        // arrives every 10 ms, so with a real clock the three calls after the wait could themselves
+        // take long enough to refill a fourth and fail the last assertion -- which is what happened
+        // once on a laptop. Nothing here is slept through, and the last assertion is now exact.
+        long[] clock = {1_000};
+        RateLimiter r = new RateLimiter(3, 100, RateLimiter.DEFAULT_PRUNE_MS, () -> clock[0]);
         for (int i = 0; i < 3; i++) {
             assertTrue(r.allow("10.0.0.2"));
         }
         assertFalse(r.allow("10.0.0.2"));
-        Thread.sleep(200);
+        clock[0] += 200;   // 20 tokens' worth, so the burst of 3 is full and no more
         for (int i = 0; i < 3; i++) {
             assertTrue(r.allow("10.0.0.2"), "token " + i + " should have refilled");
         }
@@ -37,7 +43,7 @@ class RateLimiterTest {
 
     @Test
     void keysAreIndependent() {
-        RateLimiter r = new RateLimiter(1, 1);
+        RateLimiter r = new RateLimiter(1, 1, RateLimiter.DEFAULT_PRUNE_MS, Clock::millis);
         assertTrue(r.allow("10.0.0.3"));
         assertFalse(r.allow("10.0.0.3"));
         assertTrue(r.allow("10.0.0.4"), "one exhausted address must not shut out another");
@@ -48,7 +54,7 @@ class RateLimiterTest {
         // §11.5 is a bound per caller, and in v6 a caller is not an address: a routed /64 comes with
         // every ordinary VPS, so counted per address every limit in that table would be free to
         // anyone who wanted it. The hub serves both stacks wherever its listener is bound to `::`.
-        RateLimiter r = new RateLimiter(2, 1);
+        RateLimiter r = new RateLimiter(2, 1, RateLimiter.DEFAULT_PRUNE_MS, Clock::millis);
         assertTrue(r.allow("2001:db8:1:2::1"));
         assertTrue(r.allow("2001:db8:1:2::2"));
         assertFalse(r.allow("2001:db8:1:2::3"), "a third address in the same /64 is the same caller");
@@ -63,7 +69,7 @@ class RateLimiterTest {
         // ten thousand of them that prune has nothing to remove. It used to scan all of them on
         // every call from then on -- 36.4 us against 0.044 us with a map of one, all of it the scan
         // and none of it doing anything.
-        RateLimiter r = new RateLimiter(30, 1);
+        RateLimiter r = new RateLimiter(30, 1, RateLimiter.DEFAULT_PRUNE_MS, Clock::millis);
         for (int i = 0; i < RateLimiter.MAX_KEYS + 500; i++) {
             r.allow("10." + (i >> 16 & 0xff) + "." + (i >> 8 & 0xff) + "." + (i & 0xff));
         }
@@ -82,24 +88,18 @@ class RateLimiterTest {
         // only ever grew would be the trade going the wrong way. This is also what says the scan
         // drops the full buckets at all -- the test that used to say it separately did so with the
         // interval set to zero, which is the one setting that turns off the thing under test.
-        long was = RateLimiter.pruneIntervalMs;
-        RateLimiter.pruneIntervalMs = 10;
-        try {
-            RateLimiter r = new RateLimiter(1, 1000); // full again 1 ms after use
-            for (int i = 0; i < RateLimiter.MAX_KEYS + 500; i++) {
-                r.allow("10." + (i >> 16 & 0xff) + "." + (i >> 8 & 0xff) + "." + (i & 0xff));
-            }
-            Thread.sleep(50);
-            r.allow("10.9.9.9");
-            assertTrue(r.size() <= RateLimiter.MAX_KEYS, "expected a scan by now, size " + r.size());
-        } finally {
-            RateLimiter.pruneIntervalMs = was;
+        RateLimiter r = new RateLimiter(1, 1000, 10, Clock::millis); // full again 1 ms after use, scan every 10
+        for (int i = 0; i < RateLimiter.MAX_KEYS + 500; i++) {
+            r.allow("10." + (i >> 16 & 0xff) + "." + (i >> 8 & 0xff) + "." + (i & 0xff));
         }
+        Thread.sleep(50);
+        r.allow("10.9.9.9");
+        assertTrue(r.size() <= RateLimiter.MAX_KEYS, "expected a scan by now, size " + r.size());
     }
 
     @Test
     void aPrunedKeyStartsFreshWhichIsWhatAFullBucketWouldHaveDone() throws Exception {
-        RateLimiter r = new RateLimiter(2, 1000);
+        RateLimiter r = new RateLimiter(2, 1000, RateLimiter.DEFAULT_PRUNE_MS, Clock::millis);
         assertTrue(r.allow("10.0.0.5"));
         Thread.sleep(20);
         assertTrue(r.allow("10.0.0.5"));

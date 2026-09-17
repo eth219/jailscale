@@ -82,30 +82,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
-        this(config, Visitors.defaultCeiling());
-    }
-
-    /**
-     * As above with the visitor bound of §9.3 given rather than derived from the heap. The same
-     * escape {@link io.jailscale.proto.mux.FlowBudget#of} offers for the hub's byte budget and for
-     * the same reasons: a test needs to reach the bound without a heap that large, and a host may
-     * want to say the number itself. Nothing on the command line reaches it -- the derived number is
-     * the only one anything has measured, and the way to move it is the heap ceiling it comes from.
-     */
-    public Daemon(NodeConfig config, int visitorCeiling) throws IOException {
-        this(config, visitorCeiling, Visitors.FIRST_BYTE_MS);
-    }
-
-    /**
-     * As above with §9.3's first-byte deadline given as well. Here for the same reason and with the
-     * same caveat as the bound: a test that wants to watch a slot come back cannot sit out the
-     * shipped thirty seconds, and nothing on the command line reaches this either.
-     */
-    public Daemon(NodeConfig config, int visitorCeiling, long firstByteMs) throws IOException {
         this.config = config;
         this.state = NodeState.load(config.stateFile());
         // visitors first: its bound goes into every Hello this link sends (ARCHITECTURE.md §9.3).
-        this.visitors = new Visitors(state, visitorCeiling, firstByteMs);
+        this.visitors = new Visitors(state, config.tuning().visitorCeiling(), config.tuning().firstByteMs());
         this.link = new HubLink(state, Version.string(), this, visitors.maxInFlight());
         this.domainCerts = new DomainCerts(config.configDir());
     }

@@ -7,6 +7,7 @@ import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.mux.MuxStream;
 import io.jailscale.proto.json.JsonObject;
+import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import java.io.EOFException;
 import java.io.IOException;
@@ -134,10 +135,12 @@ final class HttpFront {
     static final String ICON = "<link rel=\"icon\" href=\"/favicon.svg\">";
 
     private final Hub hub;
-    private final RateLimiter handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND);
+    private final RateLimiter handshakes;
 
     HttpFront(Hub hub) {
         this.hub = hub;
+        this.handshakes = new RateLimiter(HANDSHAKE_BURST, HANDSHAKE_PER_SECOND,
+            hub.config().tuning().rateLimitPruneMs(), Clock::millis);
     }
 
     /**
