@@ -310,24 +310,23 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
    `tools/flake-rate.sh` prints it: for each job on `main` it counts the reds, and sorts them into
    red-then-re-run-green, red-then-re-run-red, and never resolved. What the rule is exposed to is
    the middle one — a false revert is a flake that repeats — and what a red rate measures is
-   mostly the first and the third. `tools/flake-rate.sh 50` on 2026-09-16, over the 45 push runs
-   it counted — before `load` and `budget` moved to `ci-full.yml`, so reproducing the two of them
-   now takes `WORKFLOW=ci-full.yml` as well, which is #194:
+   mostly the first and the third. `tools/flake-rate.sh 50` on 2026-09-17, over the last 50 pushes
+   to `main` — 102 runs, every workflow that answered them, `ci` and `ci-full` and `images`:
 
    | | |
    |---|---|
-   | reds | 13, across four jobs; per-job rate 4.4% to 8.9% |
+   | reds | 13 — twelve in `ci`, at 4.4% to 8.9% a job, and one in `ci-full`. `images` clean over all 50 |
    | re-run on the same commit | 5, of which 5 went green and 0 were red again |
    | never resolved | 8 — nobody re-ran them, so a flake and a regression look identical |
 
    So the rule has not yet been wrong here, on a sample of five. The eight unresolved reds are the
    reason that is not a stronger statement, and they are why the report prints them as their own
-   column rather than folding them into a rate. Every red in the window was `VisitorStallTest`
-   (six, fixed by #150), `LoadTest` (three, #183), `AutoPromoteTest` or `RawPortTest` (three, the
-   port race fixed by #171), and one whose log holds no test failure at all — a Maven download that
-   failed. At this pace fifty runs is about a day, so re-run the script rather than trusting the
-   table above; `tools/flake-rate.sh --self-test` is what a change to the script itself has to pass,
-   since no CI job runs it (#192).
+   column rather than folding them into a rate. Four tests account for all thirteen:
+   `VisitorStallTest` six, fixed by #150; `LoadTest` four, which is #183; `AutoPromoteTest` two and
+   `RawPortTest` one, the port race fixed by #171. Read the per-job rates and not `ci-full`'s 50%:
+   that job has two runs in this window, because the file is two pushes old. At this pace fifty
+   pushes is under two days, so re-run the script rather than trusting the table above; `tools/flake-rate.sh --self-test` is what a change to the
+   script itself has to pass, since no CI job runs it (#192).
 
 7. A problem seen anywhere in this is step 5: filed with all three axes and linked both ways. That
    is how the tracker grows from the loop, and it is the only way it may.

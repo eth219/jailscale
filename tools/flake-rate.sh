@@ -4,10 +4,13 @@
 # good as the chance that a flake repeats, and until this existed nothing said what that chance
 # was (#187, from the survey in #184).
 #
-#   tools/flake-rate.sh [N]          the last N push runs of one workflow on main (default 50, max
-#                                    100). WORKFLOW= picks it; ci.yml by default, and ci-full.yml is
-#                                    where load and budget are (#194 is that this needs one report).
+#   tools/flake-rate.sh [N]          the last N pushes to main (default 50, max 100)
 #   tools/flake-rate.sh --self-test  the classification, against a fixture that must fail if it is wrong
+#
+# N counts PUSHES, not runs. Every workflow that ran on those pushes is in one report, because the
+# jobs worth measuring are spread across more than one: `load` and `budget` moved to ci-full.yml in
+# #193, and a report of ci.yml alone silently left out the two that the revert rule most depends on
+# (#194). WORKFLOW= narrows it back to one file when that is what you want.
 #
 # A job's reds are sorted into three outcomes, and the difference between them is the whole point:
 #
@@ -27,8 +30,9 @@
 # is a shape the fixture below carries, because getting it wrong turns every red that happened to
 # sit beside a re-run into a false "red again", and that is what the revert rule acts on.
 #
-# For every red the failing test classes are read out of that job's log, so the report names
-# LoadTest rather than `load`. A log that cannot be read says so rather than reading as "no test
+# A job name is only unique within its workflow, so the table is keyed by both. For every red the
+# failing test classes are read out of that job's log, so the report names LoadTest rather than
+# `load`. A log that cannot be read says so rather than reading as "no test
 # failed" -- the two mean different things and the report has been wrong about it.
 #
 # Needs gh (authenticated), jq and awk.
@@ -41,12 +45,14 @@ command -v jq >/dev/null 2>&1 || { echo "this needs jq." >&2; exit 1; }
 # itself rather than silently on eth219/jailscale.
 repo=$(cd "$root" && gh repo view --json nameWithOwner --jq .nameWithOwner) \
     || { echo "cannot tell which GitHub repository $root is; is the origin remote set?" >&2; exit 1; }
-workflow=${WORKFLOW:-ci.yml}
+workflow=${WORKFLOW:-}          # empty means every workflow that ran on those pushes
 branch=${BRANCH:-main}
 tab=$(printf '\t')
+nl='
+'
 
 # The classification. Input: an array of executions, one per (run, job, started):
-#   {run, sha, job, attempt, conclusion, started, tests}
+#   {run, sha, workflow, job, attempt, conclusion, started, tests}
 # Output: the whole report. Kept in one jq program so --self-test and the live path share it.
 classify='
   def pct: (. * 1000 | round) as $n | "\($n / 10 | floor).\($n % 10)%";
@@ -55,7 +61,7 @@ classify='
     | map( sort_by(.attempt) as $e
            | ($e | map(select(.conclusion == "failure"))) as $red
            | $e[-1] as $last
-           | { run: $e[0].run, sha: $e[0].sha, job: $e[0].job,
+           | { run: $e[0].run, sha: $e[0].sha, workflow: $e[0].workflow, job: $e[0].job,
                ran: ($e | any(.conclusion == "success" or .conclusion == "failure")),
                outcome: (if ($red | length) == 0 then null
                          elif $last.conclusion == "success" then "flaked"
@@ -63,20 +69,20 @@ classify='
                          else "unresolved" end),
                tests: ($red[-1].tests // "-") } )
   ) as $rj
-  | ( $rj | group_by(.job)
-      | map( { job: .[0].job,
+  | ( $rj | group_by([.workflow, .job])
+      | map( { workflow: .[0].workflow, job: .[0].job,
                runs: (map(select(.ran)) | length),
                flaked: (map(select(.outcome == "flaked")) | length),
                again: (map(select(.outcome == "red again")) | length),
                unresolved: (map(select(.outcome == "unresolved")) | length) }
              | .red = (.flaked + .again + .unresolved) )
-      | map(select(.runs > 0)) | sort_by(.job) ) as $table
-  | ( $rj | map(select(.outcome != null)) | sort_by(.run, .job) ) as $reds
+      | map(select(.runs > 0)) | sort_by([.workflow, .job]) ) as $table
+  | ( $rj | map(select(.outcome != null)) | sort_by([.run, .workflow, .job]) ) as $reds
   | ( $reds | map(select(.outcome == "flaked")) | length ) as $g
   | ( $reds | map(select(.outcome == "red again")) | length ) as $b
   | ( $reds | map(select(.outcome == "unresolved")) | length ) as $u
-  | ( ["job", "runs", "red", "flaked", "red again", "unresolved", "red rate"] | @tsv ),
-    ( $table[] | [ .job, .runs, .red, .flaked, .again, .unresolved,
+  | ( ["workflow", "job", "runs", "red", "flaked", "red again", "unresolved", "red rate"] | @tsv ),
+    ( $table[] | [ .workflow, .job, .runs, .red, .flaked, .again, .unresolved,
                    (if .runs == 0 then "-" else (.red / .runs | pct) end) ] | @tsv ),
     "",
     ( if ($reds | length) == 0 then "no red job in these runs"
@@ -88,10 +94,32 @@ classify='
       end ),
     "",
     ( if ($reds | length) == 0 then empty
-      else "red jobs (run, commit, job, outcome, what failed):",
-           ( $reds[] | "  \(.run)\t\(.sha[0:7])\t\(.job)\t\(.outcome)\t\(.tests)" )
+      else "red jobs (run, commit, workflow, job, outcome, what failed):",
+           ( $reds[] | "  \(.run)\t\(.sha[0:7])\t\(.workflow)\t\(.job)\t\(.outcome)\t\(.tests)" )
       end )
 '
+
+# Keeps the completed runs, and the ones WORKFLOW= names -- either as a bare file name or as the
+# path the listing carries. It compares the two whole, rather than testing a suffix: the arithmetic
+# version matched `.github/workflows/release.yml` for a WORKFLOW= of `.github/workflows/ci-full.yml`,
+# because `index` returns 0 for "not found" and the two paths are the same length.
+# Input is the seven fields the listing emits; output is the five the rest of the script wants.
+filter_runs() {
+    awk -F'\t' -v w="$1" '
+      $7 != "completed" { next }
+      w != "" { k = split($6, part, "/"); if (part[k] != w && $6 != w) next }
+      { print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 }'
+}
+
+# Keeps the runs belonging to the newest N pushes. The listing is newest first, so first-seen order
+# is newest first.
+trim_to_pushes() {
+    _in=$(cat)
+    # Comma-joined, because awk's -v cannot carry a value with a newline in it.
+    _keep=$(printf '%s\n' "$_in" | awk -F'\t' '!seen[$3]++ { print $3 }' | head -n "$1" | paste -sd, -)
+    printf '%s\n' "$_in" | awk -F'\t' -v keep="$_keep" '
+      BEGIN { m = split(keep, a, ","); for (i = 1; i <= m; i++) K[a[i]] = 1 } K[$3]'
+}
 
 # Pads the tab-separated lines into columns. awk rather than `column`, which is not POSIX and is
 # missing from minimal images -- and which, being the last command of a pipeline, used to take the
@@ -116,52 +144,79 @@ pad() {
 }
 
 if [ "${1:-}" = "--self-test" ]; then
-    # Nine runs, each shape the classifier has to tell apart. Run 5 is the one the live API forced:
+    # Ten runs, each shape the classifier has to tell apart. `load` exists in two workflows, with
+    # different histories, because a job name is only unique within one: merging them was the
+    # defect #194 filed. Run 5 is the one the live API forced:
     # a re-run lists the jobs it did not re-run again, with the same started_at, and counting that
     # as a second red would turn every red beside a re-run into a false "red again".
     fixture='[
-      {"run":1,"sha":"aaaaaaa","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"LoadTest"},
-      {"run":1,"sha":"aaaaaaa","job":"load","attempt":2,"conclusion":"success","started":"t2"},
-      {"run":1,"sha":"aaaaaaa","job":"budget","attempt":1,"conclusion":"success","started":"t1"},
-      {"run":1,"sha":"aaaaaaa","job":"budget","attempt":2,"conclusion":"success","started":"t1"},
-      {"run":2,"sha":"bbbbbbb","job":"load","attempt":1,"conclusion":"success","started":"t1"},
-      {"run":2,"sha":"bbbbbbb","job":"budget","attempt":1,"conclusion":"failure","started":"t1","tests":"VisitorStallTest"},
-      {"run":3,"sha":"ccccccc","job":"load","attempt":1,"conclusion":"success","started":"t1"},
-      {"run":3,"sha":"ccccccc","job":"budget","attempt":1,"conclusion":"success","started":"t1"},
-      {"run":4,"sha":"ddddddd","job":"test","attempt":1,"conclusion":"failure","started":"t1","tests":"DnsQueryTest"},
-      {"run":4,"sha":"ddddddd","job":"test","attempt":2,"conclusion":"failure","started":"t2","tests":"DnsQueryTest"},
-      {"run":4,"sha":"ddddddd","job":"index","attempt":2,"conclusion":"skipped","started":"t1"},
-      {"run":5,"sha":"eeeeeee","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"LoadTest"},
-      {"run":5,"sha":"eeeeeee","job":"load","attempt":2,"conclusion":"failure","started":"t1","tests":"LoadTest"},
-      {"run":5,"sha":"eeeeeee","job":"budget","attempt":1,"conclusion":"failure","started":"t1","tests":"RawPortTest"},
-      {"run":5,"sha":"eeeeeee","job":"budget","attempt":2,"conclusion":"success","started":"t2"},
-      {"run":6,"sha":"fffffff","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"LoadTest"},
-      {"run":6,"sha":"fffffff","job":"load","attempt":2,"conclusion":"cancelled","started":"t2"},
-      {"run":7,"sha":"ggggggg","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"(log unavailable)"},
-      {"run":8,"sha":"hhhhhhh","job":"load","attempt":1,"conclusion":"success","started":"t1"},
-      {"run":9,"sha":"iiiiiii","job":"load","attempt":1,"conclusion":"success","started":"t1"}
+      {"run":1,"sha":"aaaaaaa","workflow":"ci-full","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"LoadTest"},
+      {"run":1,"sha":"aaaaaaa","workflow":"ci-full","job":"load","attempt":2,"conclusion":"success","started":"t2"},
+      {"run":1,"sha":"aaaaaaa","workflow":"ci-full","job":"budget","attempt":1,"conclusion":"success","started":"t1"},
+      {"run":1,"sha":"aaaaaaa","workflow":"ci-full","job":"budget","attempt":2,"conclusion":"success","started":"t1"},
+      {"run":2,"sha":"bbbbbbb","workflow":"ci-full","job":"load","attempt":1,"conclusion":"success","started":"t1"},
+      {"run":2,"sha":"bbbbbbb","workflow":"ci-full","job":"budget","attempt":1,"conclusion":"failure","started":"t1","tests":"VisitorStallTest"},
+      {"run":3,"sha":"ccccccc","workflow":"ci-full","job":"load","attempt":1,"conclusion":"success","started":"t1"},
+      {"run":3,"sha":"ccccccc","workflow":"ci-full","job":"budget","attempt":1,"conclusion":"success","started":"t1"},
+      {"run":4,"sha":"ddddddd","workflow":"ci","job":"test","attempt":1,"conclusion":"failure","started":"t1","tests":"DnsQueryTest"},
+      {"run":4,"sha":"ddddddd","workflow":"ci","job":"test","attempt":2,"conclusion":"failure","started":"t2","tests":"DnsQueryTest"},
+      {"run":4,"sha":"ddddddd","workflow":"ci","job":"index","attempt":2,"conclusion":"skipped","started":"t1"},
+      {"run":5,"sha":"eeeeeee","workflow":"ci-full","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"LoadTest"},
+      {"run":5,"sha":"eeeeeee","workflow":"ci-full","job":"load","attempt":2,"conclusion":"failure","started":"t1","tests":"LoadTest"},
+      {"run":5,"sha":"eeeeeee","workflow":"ci-full","job":"budget","attempt":1,"conclusion":"failure","started":"t1","tests":"RawPortTest"},
+      {"run":5,"sha":"eeeeeee","workflow":"ci-full","job":"budget","attempt":2,"conclusion":"success","started":"t2"},
+      {"run":6,"sha":"fffffff","workflow":"ci-full","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"LoadTest"},
+      {"run":6,"sha":"fffffff","workflow":"ci-full","job":"load","attempt":2,"conclusion":"cancelled","started":"t2"},
+      {"run":7,"sha":"ggggggg","workflow":"ci-full","job":"load","attempt":1,"conclusion":"failure","started":"t1","tests":"(log unavailable)"},
+      {"run":8,"sha":"hhhhhhh","workflow":"ci-full","job":"load","attempt":1,"conclusion":"success","started":"t1"},
+      {"run":9,"sha":"iiiiiii","workflow":"ci-full","job":"load","attempt":1,"conclusion":"success","started":"t1"},
+      {"run":10,"sha":"jjjjjjj","workflow":"ci","job":"load","attempt":1,"conclusion":"success","started":"t1"}
     ]'
     # The expected report, whole. Comparing it entire is what makes the red-jobs half of the
     # classifier able to fail: asserting only the table let the list be blanked, inverted, or
     # stripped of its test classes and still pass (CLAUDE.md rule 5).
     expected=$(cat <<'EXPECT'
-job|runs|red|flaked|red again|unresolved|red rate
-budget|4|2|1|0|1|50.0%
-load|8|4|1|0|3|50.0%
-test|1|1|0|1|0|100.0%
+workflow|job|runs|red|flaked|red again|unresolved|red rate
+ci|load|1|0|0|0|0|0.0%
+ci|test|1|1|0|1|0|100.0%
+ci-full|budget|4|2|1|0|1|50.0%
+ci-full|load|8|4|1|0|3|50.0%
 
 of 7 reds, 3 were re-run on the same commit: 2 green, 1 red again. 4 were never resolved, so whether those were flakes is not known from here. The re-run-once rule reverts when a flake repeats, which happened in 1 of 3 re-runs.
 
-red jobs (run, commit, job, outcome, what failed):
-  1|aaaaaaa|load|flaked|LoadTest
-  2|bbbbbbb|budget|unresolved|VisitorStallTest
-  4|ddddddd|test|red again|DnsQueryTest
-  5|eeeeeee|budget|flaked|RawPortTest
-  5|eeeeeee|load|unresolved|LoadTest
-  6|fffffff|load|unresolved|LoadTest
-  7|ggggggg|load|unresolved|(log unavailable)
+red jobs (run, commit, workflow, job, outcome, what failed):
+  1|aaaaaaa|ci-full|load|flaked|LoadTest
+  2|bbbbbbb|ci-full|budget|unresolved|VisitorStallTest
+  4|ddddddd|ci|test|red again|DnsQueryTest
+  5|eeeeeee|ci-full|budget|flaked|RawPortTest
+  5|eeeeeee|ci-full|load|unresolved|LoadTest
+  6|fffffff|ci-full|load|unresolved|LoadTest
+  7|ggggggg|ci-full|load|unresolved|(log unavailable)
 EXPECT
 )
+    # filter_runs and trim_to_pushes are the live path's two text transforms. They are here
+    # because everything below `--self-test`'s exit used to be unreachable from it: the WORKFLOW
+    # filter shipped with a false positive that matched release.yml, and nothing could have failed.
+    # %b, not %s: %s leaves the \t in the argument as two characters.
+    raw=$(printf '%b\n' \
+      "1\tsuccess\taaa\tt1\tci\t.github/workflows/ci.yml\tcompleted" \
+      "2\tsuccess\taaa\tt1\tci-full\t.github/workflows/ci-full.yml\tcompleted" \
+      "3\tsuccess\tbbb\tt2\trelease\t.github/workflows/release.yml\tcompleted" \
+      "4\t-\tbbb\tt2\tci\t.github/workflows/ci.yml\tin_progress" \
+      "5\tsuccess\tccc\tt3\tci\t.github/workflows/ci.yml\tcompleted" \
+      "6\tsuccess\tccc\tt3\tmy-ci\t.github/workflows/my-ci.yml\tcompleted")
+    f_all=$(printf '%s\n' "$raw" | filter_runs "" | cut -f1 | paste -sd, -)
+    f_ci=$(printf '%s\n' "$raw" | filter_runs "ci.yml" | cut -f1 | paste -sd, -)
+    # The same length as release.yml, which is the collision the sentinel used to produce.
+    f_path=$(printf '%s\n' "$raw" | filter_runs ".github/workflows/ci-full.yml" | cut -f1 | paste -sd, -)
+    f_none=$(printf '%s\n' "$raw" | filter_runs "nope.yml" | cut -f1 | paste -sd, -)
+    t_two=$(printf '%s\n' "$raw" | filter_runs "" | trim_to_pushes 2 | cut -f1 | paste -sd, -)
+    t_one=$(printf '%s\n' "$raw" | filter_runs "" | trim_to_pushes 1 | cut -f1 | paste -sd, -)
+    for want_got in "1,2,3,5,6:$f_all" "1,5:$f_ci" "2:$f_path" ":$f_none" "1,2,3:$t_two" "1,2:$t_one"; do
+        want=${want_got%%:*}; got_=${want_got#*:}
+        [ "$want" = "$got_" ] || { echo "self-test: expected [$want], got [$got_]" >&2; exit 1; }
+    done
+
     got=$(printf '%s' "$fixture" | jq -r "$classify" | tr '\t' '|')
     # pad() is the other half of the report and the classifier's output does not reach a reader
     # without it. Two blocks around a prose line, which is the shape that broke: the paragraph's
@@ -187,20 +242,44 @@ case $n in ''|*[!0-9]*) echo "usage: tools/flake-rate.sh [N] | --self-test" >&2;
 # report quietly about a different window than the one asked for.
 { [ "$n" -ge 1 ] && [ "$n" -le 100 ]; } || { echo "N must be between 1 and 100." >&2; exit 2; }
 
-runs=$(gh api "repos/$repo/actions/workflows/$workflow/runs?branch=$branch&event=push&per_page=$n" \
-       --jq '.workflow_runs[] | select(.status == "completed")
-             | [.id, (.conclusion // "-"), .head_sha, .created_at] | @tsv')
-[ -n "$runs" ] || { echo "no completed push runs of $workflow on $branch." >&2; exit 1; }
+# Pages of runs across every workflow, newest first, until N distinct pushes are in hand. Paging
+# is what makes N mean pushes: three workflows answer a push here, so one page of 100 runs is
+# barely thirty commits, and the figure quoted in docs/issue-workflow.md is per commit.
+runs=
+page=1
+pages=10
+while :; do
+    # `raw=$(...)` and not a pipeline, so that a failed call exits here. gh's --jq takes a filter
+    # and nothing else -- no --arg -- so WORKFLOW= is applied by filter_runs, below.
+    raw=$(gh api "repos/$repo/actions/runs?branch=$branch&event=push&per_page=100&page=$page" \
+          --jq '.workflow_runs[]
+                | [.id, (.conclusion // "-"), .head_sha, .created_at, .name, .path, .status] | @tsv')
+    # An empty page means the branch has no more push runs. It must be told apart from a page whose
+    # runs were all filtered out, which is what WORKFLOW= does to most of them: breaking on that
+    # made `WORKFLOW=ci-full.yml 50` report two pushes and call it the history.
+    [ -n "$raw" ] || break
+    batch=$(printf '%s\n' "$raw" | filter_runs "$workflow")
+    [ -z "$batch" ] || runs=${runs:+$runs$nl}$batch
+    # N+1 and not N. All the runs of one push are newer than every run of the next, so the Nth
+    # push is only known to be whole once a run of the N+1th has been seen; stopping at N leaves
+    # the oldest push in the window missing whatever fell onto the following page.
+    [ "$(printf '%s\n' "$runs" | cut -f3 | sort -u | wc -l)" -gt "$n" ] && break
+    page=$((page + 1))
+    [ "$page" -le "$pages" ] || { echo "stopped at $pages pages; the window may be short." >&2; break; }
+done
+[ -n "$runs" ] || { echo "no completed push runs${workflow:+ of $workflow} on $branch." >&2; exit 1; }
+runs=$(printf '%s\n' "$runs" | trim_to_pushes "$n")
 
 eval "$(printf '%s\n' "$runs" | awk -F'\t' '
-  NR == 1 { last = $4 } $2 == "cancelled" { c++ } { first = $4 }
-  END { printf "total=%d cancelled=%d first=%s last=%s\n", NR, c + 0, first, last }')"
+  NR == 1 { last = $4 } $2 == "cancelled" { c++ } { first = $4 } { sha[$3]; wf[$5] }
+  END { printf "total=%d cancelled=%d first=%s last=%s pushes=%d flows=%d\n",
+               NR, c + 0, first, last, length(sha), length(wf) }')"
 
 # One TSV line per execution. The jobs call is made once per run: filter=all returns every
 # attempt's jobs, each carrying its own run_attempt, so there is no attempt loop to get wrong.
 # `jobs=$(...)` rather than a pipeline, so that a failed call exits here instead of being
 # swallowed and leaving a report that looks complete.
-rows=$(printf '%s\n' "$runs" | awk -F'\t' '$2 != "cancelled"' | while IFS="$tab" read -r id conclusion sha created; do
+rows=$(printf '%s\n' "$runs" | awk -F'\t' '$2 != "cancelled"' | while IFS="$tab" read -r id conclusion sha created flow; do
     jobs=$(gh api "repos/$repo/actions/runs/$id/jobs?filter=all&per_page=100" \
            --jq '[.jobs[] | {id, name, conclusion: (.conclusion // "-"), attempt: .run_attempt, started: (.started_at // "-")}]
                  | .[] | [.id, .attempt, .conclusion, .started, .name] | @tsv')
@@ -218,14 +297,18 @@ rows=$(printf '%s\n' "$runs" | awk -F'\t' '$2 != "cancelled"' | while IFS="$tab"
                 tests='(log unavailable)'
             fi
         fi
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$sha" "$attempt" "$jc" "$started" "$tests" "$name"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$sha" "$attempt" "$jc" "$started" "$flow" "$tests" "$name"
     done
 done)
 
 events=$(printf '%s\n' "$rows" | jq -Rn '[ inputs | select(length > 0) | split("\t")
   | { run: (.[0] | tonumber), sha: .[1], attempt: (.[2] | tonumber), conclusion: .[3],
-      started: .[4], tests: (.[5] | if . == "" then null else . end), job: .[6] } ]')
+      started: .[4], workflow: .[5],
+      tests: (.[6] | if . == "" then null else . end), job: .[7] } ]')
 
-echo "$workflow on $branch, the last $total push runs ($first .. $last), $cancelled cancelled and not counted"
+[ "$pushes" = 1 ] && push_word=push || push_word=pushes
+[ "$flows" = 1 ] && flow_word=workflow || flow_word=workflows
+[ "$pushes" -ge "$n" ] || echo "asked for $n pushes; only $pushes are on $branch${workflow:+ for $workflow}." >&2
+echo "$branch, the last $pushes $push_word ($first .. $last): $total runs over $flows $flow_word${workflow:+, filtered to $workflow}, $cancelled of them cancelled and not counted"
 echo
 printf '%s' "$events" | jq -r "$classify" | pad
