@@ -113,7 +113,7 @@ class NodeCapacityTest {
 
     /** Joins with a node that will hold {@code CEILING} visitors and opens one link on it. */
     private void join() throws Exception {
-        node = new Daemon(NodeConfig.in(root.resolve("alice")), CEILING);
+        node = new Daemon(NodeConfig.in(root.resolve("alice")).withTuning(NodeConfig.Tuning.defaults().visitorCeiling(CEILING)));
         node.start();
         Path sock = root.resolve("alice/jailscale.sock");
         assertTrue(Ipc.call(sock, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1")
@@ -233,10 +233,10 @@ class NodeCapacityTest {
      */
     @Test
     void twoNodesClaimingEverythingCannotWrapTheHubsCapacityNegative() throws Exception {
-        node = new Daemon(NodeConfig.in(root.resolve("alice")), Integer.MAX_VALUE);
+        node = new Daemon(NodeConfig.in(root.resolve("alice")).withTuning(NodeConfig.Tuning.defaults().visitorCeiling(Integer.MAX_VALUE)));
         node.start();
         joinAs(root.resolve("alice/jailscale.sock"), "alice");
-        Daemon second = new Daemon(NodeConfig.in(root.resolve("bob")), Integer.MAX_VALUE);
+        Daemon second = new Daemon(NodeConfig.in(root.resolve("bob")).withTuning(NodeConfig.Tuning.defaults().visitorCeiling(Integer.MAX_VALUE)));
         try {
             second.start();
             joinAs(root.resolve("bob/jailscale.sock"), "bob");

@@ -2,6 +2,7 @@ package io.jailscale.hub;
 
 import io.jailscale.proto.net.NetKey;
 import io.jailscale.proto.util.Clock;
+import java.util.function.LongSupplier;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -46,20 +47,36 @@ final class RateLimiter {
      * one second's worth of <em>new addresses that have each completed a TLS handshake</em>, which
      * is a few thousand entries at the very most and 48 bytes each.
      */
-    static long pruneIntervalMs = 1_000;
+    static final long DEFAULT_PRUNE_MS = 1_000;
 
     private record Bucket(double tokens, long at) {}
 
     private final int burst;
     private final double perSecond;
+    /** {@link HubConfig.Tuning#rateLimitPruneMs}; a constructor parameter and not a static (#61). */
+    private final long pruneIntervalMs;
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
     private final AtomicLong prunes = new AtomicLong();
     /** Seeded, not left at zero: {@link Clock} has no defined origin and may start below it. */
-    private volatile long lastPrune = Clock.millis();
+    private final LongSupplier now;
+    private volatile long lastPrune;
 
-    RateLimiter(int burst, double perSecond) {
+    /**
+     * The clock is a parameter for the same reason the interval is (#61): a bucket refills by
+     * elapsed time, and a test that has to spend that time in {@code Thread.sleep} is measuring the
+     * machine as much as the code. {@code refillsOverTime} did exactly that and went red once on a
+     * developer's laptop for it (#197) -- with 100 tokens a second, a new one arrives every 10 ms,
+     * and three {@code allow} calls on a busy machine can cross that and refill a fourth.
+     *
+     * <p>Production passes {@link Clock#millis}, which is monotonic: a bucket refills by elapsed
+     * time and the time of day is not that.
+     */
+    RateLimiter(int burst, double perSecond, long pruneIntervalMs, LongSupplier now) {
         this.burst = burst;
         this.perSecond = perSecond;
+        this.pruneIntervalMs = pruneIntervalMs;
+        this.now = now;
+        this.lastPrune = now.getAsLong();
     }
 
     /**
@@ -71,8 +88,7 @@ final class RateLimiter {
      */
     boolean allow(String ip) {
         String key = NetKey.of(ip);
-        // Monotonic: a bucket refills by elapsed time, and the time of day is not that (Clock).
-        long now = Clock.millis();
+        long now = this.now.getAsLong();
         if (buckets.size() > MAX_KEYS && now - lastPrune >= pruneIntervalMs) {
             // Set first, so two threads arriving together scan once between them rather than twice.
             // Both scanning is harmless if it happens -- the scan is idempotent -- and this is not

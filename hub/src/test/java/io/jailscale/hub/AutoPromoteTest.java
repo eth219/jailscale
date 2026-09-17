@@ -10,7 +10,6 @@ import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
-import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import java.net.ServerSocket;
 import java.net.URI;
@@ -19,7 +18,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import io.jailscale.proto.net.TestPorts;
@@ -46,18 +44,18 @@ class AutoPromoteTest {
     private HubConfig cfgA;
     private HubConfig cfgB;
 
-    @BeforeEach
-    void quick() {
-        Hub.promoteAfterMs = 1500;
-        Hub.witnessWindowMs = 1500;
-        Hub.autoPromoteIntervalMs = 0;
-    }
+    /**
+     * §13.5's timings, shortened so a test does not sit out forty seconds. On the two configs and
+     * not on a static: that is #61, and the reason is this class -- three fields set in a
+     * {@code @BeforeEach} and put back in an {@code @AfterEach}, correct only for as long as
+     * surefire runs one test at a time, and silently wrong for every later test in the JVM if the
+     * restore were ever missed.
+     */
+    private static final HubConfig.Tuning QUICK =
+        HubConfig.Tuning.defaults().promoteAfterMs(1500).witnessWindowMs(1500).autoPromoteIntervalMs(0);
 
     @AfterEach
     void stop() throws Exception {
-        Hub.promoteAfterMs = 30_000;
-        Hub.witnessWindowMs = 10_000;
-        Hub.autoPromoteIntervalMs = 10 * 60_000;
         for (AutoCloseable c : new AutoCloseable[] {alice, b, a, app}) {
             if (c != null) {
                 c.close();
@@ -82,12 +80,17 @@ class AutoPromoteTest {
 
     /** Primary A with alice on it, standby B with alice's relay connection: the witness is in place. */
     private void pair() throws Exception {
+        pair(QUICK);
+    }
+
+    /** As above, with B's timings given: one test needs an interval nothing can have elapsed against. */
+    private void pair(HubConfig.Tuning tuningB) throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("ap");
         portA = TestPorts.reserve();
         // Both units name the other (§13.5): the role file, not the flag, says which is which.
         cfgA = HubConfig.withCert(URI.create("https://hub.test:" + portA), root.resolve("a"), "127.0.0.1", portA,
-            CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1");
+            CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1").withTuning(QUICK);
         a = new Hub(cfgA);
         a.relayEndpointOverride = "127.0.0.1:" + portA;
         a.start();
@@ -108,7 +111,8 @@ class AutoPromoteTest {
         portB = TestPorts.reserve();
         cfgB = HubConfig.withCert(URI.create("https://hub.test:" + portB), root.resolve("b"), "127.0.0.1", portB,
             null, null, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
-            .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1").withAdvertise("203.0.113.2");
+            .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1").withAdvertise("203.0.113.2")
+            .withTuning(tuningB);
         Files.createDirectories(root.resolve("b"));
         Files.copy(root.resolve("a/hub.key"), root.resolve("b/hub.key"), StandardCopyOption.REPLACE_EXISTING);
         b = new Hub(cfgB);
@@ -149,13 +153,20 @@ class AutoPromoteTest {
 
     @Test
     void theFirstPromotionIsNotHeldBackByAnIntervalNothingHasElapsedAgainst() throws Exception {
-        pair();
         // The rest of this class runs with no interval at all, so the term this asserts is dead in
         // every other test. An interval longer than the monotonic clock has been running is what
         // the default ten minutes looks like to a host that booted nine minutes ago -- the
         // mass-reboot case -- and a hub that has never promoted has no reading to compare against
         // it. Read as a reading, the zero it holds instead blocks the promotion entirely.
-        Hub.autoPromoteIntervalMs = Clock.millis() + 60_000;
+        //
+        // Given to B at construction rather than set on it afterwards: its configuration is a
+        // record, and B has never promoted either way, which is the condition under test.
+        //
+        // Long.MAX_VALUE and not `Clock.millis() + 60_000`: set before the pair is built, a minute
+        // is spent by A starting, alice joining, B starting and two waits that each allow thirty
+        // seconds, so on a slow enough runner the interval would have elapsed by the time it
+        // mattered and the test would pass while asserting nothing.
+        pair(QUICK.autoPromoteIntervalMs(Long.MAX_VALUE));
         a.close();
         a = null;
         waitFor("the standby never promoted itself", () -> "primary".equals(b.role()));
@@ -237,7 +248,7 @@ class AutoPromoteTest {
         // B's probe comes back with A's proof, and B stays what it is however long this lasts.
         b.peerClient().suspend(true);
         waitFor("the channel did not drop", () -> !b.peerClient().isConnected());
-        Thread.sleep(Hub.promoteAfterMs + Hub.witnessWindowMs + 2500);
+        Thread.sleep(QUICK.promoteAfterMs() + QUICK.witnessWindowMs() + 2500);
         assertEquals("standby", b.role(), "a reachable primary is not replaced");
         assertEquals("primary", a.role());
         assertEquals(1, a.epoch());
@@ -253,7 +264,7 @@ class AutoPromoteTest {
         waitFor("alice's relay connection did not go", () -> b.registry().size() == 0);
         a.close();
         a = null;
-        Thread.sleep(Hub.promoteAfterMs + Hub.witnessWindowMs + 2500);
+        Thread.sleep(QUICK.promoteAfterMs() + QUICK.witnessWindowMs() + 2500);
         assertEquals("standby", b.role(), "nobody to ask, so nobody promotes");
         assertFalse(b.peerClient().isConnected());
     }

@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import io.jailscale.proto.control.Message;
+import io.jailscale.proto.util.Clock;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
 
@@ -29,11 +30,14 @@ final class Registrar {
     private final HubConfig config;
     private final Store store;
     private final Bans bans;
-    private final RateLimiter credentials = new RateLimiter(CREDENTIAL_BURST, CREDENTIAL_PER_SECOND);
-    private final RateLimiter openRegistrations = new RateLimiter(OPEN_BURST, OPEN_PER_SECOND);
+    private final RateLimiter credentials;
+    private final RateLimiter openRegistrations;
 
     Registrar(HubConfig config, Store store, Bans bans) {
         this.config = config;
+        long prune = config.tuning().rateLimitPruneMs();
+        this.credentials = new RateLimiter(CREDENTIAL_BURST, CREDENTIAL_PER_SECOND, prune, Clock::millis);
+        this.openRegistrations = new RateLimiter(OPEN_BURST, OPEN_PER_SECOND, prune, Clock::millis);
         this.store = store;
         this.bans = bans;
     }

@@ -88,7 +88,7 @@ class RawPortSlotCapTest {
 
         // The bound given rather than derived, so that what this test holds open is decided here
         // and not by the heap the suite happens to run with.
-        node = new Daemon(NodeConfig.in(root.resolve("node")), CEILING);
+        node = new Daemon(NodeConfig.in(root.resolve("node")).withTuning(NodeConfig.Tuning.defaults().visitorCeiling(CEILING)));
         node.start();
         Path sock = root.resolve("node/jailscale.sock");
         assertTrue(Ipc.call(sock, JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1")

@@ -30,7 +30,9 @@ class UserIdentityTest {
         root = TestDirs.newRoot("ui");
         store = new Store(root.resolve("hub"));
         store.setSetting(Store.SETTING_REGISTRATION, "open");
-        registrar = new Registrar(null, store, new Bans(store));
+        // A real config, not null: the registrar reads its rate-limit timing from one (#61).
+        registrar = new Registrar(HubConfig.withCert(java.net.URI.create("https://hub.test"), root.resolve("hub"), "127.0.0.1", 0,
+            null, null, true, HubConfig.POLICY_MEMBERS, true, "hub.test"), store, new Bans(store));
     }
 
     @AfterEach

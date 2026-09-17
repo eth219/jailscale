@@ -91,10 +91,6 @@ public final class Hub implements AutoCloseable {
     /** Nonces out to witnesses right now, and whether a valid answer came back for the round. */
     private final java.util.Set<String> probeNonces = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private volatile boolean primaryProven;
-    /** §13.5 timings; tests shorten them. */
-    static volatile long promoteAfterMs = 30_000;
-    static volatile long witnessWindowMs = 10_000;
-    static volatile long autoPromoteIntervalMs = 10 * 60_000;
     private volatile PeerClient peerClient;
     /** The public address this hub answers for itself (§13.3); null until known. */
     private volatile String advertised;
@@ -794,8 +790,8 @@ public final class Hub implements AutoCloseable {
 
     /**
      * §13.5, on the standby, once a second: notice the channel to the primary down, and after
-     * {@link #promoteAfterMs} ask every witness whether the primary can be reached; when none can
-     * within {@link #witnessWindowMs}, promote. A witness is a node attached here by a relay
+     * {@link HubConfig.Tuning#promoteAfterMs} ask every witness whether the primary can be reached;
+     * when none can within {@link HubConfig.Tuning#witnessWindowMs}, promote. A witness is a node attached here by a relay
      * connection, approved, one per user. With no witness the decision stays a person's.
      */
     private void watchPrimary() {
@@ -817,8 +813,8 @@ public final class Hub implements AutoCloseable {
             primaryLostAt = now;
             return;
         }
-        if (now - primaryLostAt < promoteAfterMs || !probeNonces.isEmpty() || !autoPromote()
-            || (lastAutoPromoteAt != 0 && now - lastAutoPromoteAt < autoPromoteIntervalMs)) {
+        if (now - primaryLostAt < config.tuning().promoteAfterMs() || !probeNonces.isEmpty() || !autoPromote()
+            || (lastAutoPromoteAt != 0 && now - lastAutoPromoteAt < config.tuning().autoPromoteIntervalMs())) {
             return;
         }
         // One round: a nonce to every witness, then a window to answer in.
@@ -853,7 +849,7 @@ public final class Hub implements AutoCloseable {
         int asked = probeNonces.size();
         Thread.ofVirtual().name("witness-round").start(() -> {
             try {
-                Thread.sleep(witnessWindowMs);
+                Thread.sleep(config.tuning().witnessWindowMs());
             } catch (InterruptedException e) {
                 return;
             }
