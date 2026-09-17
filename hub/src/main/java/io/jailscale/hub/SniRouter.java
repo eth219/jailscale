@@ -9,6 +9,7 @@ import io.jailscale.proto.net.NetKey;
 import io.jailscale.proto.tls.Sni;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
+import io.jailscale.proto.util.Throttle;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.InetAddress;
@@ -27,6 +28,8 @@ import javax.net.ssl.SSLSocketFactory;
 final class SniRouter {
 
     private static final Log LOG = Log.get("sni");
+    /** See {@link #refused}: one line a minute about visitors the hub turned away before relaying. */
+    private static final Throttle REFUSED_LOG = new Throttle(60_000);
     static final int HELLO_TIMEOUT_MS = 5_000;
     static final int MAX_PER_IP = 64;
     static final int MAX_PER_NAME = 1024;
@@ -214,6 +217,7 @@ final class SniRouter {
             if (acquire(perName, name) > MAX_PER_NAME) {
                 release(perName, name);
                 Metrics.VISITORS_REFUSED.increment();
+                refused(ip, name, "the per-name cap of " + MAX_PER_NAME);
                 Relay.closeQuietly(socket);
                 return;
             }
@@ -228,6 +232,7 @@ final class SniRouter {
                 release(perName, name);
                 Metrics.VISITORS_REFUSED.increment();
                 Metrics.VISITORS_REFUSED_CAPACITY.increment();
+                refused(ip, name, "the node's ceiling of " + ceiling);
                 // Closed rather than answered. The hub has the key and could serve a page the way
                 // fallback() does for an offline node, but that is a full TLS handshake per refused
                 // visitor -- about 2.8 ms of hub CPU on the gate's runner -- and a node at its bound
@@ -259,14 +264,44 @@ final class SniRouter {
         NodeGroup group = link.group();
         socket.setSoTimeout(0);
         long beforeOpen = System.nanoTime();
-        MuxStream stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
-            link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
+        MuxStream stream;
+        try {
+            stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
+                link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
+        } catch (IOException e) {
+            refused(visitorIp, peek.serverName(), e.getMessage());
+            throw e;
+        }
         long openedAt = System.nanoTime();
         RelayStages.OPEN.record(openedAt - beforeOpen);
         try {
             Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream), acceptedAt, openedAt);
         } finally {
             group.visitorDone(stream);
+        }
+    }
+
+    /**
+     * Says, at most once a minute, that a visitor was turned away before it was relayed.
+     *
+     * <p>All four refusals above -- the per-name cap, the node's ceiling, the backstop in
+     * {@link NodeGroup#openVisitor} and whatever else it throws -- used to close the socket and
+     * increment a counter, and that was all. A counter says how many; it does not say which cap,
+     * and the visitor is told nothing either: a closed socket mid-handshake reaches it as
+     * {@code SSLHandshakeException: Remote host terminated the handshake}, which is the same
+     * sentence for all four.
+     *
+     * <p>That is how #183 came to be unanswerable. The `load` job failed on main with 455 of 1000
+     * visitors seeing exactly that, and the hub's log at info held nothing about any of them -- so
+     * the run said which test failed and nothing whatever about why, and a re-run made it go away.
+     *
+     * <p>One line a minute rather than one a visitor, because a hub at a cap refuses continuously
+     * and a log that says so every time is a log nobody reads. It is the argument
+     * {@code Visitors.refuse} already makes on the node side, with the same interval.
+     */
+    private static void refused(String ip, String name, String why) {
+        if (REFUSED_LOG.ready()) {
+            LOG.info("{}: visitor for {} refused before it was relayed: {}", ip, name, why);
         }
     }
 
