@@ -195,11 +195,21 @@ Then `/code-review`, and answer what it finds. "Answer" includes deciding a find
 saying why — an unanswered finding and an excluded one look identical six months later, which is the
 argument `spotbugs-exclude.xml` already makes about its own entries.
 
-If the review changes code — `--fix` does — the two commands above ran on code that no longer
-exists, so they run again on what the review left, and the gate is whatever ran last. Read the
-review's diff against the issue before that: `--fix` applies findings it did not ask you about, and
-a fix outside the issue's scope is step 3's widening in a different coat. Revert it and file it
-(step 5) rather than keep it.
+**Not `--fix`, and especially not unattended.** It applies findings after the review's own
+filtering, which is real — but the level decides what survives that filter, and `high` upwards
+takes uncertain findings on purpose. Answering them is work the loop does either way, since every
+finding has to be answered in the pull request; the only thing `--fix` changes is that the code is
+already different when you read them. Deciding whether to keep somebody else's edit is harder than
+deciding whether to write your own, and a fix outside the issue's scope is step 3's widening in a
+different coat.
+
+Two of this project's own reviews argued from a premise that did not hold, and reproducing them is
+what separated those from the ones that did: one predicted that a skipped required check reports as
+success, and the measurement said the opposite — the pull request went `BLOCKED` and stayed there.
+A finding worth acting on survives being checked. Check it, then write the fix.
+
+If a review does change code, for whatever reason, the two commands above ran on code that no
+longer exists. Run them again; the gate is whatever ran last.
 
 **A green local build is not the gate, and has twice been mistaken for it.** CI adds SpotBugs and
 runs the suite on ubuntu, macOS and Windows; a pull request does not run everything main runs. Two
@@ -307,8 +317,9 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
 1. **A fresh worktree from the current `main`.** Reusing the last one means the second pull request
    is based on a `main` that has moved, and the merge is what finds out.
 2. Steps 2 to 5 exactly as above.
-3. `/code-review xhigh --fix`, then the review's diff read against the issue, then the gate — step 6
-   with the table's row if the change touches it — on the code the review left.
+3. `/code-review xhigh`, without `--fix` (step 6 says why), then every finding answered — written
+   or refused with a reason — and then the gate, step 6 with the table's row if the change touches
+   it, on whatever the answers left.
 4. Step 7, labels included, and `ci:full` as well when the change touches a row of that table. Then
    wait for `load` and `budget` by name before merging — they are not required checks, so the merge
    box goes green without them and `gh pr merge --auto` would not wait. That wait is the whole
