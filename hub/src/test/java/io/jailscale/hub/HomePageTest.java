@@ -61,10 +61,7 @@ class HomePageTest {
 
     @AfterEach
     void stop() throws Exception {
-        if (alice != null) {
-            alice.close();
-        }
-        hub.close();
+        TestCloseables.closeAll(alice, hub);
     }
 
     private HttpResponse http(String method, String path, String cookie, String form) throws Exception {

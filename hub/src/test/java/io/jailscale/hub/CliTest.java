@@ -110,8 +110,7 @@ class CliTest {
     @AfterEach
     void stop() throws Exception {
         killSpawnedDaemon();
-        app.close();
-        hub.close();
+        TestCloseables.closeAll(app, hub);
     }
 
     /**

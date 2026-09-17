@@ -48,18 +48,10 @@ class UserDomainTest {
 
     @AfterEach
     void stop() throws Exception {
-        if (node != null) {
-            node.close();
-        }
-        if (hub != null) {
-            hub.close();
-        }
-        if (ca != null) {
-            ca.close();
-        }
-        if (app != null) {
-            app.stop(0);
-        }
+        // app is an HttpServer: it stops rather than closes, so it arrives as a lambda. Null
+        // rather than a lambda that would dereference null, because closeAll skips nulls and a
+        // @BeforeEach that threw part way leaves fields unset.
+        TestCloseables.closeAll(node, hub, ca, app == null ? null : () -> app.stop(0));
     }
 
     private String get(String sni, String path) throws Exception {

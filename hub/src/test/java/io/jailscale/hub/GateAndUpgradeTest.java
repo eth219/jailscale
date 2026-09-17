@@ -102,9 +102,7 @@ class GateAndUpgradeTest {
 
     @AfterEach
     void stop() throws Exception {
-        alice.close();
-        app.close();
-        hub.close();
+        TestCloseables.closeAll(alice, app, hub);
     }
 
     private SSLSocket connect(String host) throws Exception {

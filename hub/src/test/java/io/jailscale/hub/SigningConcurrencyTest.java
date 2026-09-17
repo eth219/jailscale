@@ -60,15 +60,7 @@ class SigningConcurrencyTest {
 
     @AfterEach
     void stop() throws Exception {
-        if (node != null) {
-            node.close();
-        }
-        if (hub != null) {
-            hub.close();
-        }
-        if (app != null) {
-            app.close();
-        }
+        TestCloseables.closeAll(node, hub, app);
     }
 
     private void serveApp(Socket c) {

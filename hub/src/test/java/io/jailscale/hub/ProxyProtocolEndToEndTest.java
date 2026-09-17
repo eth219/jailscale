@@ -47,14 +47,7 @@ class ProxyProtocolEndToEndTest {
 
     @AfterEach
     void stop() throws Exception {
-        if (node != null) {
-            node.close();
-        }
-        hub.close();
-        app.close();
-        if (proxy != null) {
-            proxy.close();
-        }
+        TestCloseables.closeAll(node, hub, app, proxy);
     }
 
     private void forward(Socket c) {

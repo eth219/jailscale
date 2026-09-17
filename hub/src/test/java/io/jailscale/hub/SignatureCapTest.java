@@ -47,15 +47,7 @@ class SignatureCapTest {
 
     @AfterEach
     void stop() throws Exception {
-        if (node != null) {
-            node.close();
-        }
-        if (hub != null) {
-            hub.close();
-        }
-        if (app != null) {
-            app.close();
-        }
+        TestCloseables.closeAll(node, hub, app);
     }
 
     /** A hub with one registered node holding one open link, and a visitor stream on it. */
