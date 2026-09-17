@@ -16,7 +16,8 @@ Closes #
 
      Do not write "does not close #N" here, or fix/resolve either: GitHub matches the keyword and
      ignores the "not", so the sentence closes the issue it says it is leaving open. "#N stays
-     open" says the same thing and does not. -->
+     open" says the same thing and does not. This applies to an example as much as to a claim --
+     quoting the bad sentence with a real number in it does the same damage. -->
 
 ## Gates
 
