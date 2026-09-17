@@ -39,12 +39,10 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-command -v gh >/dev/null 2>&1 || { echo "this needs the gh CLI." >&2; exit 1; }
+# jq and awk only. Everything that needs gh -- which is everything that needs the network -- waits
+# until after --self-test has had its chance to exit, so that the check can run where there is no
+# token: the `tools` job in ci.yml has none, and this refused to start there.
 command -v jq >/dev/null 2>&1 || { echo "this needs jq." >&2; exit 1; }
-# The sibling scripts' convention: the repository comes from this checkout, so a fork reports on
-# itself rather than silently on eth219/jailscale.
-repo=$(cd "$root" && gh repo view --json nameWithOwner --jq .nameWithOwner) \
-    || { echo "cannot tell which GitHub repository $root is; is the origin remote set?" >&2; exit 1; }
 workflow=${WORKFLOW:-}          # empty means every workflow that ran on those pushes
 branch=${BRANCH:-main}
 tab=$(printf '\t')
@@ -235,6 +233,12 @@ EXPECT
     printf 'expected:\n%s\n\ngot:\n%s\n' "$expected" "$got" >&2
     exit 1
 fi
+
+command -v gh >/dev/null 2>&1 || { echo "this needs the gh CLI." >&2; exit 1; }
+# The sibling scripts' convention: the repository comes from this checkout, so a fork reports on
+# itself rather than silently on eth219/jailscale.
+repo=$(cd "$root" && gh repo view --json nameWithOwner --jq .nameWithOwner) \
+    || { echo "cannot tell which GitHub repository $root is; is the origin remote set?" >&2; exit 1; }
 
 n=${1:-50}
 case $n in ''|*[!0-9]*) echo "usage: tools/flake-rate.sh [N] | --self-test" >&2; exit 2 ;; esac
