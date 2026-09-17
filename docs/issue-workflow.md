@@ -326,7 +326,8 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
    `RawPortTest` one, the port race fixed by #171. Read the per-job rates and not `ci-full`'s 50%:
    that job has two runs in this window, because the file is two pushes old. At this pace fifty
    pushes is under two days, so re-run the script rather than trusting the table above; `tools/flake-rate.sh --self-test` is what a change to the
-   script itself has to pass, since no CI job runs it (#192).
+   script itself has to pass; the `tools` job runs it, and every other self-test in `tools/`,
+   through `tools/self-test.sh`.
 
 7. A problem seen anywhere in this is step 5: filed with all three axes and linked both ways. That
    is how the tracker grows from the loop, and it is the only way it may.

@@ -92,3 +92,16 @@ jobs:
           distribution: 'liberica'
       - run: ./mvnw -B -ntp -Panalyze verify -DskipTests
         shell: bash
+
+  # Every self-test in tools/, through tools/self-test.sh. Its own job, with no JDK and no Maven,
+  # because that is all it needs and a red here should mean a tools/ script broke and nothing else.
+  # It is not a step on `analyze` for the reason ci-full.yml is its own file: a job's comment is
+  # what a red is read against, and `analyze` says a red there is a SpotBugs finding nobody
+  # answered. Until this existed, tools/ held twelve scripts -- two of which sign a release -- and
+  # CI ran a test for none of them (#192).
+  tools:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: tools/self-test.sh
+        shell: bash

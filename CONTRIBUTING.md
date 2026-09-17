@@ -73,6 +73,7 @@ simplifying it away.
 ```sh
 ./mvnw package
 ./mvnw -Panalyze verify -DskipTests
+tools/self-test.sh
 ```
 
 **A green local build is not the gate.** CI runs the suite on ubuntu, macOS and Windows and SpotBugs

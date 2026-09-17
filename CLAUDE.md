@@ -28,6 +28,7 @@ suggestion. The part that cannot be skipped:
 ```sh
 ./mvnw package                            # the tests. JDK 25, but NOT 25.0.0-25.0.2 (§3.2)
 ./mvnw -Panalyze verify -DskipTests       # SpotBugs. Its own CI job, so it is easy to forget
+tools/self-test.sh                        # the self-tests in tools/, and which scripts have none
 ./native.sh -DskipTests                   # the native binaries, GraalVM CE 25.3
 LOAD=1000 SLOW=1000 ./measure.sh --check  # the §14 budget, against binaries native.sh just built.
                                           # Without LOAD and SLOW it skips the two axes that matter
