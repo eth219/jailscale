@@ -74,9 +74,11 @@ class UserDomainTest {
     void ownDomainIsIssuedRelayedAndPassedThrough() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jd");
-        port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withHttp("127.0.0.1", 0).withUserDomainCa(CERT));
+        hub.listenOn(portSocket);
         hub.start();
         assertTrue(hub.httpPort() > 0);
         ca = new AcmeFlowTest.MockCa(() -> -1);

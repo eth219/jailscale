@@ -292,13 +292,20 @@ class AdminCommandTest {
     /** A throwaway hub on a free port, with the test certificate. */
     private static Hub startedHub() throws Exception {
         Path root = TestDirs.newRoot("ja");
-        int port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        int port = portSocket.getLocalPort();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath(),
             Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath(),
             true, HubConfig.POLICY_MEMBERS, true, "hub.test");
         Hub hub = new Hub(cfg);
-        hub.start();
+        hub.listenOn(portSocket);
+        try {
+            hub.start();
+        } catch (Exception e) {
+            hub.close();   // which gives the socket back; a throw here used to leak only a number
+            throw e;
+        }
         return hub;
     }
 

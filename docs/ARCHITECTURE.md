@@ -159,12 +159,19 @@ was never this class handing out the same number twice, it was an echo server be
 a hub was about to bind. Surefire runs one JVM per module with no parallelism, so no two callers of
 it run at once.
 
-What that pair does **not** cover is a port drawn by something other than a test: a hub binds its DNS
-TCP/UDP pair, `/metrics` and the plain-HTTP front on port 0, and those draws know nothing of the
-register, so a hub started between a `reserve()` and the bind it was reserved for can be handed that
-number. Reserve each port immediately before the thing that binds it and the window is shut; the DNS
-suites draw their own numbers because drawing them is what they are testing. A port taken by another
-process on the machine still fails the bind, and says so. `TestPorts`' own javadoc keeps this list.
+A hub's listen port is **held** rather than reserved: `TestPorts.listen` returns a bound socket and
+`Hub.listenOn` takes it, so the number is never unheld and nothing can be handed it. That is not
+tidiness — a hub binds its DNS TCP/UDP pair, `/metrics` and the plain-HTTP front on port 0, those
+draws know nothing of the register, and four times in two days one of them took a number a test had
+reserved (#196). The advice that used to be here, *reserve immediately before the bind*, does not
+work when the thing between the two is `Hub.start()` itself, which draws port 0 up to eight times
+before it is done.
+
+`reserve()` is still right for the shapes that cannot take a bound socket: a raw port range bound
+later by the code under test (`reserveRange`, which scans from 20000 and so sits below every
+ephemeral range), and a port whose whole purpose is that nothing listens on it. The DNS suites draw
+their own numbers because drawing them is what they are testing. A port taken by another process on
+the machine still fails the bind, and says so. `TestPorts`' own javadoc keeps this list.
 
 ### 3.1 GraalVM Native Image rules
 

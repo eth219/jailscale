@@ -61,11 +61,16 @@ class RawPortSlotCapTest {
     /** A hub with one raw tcp port open on a node, and no PROXY headers: every visitor is 127.0.0.1. */
     private void start() throws Exception {
         root = TestDirs.newRoot("rpc");
-        int port = TestPorts.reserve();
-        int lo = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        int port = portSocket.getLocalPort();
+        // reserveRange and not reserve: a raw port is bound lazily, when a node opens the link,
+        // and hub.start() draws port 0 up to eight times for the DNS pair in between. The range
+        // scans from 20000, below every ephemeral range, so a port-0 draw cannot be handed it.
+        int lo = TestPorts.reserveRange(1);
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withPortRange(lo, lo);
         hub = new Hub(cfg);
+        hub.listenOn(portSocket);
         hub.start();
 
         echo = TestPorts.listen(128);

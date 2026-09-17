@@ -111,11 +111,13 @@ class HandoffTest {
     void takeoverKeepsInFlightStreamsAndServesNewVisitors() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jh");
-        int port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        int port = portSocket.getLocalPort();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test");
         old = new Hub(cfg);
         old.exitOnDrain = false;
+        old.listenOn(portSocket);
         old.start();
         startSlowApp();
 

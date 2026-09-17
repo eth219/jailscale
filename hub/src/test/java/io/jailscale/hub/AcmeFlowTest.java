@@ -94,7 +94,8 @@ class AcmeFlowTest {
     void hubObtainsWildcardCertificateAndServesALink() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("ja");
-        int port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        int port = portSocket.getLocalPort();
         Hub[] hubRef = new Hub[1];
         ca = new MockCa(() -> hubRef[0].dnsPort());
         HubConfig cfg = new HubConfig(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
@@ -102,6 +103,7 @@ class AcmeFlowTest {
             URI.create("http://127.0.0.1:" + ca.port() + "/directory"), "ops@hub.test", "127.0.0.1", 0, false, false, 0, 0, null, -1, null, -1, null, false, List.of(), null, null, null, null, HubConfig.Tuning.defaults());
         hub = new Hub(cfg);
         hubRef[0] = hub;
+        hub.listenOn(portSocket);
         hub.start(); // issues the certificate through the mock CA before listening
 
         assertTrue(hub.tls().isLoaded());

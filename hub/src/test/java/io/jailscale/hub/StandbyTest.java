@@ -120,9 +120,11 @@ class StandbyTest {
     void aStandbyFollowsThePrimaryTurnsNodesAwayAndServesThemOncePromoted() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("sb");
-        int portA = TestPorts.reserve();
+        java.net.ServerSocket portASocket = TestPorts.listen(1024);
+        int portA = portASocket.getLocalPort();
         primary = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + portA), root.resolve("a"), "127.0.0.1", portA,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test").withAdvertise("203.0.113.1"));
+        primary.listenOn(portASocket);
         // Both hubs share the loopback address here and differ by port, so what a node dials is
         // told apart from what DNS advertises (§13.4); in a deployment they are the same address.
         primary.relayEndpointOverride = "127.0.0.1:" + portA;
@@ -148,11 +150,11 @@ class StandbyTest {
         // provisioning act. Without it, starting is refused with the file named. Its base URL is
         // the primary's own name, as deployed: that is the name it serves once promoted.
         //
-        // Its port is drawn here and not beside portA: TestPorts keeps two of its own callers
-        // apart, but a hub binds its DNS pair, /metrics and the plain-HTTP front on port 0, and
-        // those draws know nothing of its register. Reserved before the primary starts, this
-        // number is one of the numbers the primary could be handed.
-        int portB = TestPorts.reserve();
+        // Its port is held rather than reserved, so the ordering no longer matters: a bound socket
+        // cannot be handed to the primary's own port-0 draws, which is what used to make this
+        // fragile (#196).
+        java.net.ServerSocket portBSocket = TestPorts.listen(1024);
+        int portB = portBSocket.getLocalPort();
         HubConfig sbConfig = HubConfig.withCert(URI.create("https://hub.test:" + portB), root.resolve("b"), "127.0.0.1", portB,
             null, null, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withPeer(URI.create("https://hub.test:" + portA), CERT, "127.0.0.1").withAdvertise("203.0.113.2");
@@ -161,6 +163,7 @@ class StandbyTest {
         Files.createDirectories(root.resolve("b"));
         Files.copy(root.resolve("a/hub.key"), root.resolve("b/hub.key"), StandardCopyOption.REPLACE_EXISTING);
         standby = new Hub(sbConfig);
+        standby.listenOn(portBSocket);
         standby.relayEndpointOverride = "127.0.0.1:" + portB;
         standby.start(); // returns once the primary's certificate has arrived
 

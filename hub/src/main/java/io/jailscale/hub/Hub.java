@@ -99,6 +99,8 @@ public final class Hub implements AutoCloseable {
      * address on 443. Tests, where two hubs share a loopback address and differ by port.
      */
     volatile String relayEndpointOverride;
+    /** See {@link #listenOn}. */
+    private ServerSocket preBound;
     /** The name servers the parent delegates to, label to address; empty until looked up or when not delegated. */
     private volatile Map<String, String> nameServers = Map.of();
     /** Whether port 53 could be bound: the DNS answers exist only when it could. */
@@ -236,9 +238,14 @@ public final class Hub implements AutoCloseable {
             peerClient = new PeerClient(this, config.peer(), config.peerCa(), config.peerAddr());
             peerClient.start();
         }
-        listener = new ServerSocket();
-        listener.setReuseAddress(true);
-        listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 1024); // capped by somaxconn
+        if (preBound != null) {
+            listener = preBound;
+            preBound = null;
+        } else {
+            listener = new ServerSocket();
+            listener.setReuseAddress(true);
+            listener.bind(new InetSocketAddress(config.listenHost(), config.listenPort()), 1024); // capped by somaxconn
+        }
         running = true;
         Thread.ofPlatform().name("accept").daemon(false).start(this::acceptLoop);
         if (!standby) {
@@ -429,6 +436,56 @@ public final class Hub implements AutoCloseable {
             }
         }
         return out;
+    }
+
+    /**
+     * Serve on {@code socket} instead of binding one at {@link #start}. For tests, and the reason
+     * is a race they could not otherwise avoid (#196).
+     *
+     * <p>A test needs a port nothing else will take. It asked {@code TestPorts} for a number, which
+     * binds a socket to find a free one and closes it again — and between that close and this hub's
+     * bind the number is held by nothing. Anything in the same JVM asking the kernel for port 0 can
+     * be handed it, and a running hub asks four times: the DNS pair, {@code /metrics}, the
+     * plain-HTTP front, and a raw port. Four times in two days a hub lost that race, three of them
+     * here in {@code start}.
+     *
+     * <p>Given a socket that is already bound, the number is never unheld and the race has nowhere
+     * to happen. This hub owns the socket from here: {@link #close} closes it whether or not
+     * {@code start} was ever called.
+     *
+     * <p>{@code SO_REUSEADDR} is not a difference: the JDK turns it on when the socket is created,
+     * before the bind, so a socket from {@code TestPorts.listen} carries it already — measured, on
+     * this JDK, rather than assumed. It would not matter either way. What that option buys is on
+     * the <em>next</em> bind of the number, and a hub that binds for itself still sets it
+     * explicitly.
+     *
+     * @throws IllegalArgumentException if the socket is not bound, or is bound to a different port
+     *     than the configuration says — a test disagreeing with itself about its own port is the
+     *     kind of thing that reads as this race and is not.
+     */
+    void listenOn(ServerSocket socket) {
+        if (!socket.isBound()) {
+            throw new IllegalArgumentException("listenOn needs a bound socket");
+        }
+        // The two state errors are easier to make than the port one and were the two not checked:
+        // twice leaks the first socket for the life of the JVM, and after start attaches a socket
+        // this hub will never serve on and closes at close(). Both were silent.
+        if (preBound != null || listener != null) {
+            throw new IllegalStateException("this hub already has a listener");
+        }
+        if (config.listenPort() != 0 && socket.getLocalPort() != config.listenPort()) {
+            throw new IllegalArgumentException("the socket is on port " + socket.getLocalPort()
+                + " and the configuration says " + config.listenPort());
+        }
+        // The address, for the same reason as the port: TestPorts binds the loopback the JVM
+        // prefers, which is ::1 under -Djava.net.preferIPv6Addresses, while every caller's
+        // configuration says 127.0.0.1 and every caller dials it.
+        String bound = ((java.net.InetSocketAddress) socket.getLocalSocketAddress()).getAddress().getHostAddress();
+        if (!bound.equals(config.listenHost())) {
+            throw new IllegalArgumentException("the socket is on " + bound
+                + " and the configuration says " + config.listenHost());
+        }
+        preBound = socket;
     }
 
     /** What a node dials to reach this host as a relay: the advertised address, with the port when it is not 443. */
@@ -1243,6 +1300,10 @@ public final class Hub implements AutoCloseable {
     public void close() throws IOException {
         running = false;
         stopped = true;
+        if (preBound != null) {   // listenOn, and then never started
+            preBound.close();
+            preBound = null;
+        }
         stopLoops();
         if (timer != null) {
             timer.shutdownNow();
