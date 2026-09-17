@@ -50,7 +50,7 @@ final class NodeGroup {
      * what tells a queue apart from a burst when the bucket is not the thing refusing.
      */
     private final AtomicInteger signsInFlight = new AtomicInteger();
-    private volatile int peakSignsInFlight;
+    private final AtomicInteger peakSignsInFlight = new AtomicInteger();
 
     NodeGroup(Hub hub, String mkey) {
         this.hub = hub;
@@ -257,7 +257,7 @@ final class NodeGroup {
 
     /** The most signing requests this group has had in flight at once, since it connected. */
     int peakConcurrentSignatures() {
-        return peakSignsInFlight;
+        return peakSignsInFlight.get();
     }
 
     /**
@@ -286,13 +286,42 @@ final class NodeGroup {
         return taken[0];
     }
 
+    /**
+     * Run while a signature is in flight and before it is taken, with the number in flight
+     * including this one. Does nothing, and exists so that a test can hold a signature here.
+     *
+     * <p>{@code SigningConcurrencyTest} asserts that two signatures for one connection were in
+     * flight at once, which is what says they are not served one at a time on the mux reader. That
+     * used to be observed -- fire a burst and look at the high-water mark -- and an observation of
+     * a coincidence in time is a test that can be red on a slow machine with the code correct,
+     * which is what happened on {@code windows-2025} (#226). With this the test holds the first
+     * signature here until the second arrives, so the overlap is constructed rather than hoped
+     * for, and a machine too slow to produce it has to fail to produce it rather than fail to
+     * schedule it.
+     *
+     * <p>Static and settable for the same reason {@link NodeSession#concurrentSignLimit} is: the
+     * alternative is a constructor parameter on a production path so that one test can reach it.
+     */
+    static final java.util.function.IntConsumer NO_HOOK = n -> { };
+
+    /**
+     * Volatile, and that is not decoration. The hub's threads are started before a test installs a
+     * hook, so thread-start supplies no happens-before edge to the write and a signing thread would
+     * be within its rights never to see it -- which reads as "no signature was ever in flight" and
+     * is the #226 failure all over again. {@link NodeSession#concurrentSignLimit} does not need it
+     * because it is read in a constructor, by objects made after the write.
+     */
+    static volatile java.util.function.IntConsumer onSignInFlight = NO_HOOK;
+
     /** The four conditions of ARCHITECTURE.md §9.2, then the signature. */
     Message sign(Message.SignRequest sr) {
         int inFlight = signsInFlight.incrementAndGet();
-        if (inFlight > peakSignsInFlight) {
-            peakSignsInFlight = inFlight; // a high-water mark; racing writers can only under-report
-        }
+        // accumulateAndGet and not read-then-write: two threads that both read the old peak lose
+        // the higher of the two writes, and SigningConcurrencyTest asserts on this number -- a lost
+        // update there reports a counting bug in the hub on a run where nothing is wrong.
+        peakSignsInFlight.accumulateAndGet(inFlight, Math::max);
         try {
+            onSignInFlight.accept(inFlight);
             Message m = signChecked(sr);
             // One place, so a refusal added later cannot forget to be counted: what went back to
             // the node is what says whether it was signed.
