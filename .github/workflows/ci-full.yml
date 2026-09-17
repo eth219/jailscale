@@ -12,6 +12,11 @@
 #
 # The jobs below are the ones that used to live at the end of ci.yml, moved rather than copied:
 # a pull request and main must not be able to measure different things.
+#
+# A third job, `idle-split`, runs on nothing at all unless it is asked for by name. It is here and
+# not in a file of its own for a reason that is GitHub's and not this project's: `workflow_dispatch`
+# is only offered for a workflow that already exists on the default branch, so a new file cannot be
+# dispatched from the branch that adds it, and this one can.
 name: ci-full
 
 on:
@@ -30,17 +35,30 @@ on:
         # means running it a dozen times, and doing that through the whole workflow would spend an
         # hour of runner time on native builds nobody asked for. GitHub will not re-run a single
         # job that passed, so this is the way to ask for one.
+        #
+        # `idle-split` is not a gate and is not part of `all`: it is the run that answers a
+        # documentation measurement -- `docs/jsse-idle-cost/decompose.sh` at its five states on
+        # linux-amd64, which is the platform §14's node figure comes from and the one an arm64
+        # laptop cannot produce (#216). Asking for it by name is the whole of how it runs.
+        #
+        # Adding a value here means editing the `if:` of every job below that should not run for it:
+        # each one names the values it runs on rather than the ones it does not, so a new value that
+        # nothing names runs nothing and reports green. Three places, one edit.
         description: which job to run
         type: choice
         default: all
-        options: [all, load, budget]
+        options: [all, load, budget, idle-split]
 
 # Deliberately no cancel-in-progress. These are opt-in and expensive, and every way of cancelling
 # an older one also cancels a wanted one: runs for the same pull request share a ref, so a second
 # label -- or any label added while a `ci:full` build is going -- would kill it. A superseded run
 # costs runner minutes; a cancelled one costs the evidence somebody asked for.
+# `inputs.only` is in the group because `idle-split` is dispatched by hand at a moment somebody
+# chose, and without it a measurement asked for while main's push run is going would sit pending
+# behind a native build and a thousand-visitor load test -- and be cancelled outright if the nightly
+# then fired on the same unchanged head, since GitHub keeps one pending run per group.
 concurrency:
-  group: ci-full-${{ github.event.pull_request.head.sha || github.sha }}
+  group: ci-full-${{ github.event.pull_request.head.sha || github.sha }}-${{ inputs.only || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -53,7 +71,7 @@ jobs:
   load:
     if: ${{ (github.event_name != 'pull_request'
           || contains(github.event.pull_request.labels.*.name, 'ci:full'))
-        && (github.event_name != 'workflow_dispatch' || inputs.only != 'budget') }}
+        && (github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'load') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -71,7 +89,7 @@ jobs:
   budget:
     if: ${{ (github.event_name != 'pull_request'
           || contains(github.event.pull_request.labels.*.name, 'ci:full'))
-        && (github.event_name != 'workflow_dispatch' || inputs.only != 'load') }}
+        && (github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'budget') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -112,3 +130,39 @@ jobs:
         # count; measure.sh has the figures. measure.sh's B_NODE_SLOW_AT holds the count the node
         # budget was measured at and refuses to apply it at any other.
         run: LOAD=1000 SLOW=1000 RATE=8 RATE_HANDSHAKES=200 ./measure.sh --check
+
+  # Not a gate. `docs/jsse-idle-cost/decompose.sh` holds a node daemon in five states and says what
+  # each one costs; §14's node idle RSS is a linux-amd64 figure and this is the only way to run that
+  # sequence on linux-amd64, since the machines this is developed on are arm64 (#216). It publishes
+  # nothing and asserts nothing -- the output is read off the log and pasted into
+  # docs/jsse-idle-cost/README.md beside the two runs already there.
+  #
+  # It runs on workflow_dispatch and on `only: idle-split` alone, so it is outside `all` as well: a
+  # native build nobody asked for is what the `only` input above exists to avoid, and a measurement
+  # that runs on every push is a measurement nobody reads.
+  idle-split:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.only == 'idle-split' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # The release toolchain, for the reason the budget job gives above: a decomposition of a
+      # figure has to be a decomposition of the build that figure came from.
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          version: '25.3'
+      # decompose.sh's await() multiplies its timeout in bc, and the runner image has no bc -- the
+      # same line the budget job carries, for the same reason.
+      - name: decompose.sh needs bc, which the runner image does not ship
+        run: sudo apt-get update && sudo apt-get install -y bc
+      # -DskipTests: the suite has already run on this commit in ci.yml, and here it only delays a
+      # measurement. The binaries are what this needs.
+      - name: Build the binaries
+        run: ./mvnw -B -ntp -Pnative package -DskipTests
+      - name: The five states
+        # Spelled out rather than left to the script's own defaults, because the README records the
+        # conditions its amd64 table was taken under -- three runs, the default settle -- and a run
+        # with other values is not comparable with it. Left implicit, somebody tuning decompose.sh
+        # for a laptop would change what this job measures and nothing would notice.
+        run: RUNS=3 SETTLE=8 docs/jsse-idle-cost/decompose.sh
