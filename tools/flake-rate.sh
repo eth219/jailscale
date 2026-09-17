@@ -4,7 +4,9 @@
 # good as the chance that a flake repeats, and until this existed nothing said what that chance
 # was (#187, from the survey in #184).
 #
-#   tools/flake-rate.sh [N]          the last N push runs of ci.yml on main (default 50, max 100)
+#   tools/flake-rate.sh [N]          the last N push runs of one workflow on main (default 50, max
+#                                    100). WORKFLOW= picks it; ci.yml by default, and ci-full.yml is
+#                                    where load and budget are (#194 is that this needs one report).
 #   tools/flake-rate.sh --self-test  the classification, against a fixture that must fail if it is wrong
 #
 # A job's reds are sorted into three outcomes, and the difference between them is the whole point:
