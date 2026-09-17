@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -24,7 +26,25 @@ class SniTest {
 
     /** Builds a minimal ClientHello record with the given server_name (null for none). */
     static byte[] clientHello(String sni) {
+        return clientHello(sni, java.util.List.of());
+    }
+
+    /** As above, with an ALPN extension offering {@code protocols} (empty for none). */
+    static byte[] clientHello(String sni, java.util.List<String> protocols) {
         ByteArrayOutputStream ext = new ByteArrayOutputStream();
+        if (!protocols.isEmpty()) {
+            ByteArrayOutputStream list = new ByteArrayOutputStream();
+            for (String proto : protocols) {
+                byte[] n = proto.getBytes(StandardCharsets.ISO_8859_1);
+                list.write(n.length);
+                list.writeBytes(n);
+            }
+            byte[] names = list.toByteArray();
+            ext.write(0); ext.write(16);                    // application_layer_protocol_negotiation
+            ext.write((names.length + 2) >> 8); ext.write(names.length + 2);
+            ext.write(names.length >> 8); ext.write(names.length);
+            ext.writeBytes(names);
+        }
         if (sni != null) {
             byte[] name = sni.getBytes(StandardCharsets.US_ASCII);
             int listLen = 3 + name.length;
@@ -53,6 +73,44 @@ class SniTest {
         rec.write(1); rec.write(0); rec.write(body.length >> 8); rec.write(body.length);
         rec.writeBytes(body);
         return rec.toByteArray();
+    }
+
+    /**
+     * ALPN decides who answers a handshake rather than what is carried inside it: {@code acme-tls/1}
+     * is an ACME server validating a name (RFC 8737), which the hub answers itself rather than
+     * relaying. Before this the peek carried the name and nothing else, so the hub could not tell
+     * that connection from a visitor's.
+     */
+    @Test
+    void theProtocolsOfferedAreReadAlongsideTheName() throws Exception {
+        Sni.Peek one = Sni.peek(new ByteArrayInputStream(
+            clientHello("app.hub.test", java.util.List.of("acme-tls/1"))));
+        assertEquals("app.hub.test", one.serverName(), "the name is still read when ALPN comes first");
+        assertEquals(java.util.List.of("acme-tls/1"), one.alpn());
+        assertTrue(one.offers("acme-tls/1"));
+        assertFalse(one.offers("h2"));
+
+        Sni.Peek many = Sni.peek(new ByteArrayInputStream(
+            clientHello("app.hub.test", java.util.List.of("h2", "http/1.1"))));
+        assertEquals(java.util.List.of("h2", "http/1.1"), many.alpn(), "in the order offered");
+        assertFalse(many.offers("acme-tls/1"));
+
+        Sni.Peek none = Sni.peek(new ByteArrayInputStream(clientHello("app.hub.test")));
+        assertEquals(java.util.List.of(), none.alpn(), "no extension, no protocols, and not null");
+        assertFalse(none.offers("acme-tls/1"));
+    }
+
+    /** A protocol list that does not add up is a hello this hub does not have to make sense of. */
+    @Test
+    void anAlpnLengthThatOverrunsIsRefused() {
+        byte[] hello = clientHello("a.b", java.util.List.of("h2"));
+        for (int i = 0; i + 6 < hello.length; i++) {
+            if ((hello[i] & 0xff) == 0 && (hello[i + 1] & 0xff) == 16) {
+                hello[i + 6] = (byte) 0x7f;   // the first protocol's length, past the list holding it
+                break;
+            }
+        }
+        assertThrows(IOException.class, () -> Sni.peek(new ByteArrayInputStream(hello)));
     }
 
     @Test

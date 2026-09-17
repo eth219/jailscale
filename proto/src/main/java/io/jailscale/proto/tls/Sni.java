@@ -3,6 +3,8 @@ package io.jailscale.proto.tls;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -22,10 +24,35 @@ public final class Sni {
      */
     private static final Pattern HOST = Pattern.compile("[a-z0-9.-]+");
 
+    /** application_layer_protocol_negotiation (RFC 7301). */
+    private static final int EXT_ALPN = 16;
+
+    /**
+     * How many offered protocols are kept. A ClientHello may list as many as it likes and this
+     * reads every one to walk the extension, but what the hub does with the list is ask whether
+     * one constant is in it; keeping an unbounded list from an unauthenticated caller is a cost
+     * with no use.
+     */
+    private static final int MAX_ALPN = 16;
+
     private Sni() {}
 
-    /** The peeked bytes and the SNI (null if the hello carries none). */
-    public record Peek(byte[] consumed, String serverName) {}
+    /**
+     * The peeked bytes, the SNI (null if the hello carries none) and the protocols the client
+     * offered in ALPN (empty if it offered none).
+     *
+     * <p>ALPN is here because one protocol changes who answers the handshake rather than what is
+     * carried inside it: {@code acme-tls/1} means an ACME server validating a name, and the hub
+     * answers that itself with a certificate built for the purpose (RFC 8737) instead of relaying
+     * it to the node that holds the name.
+     */
+    public record Peek(byte[] consumed, String serverName, List<String> alpn) {
+
+        /** Whether the client offered {@code protocol}. */
+        public boolean offers(String protocol) {
+            return alpn.contains(protocol);
+        }
+    }
 
     /**
      * Reads exactly one TLS record from {@code in} and parses the ClientHello inside.
@@ -50,11 +77,20 @@ public final class Sni {
         byte[] consumed = new byte[5 + len];
         System.arraycopy(header, 0, consumed, 0, 5);
         System.arraycopy(body, 0, consumed, 5, len);
-        return new Peek(consumed, parse(body));
+        Hello hello = parseHello(body);
+        return new Peek(consumed, hello.serverName(), hello.alpn());
     }
+
+    /** What a ClientHello carries that anything here reads. */
+    public record Hello(String serverName, List<String> alpn) {}
 
     /** Parses the handshake body of a ClientHello record and returns the SNI host, or null. */
     public static String parse(byte[] b) throws IOException {
+        return parseHello(b).serverName();
+    }
+
+    /** As above, with the ALPN list as well. */
+    public static Hello parseHello(byte[] b) throws IOException {
         int p = 0;
         if (b.length < 4 || (b[0] & 0xff) != 0x01) {
             throw new IOException("not a ClientHello");
@@ -81,11 +117,13 @@ public final class Sni {
         int compLen = b[p++] & 0xff;
         p += compLen;
         if (p + 2 > b.length) {
-            return null; // no extensions
+            return new Hello(null, List.of()); // no extensions
         }
         int extLen = ((b[p] & 0xff) << 8) | (b[p + 1] & 0xff);
         p += 2;
         int end = Math.min(b.length, p + extLen);
+        String serverName = null;
+        List<String> alpn = new ArrayList<>(4);
         while (p + 4 <= end) {
             int type = ((b[p] & 0xff) << 8) | (b[p + 1] & 0xff);
             int len = ((b[p + 2] & 0xff) << 8) | (b[p + 3] & 0xff);
@@ -93,7 +131,7 @@ public final class Sni {
             if (p + len > end) {
                 throw new IOException("bad extension length");
             }
-            if (type == 0) {
+            if (type == 0 && serverName == null) {
                 int q = p + 2; // skip server_name_list length
                 while (q + 3 <= p + len) {
                     int nameType = b[q] & 0xff;
@@ -107,14 +145,35 @@ public final class Sni {
                         if (name.isEmpty() || name.length() > 253 || !HOST.matcher(name).matches()) {
                             throw new IOException("bad server_name");
                         }
-                        return name;
+                        serverName = name;
+                        break;
+                    }
+                    q += nameLen;
+                }
+            } else if (type == EXT_ALPN) {
+                // ProtocolNameList: two bytes of list length, then one-byte-prefixed names. Read
+                // as ISO-8859-1 and compared whole, never parsed: a protocol name is an opaque
+                // label and the only one this hub acts on is a constant.
+                if (len < 2) {
+                    throw new IOException("bad ALPN extension");
+                }
+                int listEnd = p + len;
+                int q = p + 2;
+                while (q + 1 <= listEnd) {
+                    int nameLen = b[q] & 0xff;
+                    q += 1;
+                    if (nameLen == 0 || q + nameLen > listEnd) {
+                        throw new IOException("bad ALPN protocol length");
+                    }
+                    if (alpn.size() < MAX_ALPN) {
+                        alpn.add(new String(b, q, nameLen, StandardCharsets.ISO_8859_1));
                     }
                     q += nameLen;
                 }
             }
             p += len;
         }
-        return null;
+        return new Hello(serverName, List.copyOf(alpn));
     }
 
     /**
