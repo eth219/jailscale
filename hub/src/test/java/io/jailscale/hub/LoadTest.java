@@ -57,11 +57,7 @@ class LoadTest {
 
     @AfterEach
     void stop() throws Exception {
-        if (node != null) {
-            node.close();
-        }
-        hub.close();
-        app.close();
+        TestCloseables.closeAll(node, hub, app);
     }
 
     private void serveApp(Socket c) {

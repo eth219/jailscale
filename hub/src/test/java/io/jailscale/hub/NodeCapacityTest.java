@@ -106,11 +106,7 @@ class NodeCapacityTest {
     @AfterEach
     void stop() throws Exception {
         release.countDown();
-        if (node != null) {
-            node.close();
-        }
-        app.close();
-        hub.close();
+        TestCloseables.closeAll(node, app, hub);
     }
 
     /** Joins with a node that will hold {@code CEILING} visitors and opens one link on it. */

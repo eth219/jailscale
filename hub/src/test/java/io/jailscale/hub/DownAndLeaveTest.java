@@ -58,9 +58,7 @@ class DownAndLeaveTest {
 
     @AfterEach
     void stop() throws Exception {
-        node.close();
-        localApp.close();
-        hub.close();
+        TestCloseables.closeAll(node, localApp, hub);
     }
 
     private JsonObject cli(JsonObject.Builder req) throws IOException {

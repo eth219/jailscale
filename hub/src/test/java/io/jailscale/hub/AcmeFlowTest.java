@@ -76,18 +76,11 @@ class AcmeFlowTest {
 
     @AfterEach
     void stop() throws Exception {
-        for (Daemon d : daemons) {
-            d.close();
-        }
-        if (localApp != null) {
-            localApp.close();
-        }
-        if (hub != null) {
-            hub.close();
-        }
-        if (ca != null) {
-            ca.close();
-        }
+        List<AutoCloseable> all = new ArrayList<>(daemons);
+        all.add(localApp);
+        all.add(hub);
+        all.add(ca);
+        TestCloseables.closeAll(all.toArray(new AutoCloseable[0]));
     }
 
     @Test
