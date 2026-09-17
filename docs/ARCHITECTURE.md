@@ -2685,10 +2685,24 @@ which ships too, measures **24.0 MB of node idle RSS with 2.3 MB anonymous** —
 against amd64's 34.4 with 2.1 anonymous. The two Linux targets own the same memory to within 0.2 MB,
 so the whole of the 10.4 MB between them is file-backed — 32.3 MB against 21.7 — and what the
 paragraph above describes is real and is a property of one architecture rather than of the kernel.
-*Which* file-backed pages is not measured, and 32.3 MB is more of them than the whole 26.4 MiB
-binary, so the sentence above names the binary for more of that figure than anything has taken
-apart. `docs/jsse-idle-cost` has that run at five states; what nothing has taken apart is the 34.4
-itself, which is #216.
+**And it is all there before the daemon does anything.** `docs/jsse-idle-cost` has now run its five
+states on this platform too. A node with a fresh home, which has never built an `SSLContext` and
+never opened a socket to the hub, is **29.9 MB here against 17.3 on `linux-arm64`** — 12.6 MB, which
+is more than the 10.4 the two idle figures differ by, because everything *after* that first state
+costs less on amd64 than on either other target: +5.2 MB from there to a joined node with a link
+open, against arm64 Linux's +6.7 and darwin's +8.0. So the gap is at its widest before any TLS, any
+connect and any join, and the daemon's own work then closes a little of it. It is not a bigger
+binary either: v0.1.10 ships `jailscale-linux-amd64` at 27.1 MiB against `linux-arm64`'s 26.2.
+
+*Which* file-backed pages is measured for part of it and asserted for the rest, and the two figures
+are not two halves of one quantity. Of the 12.6 MB gap at that first state, **2.9 MB** is the
+binary's own executable mappings — 10,388 KB against arm64's 7,420. Separately, of the 29.3 MB of
+file-backed memory the amd64 process holds there, **about 19 MB is outside those mappings** and
+nothing has named it: `decompose.sh` sums the executable mappings of `/proc/PID/exe` and cannot tell
+the binary's rodata and image heap from anything else the loader brought in. 32.3 MB is more
+file-backed memory than the whole binary at either size the table above and `main` disagree about
+(26.4 MiB and 27.3, which is #228), so this paragraph still names the binary for more than anything
+has taken apart. #227 is the run that would settle it.
 
 The live hub shows what that means under pressure. On a GCP e2-micro with 969 MB of RAM, after a
 day of service, `smaps_rollup` reported 41.1 MB of RSS split into 15.0 MB anonymous and 26.2 MB of
@@ -3114,13 +3128,17 @@ say so and name the issue. An entry that does neither has not been through that 
   roughly 7.6 MB of it was JSSE standing up one TLS client, and to price two levers against that
   figure. `docs/jsse-idle-cost` took the figure apart, and it is the wrong thing to aim at.
 
-  **Almost none of it is memory the process owns.** From a daemon that has never built an
-  `SSLContext` to one connected with a link open is 8.0 MB of RSS and **1.5 MB of written pages**;
-  +3.7 MB is the binary's own `__TEXT` becoming resident with zero dirty pages in it, and +2.0 MB
-  its image-heap mapping, 288 KB of that dirty. Standing JSSE up at all is 2.6 MB of RSS for
-  **139 KB written**. The cost is code executing for the first time out of a 26 MiB binary, page by
-  page, and those pages are clean, file-backed and evictable. There is no megabyte of dirty memory
-  here for any TLS work to recover.
+  **Almost none of it is memory the process owns, on any of the three.** From a daemon that has
+  never built an `SSLContext` to one connected with a link open is 8.0 MB of RSS and **1.5 MB of
+  written pages** — and the same sequence owns 1,477 KB on `linux-arm64` and 1,447 on `linux-amd64`,
+  two kernels, two architectures and two samplers within 99 KB of each other, which is the size of
+  that column's own run-to-run movement: agreement within noise, not a ranking. The figure the
+  levers below are priced against is not one platform's. On `darwin-arm64`, where the regions can be
+  attributed: +3.7 MB is the binary's own `__TEXT` becoming resident with zero dirty pages in it,
+  and +2.0 MB its image-heap mapping, 288 KB of that dirty. Standing JSSE up at all is 2.6 MB of RSS
+  for **139 KB written**. The cost is code executing for the first time out of a 26 MiB binary, page
+  by page, and those pages are clean, file-backed and evictable. There is no megabyte of dirty
+  memory here for any TLS work to recover.
 
   **And it is not all TLS.** 2.0 MB of the 8.0 is the join — `/v1/key`, the join request, the first
   certificate — which `measure.sh` samples because it measures idle in the daemon that just

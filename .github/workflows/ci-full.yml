@@ -40,6 +40,10 @@ on:
         # documentation measurement -- `docs/jsse-idle-cost/decompose.sh` at its five states on
         # linux-amd64, which is the platform §14's node figure comes from and the one an arm64
         # laptop cannot produce (#216). Asking for it by name is the whole of how it runs.
+        #
+        # Adding a value here means editing the `if:` of every job below that should not run for it:
+        # each one names the values it runs on rather than the ones it does not, so a new value that
+        # nothing names runs nothing and reports green. Three places, one edit.
         description: which job to run
         type: choice
         default: all
@@ -49,8 +53,12 @@ on:
 # an older one also cancels a wanted one: runs for the same pull request share a ref, so a second
 # label -- or any label added while a `ci:full` build is going -- would kill it. A superseded run
 # costs runner minutes; a cancelled one costs the evidence somebody asked for.
+# `inputs.only` is in the group because `idle-split` is dispatched by hand at a moment somebody
+# chose, and without it a measurement asked for while main's push run is going would sit pending
+# behind a native build and a thousand-visitor load test -- and be cancelled outright if the nightly
+# then fired on the same unchanged head, since GitHub keeps one pending run per group.
 concurrency:
-  group: ci-full-${{ github.event.pull_request.head.sha || github.sha }}
+  group: ci-full-${{ github.event.pull_request.head.sha || github.sha }}-${{ inputs.only || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -153,7 +161,8 @@ jobs:
       - name: Build the binaries
         run: ./mvnw -B -ntp -Pnative package -DskipTests
       - name: The five states
-        # RUNS and SETTLE are inputs of the script, not of the workflow, because the numbers in the
-        # README are three runs at the default settle and a run with other values is not comparable
-        # with them. Change them here, in a commit, if they ever have to change.
-        run: docs/jsse-idle-cost/decompose.sh
+        # Spelled out rather than left to the script's own defaults, because the README records the
+        # conditions its amd64 table was taken under -- three runs, the default settle -- and a run
+        # with other values is not comparable with it. Left implicit, somebody tuning decompose.sh
+        # for a laptop would change what this job measures and nothing would notice.
+        run: RUNS=3 SETTLE=8 docs/jsse-idle-cost/decompose.sh

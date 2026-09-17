@@ -11,7 +11,7 @@ the pages the process has actually written, and the resident pages of the binary
 on Linux, which can also report the anonymous resident share §14 publishes beside RSS. Three
 runs, `darwin-arm64`, GraalVM CE 25.3.4.1, `-O2`, the release toolchain. The spread between runs is
 0.1 MB, so the differences below are real at one decimal place. The same five states on
-`linux-arm64` are further down, and they say the same thing.
+`linux-arm64` and on `linux-amd64` are further down, and all three say the same thing.
 
 | state | | RSS | written | code |
 |---|---|---|---|---|
@@ -162,6 +162,75 @@ Two smaller differences, neither of which moves anything:
   measurement — Linux's column is the binary's executable mappings and darwin's is `__TEXT`, which
   carries rodata as well — so what carries across is the growth and not the 7,420 against 4,560.
 
+## The same five states on `linux-amd64`, which is the platform the gate measures
+
+The two runs above are arm64, and §14's node figure is not: 34.4 MB is `linux-amd64`, measured by
+`measure.sh` on every push to `main`. No machine this is developed on can produce that platform, so
+this run is a `workflow_dispatch` of `ci-full.yml` with `only: idle-split` — `ubuntu-24.04`,
+GraalVM CE 25.3.4.1, `./mvnw -Pnative package`, the same toolchain and runner image the budget gate
+itself uses. Three runs at the default settle. RSS repeated to 0.1 MB across all three and `code` to
+the kilobyte. `written` is the mean of the three, and the arm64 section above measures that column's
+own run-to-run movement at about 100 KB, which is the floor to read it against.
+
+| state | | RSS | written | code | anonymous |
+|---|---|---|---|---|---|
+| `A` | fresh home, never joined | 29.9 MB | 713 KB | 10,388 KB | 0.7 MB |
+| `Bpin` | joined with `--ca-file`, hub down | 32.3 | 923 | 11,988 | 0.9 |
+| `C` | restarted daemon, connected | 34.3 | 1,499 | 13,268 | 1.5 |
+| `E` | `C` with one link open | 34.5 | 1,685 | 13,268 | 1.6 |
+| `J` | joined **and** opened within one daemon's life | 35.1 | 2,160 | 13,268 | 2.1 |
+
+| | RSS | written | code |
+|---|---|---|---|
+| `A → Bpin` stand JSSE up, no bytes moved | +2.3 MB | +209 KB | +1,600 KB |
+| `Bpin → C` handshake, Noise, mux, registration | +2.0 | +576 | +1,280 |
+| `C → E` open one link | +0.2 | +187 | +0 |
+| `E → J` having performed the join in this process | +0.7 | +475 | +0 |
+| **`A → J`** | **+5.2** | **+1,447** | **+2,880** |
+
+**`written` carries to the third platform, and it is the column everything above rests on.** `A → J`
+owns 1,546 KB on `darwin-arm64`, 1,477 on `linux-arm64` and **1,447 on `linux-amd64`** — two
+architectures, two kernels, two samplers that share no code, and a spread of 99 KB. That spread is
+the size of the column's own noise and not smaller than it: the arm64 run's three passes gave 1,477,
+1,500 and 1,581 KB. So this says the three platforms agree to within what one of them varies by, and
+not that amd64 owns 30 KB less than arm64. The claim that standing JSSE up, connecting, opening a
+link and joining costs about a megabyte and a half of memory the process owns is now measured on
+every shipped native target but `windows-amd64`.
+
+**The 10 MB is there before the daemon has done anything.** State `A` is a process that has never
+built an `SSLContext`, never opened a socket to the hub and has no keys: 17.1 MB on `darwin-arm64`,
+17.3 on `linux-arm64` and **29.9 on `linux-amd64`**. The whole of the gap §14 reports is already
+present there. Everything after it is *cheaper* on amd64 than anywhere else — `A → J` is +5.2 MB
+against arm64 Linux's +6.7 and darwin's +8.0 — so whatever the 10 MB is, it is not JSSE, not the
+handshake, not the link and not the join. This is the question #216 asked, and it is answered in the
+first row of the table.
+
+**It is not the binary being bigger.** v0.1.10 ships `jailscale-linux-amd64` at 27.1 MiB against
+`jailscale-linux-arm64` at 26.2 — 0.9 MiB apart, against 12.6 MB of RSS at `A`.
+
+**What is still an attribution is which mappings.** `code` here is the binary's own executable
+mappings, and it is 10,388 KB at `A` against arm64's 7,420: **2.9 MB of the 12.6, and no more.** At
+`A` the process is 29.9 MB of RSS with 0.7 anonymous, so 29.3 MB of it is file-backed and about 19
+of those are outside the binary's executable mappings. `decompose.sh` has no column that says
+whether they are the binary's non-executable mappings — rodata, the image heap — or something else
+mapped into the process, and §14 names the binary for all of them. That sentence is now narrower
+than it was rather than settled: the executable share is measured and the rest is not. #227 is the
+run that would settle it.
+
+**And `J` lines up with the gate, which is the check that says this measured the right thing.** §14
+publishes 34.4 MB for a node of exactly `J`'s shape and this reads **35.1**, which looks like 2% of
+disagreement and is not. The `budget` job on `main` at the same commit
+([35247984078](https://github.com/eth219/jailscale/actions/runs/35247984078)) reads **35.2 MB with
+2.1 MB anonymous**, against `J`'s 35.1 with 2.1. The two harnesses are not the same sequence —
+`measure.sh` settles for `IDLE=10` against this script's 8, and the daemon it samples has also
+issued an invite, served a second node's join and answered a `netcheck` — and they land 0.1 MB
+apart anyway.
+
+What is 0.8 MB out of date is §14's **34.4**, which is v0.1.2's figure. The same run puts the
+binary at 27.3 MiB against the table's 26.4, and since idle RSS here is mostly the binary mapped in,
+a binary 0.9 MiB larger is the whole of it. The gate held on every release in between; the table
+was not re-measured. #228 is that table.
+
 ## What this says about replacing JSSE
 
 The question this was run for was whether writing our own TLS would move the figure, and the
@@ -187,11 +256,13 @@ defence. If this number is ever worth moving, the lever is code layout.
 
 ## What this does not cover
 
-`darwin-arm64` and `linux-arm64`. **`linux-amd64` is the one that is missing, and it is the one the
-gate measures** — the 34.4 MB in §14 and the README is its figure, and nothing has taken it apart at
-these five states. What the run above establishes is that its extra 10 MB is file-backed and not
-memory the process owns; what it cannot establish is which mappings, because an arm64 machine is not
-where that number comes from. #216 is that run.
+**Which file-backed mappings the `linux-amd64` baseline is.** Every shipped native target but
+`windows-amd64` — which has no sampler here at all, and is the fourth — has now been through the
+five states, and the amd64 run says the gap is present at `A` and that 2.9 MB of the 12.6 is the
+binary's executable mappings. Separately, of the 29.3 MB of file-backed memory the process holds at
+`A`, about 19 MB is outside those mappings and unattributed: `decompose.sh` sums the executable
+mappings of `/proc/PID/exe` and nothing else, so it cannot tell the binary's rodata and image heap
+from anything else the loader brought in. #227 is that run.
 
 Only `decompose.sh`'s five states have been run on Linux. The trust-store half of this file is
 `truststore.sh`, which rests on `vmmap` and on a second image built beside the first, so the 0.55 MB
