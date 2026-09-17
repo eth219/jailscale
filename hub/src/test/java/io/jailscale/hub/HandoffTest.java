@@ -52,7 +52,18 @@ class HandoffTest {
 
     @AfterEach
     void stop() throws Exception {
-        TestCloseables.closeAll(alice, localApp, fresh, old);
+        if (alice != null) {
+            alice.close();
+        }
+        if (localApp != null) {
+            localApp.close();
+        }
+        if (fresh != null) {
+            fresh.close();
+        }
+        if (old != null) {
+            old.close();
+        }
     }
 
     /** A local app whose response body trickles out over ~1.5 s. */

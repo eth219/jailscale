@@ -106,7 +106,9 @@ class VisitorHeadHasNoBodyTest {
 
     @AfterEach
     void stop() throws Exception {
-        TestCloseables.closeAll(alice, app, hub);
+        alice.close();
+        app.close();
+        hub.close();
     }
 
     /** A response head, and the next byte on the wire after it: -1 when the message ended there. */
