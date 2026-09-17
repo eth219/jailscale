@@ -300,10 +300,35 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
    review finding answered in the pull request, no `status:needs-decision`, base is the current
    `main`. Squash — that is what the history is made of. Then step 8, and the invariant command.
 6. **Watch `main`.** Unless the pull request carried `ci:full`, this is the first time `load` and
-   `budget` see the change, and so the first native run of it. A red job is re-run once. Red again: revert the merge (`gh pr revert`, or
-   `git revert -m 1`), reopen the issue with the failing job's output in a comment, set it
-   `status:ready`, and stop. Fixing forward is not the default because the next issue's pull request
-   would then be based on a red `main`, and two changes would own one failure.
+   `budget` see the change, and so the first native run of it. A red job is re-run once. Red
+   again: revert the merge (`gh pr revert`, or `git revert -m 1`), reopen the issue with the
+   failing job's output in a comment, set it `status:ready`, and stop. Fixing forward is not the
+   default because the next issue's pull request would then be based on a red `main`, and two
+   changes would own one failure.
+
+   The rule rests on a number, and the number is smaller than the one a reader reaches for.
+   `tools/flake-rate.sh` prints it: for each job on `main` it counts the reds, and sorts them into
+   red-then-re-run-green, red-then-re-run-red, and never resolved. What the rule is exposed to is
+   the middle one — a false revert is a flake that repeats — and what a red rate measures is
+   mostly the first and the third. `tools/flake-rate.sh 50` on 2026-09-16, over the 45 push runs
+   it counted — before `load` and `budget` moved to `ci-full.yml`, so reproducing the two of them
+   now takes `WORKFLOW=ci-full.yml` as well, which is #194:
+
+   | | |
+   |---|---|
+   | reds | 13, across four jobs; per-job rate 4.4% to 8.9% |
+   | re-run on the same commit | 5, of which 5 went green and 0 were red again |
+   | never resolved | 8 — nobody re-ran them, so a flake and a regression look identical |
+
+   So the rule has not yet been wrong here, on a sample of five. The eight unresolved reds are the
+   reason that is not a stronger statement, and they are why the report prints them as their own
+   column rather than folding them into a rate. Every red in the window was `VisitorStallTest`
+   (six, fixed by #150), `LoadTest` (three, #183), `AutoPromoteTest` or `RawPortTest` (three, the
+   port race fixed by #171), and one whose log holds no test failure at all — a Maven download that
+   failed. At this pace fifty runs is about a day, so re-run the script rather than trusting the
+   table above; `tools/flake-rate.sh --self-test` is what a change to the script itself has to pass,
+   since no CI job runs it (#192).
+
 7. A problem seen anywhere in this is step 5: filed with all three axes and linked both ways. That
    is how the tracker grows from the loop, and it is the only way it may.
 
