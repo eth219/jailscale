@@ -9,9 +9,11 @@ import java.util.Map;
 
 /**
  * Rebuilds, at the moment JSSE asks for a CertificateVerify signature, the handshake messages the
- * transcript hash in that request covers (ARCHITECTURE.md §9.2). JSSE signs before it has written
- * a byte of its flight, and shows neither its ServerHello nor its EncryptedExtensions, so the
- * node works them out from what it does have:
+ * transcript hash in that request covers (ARCHITECTURE.md §9.2). The node drives an
+ * {@code SSLEngine}, and the signature is asked for in a {@code NEED_TASK} while the engine is
+ * still consuming the ClientHello -- before the first {@code wrap()} of the server flight has
+ * returned, so neither the ServerHello nor the EncryptedExtensions has reached the node, and it
+ * works them out from what it does have:
  *
  * <ul>
  *   <li>the ClientHello(s), and a HelloRetryRequest if one went out: plaintext, taken off the wire
@@ -25,7 +27,13 @@ import java.util.Map;
  *   <li>the Certificate: the chain the hub sent.
  * </ul>
  *
- * The reconstruction is checked here, against the hash JSSE handed over, before anything is
+ * <p>That the ServerHello is not there to be read is a property of how the node drives the engine
+ * and not of JSSE: a server on an {@code SSLSocket} has written it, in the clear, before it is
+ * asked to sign (jailscale#208). A visitor stream is not a socket (§9.2), so all this side has put
+ * on the wire by then is a HelloRetryRequest, if there was one -- which is why that message is the
+ * one above that is read rather than rebuilt.
+ *
+ * <p>The reconstruction is checked here, against the hash JSSE handed over, before anything is
  * sent: a wrong guess fails this handshake with a clear reason instead of asking the hub to sign
  * something it will refuse. A JDK that changes how it writes these messages shows up as every
  * visitor handshake failing, which the end-to-end tests catch.

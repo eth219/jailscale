@@ -1185,10 +1185,18 @@ someone else's name. So the hub signs only when all of these hold:
 6. The node is within its signing rate: a token bucket of 2,000 with 1,000 per second sustained,
    sized from a load test where 1,000 visitors handshake at once. Resumption needs no signature.
 
-**Where the node gets the messages from.** JSSE asks for the signature before it has written a byte
-of its flight, and shows neither its ServerHello nor its EncryptedExtensions, so the node rebuilds
-them (`Transcript`). The ClientHello and any HelloRetryRequest are plaintext, taken off the wire by
-`TlsEndpoint`. The Certificate is the chain. The EncryptedExtensions are a function of the ClientHello
+**Where the node gets the messages from.** The signature is asked for inside a `NEED_TASK`, while
+the engine is still consuming the ClientHello and before the first `wrap()` of the server flight has
+returned, so neither the ServerHello nor the EncryptedExtensions has reached the node, and it
+rebuilds them (`Transcript`). The ClientHello and any HelloRetryRequest are plaintext, taken off the
+wire by `TlsEndpoint`: a retry that went out did so before the signature was asked for, and it is
+the one message of this side's own flight that is read rather than rebuilt. **That is how the node
+drives the engine and not a property of JSSE**, which is what makes this section's opening sentence
+load-bearing: a server on an `SSLSocket` has written its ServerHello in the clear, and its
+EncryptedExtensions after it under the handshake keys, before it is asked to sign -- so a design
+free to layer TLS on a socket can read the ServerHello that this one has to rebuild (#208 measured
+both shapes).
+The Certificate is the chain. The EncryptedExtensions are a function of the ClientHello
 and a fixed server configuration: one key-exchange group (X25519; a client whose key share is for
 something else gets a retry) and one ALPN protocol. The ServerHello has two unknowns, its random and
 the X25519 key share, and both come out of the `SecureRandom` the node hands the `SSLContext`, which
