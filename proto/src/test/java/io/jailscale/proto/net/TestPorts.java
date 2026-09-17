@@ -32,10 +32,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <b>What this does not cover</b>, and what a reserved port can still be lost to:
  * <ul>
  *   <li>a listener the code under test opens on port 0 -- every hub started in a test binds a DNS
- *       TCP/UDP pair that way, and {@code /metrics} and the plain-HTTP front too, so a hub started
- *       between a {@code reserve()} and the bind it was reserved for can be handed that number.
- *       Reserving each port immediately before the thing that binds it is what keeps that window
- *       shut, and is why the two-hub tests draw the standby's number after the primary is up;</li>
+ *       TCP/UDP pair that way, and {@code /metrics} and the plain-HTTP front too, so a number
+ *       reserved and not yet bound can be handed to one of them. It happened four times in two days
+ *       (#196). A hub's listen port is no longer exposed to it: {@link #listen} hands over a bound
+ *       socket and {@code Hub.listenOn} takes it, so nothing is ever unheld. Reserving immediately
+ *       before the bind does not help when the thing in between is {@code Hub.start()}, which draws
+ *       port 0 up to eight times of its own;</li>
  *   <li>the DNS suites ({@code DnsResponderTest}, {@code DnsQueryFallbackTest},
  *       {@code ReferralTest}), which draw their own numbers because they are testing that draw;</li>
  *   <li>another process on the machine. The bind still fails, and the message says so rather than
@@ -53,8 +55,15 @@ public final class TestPorts {
     }
 
     /**
-     * A loopback port for something that will bind it itself, later: a hub's listen port, a
-     * daemon's, a peer's. The number is remembered, so nothing else here is given it.
+     * A loopback port for something that will bind it itself, later: a daemon's, a peer's, a raw
+     * port range, or a port a test wants nothing listening on. The number is remembered, so nothing
+     * else here is given it.
+     *
+     * <p><b>Not for a hub's listen port any more.</b> The residual below is real and a hub lost that
+     * race four times in two days (#196), three of them inside {@code Hub.start}. A hub takes an
+     * already-bound socket now — {@link #listen} and {@code Hub.listenOn} — so the number is never
+     * unheld. What is left here is the shapes that cannot take a bound socket: something in another
+     * process binds it, or the whole point is that nothing does.
      */
     public static int reserve() throws IOException {
         List<ServerSocket> refused = new ArrayList<>();

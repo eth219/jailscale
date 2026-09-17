@@ -102,11 +102,14 @@ class ProxyProtocolEndToEndTest {
     void visitorAddressSurvivesTheProxyAndReachesTheApp() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jp");
-        port = TestPorts.reserve();
-        int rawLo = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
+        // reserveRange, for the reason RawPortTest already does it: see RawPortSlotCapTest.
+        int rawLo = TestPorts.reserveRange(1);
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withProxyProtocol(true, List.of()).withPortRange(rawLo, rawLo));
+        hub.listenOn(portSocket);
         hub.start();
         app = TestPorts.listen(8);
         Thread.ofVirtual().start(() -> {

@@ -40,9 +40,11 @@ class SecondMachineJoinTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("2nd");
-        port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
+        hub.listenOn(portSocket);
         hub.start();
     }
 

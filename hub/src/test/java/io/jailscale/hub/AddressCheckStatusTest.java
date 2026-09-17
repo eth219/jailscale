@@ -195,6 +195,9 @@ class AddressCheckStatusTest {
      */
     private static Hub hub(boolean addressCheck) throws Exception {
         Path root = TestDirs.newRoot("ac");
+        // reserve and not listen: this hub is built and never started, so the number is only
+        // interpolated into a URI and nothing binds it. A held socket here would be six listeners
+        // nobody accepts on.
         int port = TestPorts.reserve();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath(),

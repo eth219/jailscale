@@ -70,9 +70,11 @@ class NodeCapacityTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.INFO);
         root = TestDirs.newRoot("jcap");
-        port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test"));
+        hub.listenOn(portSocket);
         hub.start();
         // An app that answers only once released, so visitors stay in flight and the node stays at
         // its bound while the assertions run. A responding app would free slots as fast as they

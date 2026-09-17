@@ -47,12 +47,14 @@ class HeadHasNoBodyTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("head");
-        port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
         // Port 0 on both extra listeners: the defaults (9090, 80) would collide with a second test
         // JVM, and 80 needs root besides.
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
             .withMetrics("127.0.0.1", 0).withHttp("127.0.0.1", 0));
+        hub.listenOn(portSocket);
         hub.start();
     }
 

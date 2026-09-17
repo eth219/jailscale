@@ -41,11 +41,13 @@ class MetricsEndpointTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         Path root = TestDirs.newRoot("metrics");
-        port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
         // Port 0: the fixed default would collide with a second test JVM, and with whatever else
         // on this machine happens to own 9090.
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test").withMetrics("127.0.0.1", 0));
+        hub.listenOn(portSocket);
         hub.start();
     }
 

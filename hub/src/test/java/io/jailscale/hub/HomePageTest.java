@@ -51,9 +51,11 @@ class HomePageTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("home");
-        port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
+        hub.listenOn(portSocket);
         hub.start();
     }
 
@@ -566,10 +568,17 @@ class HomePageTest {
             .put("peers", JsonObject.builder().build())
             .toJson());
 
-        int port2 = TestPorts.reserve();
+        java.net.ServerSocket port2Socket = TestPorts.listen(1024);
+        int port2 = port2Socket.getLocalPort();
         Hub down = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port2), state, "127.0.0.1", port2,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
-        down.start();
+        down.listenOn(port2Socket);
+        try {
+            down.start();
+        } catch (Exception e) {
+            down.close();   // as in AdminCommandTest: a throw here would otherwise leak the socket
+            throw e;
+        }
         try {
             String page = get(port2, "/").bodyText();
             assertTrue(page.contains("<details>"), "the numbers have to be reachable without a hover: " + page);

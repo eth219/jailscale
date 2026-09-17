@@ -77,10 +77,12 @@ class VisitorStallTest {
     void start() throws Exception {
         Log.setLevel(Log.Level.DEBUG);
         root = TestDirs.newRoot("jstall");
-        port = TestPorts.reserve();
+        java.net.ServerSocket portSocket = TestPorts.listen(1024);
+        port = portSocket.getLocalPort();
         HubConfig cfg = HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test");
         hub = new Hub(cfg);
+        hub.listenOn(portSocket);
         hub.start();
         localApp = TestPorts.listen(8);
         // A number nothing listens on, and nothing in this suite will be given later either:
