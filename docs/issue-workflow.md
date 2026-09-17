@@ -270,11 +270,13 @@ it starts at step 1.
 ## Running the loop unattended
 
 One session, one issue after another, with no person reading the diff between the claim and the
-merge. It is the loop above with a pick rule, a merge rule, and a rule for `main` afterwards. **It is
-not open yet**: #184 is the survey of what the suite can and cannot fail without a person, and it is
-blocked on the three things that survey decided are the gate (#187, #188, #183). Until #184 is
-closed a session runs the loop as far as step 7 and stops there, however many issues it takes in a
-row.
+merge. It is the loop above with a pick rule, a merge rule, and a rule for `main` afterwards.
+
+It was shut until #184 said what the suite can and cannot fail without a person, and it opened on
+2026-09-17 when the three things that survey named were done: `tools/flake-rate.sh` (#187), the
+`ci:full` label (#188), and a measured answer for the `load` flake (#183). What that gate was
+asking for, in the end, was one number — how often a red job is red for no reason — because the
+revert rule below rests on it and nothing said what it was.
 
 The session is started with a **count**: how many issues to take before stopping, and one if
 nothing is said. It is a ceiling, not a target — every stop below fires first — and it is what lets
@@ -311,8 +313,18 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
    `tools/flake-rate.sh` prints it: for each job on `main` it counts the reds, and sorts them into
    red-then-re-run-green, red-then-re-run-red, and never resolved. What the rule is exposed to is
    the middle one — a false revert is a flake that repeats — and what a red rate measures is
-   mostly the first and the third. `tools/flake-rate.sh 50` on 2026-09-17, over the last 50 pushes
-   to `main` — 102 runs, every workflow that answered them, `ci` and `ci-full` and `images`:
+   mostly the first and the third.
+
+   The sharpest reading is of `load`, because it was measured on purpose rather than gathered:
+   twenty dispatches of that job alone on one commit, after the race behind #201 was fixed, gave
+   **one red in twenty**. A false revert needs two in a row, so it is about **one in four hundred**.
+   That is the arithmetic the rule stands on, and #183 holds the working. The one red is the test's
+   own thirty-second connect deadline being met on a runner ten times slower than usual; it is
+   parked at that rate deliberately, because raising the deadline buys a green run by removing the
+   only signal that says the run was slow.
+
+   Across every job, from `tools/flake-rate.sh 50` on 2026-09-17, the last 50 pushes to `main` —
+   102 runs, every workflow that answered them, `ci` and `ci-full` and `images`:
 
    | | |
    |---|---|
@@ -320,9 +332,9 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
    | re-run on the same commit | 5, of which 5 went green and 0 were red again |
    | never resolved | 8 — nobody re-ran them, so a flake and a regression look identical |
 
-   So the rule has not yet been wrong here, on a sample of five. The eight unresolved reds are the
-   reason that is not a stronger statement, and they are why the report prints them as their own
-   column rather than folding them into a rate. Four tests account for all thirteen:
+   The eight unresolved reds are why that table is weaker than the twenty dispatches above, and
+   they are why the report prints them as their own column rather than folding them into a rate.
+   Four tests account for all thirteen:
    `VisitorStallTest` six, fixed by #150; `LoadTest` four, which is #183; `AutoPromoteTest` two and
    `RawPortTest` one, the port race fixed by #171. Read the per-job rates and not `ci-full`'s 50%:
    that job has two runs in this window, because the file is two pushes old. At this pace fifty
