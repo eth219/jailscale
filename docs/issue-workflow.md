@@ -188,6 +188,7 @@ In this order, and the order matters — a review of code that does not compile 
 ```sh
 ./mvnw package                            # the tests, on this platform
 ./mvnw -Panalyze verify -DskipTests       # SpotBugs; its own job in CI, so it is easy to forget
+tools/self-test.sh                        # only if the change touches tools/; its own job as well
 ```
 
 Then `/code-review`, and answer what it finds. "Answer" includes deciding a finding is wrong and

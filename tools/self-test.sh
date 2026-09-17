@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Runs the self-test of every script in tools/ that has one, and refuses to run if any script here
-# is in neither list below. CI calls this (#192): until it existed, tools/ held eleven scripts --
+# is in neither list below. CI calls this (#192): until it existed, tools/ held twelve scripts --
 # two of which sign a release -- and nothing in CI ran a test for any of them.
 #
 #   tools/self-test.sh
@@ -39,10 +39,29 @@ fail=0
 # time -- which it did, and said flake-rate.sh was in both lists.
 UNTESTED_NAMES=$(printf '%s\n' "$UNTESTED" | awk 'NF { print $1 }')
 
-# Every .sh and .py in tools/ is in exactly one of the two lists.
+# The names first, then `set -f`: an unquoted $TESTED in a `for` list is glob-expanded against the
+# caller's working directory, so an entry with a metacharacter would make the answer depend on
+# where the script was run from. The [ -e ] guard is for a glob that matches nothing -- delete the
+# three .py files and "$dir"/*.py stays literal, and the run fails naming a file that is not there.
+names=
 for path in "$dir"/*.sh "$dir"/*.py; do
+    [ -e "$path" ] || continue
     name=${path##*/}
     [ "$name" = "self-test.sh" ] && continue
+    names="$names $name"
+done
+set -f
+
+# This one cannot be tested: it has no --self-test, and listing it would recurse until the stack
+# or the patience runs out.
+for t in $TESTED; do
+    [ "$t" = "self-test.sh" ] || continue
+    echo "self-test.sh cannot be in its own TESTED list; it would run itself forever." >&2
+    exit 1
+done
+
+# Every .sh and .py in tools/ is in exactly one of the two lists.
+for name in $names; do
     in_tested=no; in_untested=no
     for t in $TESTED; do [ "$t" = "$name" ] && in_tested=yes; done
     for u in $UNTESTED_NAMES; do [ "$u" = "$name" ] && in_untested=yes; done
@@ -68,20 +87,27 @@ done
 
 # Each self-test has to say `self-test: ok` on its way out. Without that the runner's own claim is
 # unfalsifiable: replace the invocation with `true` and it still reports that everything passed.
+# A whole line and not a substring, because `usage: ... --self-test: ok to pass N` would otherwise
+# do; stdout and not stderr, which is where a script says what went wrong rather than that nothing
+# did.
 ran=0
 for t in $TESTED; do
     echo "== $t --self-test"
-    out=$("$dir/$t" --self-test 2>&1) || { printf '%s\n' "$out" >&2; exit 1; }
+    # Four scripts in here are not executable in git's index, so this would otherwise be a bare
+    # "Permission denied" from a line that does not say which file or why.
+    [ -x "$dir/$t" ] || { echo "$t is listed as tested and is not executable." >&2; exit 1; }
+    out=$("$dir/$t" --self-test) || exit 1
     printf '%s\n' "$out"
-    case $out in
-        *"self-test: ok"*) ;;
-        *) echo "$t exited 0 without saying 'self-test: ok'; it did not run." >&2; exit 1 ;;
-    esac
+    printf '%s\n' "$out" | grep -qx 'self-test: ok' \
+        || { echo "$t exited 0 without a line saying 'self-test: ok'; it did not run." >&2; exit 1; }
     ran=$((ran + 1))
 done
 
 # A runner that silently ran nothing would pass every time, which is the failure this whole file
 # exists to prevent one directory over.
 [ "$ran" -gt 0 ] || { echo "tools/self-test.sh ran no self-test at all." >&2; exit 1; }
-total=$(ls "$dir"/*.sh "$dir"/*.py | wc -l | tr -d ' ')
-echo "tools/self-test.sh: $ran of $((total - 1)) scripts have a self-test, and it passed."
+# Counted from $names and not from a glob: `set -f` is on by now, and `ls "$dir"/*.sh` under it
+# lists nothing and reports a negative.
+total=0
+for name in $names; do total=$((total + 1)); done
+echo "tools/self-test.sh: $ran of $total scripts have a self-test, and it passed."

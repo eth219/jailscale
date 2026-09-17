@@ -101,6 +101,10 @@ jobs:
   # CI ran a test for none of them (#192).
   tools:
     runs-on: ubuntu-24.04
+    # Nothing here should take a minute. Without this a self-test that blocks holds a runner for
+    # the six-hour default, and because the runner captures each script's output, a hang shows
+    # nothing at all about which one.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - run: tools/self-test.sh
