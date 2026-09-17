@@ -20,7 +20,8 @@ Closes #
      measured. CI runs `package` and `-Panalyze` on every pull request; the budget and load gates
      are off by default, so an unticked box for one of those is a failure that finds main instead
      of you. The `ci:full` label runs both of them here, on this head, which is better evidence
-     than the local run and costs you only the wait. -->
+     than a local run — but they are not required checks, so nothing stops a merge from beating
+     them. Wait for them by name. -->
 
 - [ ] `./mvnw package`
 - [ ] `./mvnw -Panalyze verify -DskipTests`
