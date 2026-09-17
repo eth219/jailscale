@@ -306,11 +306,34 @@ The session is started with a **count**: how many issues to take before stopping
 nothing is said. It is a ceiling, not a target — every stop below fires first — and it is what lets
 a person say "three, then I will look" instead of finding out in the morning how far it got.
 
+**An issue spends the count when it produces the thing it asked for** — a pull request, or the
+comment that is the whole deliverable on an issue asking for a measurement. One that is claimed and
+released on a first real read, the body disagreeing with the label or the work turning out to be a
+decision, was taken and produced nothing; counting that would let a run of three end with three
+released issues and nothing to show. The two readings have the same words and very different
+mornings. The session names the released ones when it stops, with a line each on why, because a
+release is invisible from `gh issue list`: the label is back to what it was, and only the comment on
+the issue says a session was ever there.
+
 ### Pick
 
 The oldest `status:ready` whose newest CLAIM has expired or does not exist. There is no priority
 axis, so age is the one rule a reader can check afterwards. Skip — do not even claim — anything
 carrying `security`, `area:proto` or `area:release`; the merge rule below says why.
+
+**The label is a claim about the body, not a reading of it, and the first run found two that
+disagreed with their own.** #71 was `status:ready` under a heading reading "Why this is a decision
+and not a task", #72 under "Parked, deliberately". So the body is read before the CLAIM comment goes
+up — step 2 already says to read the comments, and this is the same reflex one field over — and when
+the two disagree, the label the body asks for is what the issue gets, with a line saying why. That
+relabelling is the work, it is worth doing, and it does not spend the count.
+
+**Ready means scoped, not reachable.** #80 wants a run on a real Windows console and #81 one VM per
+platform, and a session on a Mac can start neither; both are correctly `status:ready`, and nothing
+in the three axes says so. Walk past those the way the three labels above are walked past — no
+claim, no comment — and name them at the stop, so that the next session reads it rather than
+spending its own first cycle finding out. Two runs have now each paid for that reading. What would
+save the third is something on the issue itself that says so, and which of those is #223.
 
 ### Each issue
 
@@ -333,6 +356,15 @@ carrying `security`, `area:proto` or `area:release`; the merge rule below says w
    failing job's output in a comment, set it `status:ready`, and stop. Fixing forward is not the
    default because the next issue's pull request would then be based on a red `main`, and two
    changes would own one failure.
+
+   **The revert is a pull request, and it is exposed to exactly what it is recovering from.** On
+   the first real run the revert's own Windows job went red — `DnsResponderTest`, `Address already
+   in use`, #196's family, and nothing to do with either change — and passed when it was re-run. So
+   it gets the same one re-run as any other red, and if it still cannot land the session stops
+   there and says so on the issue it reopened: a revert retried until it passes is a session
+   deciding on its own that a red is a flake, which is the judgement this whole rule exists to take
+   away from it. That stop is the one below that cannot leave the tracker tidy — `main` is red and
+   a pull request is open — and saying which job, on which run, is the whole of what it can do.
 
    The rule rests on a number, and the number is smaller than the one a reader reaches for.
    `tools/flake-rate.sh` prints it: for each job on `main` it counts the reds, and sorts them into
@@ -388,7 +420,10 @@ the start; the merge rule is for the label that was added on the way.
   it; finish that issue and stop rather than start the next on a summary.
 
 Every stop leaves the tracker true — nothing claimed, every pull request merged, `status:in-review`
-or `status:needs-decision` — because the next session starts by reading it.
+or `status:needs-decision` — because the next session starts by reading it, and the one stop above
+that cannot say so says which job on which run beat it. The session's own last word carries the two
+things no label can: which issues it walked past unclaimed, and which it claimed and released
+without work. Both are what the next session would otherwise pay to discover again.
 
 ## What this does not do
 
