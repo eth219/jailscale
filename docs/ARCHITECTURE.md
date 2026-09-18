@@ -1443,11 +1443,12 @@ ninety days by a person with the signing key, a nightly job whose purpose was to
 had been forgotten, a floor file on every node, and about 2,800 lines, against a bound on a party
 who already had an equivalent move. That is a maintenance schedule for a project with one operator,
 and the schedule was the bigger risk. The pointer that was up was never re-issued and was deleted on
-2026-09-19, the day v0.1.11 shipped and the one fielded node moved to it, rather than left until its
-2026-12-14 expiry: a node still on v0.1.7–v0.1.10 says "cannot tell", which is what this section
-promised for an expired pointer, while a node that upgrades stops reading it at once. A build with no key still refuses to download — and,
-one step earlier, does not announce a release it could not check — and a `dev` build still says it
-cannot compare rather than that it is current.
+2026-09-18, the day v0.1.11 shipped, rather than left until its 2026-12-14 expiry — which cost
+nothing, because no released binary ever read it: the reader landed after v0.1.10 was tagged, and
+the one tag that contains it, v0.1.11, is the commit that removed it. Every node in the field had
+gone on asking GitHub which release is latest, and still does. A build with no key still
+refuses to download — and, one step earlier, does not announce a release it could not check —
+and a `dev` build still says it cannot compare rather than that it is current.
 
 **The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
 key that has to move: every binary in the field accepts that one and nothing else, so publishing
