@@ -324,7 +324,8 @@ it starts at step 1.
 ## Running the loop unattended
 
 One session, one issue after another, with no person reading the diff between the claim and the
-merge. It is the loop above with a pick rule, a merge rule, and a rule for `main` afterwards.
+merge. It is the loop above with a rule for what it reads first, a pick rule, a merge rule, and a
+rule for `main` afterwards.
 
 It was shut until #184 said what the suite can and cannot fail without a person, and it opened on
 2026-09-17 when the three things that survey named were done: `tools/flake-rate.sh` (#187), the
@@ -364,11 +365,13 @@ Both files, because the rules live in both and `CLAUDE.md` is the one a session 
 for anything — which is exactly why a stale copy of it is not noticed.
 
 Once per run and not per issue: this is a long document, and the context it spends is the budget the
-last stop below is about. What changes under a session mid-run is caught more cheaply by
-`git diff <what you read>..origin/main -- docs/issue-workflow.md CLAUDE.md`. Say at the stop which
-revision was read — `git rev-parse --short origin/main` — because nothing else distinguishes a run
-that did this from one that did not, and the last one to skip it was found only by re-deriving it
-from a duplicate issue.
+last stop below is about. Keep the revision the fetch landed on — `git rev-parse --short
+origin/main`, taken **then** and not at the stop, where it would name whatever `main` has become by
+then and would read the same for a run that never looked. What moves under a session mid-run is
+caught more cheaply by `git diff <that revision>..origin/main -- docs/issue-workflow.md CLAUDE.md`.
+The stop says which revision it was, because nothing else distinguishes a run that did this from one
+that did not, and the last one to skip it was found only by re-deriving it from the duplicate it
+filed.
 
 ### Pick
 
@@ -487,8 +490,8 @@ the start; the merge rule is for the label that was added on the way.
 - The context was summarised. What the session knows about the issue in hand is now a summary of
   it; finish that issue and stop rather than start the next on a summary.
 
-The stop also names the revision of this document the run was working from, which the first
-paragraph of this section asks for.
+The stop also names the revision the run read this document at, which the read rule at the top of
+this section asks it to keep.
 
 Every stop leaves the tracker true — nothing claimed, every pull request merged, `status:in-review`
 or `status:needs-decision` — because the next session starts by reading it, and the one stop above
