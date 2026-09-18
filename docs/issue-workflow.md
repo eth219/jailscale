@@ -53,8 +53,9 @@ same limitation is rediscovered from the docs every few months and filed again.
 **Beside the axes** — `needs:hardware`. What is left to close the issue is a machine or a device,
 so a session without one cannot finish it however well it is scoped. It is not a status: the issue
 stays `status:ready`, because a person with the machine can start it today and nothing is waiting on
-a decision. It sits beside the three the way `security` sits beside a type, and it is the reason an
-issue can carry four labels and still satisfy the sentence at the top of this section.
+a decision. It sits beside the three the way `security` sits beside a type, and it is why an issue
+can carry a label none of the three axes accounts for and still satisfy the sentence at the top of
+this section.
 
 **What is left** is the whole of it. #80 needs a real Windows console, because the feature only runs
 when `isTerminal()` is true. #81 needs a Windows machine for `schtasks`, a reboot and a logon —
@@ -151,7 +152,8 @@ when you do not yet know.
 And `needs:hardware` if what would close it is a machine — a console on a particular OS, a box of a
 particular architecture, a device. It is the one label a filer is better placed to set than anyone
 afterwards: whoever writes "what would close it" already knows whether the answer names a machine.
-Step 5 and step 7 of the loop below file issues too, and the same applies there.
+The loop below files issues as well — step 5, and item 7 of "Each issue" in the unattended section —
+and the same applies there.
 
 ## The loop
 
@@ -461,9 +463,9 @@ the start; the merge rule is for the label that was added on the way.
 Every stop leaves the tracker true — nothing claimed, every pull request merged, `status:in-review`
 or `status:needs-decision` — because the next session starts by reading it, and the one stop above
 that cannot say so says which job on which run beat it. The session's own last word carries what a
-label carries only half of: `gh issue list --label needs:hardware` says which issues no session can
-finish, and the stop says which of them *this* run reached and skipped, and which it claimed and
-released without work. Both are what the next session would otherwise pay to discover again.
+label carries only half of: `gh issue list --label needs:hardware` says which issues need a machine,
+and the stop says which of them *this* run reached and skipped, and which it claimed and released
+without work. Both are what the next session would otherwise pay to discover again.
 
 ## What this does not do
 

@@ -14,10 +14,11 @@ suggestion. The part that cannot be skipped:
   the `status:claimed` label. Several sessions read this tracker at once and an agent session has
   no GitHub account, so the assignee field cannot do this job.
 - Read the issue's comments before claiming. The label goes stale; the newest CLAIM is what is true.
-- `needs:hardware` means what is left to close it is a machine you have not got. Walk past it — no
-  claim, no comment — and say at the end which ones you skipped. The issue is still `status:ready`,
-  because a person with the machine can start it. If the body says otherwise — a missing label, or a
-  part you *can* reach — put the label right and say why; that is work, not a walk-past.
+- `needs:hardware` means what is left to close it is a machine. When it is one you have not got,
+  walk past it — no claim, no comment — and say at the end which ones you skipped. The issue is
+  still `status:ready`, because a person with the machine can start it. If the body says otherwise —
+  a missing label, or a part you *can* reach — put the label right and say why; that is work, not a
+  walk-past.
 - A decision that is not yours to make (which approach, whether a cost is worth paying): leave the
   question on the issue, comment `🤖 RELEASE`, move it to `status:needs-decision`, and go do
   something else. Do not hold a claim while waiting.
