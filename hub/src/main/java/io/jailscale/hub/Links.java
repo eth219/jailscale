@@ -23,16 +23,9 @@ final class Links {
     private static final SecureRandom RNG = new SecureRandom();
     static final int MAX_LINKS_PER_NODE = 20;
 
-    /**
-     * An active link: a name served by a node (all of its connections). {@code openedAt} is when
-     * this link opened, not when the name was claimed: a node that reconnects or hands a name over
-     * opens a new one and the clock starts again, which is what the directory means by "open for".
-     * It is passed in rather than read from a clock in here, so that the reset is visible at the
-     * site that decides it, a test can build a link that has been open for a day, and no copy of a
-     * link made to change one field can silently land on a shorter constructor and reset it.
-     */
+    /** An active link: a name served by a node (all of its connections). */
     record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port,
-        String domain, long openedAt) {
+        String domain) {
 
         boolean raw() {
             return port > 0;
@@ -59,11 +52,11 @@ final class Links {
     /**
      * The three maps a live link can be in, as one list instead of three names written out at
      * every site that walks them. {@link #all} and {@link #count} have to mean the same thing by
-     * "every link" -- one is the directory's list and the other is the number the front page
-     * prints -- and a fourth map added to one of two hand-written enumerations is those two pages
-     * disagreeing about how many links this hub is serving. Sharing the list is what makes that
-     * impossible; a test can only notice it after the fact, and only for the maps it happens to
-     * have filled. {@code byId} is not here: it is an index of the same links, not a fourth place
+     * "every link" -- one is what a test and the operator's tools walk, the other the number the
+     * front page prints -- and a fourth map added to one of two hand-written enumerations is the
+     * two disagreeing about how many links this hub is serving. Sharing the list is what makes
+     * that impossible; a test can only notice it after the fact, and only for the maps it happens
+     * to have filled. {@code byId} is not here: it is an index of the same links, not a fourth place
      * one lives.
      */
     private final List<Map<?, Link>> live = List.<Map<?, Link>>of(byName, byDomain, byPort);
@@ -192,7 +185,7 @@ final class Links {
             // Same owner from another (or restarted) node: the newest opener wins.
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null, System.currentTimeMillis());
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
@@ -225,7 +218,7 @@ final class Links {
             if (existing != null && existing.group() != s.group()) {
                 byId.remove(existing.linkId());
             }
-            Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain, System.currentTimeMillis());
+            Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
             byDomain.put(domain, link);
             byId.put(link.linkId(), link);
             LOG.info("domain {} reopened here by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
@@ -243,7 +236,7 @@ final class Links {
         if (existing != null && existing.group() != s.group()) {
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null, System.currentTimeMillis());
+        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} reopened here by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
@@ -293,7 +286,7 @@ final class Links {
         if (prior != null && !prior.mkey().equals(node.mkey())) {
             notifyRevoked(prior.mkey(), null, domain, Message.LinkRevoked.REASSIGNED);
         }
-        Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain, System.currentTimeMillis());
+        Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
         byDomain.put(domain, link);
         byId.put(link.linkId(), link);
         LOG.info("domain {} opened by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
@@ -344,7 +337,7 @@ final class Links {
                 byId.remove(existing.linkId());
                 byPort.remove(port);
             }
-            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port, null, System.currentTimeMillis());
+            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port, null);
             try {
                 raw.start(link);
             } catch (IOException e) {
@@ -464,8 +457,8 @@ final class Links {
         return l;
     }
 
-    /** Package-private: the hub's own page builds the same URL the node was told (§8.2). */
-    String portSuffix() {
+    /** The port in the URL the node is told, when the hub is not on 443 (§8.2). */
+    private String portSuffix() {
         return config.listenPort() == 443 || config.baseUrl().getPort() <= 0 ? "" : ":" + config.baseUrl().getPort();
     }
 

@@ -15,13 +15,12 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /**
  * The hub's own HTTP endpoints on its name (ARCHITECTURE.md §5.1): {@code /v1/key}, {@code /v1/noise}
- * (Upgrade), {@code /join/<token>}, {@code /robots.txt}, a root page and the link directory at
- * {@code /links}. {@link SniRouter} hands over connections whose SNI is the hub's own name,
+ * (Upgrade), {@code /join/<token>}, {@code /robots.txt} and a root page. {@link SniRouter} hands
+ * over connections whose SNI is the hub's own name,
  * already wrapped in TLS.
  */
 final class HttpFront {
@@ -47,13 +46,6 @@ final class HttpFront {
      */
     private static final String TAKES = NodeSession.MIN_PROTO == Message.PROTO
         ? "nothing older" : "protocol " + NodeSession.MIN_PROTO + " and newer";
-    /**
-     * How many the directory itself lists before it stops and says how many are left. Of everything
-     * these pages print this is the only part with no fixed length -- twenty links per node
-     * (ARCHITECTURE.md §8.2) and no bound on nodes -- and it is answered without a session to
-     * anyone who asks, so it has a ceiling like every other unauthenticated answer here.
-     */
-    private static final int LINKS_SHOWN = 200;
 
     /**
      * The one path a crawler is asked not to fetch, and it is not the obvious one.
@@ -79,11 +71,8 @@ final class HttpFront {
     private static final String ROBOTS = "User-agent: *\nDisallow: /admin\n";
 
     /**
-     * {@code nofollow} as well as {@code noindex}, because these two pages are the ones carrying
-     * addresses that lead to other people's machines: without it a crawler that has read the
-     * directory walks into every app behind it, which is a heavier version of the thing the
-     * directory refuses to do itself. It also keeps a crawler from paging through the whole list
-     * one {@code ?from=} at a time.
+     * {@code nofollow} as well as {@code noindex}: an invitation and the wildcard's "not open" page
+     * are served to whoever holds the URL, and neither is a place a crawler should walk on from.
      */
     static final String NOINDEX = "<meta name=\"robots\" content=\"noindex,nofollow\">";
 
@@ -316,16 +305,13 @@ final class HttpFront {
                 + "<p>Install jailscale first if you do not have it. Opening this page does not use "
                 + "the invitation up.</p>", false))
                 // The one page here whose body is a credential, and until now the only 200 on this
-                // route without it: the two pages that carry nothing secret said no-store and the
-                // invitation did not.
+                // route without it: the hub page, which carries nothing secret, said no-store and
+                // the invitation did not.
                 .header("Cache-Control", "no-store");
         }
         if (path.equals("/")) {
             return HttpResponse.html(200, page("jailscale hub", preview(), home(req), true))
                 .header("Cache-Control", "no-store");
-        }
-        if (path.equals("/links")) {
-            return HttpResponse.html(200, page("Open links", directory(req), false)).header("Cache-Control", "no-store");
         }
         return errorPage(404, "Not found", "There is no page at <code>" + escape(path)
             + "</code> on this hub.");
@@ -715,7 +701,7 @@ final class HttpFront {
      * controls over it appear only for a signed-in admin, since that is who and where.
      */
     private String home(HttpRequest req) {
-        StringBuilder b = new StringBuilder(nav("/"));
+        StringBuilder b = new StringBuilder();
         String host = escape(hub.config().hostname());
         // Sampled once for the whole page, for the reason the status section below already gives:
         // the role is live state, and a hub promoted between two readings of it renders a page that
@@ -982,27 +968,20 @@ final class HttpFront {
             .append(" what this hub says about itself, so they tell you an operator is running what they think they")
             .append(" are; a dishonest hub prints whatever it likes here.</small></p>");
 
-        // How many, and where the list is. Not the list, and not the first eight rows of it either:
-        // this page is the one page here a crawler is asked to index (ROBOTS, NOINDEX), and an
-        // address on it is text on a page that says it may be listed. rel=nofollow on each row did
-        // not change that -- it is a hint about where a crawler goes next, not about what it keeps
-        // -- so the rows are gone rather than annotated, and dropping only the href would have left
-        // exactly the same text behind. The count is not a name and /links says noindex, so no name
-        // under this hub is reachable from an indexable page. §6.3 is the argument in full; the
-        // cost is that the at-a-glance view is a click away instead of here.
+        // How many, and not which. This page is the one page here a crawler is asked to index
+        // (ROBOTS, NOINDEX), and an address on it is text on a page that says it may be listed;
+        // the directory that used to list them at /links was a public enumeration of every name on
+        // the hub and went with #252. The count is not a name. §6.3 has the argument.
         b.append("<h2>Open links</h2>");
-        // count() and not sortedLinks(): a count needs neither the order nor the list. sortedLinks
-        // builds a sort key per link and sorts them, and all() copies every live link into a new
-        // ArrayList; this page is served to everyone who visits the hub's own name, so either of
-        // those is per-request allocation proportional to the hub, for a number the three maps
-        // already know.
-        // openLinks and not `open`, which in this method already means "registration is open".
+        // count() and not all(): all() copies every live link into a new ArrayList, and this page
+        // is served to everyone who visits the hub's own name, for a number the three maps already
+        // know. openLinks and not `open`, which in this method already means "registration is open".
         int openLinks = hub.links().count();
         if (openLinks == 0) {
             b.append("<p>None open right now.</p>");
         } else {
             b.append("<p>").append(openLinks).append(openLinks == 1 ? " link is" : " links are")
-                .append(" open right now. <a href=\"/links\">See them &rarr;</a></p>");
+                .append(" open right now.</p>");
         }
 
         b.append("<h2>Limits</h2><table>");
@@ -1047,214 +1026,6 @@ final class HttpFront {
         return b.toString();
     }
 
-    /**
-     * The directory: everything this hub is serving, on a URL of its own so that it is something
-     * one person can send another. Splitting it off rather than folding the page into scripted
-     * tabs keeps both halves linkable and keeps the no-script bargain the rest of this front end
-     * makes.
-     *
-     * <p>Three facts per link: the address, which is public by construction because a visitor
-     * reaches it by typing it; its kind; and how long it has been open. Nothing here is fetched
-     * from the link itself.
-     *
-     * <p><b>And none of it is for a search index.</b> "Public by construction" is an argument
-     * about the visitor who types the address, not about a result that hands the whole list to
-     * somebody who never heard of this hub and keeps saying "open 3 days" after the node has gone,
-     * so this page says {@link #NOINDEX} and {@link #ROBOTS} deliberately leaves it fetchable --
-     * a page named in {@code Disallow} is never fetched, so its {@code noindex} is never read.
-     *
-     * <p><b>Not how many visitors a link is serving</b>, although the hub has that number and this
-     * page carried it for a while. That the name exists was already public; that somebody is using
-     * it right now was not, and a page anyone can poll turns it into a live activity feed for a
-     * machine that belongs to somebody else. It is also the one figure {@link AdminWeb} keeps for
-     * the operator in as many words -- "how close a particular node is to its bound ... is the
-     * operator's business and nobody else's" -- and §6.3 refuses the same shape on {@code
-     * /metrics}, which listens on loopback and so has a narrower audience than this. The reader
-     * here loses little: a visitor deciding whether to click a link learns more by clicking it. A thumbnail or a favicon would mean
-     * the hub connecting to a node's app as a visitor and republishing what came back on its own
-     * front page -- which is the one thing the front page tells people it does not do -- and would
-     * put whatever anyone who can join chooses to serve on the operator's page. Who owns a name and
-     * which local port it reaches stay behind the admin session, as the node list does.
-     */
-    private String directory(HttpRequest req) {
-        return directory(req, LINKS_SHOWN);
-    }
-
-    /** Package-private with the page size, so a test can reach the second page without 201 links. */
-    String directory(HttpRequest req, int pageSize) {
-        StringBuilder b = new StringBuilder(nav("/links"));
-        List<Keyed> links = sortedLinks();
-        if (links.isEmpty()) {
-            b.append("<p>None open right now. <a href=\"/\">What this hub is</a>.</p>");
-            return b.toString();
-        }
-        b.append("<p>").append(links.size()).append(links.size() == 1 ? " link is" : " links are")
-            .append(" being served through <code>").append(escape(hub.config().hostname()))
-            .append("</code> right now. Each is somebody's own machine; the hub relays the bytes and")
-            .append(" does not terminate the TLS, so what is behind one of these is between you and it.</p>");
-        // Where this page starts: the first row whose key is not before the cursor. A page's worth
-        // is capped, so without this the rows past the cap were counted in the sentence above and
-        // then unreachable -- no next page and no way to ask for one. The cursor is the ordering
-        // key itself and every link has a distinct one, so paging cannot stall on a repeat.
-        String from = cursor(req);
-        // The list is already sorted by exactly this key, so the cursor is a binary search rather
-        // than a walk: the walk rebuilt a key per row it skipped, which is the cost sortedLinks
-        // exists to avoid, and on a long list it made paging to the end quadratic.
-        int start = from == null ? 0 : firstAtOrAfter(links, from);
-        if (start == links.size()) {
-            // The cursor names a point past the last row, which is what a bookmarked or forwarded
-            // one becomes once the links it started from close. Saying so beats an empty table
-            // under a sentence that has just counted the links this hub is serving.
-            b.append("<p>Nothing is open at that point in the list any more. ")
-                .append("<a href=\"/links\">Start from the first</a>.</p>");
-        } else {
-            int end = Math.min(start + pageSize, links.size());
-            linkRows(b, links.subList(start, end));
-            if (end < links.size()) {
-                // The next row's own key, never the cursor the caller sent, so nothing a visitor
-                // typed is echoed back into the page; and percent-encoded, because it is going
-                // into a query string that URLDecoder reads back, not only into an attribute.
-                b.append("<p><a href=\"/links?from=").append(escape(urlEncode(links.get(end).key()))).append("\">The next ")
-                    .append(Math.min(pageSize, links.size() - end)).append(" of ").append(links.size() - end)
-                    .append(" remaining &rarr;</a></p>");
-            }
-            if (start > 0) {
-                // What the first page actually holds, not the cap: a hub with nine links offered
-                // to take the reader "back to the first 200".
-                b.append("<p><a href=\"/links\">&larr; Back to the first ").append(Math.min(pageSize, links.size()))
-                    .append("</a></p>");
-            }
-        }
-        b.append("<p><small>How busy a link is is not on this page: that a name is open is public,")
-            .append(" and who is using it at this moment is not. \"Open\" is since the link was opened:")
-            .append(" a node that restarts or hands its name to another machine opens a new one, so")
-            .append(" this counts the current one, not the name.</small></p>");
-        return b.toString();
-    }
-
-    /**
-     * The paging cursor, or null when there is none. A query string is decoded per-escape, so a
-     * malformed one -- {@code ?from=%zz}, a truncated {@code %2} -- makes {@code query()} throw,
-     * and nothing between here and the virtual thread serving the connection catches anything but
-     * {@link IOException}: the visitor got no response at all and the thread died printing a
-     * stack trace. A cursor nobody can read is no cursor, and the page still answers.
-     */
-    private static String cursor(HttpRequest req) {
-        try {
-            return req.query().get("from");
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
-    }
-
-    /**
-     * One row per link: the address, and beside it the three things the hub already knows for its
-     * own routing. Nothing here is fetched from the link itself.
-     */
-    private void linkRows(StringBuilder b, List<Keyed> links) {
-        long now = System.currentTimeMillis();
-        b.append("<table class=\"links\">");
-        for (Keyed k : links) {
-            Links.Link l = k.link();
-            row(b, address(l), escape(l.kind()) + " &middot; open " + Resources.humanDuration(now - l.openedAt()));
-        }
-        b.append("</table>");
-    }
-
-    /**
-     * Every live link, in the order a directory wants them: the order the rows read in. The key is
-     * built once per link and sorted alongside it, because {@code Comparator.comparing} would build
-     * it afresh on both sides of every comparison -- on a hub holding thousands of links that is
-     * hundreds of thousands of short-lived strings per request, on a page that shows 200 rows at
-     * most, in the process relaying every visitor's bytes. Only {@link #directory} needs this now:
-     * the home page wants a count and takes it from {@link Links#count()}, which builds no list at
-     * all.
-     */
-    private List<Keyed> sortedLinks() {
-        List<Keyed> keyed = new ArrayList<>();
-        for (Links.Link l : hub.links().all()) {
-            keyed.add(new Keyed(sortKey(l), l));
-        }
-        keyed.sort(Comparator.comparing(Keyed::key));
-        return keyed;
-    }
-
-    /** A link beside the key it sorts and pages by, so that key is built once per request. */
-    private record Keyed(String key, Links.Link link) {}
-
-    /** The first index whose key is not before {@code from}, by binary search on the sorted keys. */
-    private static int firstAtOrAfter(List<Keyed> links, String from) {
-        int lo = 0;
-        int hi = links.size();
-        while (lo < hi) {
-            int mid = (lo + hi) >>> 1;
-            if (links.get(mid).key().compareTo(from) < 0) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        return lo;
-    }
-
-    /** For a value going into a query string, which {@link #escape} does not cover. */
-    private static String urlEncode(String s) {
-        return java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8);
-    }
-
-    /**
-     * What the row will actually say, which is what a reader scans and so what the list is
-     * ordered by. Sorting by {@code name()} put a raw port among the names beginning with its
-     * kind -- {@code tcp/2001} sorts under "t" while the row reads {@code <hub>:2001} -- so raw
-     * rows landed at a position matching nothing on the page. The port is padded because this key
-     * is compared as text and 9000 belongs before 20000, not after it; that also makes every
-     * link's key distinct, which is what lets it serve as the paging cursor. {@code Locale.ROOT}
-     * because of that second job: a JVM whose default locale numbers in Arabic-Indic or Devanagari
-     * digits would put those code points in the cursor and in the URL carrying it, and the hub that
-     * read it back -- a standby, or the same hub under a different {@code LANG} -- would not match
-     * them. The hub's own listen port is left off the key although the row shows it, because it is
-     * the same on every row and so cannot change the order.
-     */
-    private String sortKey(Links.Link l) {
-        return l.raw()
-            ? hub.config().hostname() + ":" + String.format(java.util.Locale.ROOT, "%05d", l.port())
-            : l.host(hub.config());
-    }
-
-    /**
-     * The two public pages, as links and not as tabs a script swaps: each keeps its own URL, so
-     * either can be handed to someone, and neither needs a script to arrive at. The page you are
-     * on is not a link to itself.
-     */
-    private static String nav(String here) {
-        return "<nav>" + tab("/", "Hub", here) + tab("/links", "Links", here) + "</nav>";
-    }
-
-    private static String tab(String path, String label, String here) {
-        return path.equals(here) ? "<span aria-current=\"page\">" + label + "</span>"
-            : "<a href=\"" + path + "\">" + label + "</a>";
-    }
-
-    /**
-     * Where a visitor goes for this link: a raw port is a host and a port and nothing to click,
-     * an https link is the name itself, which is also the only useful thing to do with the row.
-     */
-    private String address(Links.Link l) {
-        String host = escape(l.host(hub.config()));
-        if (l.raw()) {
-            return "<code>" + escape(hub.config().hostname()) + ":" + l.port() + "</code>";
-        }
-        // With the port the hub is answering on, which is what the node was told when the link
-        // opened (Links.portSuffix). Without it every row on a hub that is not on 443 is a link
-        // to nothing, which matters more now that the rows are a page meant to be handed around.
-        String suffix = hub.links().portSuffix();
-        // rel=nofollow, not for ranking but because the other end is somebody else's machine and
-        // the hub does not fetch what is behind a link (§6.3). Rows are only ever rendered on
-        // /links now, which says noindex,nofollow for the whole page, so this is the belt to that
-        // page's braces rather than the only thing said: it was load-bearing while the home page
-        // showed eight of these, and it was not enough there, which is why it no longer does.
-        return "<a rel=\"nofollow\" href=\"https://" + host + suffix + "\">" + host + suffix + "</a>";
-    }
 
     /**
      * The wildcard's remaining life, not just "loaded". Its expiry takes every name under the hub
@@ -1289,10 +1060,12 @@ final class HttpFront {
      * titles anyone reads. Dark is the system's choice, not a toggle, since there is nothing here
      * to remember a preference with.
      *
-     * <p>{@code indexable} is false for the pages that are served to whoever holds their URL -- the
-     * directory and an invitation. {@link #ROBOTS} explains why those are left fetchable rather
-     * than disallowed: this meta is the thing that actually keeps them out of an index, and a
-     * crawler has to be allowed to read it.
+     * <p>{@code indexable} is true for {@code /} alone. It is false for an invitation, which is
+     * served to whoever holds its URL, and for the error pages, which nobody should find by
+     * searching; the wildcard's "not open" page says the same meta from {@link SniRouter}.
+     * {@link #ROBOTS} explains why those are left fetchable rather than disallowed: this meta is
+     * the thing that actually keeps them out of an index, and a crawler has to be allowed to read
+     * it.
      */
     private static String page(String title, String head, String body, boolean indexable) {
         return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -1311,8 +1084,6 @@ final class HttpFront {
             + "p.verdict{font-weight:600;margin:.25rem 0 1rem}"
             + "details{margin:.5rem 0;font-size:.85rem}summary{cursor:pointer;color:var(--dim)}"
             + "details table{margin:.25rem 0 .5rem}details td:first-child{width:9rem}"
-            + "nav{display:flex;gap:1.25rem;margin:-.25rem 0 2rem;font-size:.9rem}"
-            + "nav [aria-current]{color:var(--ink);font-weight:600}"
             + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%;margin:.25rem 0}"
             + "svg.avail{display:block;margin:.5rem 0 0;max-width:100%}td small{margin:.2rem 0 0}"
@@ -1362,7 +1133,8 @@ final class HttpFront {
      * browser and a frame would be bytes it has to skip.
      */
     private static HttpResponse errorPage(int status, String title, String says) {
-        return HttpResponse.html(status, page(title, nav("") + "<p>" + says + "</p>", false));
+        // The way back the nav used to be: the page that says what this host is.
+        return HttpResponse.html(status, page(title, "<p>" + says + "</p><p><a href=\"/\">Hub</a></p>", false));
     }
 
     /**

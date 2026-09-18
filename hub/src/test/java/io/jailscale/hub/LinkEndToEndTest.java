@@ -12,7 +12,6 @@ import io.jailscale.node.NodeConfig;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpRequest;
-import io.jailscale.proto.http.Headers;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
@@ -26,8 +25,6 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLEngine;
@@ -204,9 +201,9 @@ class LinkEndToEndTest {
     /**
      * The hub's own page counts what it is serving and names none of it. An address is public by
      * construction -- a visitor reaches one by typing it -- but `/` is the one page here meant to be
-     * indexed, and a name on it is text an indexer keeps (ARCHITECTURE.md §6.3); {@code /links}
-     * says `noindex` and is where the addresses are. Who opened a link and which local port it
-     * reaches are on neither. Fetched the way a stranger fetches it: no session, over the real router.
+     * indexed, and a name on it is text an indexer keeps (ARCHITECTURE.md §6.3). Who opened a link
+     * and which local port it reaches are not on it either. Fetched the way a stranger fetches it:
+     * no session, over the real router.
      *
      * <p>One link, so this is also the singular branch of the sentence; the nine-link case below is
      * the plural one.
@@ -225,7 +222,6 @@ class LinkEndToEndTest {
 
         String after = visit("hub.test", "/").bodyText();
         assertTrue(after.contains("1 link is open right now"), after);
-        assertTrue(after.contains("<a href=\"/links\">See them"), after);
         // Not the name in any form -- with the hub's port, without it, or as the bare label. The
         // link is not called "myapp" like the one below, because the page's own instructions use
         // `--name myapp` as their example and the bare-label assertion would match that instead.
@@ -237,57 +233,12 @@ class LinkEndToEndTest {
     }
 
     /**
-     * The directory at {@code /links}, fetched the way a stranger fetches it. It has to name what
-     * the hub is serving and give away no more than that: not the owner, not the local target, and
-     * not how busy a link is at this moment.
+     * The front page names no link at all, because {@code /} is the one page here a crawler is
+     * asked to index and an address on it is text that can be indexed whatever the row says about
+     * itself (ARCHITECTURE.md §6.3). What is left is the count.
      */
     @Test
-    void theDirectorySaysWhatIsServedWithoutSayingWhoseOrHowBusy() throws Exception {
-        Daemon alice = node("alice");
-        ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
-            .put("user", "alice").put("caFile", CERT.toString())));
-        waitFor(() -> alice.hasCert(hub.tls().keyId()));
-
-        String empty = visit("hub.test", "/links").bodyText();
-        assertTrue(empty.contains("None open right now"), empty);
-
-        ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "myapp")));
-        waitFor(() -> hub.links().byName("myapp") != null);
-
-        String idle = visit("hub.test", "/links").bodyText();
-        assertTrue(idle.contains("<a rel=\"nofollow\" href=\"https://myapp.hub.test:" + port + "\">myapp.hub.test:" + port + "</a>"), idle);
-        assertTrue(idle.contains("&middot; open "), "how long it has been open: " + idle);
-        assertFalse(idle.contains("alice"), "the owner must not be on the public page: " + idle);
-        assertFalse(idle.contains("127.0.0.1:" + localApp.getLocalPort()),
-            "the local target must not be on the public page: " + idle);
-        assertFalse(idle.contains("mkey:"), idle);
-
-        // That a name is open is public; that somebody is on it right now is not. The page carried
-        // a per-link count for a while, and a page anyone can poll turns that into a live activity
-        // feed for a machine belonging to somebody else. A visitor is held open across the fetch --
-        // one that finishes its handshake and then says nothing sits in the node's serve() -- so
-        // this is the moment a count would appear if the page still took one.
-        try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), "myapp.hub.test", "127.0.0.1", port, true, 10_000)) {
-            s.startHandshake();
-            waitFor(() -> hub.router().visitorsInFlight() == 1);
-            String busy = visit("hub.test", "/links").bodyText();
-            assertEquals(1, hub.router().visitorsInFlight(), "the visitor should still be held: " + busy);
-            assertFalse(busy.contains("visitor"), "how busy a link is is the operator's, not the page's: " + busy);
-            assertFalse(busy.matches("(?s).*&middot; [0-9]+ .*"), "no per-link figure at all: " + busy);
-            // The row itself is still there, so this is not passing because the page went blank.
-            assertTrue(busy.contains("<a rel=\"nofollow\" href=\"https://myapp.hub.test:" + port + "\">"), busy);
-        }
-    }
-
-    /**
-     * Why the directory exists, and why the front page is not a preview of it. The link list is the
-     * only part of the front page with no fixed length, so it lives at {@code /links} -- and the
-     * front page names none of it, because {@code /} is the one page here a crawler is asked to
-     * index and an address on it is text that can be indexed whatever the row says about itself
-     * (ARCHITECTURE.md §6.3). What is left is the count and a way through.
-     */
-    @Test
-    void theFrontPageNamesNoLinkAndSendsEveryOneOfThemToTheDirectory() throws Exception {
+    void theFrontPageNamesNoLinkHoweverManyAreOpen() throws Exception {
         Daemon alice = node("alice");
         ok(cli("alice", JsonObject.builder().put("cmd", "up").put("hub", "hub.test").put("addr", "127.0.0.1").put("port", port)
             .put("user", "alice").put("caFile", CERT.toString())));
@@ -296,90 +247,19 @@ class LinkEndToEndTest {
             ok(cli("alice", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "app" + i)));
         }
         waitFor(() -> hub.links().all().size() == 9);
-        // The page's number comes from count() and the directory's from all(). They walk one
-        // shared list of maps, so this cannot drift and this assertion is not what stops it
-        // drifting -- with only named links open it would pass just as well if count() had been
-        // written out by hand and dropped byDomain and byPort. It is here as the smoke test that
-        // the two agree at all, and Links.live is what makes them agree for the maps this test
-        // never fills.
+        // The page's number comes from count() and all() walks the same maps, so this is the smoke
+        // test that the two agree at all; Links.live is what makes them agree for the maps this
+        // test never fills.
         assertEquals(hub.links().all().size(), hub.links().count(), "count() and all() disagree");
 
         String home = visit("hub.test", "/").bodyText();
-        // Every one of the nine, not just the ones that used to be past the cut: this used to show
-        // the first eight, so asserting only that app8 is absent would pass unchanged against the
-        // page that named the other eight. The bare name and not the ">app0" the rows used to be
-        // written as, because the point is that the address is not on the page in any form -- an
-        // <a> with the href removed would still be text a crawler keeps.
+        // Every one of the nine, as the bare address and not as a row: an <a> with the href
+        // removed would still be text a crawler keeps.
         for (int i = 0; i < 9; i++) {
             assertFalse(home.contains("app" + i + ".hub.test"), "app" + i + " is named on an indexable page: " + home);
         }
-        // What replaces them: how many there are, and the way to the list.
         assertTrue(home.contains("9 links are open right now"), home);
-        assertTrue(home.contains("<a href=\"/links\">See them"), home);
-
-        String directory = visit("hub.test", "/links").bodyText();
-        for (int i = 0; i < 9; i++) {
-            assertTrue(directory.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + directory);
-        }
-
-        // The addresses live on the page that asks not to be indexed, and only there. That meta is
-        // what the front page could not have: `/` is meant to be found, which is why the rows are
-        // not on it rather than being on it with a hint attached.
-        assertTrue(directory.contains("content=\"noindex,nofollow\""), directory);
-        assertTrue(directory.contains("<a rel=\"nofollow\" href=\"https://app0.hub.test"), directory);
-        assertFalse(home.contains("rel=\"nofollow\""), "nothing on the front page needs it now: " + home);
-
-        // A page of the directory is capped, and the cap counted rows the page then had no way to
-        // show: the sentence at the top says how many there are, so every one of them has to be
-        // reachable. The cursor is the row's own ordering key, and asking for one starts the list
-        // there. (The cap is 200, which is more links than a test wants to open, so the cursor is
-        // exercised here at a size the assertions can see; the "next" link that carries it appears
-        // only past the cap.)
-        String fromFive = visit("hub.test", "/links?from=app5.hub.test").bodyText();
-        for (int i = 5; i < 9; i++) {
-            assertTrue(fromFive.contains("app" + i + ".hub.test"), "app" + i + " is missing: " + fromFive);
-        }
-        for (int i = 0; i < 5; i++) {
-            assertFalse(fromFive.contains("app" + i + ".hub.test"), "app" + i + " is before the cursor: " + fromFive);
-        }
-        // The count at the top is of everything open, not of this page, so it does not move.
-        assertTrue(fromFive.contains("9 links are being served"), fromFive);
-        // Nine, not the 200-row cap: the number has to be what the first page actually holds.
-        assertTrue(fromFive.contains("Back to the first 9<"), fromFive);
-
-        // A cursor is a string a visitor sends, so the page has to survive every string. A query
-        // is percent-decoded per escape and a malformed one makes query() throw; nothing between
-        // route() and the virtual thread catches anything but IOException, so this used to close
-        // the connection with no response at all and die printing a stack trace.
-        HttpResponse rubbish = visit("hub.test", "/links?from=%zz");
-        assertEquals(200, rubbish.status(), "a cursor nobody can read is no cursor, not no page");
-        assertTrue(rubbish.bodyText().contains("app0.hub.test"), rubbish.bodyText());
-
-        // And one that sorts after everything open -- what a bookmarked cursor becomes once the
-        // links it started from close -- says so rather than drawing an empty table under a
-        // sentence that has just counted nine links.
-        String past = visit("hub.test", "/links?from=zzzz").bodyText();
-        assertTrue(past.contains("Nothing is open at that point"), past);
-        assertFalse(past.contains("<table class=\"links\"></table>"), "an empty table instead of a reason: " + past);
-
-        // Past the cap, which is 200 in production and more links than a test wants to open, so
-        // the page size is given here instead. This is the block that carries the cursor a visitor
-        // never types: the "next" link the page generates for itself, and the round trip back.
-        String first = hub.front().directory(
-            new HttpRequest("GET", "/links", "HTTP/1.1", new Headers(), null), 4);
-        assertTrue(first.contains(">app0.hub.test") && first.contains(">app3.hub.test"), first);
-        // ">" so this matches a row's anchor text and not the cursor in the "next" href.
-        assertFalse(first.contains(">app4.hub.test"), "the page size was not honoured: " + first);
-        assertTrue(first.contains("The next 4 of 5 remaining"), first);
-        // The generated cursor has to be one the hub reads back, not just one it can print.
-        Matcher m = Pattern.compile("/links\\?from=([^\"]+)").matcher(first);
-        assertTrue(m.find(), first);
-        String second = hub.front().directory(
-            new HttpRequest("GET", "/links?from=" + m.group(1), "HTTP/1.1", new Headers(), null), 4);
-        assertTrue(second.contains(">app4.hub.test") && second.contains(">app7.hub.test"), second);
-        assertFalse(second.contains(">app3.hub.test"), "the cursor did not advance: " + second);
-        // And the way back names the page it returns to, not the constant.
-        assertTrue(second.contains("Back to the first 4"), second);
+        assertFalse(home.contains("rel=\"nofollow\""), "nothing on the front page needs it: " + home);
     }
 
     /**
