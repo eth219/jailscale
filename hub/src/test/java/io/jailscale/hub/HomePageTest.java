@@ -190,30 +190,13 @@ class HomePageTest {
         assertTrue(html.contains("None open right now"), html);
     }
 
-    /**
-     * Two pages and two URLs, not one page with a script swapping panels: either can be sent to
-     * someone, and both arrive with no script at all, which is the bargain the rest of this front
-     * end makes. What is on which page is the point of the split -- the evidence that this hub is
-     * up and worth joining stays on the front page, and the list that grows is the one that moved.
-     */
+    /** One page, no script, and the availability record on it: what tells a first visitor this hub is real. */
     @Test
-    void theDirectoryIsItsOwnUrlAndEachPageSaysWhereYouAre() throws Exception {
+    void theHubPageIsOneUrlWithNoScript() throws Exception {
         String home = http("GET", "/", null, null).bodyText();
-        assertTrue(home.contains("<span aria-current=\"page\">Hub</span>"), home);
-        assertTrue(home.contains("<a href=\"/links\">Links</a>"), home);
-        assertFalse(home.contains("<script"), "no script on either page: " + home);
-
-        HttpResponse r = http("GET", "/links", null, null);
-        assertEquals(200, r.status());
-        String links = r.bodyText();
-        assertTrue(links.contains("<span aria-current=\"page\">Links</span>"), links);
-        assertTrue(links.contains("<a href=\"/\">Hub</a>"), links);
-        assertTrue(links.contains("None open right now"), links);
-        assertFalse(links.contains("<script"), "no script on either page: " + links);
-        // The availability record is what says this hub is real, so it stays where a first visitor
-        // lands rather than moving behind a click.
+        assertFalse(home.contains("<script"), "no script on the page: " + home);
+        assertFalse(home.contains("<nav>"), "one page, nothing to navigate to: " + home);
         assertTrue(home.contains("<svg class=\"avail\""), home);
-        assertFalse(links.contains("<svg class=\"avail\""), links);
     }
 
     @Test
@@ -334,10 +317,10 @@ class HomePageTest {
     /**
      * Two mechanisms that pull in opposite directions, and the rule that decides which goes where.
      * A page that is disallowed is never fetched, so its {@code noindex} is never read -- which is
-     * why the pages that must stay out of an index are the ones robots.txt does *not* name. The
+     * why the page that must stay out of an index is one robots.txt does *not* name. The
      * assertions that give this test a direction to fail in are the negative ones: a robots.txt
-     * that disallowed /links and /join, which is the intuitive and wrong thing to write, satisfies
-     * every positive assertion here.
+     * that disallowed /join, which is the intuitive and wrong thing to write, satisfies every
+     * positive assertion here.
      */
     @Test
     void whatIsServedToWhoeverHoldsTheUrlIsKeptOutOfSearchAndTheHubPageIsNot() throws Exception {
@@ -351,13 +334,11 @@ class HomePageTest {
         // And these are not, on purpose: a crawler that is turned away at robots.txt never reads
         // the noindex, and a URL linked from somewhere else gets listed on the link alone -- which
         // for an invitation would publish the token.
-        assertFalse(txt.contains("Disallow: /links"), "disallowing it is what stops the noindex being read: " + txt);
         assertFalse(txt.contains("Disallow: /join"), "an invitation must be fetchable for its noindex to count: " + txt);
         assertFalse(txt.contains("Disallow: /\n"), "the hub's own page is what the operator wants found: " + txt);
 
         String meta = "<meta name=\"robots\" content=\"noindex,nofollow\">";
         // An invitation renders for any token, because viewing one never spends it.
-        assertTrue(http("GET", "/links", null, null).bodyText().contains(meta));
         HttpResponse invite = http("GET", "/join/" + enc("not-a-real-token"), null, null);
         assertTrue(invite.bodyText().contains(meta));
         // The one page here whose body is a credential is also the one that must not be kept: the
@@ -458,7 +439,7 @@ class HomePageTest {
      */
     @Test
     void everyAnswerOnThisNameCarriesTheSameSecurityHeaders() throws Exception {
-        for (String path : new String[] {"/", "/links", "/v1/status", "/admin", "/no-such-page"}) {
+        for (String path : new String[] {"/", "/v1/status", "/admin", "/no-such-page"}) {
             HttpResponse r = http("GET", path, null, null);
             String csp = r.headers().get("Content-Security-Policy");
             assertNotNull(csp, path);
@@ -492,10 +473,9 @@ class HomePageTest {
     }
 
     /**
-     * The hub's own page introduces itself to whatever unfurls it; the other two do not, and that
+     * The hub's own page introduces itself to whatever unfurls it; an invitation does not, and that
      * is the half that can fail. A block of meta tags added to the shared frame would give an
-     * invitation -- whose URL is a credential -- a card in a chat window, and would put other
-     * people's names in a preview of the directory.
+     * invitation -- whose URL is a credential -- a card in a chat window.
      */
     @Test
     void onlyTheHubsOwnPageOffersItselfForAPreview() throws Exception {
@@ -504,7 +484,6 @@ class HomePageTest {
         assertTrue(home.contains("<meta name=\"description\""), home);
         assertTrue(home.contains("<meta name=\"twitter:card\" content=\"summary\">"), home);
 
-        assertFalse(http("GET", "/links", null, null).bodyText().contains("og:"), "the directory is not a card");
         assertFalse(http("GET", "/join/" + enc("not-a-real-token"), null, null).bodyText().contains("og:"),
             "an invitation is not a card");
     }
@@ -524,6 +503,8 @@ class HomePageTest {
         assertTrue(body.contains("<a href=\"/\">Hub</a>"), "a way back: " + body);
         assertTrue(body.contains("/no-such-page"), body);
         assertTrue(body.contains("noindex"), "an error page is not for an index: " + body);
+        // The directory that used to be here is a mistype now, and answered as one (#252).
+        assertEquals(404, http("GET", "/links", null, null).status(), "the directory is gone");
 
         HttpResponse machine = http("POST", "/v1/noise", null, "");
         assertEquals(426, machine.status());

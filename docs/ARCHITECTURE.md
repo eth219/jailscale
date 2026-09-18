@@ -295,7 +295,7 @@ TCP 443, SNI = hub.example.com
 ```
 
 Both HTTP ends are hand-written (§3.1): the hub's front is about 1,100 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, `/favicon.svg`, a root page and the link directory, the
+`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, `/favicon.svg` and a root page, the
 node's client about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier
 because its 4-byte client-to-server masking would touch every visitor byte again, frame headers and
 close semantics come with it, and it would only help behind proxies passing `Upgrade: websocket`
@@ -713,88 +713,33 @@ and `/favicon.ico` both, and linked from every page on the hub's own name -- not
 "not open" page, whose `/favicon.svg` is a different origin that `img-src 'self'` refuses and whose
 own name answers that path with the same page. A description and `og:` tags on `/` and **only**
 there, so the hub introduces itself when its address is pasted into a chat: an invitation's URL is a
-credential and the directory carries other people's names, and neither wants a card made of it. And
-the answers a person can arrive at by mistyping -- 404, and 405 on a page -- go through the same
-frame as everything else, with the nav on them, instead of `not found` in the browser's default
-serif with no way back. The machine answers do not: the 426 and 429 that answer a control
+credential, and nobody wants a card made of it. And the answers a person can arrive at by mistyping
+-- 404, and 405 on a page -- go through the same frame as everything else, with a link back to `/`,
+instead of `not found` in the browser's default serif with no way back. The machine answers do not: the 426 and 429 that answer a control
 connection, and the JSON under `/v1`, are read by something that is not a browser, and a frame would
 be bytes it has to skip. The 500 is the one page held as a literal, because it is written when
 something else has just thrown and a handler that calls the machinery that failed fails twice.
 
-**The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
-open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
--- so the front page says how many are open and points at the directory, and names none of them
-(the indexing paragraphs below are why). The pair are two real URLs with a nav between them rather
-than one page with scripted tabs, so either half can be sent to someone and neither needs a script
-to arrive at. The status went nowhere: the availability record is what tells a first visitor this
-hub is real, and it belongs where they land.
-
-Each row of the directory carries the address, the kind and how long the link has been open -- every
-one of them something the hub already holds for its own routing. **Nothing on either page is fetched
-from the link.** A thumbnail or a favicon would mean the hub connecting to a node's app as a visitor
-and republishing what came back under its own name, which is the one thing the front page tells
-people it does not do, and it would put whatever anyone who can join chooses to serve on the
-operator's name. **Nor how many visitors a link is serving**, though the hub has that number and
-this page carried it briefly: that a name is open was already public, that somebody is on it right
-now was not, and a page anyone can poll turns the second into a live activity feed for a machine
-belonging to somebody else. It is also the figure `AdminWeb` keeps for the operator in as many words
--- "how close a particular node is to its bound ... is the operator's business and nobody else's" --
-and the one this section refuses on `/metrics`, which listens on loopback and so has a narrower
-audience than a page on 443. The reader loses little: someone deciding whether to click a link
-learns more by clicking it. "Open" is since the *link* opened, so
-a node that restarts or hands its name on starts the clock again -- it counts the current link, not
-the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
-list does. **And none of it is for a search index.** That a link's address is public because a
-visitor reaches it by typing it is an argument about that visitor, not about a result that hands the
-whole list to somebody who never heard of this hub and keeps saying "open 3 days" after the node has
-gone; an indexed `/join/<token>` would be a live invitation, the token in the result. The two
-mechanisms for saying so pull in opposite directions and only one of them works: a page named in
-`Disallow` is never fetched, so its `noindex` is never read, and a URL linked from anywhere else can
-be listed on the strength of that link alone -- for an invitation, exactly the outcome being
-avoided. **So the pages that must stay out of an index are deliberately left crawlable** and say
-`noindex,nofollow` themselves; being fetched costs them nothing, since opening an invitation has
-never spent it, and the page-level `nofollow` keeps a crawler from walking the directory into other
-people's machines or paging it one `?from=` at a time. `/robots.txt` names only `/admin`, and for a
-different reason than secrecy: a login link is one-shot and consumed on the GET, so a machine that
-fetches one to see what is there burns it -- and because that is advice, `/admin/login/<token>` also
-refuses every method but GET, so a link preview or a prefetch cannot spend it by looking.
-
-`/` stays indexable -- it is the page an operator wants found -- and **names no link at all**: the
-section says how many are open and links to the directory. It showed the first eight as rows for a
-while, each carrying `rel=nofollow`, and that was the weaker half and the known gap. The robots
-meta's `nofollow` is a directive and the `rel` attribute has been a hint since 2020, but neither was
-the problem: an address on that page is *text on a page that asks to be indexed*, and no annotation
-on the row around it changes what an indexer keeps. Dropping only the `href` would have left the
-same text behind, which is why the rows went rather than their links. A count is not a name, and the
-one link out of the section goes to a page that says `noindex`, so no name under this hub is now
-reachable from an indexable page here. What it costs is the at-a-glance view of what is open, which
-is one click away at `/links`; the alternative considered and rejected was listing a link only when
-the node asks to be, which leaves an opted-in link exactly as indexable as before and makes the
-directory incomplete by default. Everything on `/links` is still advice a crawler may ignore rather
-than a control.
-
-The directory renders at most 200 rows at a time, like every other unauthenticated
-answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
-reachable -- the sentence at the top counts every open link, so every one of them has to be. A
-row's address carries the port the hub answers on, the same `portSuffix` the node was told when the
-link opened, because a row is a link someone is meant to click. The cursor is a string a visitor
-sends, so it is treated as one: a query is percent-decoded per escape
-and a malformed one throws, which on a path where nothing but `IOException` is caught took the
-response down with it, so an unreadable cursor is simply no cursor; and one that sorts past the
-last row -- what a forwarded cursor becomes once the links it started from close -- says so rather
-than drawing an empty table under a sentence that has just counted the links. The key is built in
-`Locale.ROOT` and percent-encoded on the way out, because it is read back by machine and a JVM
-numbering in Arabic-Indic digits would otherwise mint a cursor no other hub can match; and the list
-it indexes is already sorted by it, so finding the start is a binary search, not a walk that rebuilt
-a key per row it passed. Behind all of it, `HttpFront.serve` now answers **500 for any unchecked
-throw** out of a handler: every one of these runs on the connection's own virtual thread and nothing
-above it caught more than `IOException`, so one bad cursor closed the socket with no response at all
-and killed the thread printing a stack trace outside `Log`. Catching it per handler is one fix per
-handler; catching it at the boundary is the one that holds for the next one. The
-order is the order the rows *read* in, not the links' internal names: a raw port is named
-`tcp/<port>` and drawn as `<hub>:<port>`, so sorting by the name put it among the names beginning
-with "t", at a position matching nothing on the page. Its port is zero-padded in the key so 9000
-sorts before 20000, which also makes every key distinct and lets it double as the paging cursor.
+**There is no list of links.** The front page says how many are open and names none of them.
+A directory at `/links` existed until 2026-09-18 -- one row per link with its address, kind and how
+long it had been open, paginated, `noindex,nofollow`, deliberately left crawlable so the meta could
+be read -- and was removed (#252): a page that enumerates every name on the hub is a scanner's
+index, no tunnel this stands beside publishes one, and everything it told the operator, the count
+and `/metrics` already say. What that page had worked out about indexing survives it. `/` is the
+one page here that asks to be indexed, so an address on it is text an indexer keeps whatever the
+markup around it says; that is why `/` carries a count and no name, and why the pages served to
+whoever holds their URL -- an invitation, the wildcard's "not open" page -- say `noindex,nofollow`
+themselves and are **left fetchable**: a page named in `Disallow` is never fetched, so its
+`noindex` is never read, and a URL linked from elsewhere can be listed on the strength of that
+link alone, which for an invitation would be the token in the result. `/robots.txt` names only
+`/admin`, and for a different reason than secrecy: a login link is one-shot and consumed on the
+GET, so a machine that fetches one to see what is there burns it -- and because that is advice,
+`/admin/login/<token>` also refuses every method but GET, so a link preview or a prefetch cannot
+spend it by looking. Behind all of it, `HttpFront.serve` answers **500 for any unchecked throw**
+out of a handler: every handler runs on the connection's own virtual thread and nothing above it
+caught more than `IOException`, so one bad query string once closed the socket with no response
+at all and killed the thread printing a stack trace outside `Log`. Catching it at the boundary is
+the one fix that holds for the next handler.
 
 The page is one column, 48rem. It was 40rem, and what was wrong there was not the margins but the
 measure: a 64-character binary hash ran to the edge of its cell and a two-word label wrapped onto two
@@ -853,15 +798,14 @@ the signature counter sits at the one point that decides, so a refusal added lat
 be counted.
 
 It says how many links are open as well -- the number and not one of the addresses -- because a hub
-that serves nothing and a hub that is busy look identical without it, and points at `/links` for the
-rest. It showed the first few of them as rows for a while and does not any more, for the reason
-above: `/` is the page that asks to be indexed. The number sits under "Open links" beside the way
-through to them rather than in the status table, so it is where a reader looking for links is
-already looking. The addresses `/links` carries are public by construction: a visitor reaches one by
-typing it. (Not because "a DNS lookup finds it either way", which this document used to say and
-which `DnsResponder` makes false -- a held name and a name nobody holds are answered identically, so
-DNS neither confirms nor enumerates.) What stays behind the admin session is the part that is nobody
-else's business: who opened a name and which local port it reaches.
+that serves nothing and a hub that is busy look identical without it. It showed the first few of
+them as rows for a while, then pointed at a directory, and now does neither, for the reason above:
+`/` is the page that asks to be indexed, and a list of every name is not something the hub should
+publish anywhere (#252). What is left to an outsider is confirming a guess one name at a time --
+a ClientHello naming an open link is relayed where one naming nothing gets the "not open" page
+(§8.1) -- and not a list: a held name and a name nobody holds are answered identically by
+`DnsResponder`, so DNS neither confirms nor enumerates. What stays behind the admin session is the part that is nobody else's business: who
+opened a name and which local port it reaches.
 
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's
