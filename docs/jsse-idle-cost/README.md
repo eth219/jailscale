@@ -266,8 +266,12 @@ apart anyway.
 
 What is 0.8 MB out of date is §14's **34.4**, which is v0.1.2's figure. The same run puts the
 binary at 27.3 MiB against the table's 26.4, and since idle RSS here is mostly the binary mapped in,
-a binary 0.9 MiB larger is the whole of it. The gate held on every release in between; the table
-was not re-measured. #228 is that table.
+a binary 0.9 MiB larger is the whole of it. §14 keeps v0.1.2's figures because that is the last
+release whose whole gate output was recorded, and carries the drift beside them now, with the run it
+came from and the released asset sizes that show the same growth has shipped — v0.1.10's
+`jailscale-linux-amd64` is 0.75 MiB over the table's row. So the gap between this file's 35.1 and
+the 34.4 it cites is eight releases of accumulated growth rather than a disagreement, and it does
+not close at the next one.
 
 ## What this says about replacing JSSE
 

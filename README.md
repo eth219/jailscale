@@ -200,11 +200,13 @@ availability figure each hub's page shows are in
 
 ## Resource usage
 
-Measured on main with the native binaries by `./measure.sh`, which CI runs as a
-budget on every push there, with the toolchain and options the release workflow
-uses. The figures are v0.1.2's; the releases since changed the hub's control
-plane and nothing on a visitor's or an idle process's path, and the same gate
-held on each release commit ([ARCHITECTURE.md §14](docs/ARCHITECTURE.md)).
+Measured with the native binaries by `./measure.sh`, which CI runs as a budget
+on every push to main, with the toolchain and options the release workflow uses.
+The figures are v0.1.2's and the releases since have grown: v0.1.10 ships
+`jailscale` 0.75 MiB larger on linux-amd64 and 0.80 larger on arm64 macOS, and
+idle RSS has moved with it, every one still inside its budget.
+[ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has that drift, what it is made of,
+and what a release publishes that lets you check the binary rows yourself.
 
 | | jailhub | jailscale |
 |---|---|---|

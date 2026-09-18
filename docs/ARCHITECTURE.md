@@ -2504,8 +2504,65 @@ four, since the 25.3 line is what dropped macos-amd64 (§3.2). README says the s
 people which file to download. The releases since, v0.1.3 to v0.1.10, changed the hub's control
 plane -- a standby, the availability record, the hub answering its own DNS, the standby serving,
 promotion by the nodes' word (§13) -- and no path a visitor's bytes or an idle process take, and
-the same gate held on each release commit; the table is not re-measured per release for that
-reason.
+the same gate held on each release commit.
+
+**The table is v0.1.2's, and the sentence above is not the reason it can stay that way.** That
+sentence is about *paths*, and it is right about them. It does not say the figures are current, and
+they are not — the drift is in the releases, not only on `main`.
+
+The binary rows can be checked against any release without measuring anything, because a release
+publishes its assets with their sizes:
+
+| | v0.1.2 | v0.1.10 | |
+|---|---|---|---|
+| `jailscale-linux-amd64` | 26.38 MiB | 27.13 | +0.75 |
+| `jailhub-linux-amd64` | 26.13 | 26.50 | +0.37 |
+| `jailscale-darwin-arm64` | 25.54 | 26.34 | +0.80 |
+| `jailhub-darwin-arm64` | 25.35 | 25.68 | +0.33 |
+
+So someone downloading the current release gets a `jailscale` 0.75 MiB larger than the row below
+says, and the macOS column moved as much as the Linux one. `gh release view <tag> --json assets` is
+the whole of that check.
+
+The rest of the table is the gate's output, and it has not been re-recorded since v0.1.2. The
+`budget` job prints it on every push to `main`, nightly, and on a pull request that asks with the
+`ci:full` label, so what `main` reads is always to hand — at 899fbc7
+([run 35256792463](https://github.com/eth219/jailscale/actions/runs/35256792463)):
+
+| `linux-amd64` | the table, v0.1.2 | `main` 899fbc7 |
+|---|---|---|
+| `jailscale` binary | 26.4 MiB | 27.3 |
+| `jailhub` binary | 26.1 | 26.7 |
+| Node idle RSS | 34.4 MB (2.1 anon) | 35.2 (2.1) |
+| Hub idle RSS | 35.6 MB (3.3 anon) | 36.0 (3.4) |
+| RSS with 1,000 held open | node 55, hub 62 | node 54.2, hub 62.8 |
+| CLI cold start | 2.6 ms | 3.6, median of 10 |
+
+**Two of those rows are not differences.** The held-open peaks are the noisy row this section warns
+about below: of the last thirty-two `ci-full` runs on `main`, the twelve whose commits changed no
+Java at all and whose `budget` job ran read between **52.5 and 58.5** for the node, so 54.2 against 55 is well inside the
+spread and says nothing. And the hub idle
+baseline is in dispute — this table says 35.6 where the v0.1.0 comparison above, the edition table,
+the Linux paragraph below, `profiles/README.md` and `measure.sh`'s own header all say 35.1 (#246).
+
+**What did move is the node's idle RSS and the binary, together and by the same sign**: +0.8 MB
+against +0.9 MiB. Idle RSS on this platform is mostly the binary mapped into the process —
+`docs/jsse-idle-cost` sorts that state into its mappings and finds 27.2 MB of 30.0 resident under
+the binary — so a release that adds control-plane code adds binary, and binary is what idle RSS is
+made of. The anonymous share, the memory a process actually owns, moved 0.1 MB on the hub and not
+at all on the node, which is the half the sentence above is right about.
+
+The cold start moved too, 2.6 ms to 3.6, and this paragraph does not claim to know why: +38% against
+a binary +3.4% is not the proportion that mechanism predicts, and the list of conclusions this
+harness has produced that were plausible and wrong, in `measure.sh`'s header, has timing drifting
+with machine state in it.
+
+So the figures below stay at v0.1.2's, and the true reason is the plain one: that is the last
+release the gate's whole output was recorded for, and re-recording it needs a run on a release
+commit that nothing does automatically. What is added here is what changed, and where to check it
+without waiting for that. The headroom is the part worth watching, and it is not on this platform:
+the budget is 28 MiB and v0.1.10's largest shipped binary is `jailscale-windows-amd64.exe` at
+**27.72**, which is 0.28 MiB of room on a target no gate measures (#247).
 
 | Measurement | arm64 macOS | linux-amd64 | Budget (macOS / linux) |
 |---|---|---|---|
