@@ -211,39 +211,43 @@ first row of the table.
 `jailscale-linux-arm64` at 26.2 — 0.9 MiB apart, against 12.6 MB of RSS at `A`.
 
 **Which mappings, measured.** `code` above is the binary's own executable mappings, and it is
-10,388 KB at `A` against arm64's 7,420: **2.9 MB of the 12.6, and no more.** The other 19 MB of
-file-backed memory at `A` was named by nobody until `breakdown` sorted it (#227,
-[run 35307523183](https://github.com/eth219/jailscale/actions/runs/35307523183), on ubuntu-24.04;
-one run's last sample, where the five-state table above is a mean of three):
+10,388 KB at `A` against arm64's 7,420: **2.9 MB of the 12.6, and no more.** The rest of `A`'s
+file-backed memory was named by nobody until `breakdown` sorted it (#227,
+[run 35309183734](https://github.com/eth219/jailscale/actions/runs/35309183734), on ubuntu-24.04,
+one run's last sample against the five-state table's mean of three):
 
 | state `A`, `linux-amd64` | rss | of it anonymous | mapped |
 |---|---|---|---|
-| binary, executable | 10,384 KB | 0 | 14,032 KB |
-| binary, not executable | 17,396 | 312 | 27,400 |
+| binary, executable | 10,388 KB | 0 | 14,036 KB |
+| binary, not executable | 17,468 | 332 | 27,400 |
 | other file-backed | 2,528 | 48 | 5,828 |
 | no path | 356 | 348 | reserved, see below |
-| **total** | **30,664** | **708** | |
+| **total** | **30,740** | **728** | |
 
-`smaps_rollup` read 30,664 KB at the same moment, and the script fails the state if the two disagree
-by more than a page or two, so nothing is in no bucket.
+`smaps_rollup` read 30,740 KB at the same moment. The script exits non-zero if those two disagree by
+more than 64 KB, or if it meets a mapping header it cannot read, so a table that is missing a bucket
+stops the run rather than being published.
 
-**The 19 MB is the binary, and §14's sentence is right about it.** 17,396 KB of it is the binary's
-non-executable mappings — the rodata and the image heap, which is what "text and rodata mapped in"
-meant and what nothing had taken apart. What is *not* the binary is 2,528 KB: `libc.so.6` is 1,944
-of it and the rest of the loader's is 584. That 2.5 MB is the whole of what the sentence attributes
-to the wrong thing, and it is the loader's rather than this project's.
+**The 19.5 MB is the binary, and §14's sentence is right about it.** Of the 19,996 KB of file-backed
+memory outside the executable mappings, **17,468 KB is the binary's non-executable mappings** — the
+rodata and the image heap, which is what "text and rodata mapped in" meant and what nothing had
+taken apart — and **2,528 KB is not the binary at all**. `libc.so.6` is 1,944 KB of that and the
+rest of the loader's is 584. So of the state's 30.0 MB, 27.2 is the binary, 2.5 is the loader's and
+0.3 has no path.
 
-**The `anonymous` column is why this is 2.5 MB and not more.** A private file mapping whose pages
-have been written stays resident under the file's path while being memory the process owns, so a
-bucket by path alone counts the image heap's copy-on-write pages as binary. There are 312 KB of them
-inside the binary's mappings at `A`, and the column's total of 708 KB is the same 0.7 MB the
-five-state table reports as anonymous — two different reads of `/proc` agreeing.
+**The `anonymous` column is why the binary's share is 27.2 MB and not more.** A private file mapping
+whose pages have been written stays resident under the file's path while being memory the process
+owns, so a bucket by path alone counts the image heap's copy-on-write pages as binary. There are
+332 KB of them inside the binary's mappings at `A`, and the column's total of 728 KB is the same
+0.7 MB the five-state table reports as anonymous — two reads of `/proc` agreeing.
 
-**And the binary is mapped more than once.** At `J` the two binary buckets hold 31,812 KB resident
-— 31.1 MiB against a file of 27.3 — which cannot be a fuller residency of one mapping. The `mapped`
-column says what it is: those buckets *span* 41,432 KB, **40.5 MiB of address space for a 27.3 MiB
-file**, so some of it is mapped at more than one address. Nor is it pages that stopped being the
-file when they were dirtied: only 484 KB of `J`'s binary buckets are anonymous.
+**And the binary is mapped more than once.** At `J` the two binary buckets hold 31,888 KB resident.
+Take off the 492 KB of that which is anonymous — pages the image heap has written, which are no
+longer the file — and **30.7 MiB of the file is resident out of a 27.3 MiB file**. A private mapping
+cannot hold more of a file than the file has, so some of it is resident twice. The `mapped` column
+is consistent with that rather than proof of it, since a file mapping may be longer than its file:
+those buckets span 41,436 KB, 40.5 MiB of address space, which is room for the same bytes at two
+addresses.
 
 The `no path` bucket's span is reserved address space — tens of gigabytes of it, which the runtime
 reserves and does not map — so that one cell is not a quantity of anything and the total omits it.

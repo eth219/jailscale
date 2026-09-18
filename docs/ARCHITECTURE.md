@@ -2697,18 +2697,19 @@ binary either: v0.1.10 ships `jailscale-linux-amd64` at 27.1 MiB against `linux-
 *Which* file-backed pages is measured now, for the node at that first state, and the two figures are
 not two halves of one quantity. Of the 12.6 MB gap, **2.9 MB** is the binary's own executable
 mappings — 10,388 KB against arm64's 7,420. Separately, of the file-backed memory the amd64 process
-holds there, the 19 MB outside those mappings is **17.0 MB of the binary's non-executable mappings**
-— the rodata and the image heap, which is what "text and rodata" above means and what nothing had
-taken apart — and **2.5 MB that is not the binary at all**, 1.9 of it `libc.so.6` (#227). So this
-paragraph names the binary for 2.5 MB of the loader's, and is right about the rest: the process owns
-0.7 MB at that state, and 0.3 of that sits inside the binary's own mappings as pages it has written.
+holds there, the 19.5 MB outside those mappings is **17.0 MB of the binary's non-executable
+mappings** — the rodata and the image heap, which is what "text and rodata" above means and what
+nothing had taken apart — and **2.5 MB that is not the binary at all**, 1.9 of it `libc.so.6`
+(#227). So this paragraph names the binary for 2.5 MB of the loader's and is right about the rest:
+of that state's 30.0 MB, 27.2 is the binary, and 0.3 of the 0.7 the process owns sits inside the
+binary's own mappings as pages it has written.
 
 That the process holds more file-backed memory than the whole binary is the binary mapped more than
-once. At the joined state its mappings hold 31.1 MiB resident against a file of 27.3, which no
-single mapping can do — and they *span* 40.5 MiB, so some of the file is mapped at two addresses.
-Nor is the excess pages that stopped being the file when they were written: 0.5 MB of what is
-resident under those paths is anonymous. The binary's size that comparison uses is `main`'s 27.3 MiB
-and not the 26.4 in the table above, which is #228.
+once. At the joined state its mappings hold 31.1 MiB, of which 0.5 is anonymous — pages the image
+heap has written, which are no longer the file — so **30.7 MiB of the file is resident out of a
+27.3 MiB file**, which no single private mapping can do. The mappings span 40.5 MiB, which is room
+for the same bytes at two addresses. The binary's size there is `main`'s 27.3 MiB and not the 26.4
+in the table above, which is #228.
 
 The live hub shows what that means under pressure. On a GCP e2-micro with 969 MB of RAM, after a
 day of service, `smaps_rollup` reported 41.1 MB of RSS split into 15.0 MB anonymous and 26.2 MB of
