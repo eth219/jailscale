@@ -148,8 +148,10 @@ too — idles at **24.0 MB**, which is *below* macOS, not 9 MB above it.
 **The two Linux targets own the same memory to within 0.2 MB.** Every one of the 10.4 MB between
 them is file-backed — 32.3 MB against 21.7 — clean pages the kernel can drop and re-read, which is
 what §14 says the difference is made of and is now measured on both sides of it rather than argued
-from one. §14 calls those pages the binary's, and that part is still an attribution: 32.3 MB is more
-of them than the whole 26.4 MiB binary, and nothing here says which mappings they are. What it is
+from one. §14 calls those pages the binary's, and on `linux-amd64` that is now sorted rather
+than asserted — see "Which mappings, measured" below, which also says why more of them is not more
+than the binary. On `linux-arm64` it is still an attribution: `breakdown` has not run there, and
+that is #233. What it is
 not is macOS counting differently from Linux, which is how that sentence reads — `linux-arm64` sits
 with macOS and `linux-amd64` is the outlier.
 
@@ -211,34 +213,40 @@ first row of the table.
 **Which mappings, measured.** `code` above is the binary's own executable mappings, and it is
 10,388 KB at `A` against arm64's 7,420: **2.9 MB of the 12.6, and no more.** The other 19 MB of
 file-backed memory at `A` was named by nobody until `breakdown` sorted it (#227,
-[run 35306140755](https://github.com/eth219/jailscale/actions/runs/35306140755), `RUNS=3 SETTLE=8`
-on ubuntu-24.04):
+[run 35307523183](https://github.com/eth219/jailscale/actions/runs/35307523183), on ubuntu-24.04;
+one run's last sample, where the five-state table above is a mean of three):
 
-| state `A`, `linux-amd64` | | |
-|---|---|---|
-| binary, executable | 10,384 KB | 10.1 MB |
-| binary, not executable | 17,396 | 17.0 |
-| other file-backed | 2,528 | 2.5 |
-| anonymous and kernel | 356 | 0.3 |
-| **total** | **30,664** | **29.9** |
+| state `A`, `linux-amd64` | rss | of it anonymous | mapped |
+|---|---|---|---|
+| binary, executable | 10,384 KB | 0 | 14,032 KB |
+| binary, not executable | 17,396 | 312 | 27,400 |
+| other file-backed | 2,528 | 48 | 5,828 |
+| no path | 356 | 348 | reserved, see below |
+| **total** | **30,664** | **708** | |
 
-`smaps_rollup` read 30,664 KB at the same moment, so nothing is in no bucket.
+`smaps_rollup` read 30,664 KB at the same moment, and the script fails the state if the two disagree
+by more than a page or two, so nothing is in no bucket.
 
-**So §14's sentence is right about 27.8 MB of the 29.9 and wrong about 2.5.** The 19 MB is the
-binary after all — rodata and the image heap, which is what "text and rodata mapped in" meant and
-what nothing had measured. What is not the binary is 2,528 KB, and `libc.so.6` is 1,944 of it. That
-is small, it is the loader's and not this project's, and it is the one number in that sentence that
-was attributed to the wrong thing.
+**The 19 MB is the binary, and §14's sentence is right about it.** 17,396 KB of it is the binary's
+non-executable mappings — the rodata and the image heap, which is what "text and rodata mapped in"
+meant and what nothing had taken apart. What is *not* the binary is 2,528 KB: `libc.so.6` is 1,944
+of it and the rest of the loader's is 584. That 2.5 MB is the whole of what the sentence attributes
+to the wrong thing, and it is the loader's rather than this project's.
 
-At `J` the same four buckets are 13,264 / 18,548 / 2,528 / 1,624 KB, total 35,964. The third does
-not move between the two states — the loader's share is there before the daemon does anything and
-stays — and the anonymous column is the only one that grows by a factor.
+**The `anonymous` column is why this is 2.5 MB and not more.** A private file mapping whose pages
+have been written stays resident under the file's path while being memory the process owns, so a
+bucket by path alone counts the image heap's copy-on-write pages as binary. There are 312 KB of them
+inside the binary's mappings at `A`, and the column's total of 708 KB is the same 0.7 MB the
+five-state table reports as anonymous — two different reads of `/proc` agreeing.
 
-**And one thing this cannot say.** The binary's two buckets at `J` come to 31,812 KB, which is
-31.1 MiB against a binary of 27.3. A private file mapping cannot hold more resident pages than it
-spans, so the excess is the same bytes mapped more than once, or a mapping running past the end of
-the file. `breakdown` prints `Rss` and no `Size:`, so it cannot tell those apart, and this file
-should not claim which it is.
+**And the binary is mapped more than once.** At `J` the two binary buckets hold 31,812 KB resident
+— 31.1 MiB against a file of 27.3 — which cannot be a fuller residency of one mapping. The `mapped`
+column says what it is: those buckets *span* 41,432 KB, **40.5 MiB of address space for a 27.3 MiB
+file**, so some of it is mapped at more than one address. Nor is it pages that stopped being the
+file when they were dirtied: only 484 KB of `J`'s binary buckets are anonymous.
+
+The `no path` bucket's span is reserved address space — tens of gigabytes of it, which the runtime
+reserves and does not map — so that one cell is not a quantity of anything and the total omits it.
 
 **And `J` lines up with the gate, which is the check that says this measured the right thing.** §14
 publishes 34.4 MB for a node of exactly `J`'s shape and this reads **35.1**, which looks like 2% of
