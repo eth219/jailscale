@@ -53,6 +53,17 @@ public final class DnsResponder implements AutoCloseable {
     private static final int TYPE_ANY = 255;
     private static final int RCODE_FORMERR = 1;
     private static final int RCODE_REFUSED = 5;
+    /**
+     * How many times {@link #start} draws before it gives up on finding a TCP and UDP port of
+     * the same number. Sixteen, for the reason in the comment on that loop.
+     *
+     * <p>Named rather than written there because the test sizes its band of held ports from it.
+     * A band no wider than this budget is one a stepping loop walks out of the top of, so the
+     * test that exists to catch stepping passes against it -- which is what #230 found, and
+     * #220 found one file away before that. A copy of the number in the test is a copy that
+     * goes stale the day this one moves.
+     */
+    static final int PAIR_TRIES = 16;
     /** Challenge values change per issuance and are polled by the CA: barely cached at all. */
     static final int TTL_TXT = 5;
     /** The serving set moves when a host goes; a resolver may hold it this long (§13.3). */
@@ -302,8 +313,9 @@ public final class DnsResponder implements AutoCloseable {
         // one the next attempt may be handed again, and holding pushes a sequential allocator
         // past the band instead of back into it.
         //
-        // Sixteen attempts and not eight, because alternating halves what either side gets: the
-        // eight TCP draws #102 sized are eight again only if each side is given eight of its own.
+        // PAIR_TRIES is sixteen and not eight, because alternating halves what either side gets:
+        // the eight TCP draws #102 sized are eight again only if each side is given eight of its
+        // own.
         IOException last = null;
         // Every socket this loop opens and does not go on to use, bound or not, so that no path out
         // of here -- a retry, the throw below, or a RuntimeException from a bind -- leaves one
@@ -311,7 +323,7 @@ public final class DnsResponder implements AutoCloseable {
         // microseconds away and one list is one thing to get right.
         List<Closeable> held = new ArrayList<>();
         try {
-            for (int attempt = 0; attempt < (port == 0 ? 16 : 1); attempt++) {
+            for (int attempt = 0; attempt < (port == 0 ? PAIR_TRIES : 1); attempt++) {
                 // A fixed port is never drawn by either side: it binds or it is refused, and there
                 // is nothing to alternate. That needs no test of its own here -- such a port only
                 // ever sees attempt 0, where TCP draws anyway.
