@@ -164,7 +164,8 @@ not written down is a step somebody skips the first time it is inconvenient.
 `status:needs-decision` is not ready by definition, `status:blocked` and `status:parked` are waiting
 on something that is not you, and `status:triage` has not been classified yet — classifying it is
 itself a small piece of work, and a worthwhile one. `needs:hardware` is not a status and does not
-stop a person, but it stops you if the machine it names is one you have not got.
+stop a person, but it stops you when the machine the issue needs is one you have not got. The label
+does not say which machine — that was the `env:` axis #223 turned down — so the body does.
 
 ### 2. Claim
 
@@ -358,9 +359,10 @@ the two disagree, the label the body asks for is what the issue gets, with a lin
 relabelling is the work, it is worth doing, and it does not spend the count.
 
 **Ready means scoped, not reachable**, and `needs:hardware` is what says so. Three runs paid for
-that reading before the label existed, and each paid differently: the first two read #80 and #81 and
-walked past without claiming, which is the four issues' worth of reading #215 recorded; the third
-claimed #80, found the wall, released it a minute later, and filed an issue the tracker already had.
+that reading before the label existed, and each paid differently: the first read #80 and #81, walked
+past both, and filed #215, which put the cost at four issues' worth of reading; the second walked
+past both again and filed #223, asking what to do about it; the third claimed #80, found the wall,
+released it a minute later, and filed an issue #223 already was.
 Walk past a `needs:hardware` issue the way the three labels above are walked past — no claim, no
 comment — and name it at the stop, so a person reading the session's output sees what was skipped.
 
@@ -459,9 +461,9 @@ the start; the merge rule is for the label that was added on the way.
 Every stop leaves the tracker true — nothing claimed, every pull request merged, `status:in-review`
 or `status:needs-decision` — because the next session starts by reading it, and the one stop above
 that cannot say so says which job on which run beat it. The session's own last word carries what a
-label carries only half of: `gh issue list --label needs:hardware` says which issues are unreachable
-to everyone, and the stop says which of them *this* run reached and skipped, and which it claimed
-and released without work. Both are what the next session would otherwise pay to discover again.
+label carries only half of: `gh issue list --label needs:hardware` says which issues no session can
+finish, and the stop says which of them *this* run reached and skipped, and which it claimed and
+released without work. Both are what the next session would otherwise pay to discover again.
 
 ## What this does not do
 
