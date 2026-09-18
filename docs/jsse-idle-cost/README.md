@@ -208,14 +208,37 @@ first row of the table.
 **It is not the binary being bigger.** v0.1.10 ships `jailscale-linux-amd64` at 27.1 MiB against
 `jailscale-linux-arm64` at 26.2 — 0.9 MiB apart, against 12.6 MB of RSS at `A`.
 
-**What is still an attribution is which mappings.** `code` here is the binary's own executable
-mappings, and it is 10,388 KB at `A` against arm64's 7,420: **2.9 MB of the 12.6, and no more.** At
-`A` the process is 29.9 MB of RSS with 0.7 anonymous, so 29.3 MB of it is file-backed and about 19
-of those are outside the binary's executable mappings. `decompose.sh` has no column that says
-whether they are the binary's non-executable mappings — rodata, the image heap — or something else
-mapped into the process, and §14 names the binary for all of them. That sentence is now narrower
-than it was rather than settled: the executable share is measured and the rest is not. #227 is the
-run that would settle it.
+**Which mappings, measured.** `code` above is the binary's own executable mappings, and it is
+10,388 KB at `A` against arm64's 7,420: **2.9 MB of the 12.6, and no more.** The other 19 MB of
+file-backed memory at `A` was named by nobody until `breakdown` sorted it (#227,
+[run 35306140755](https://github.com/eth219/jailscale/actions/runs/35306140755), `RUNS=3 SETTLE=8`
+on ubuntu-24.04):
+
+| state `A`, `linux-amd64` | | |
+|---|---|---|
+| binary, executable | 10,384 KB | 10.1 MB |
+| binary, not executable | 17,396 | 17.0 |
+| other file-backed | 2,528 | 2.5 |
+| anonymous and kernel | 356 | 0.3 |
+| **total** | **30,664** | **29.9** |
+
+`smaps_rollup` read 30,664 KB at the same moment, so nothing is in no bucket.
+
+**So §14's sentence is right about 27.8 MB of the 29.9 and wrong about 2.5.** The 19 MB is the
+binary after all — rodata and the image heap, which is what "text and rodata mapped in" meant and
+what nothing had measured. What is not the binary is 2,528 KB, and `libc.so.6` is 1,944 of it. That
+is small, it is the loader's and not this project's, and it is the one number in that sentence that
+was attributed to the wrong thing.
+
+At `J` the same four buckets are 13,264 / 18,548 / 2,528 / 1,624 KB, total 35,964. The third does
+not move between the two states — the loader's share is there before the daemon does anything and
+stays — and the anonymous column is the only one that grows by a factor.
+
+**And one thing this cannot say.** The binary's two buckets at `J` come to 31,812 KB, which is
+31.1 MiB against a binary of 27.3. A private file mapping cannot hold more resident pages than it
+spans, so the excess is the same bytes mapped more than once, or a mapping running past the end of
+the file. `breakdown` prints `Rss` and no `Size:`, so it cannot tell those apart, and this file
+should not claim which it is.
 
 **And `J` lines up with the gate, which is the check that says this measured the right thing.** §14
 publishes 34.4 MB for a node of exactly `J`'s shape and this reads **35.1**, which looks like 2% of
@@ -256,13 +279,12 @@ defence. If this number is ever worth moving, the lever is code layout.
 
 ## What this does not cover
 
-**Which file-backed mappings the `linux-amd64` baseline is.** Every shipped native target but
-`windows-amd64` — which has no sampler here at all, and is the fourth — has now been through the
-five states, and the amd64 run says the gap is present at `A` and that 2.9 MB of the 12.6 is the
-binary's executable mappings. Separately, of the 29.3 MB of file-backed memory the process holds at
-`A`, about 19 MB is outside those mappings and unattributed: `decompose.sh` sums the executable
-mappings of `/proc/PID/exe` and nothing else, so it cannot tell the binary's rodata and image heap
-from anything else the loader brought in. #227 is that run.
+**Which file-backed mappings the `linux-arm64` baseline is.** `breakdown` has run on
+`linux-amd64` only, so the four buckets above are one architecture's. #233 is the arm64 run, and it
+is the comparison that would say whether the 12.6 MB gap is more of the binary resident, the same
+binary mapped differently, or something that is not the binary at all — the three the measurement
+above cannot separate, for the reason its last paragraph gives. `windows-amd64` has no sampler here
+at all and is the fourth target.
 
 Only `decompose.sh`'s five states have been run on Linux. The trust-store half of this file is
 `truststore.sh`, which rests on `vmmap` and on a second image built beside the first, so the 0.55 MB

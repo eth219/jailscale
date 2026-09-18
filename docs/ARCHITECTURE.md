@@ -2694,15 +2694,20 @@ open, against arm64 Linux's +6.7 and darwin's +8.0. So the gap is at its widest 
 connect and any join, and the daemon's own work then closes a little of it. It is not a bigger
 binary either: v0.1.10 ships `jailscale-linux-amd64` at 27.1 MiB against `linux-arm64`'s 26.2.
 
-*Which* file-backed pages is measured for part of it and asserted for the rest, and the two figures
-are not two halves of one quantity. Of the 12.6 MB gap at that first state, **2.9 MB** is the
-binary's own executable mappings — 10,388 KB against arm64's 7,420. Separately, of the 29.3 MB of
-file-backed memory the amd64 process holds there, **about 19 MB is outside those mappings** and
-nothing has named it: `decompose.sh` sums the executable mappings of `/proc/PID/exe` and cannot tell
-the binary's rodata and image heap from anything else the loader brought in. 32.3 MB is more
-file-backed memory than the whole binary at either size the table above and `main` disagree about
-(26.4 MiB and 27.3, which is #228), so this paragraph still names the binary for more than anything
-has taken apart. #227 is the run that would settle it.
+*Which* file-backed pages is measured now, and the two figures are not two halves of one quantity.
+Of the 12.6 MB gap at that first state, **2.9 MB** is the binary's own executable mappings —
+10,388 KB against arm64's 7,420. Separately, of the 29.3 MB of file-backed memory the amd64 process
+holds there, the 19 MB outside those mappings is **17.0 MB of the binary's non-executable mappings**
+— rodata and the image heap, which is what this paragraph meant by "text and rodata" and what
+nothing had taken apart — and **2.5 MB that is not the binary at all**, 1.9 of it `libc.so.6`
+(#227). So the sentence above is right about 27.8 MB of that state's 29.9 and names the binary for
+2.5 MB of the loader's.
+
+That the process holds more file-backed memory than the whole binary is not more of the binary being
+resident: at the joined state the binary's own mappings come to 31.1 MiB against a binary of 27.3,
+and a private file mapping cannot hold more resident pages than it spans. So some of it is mapped
+more than once. `breakdown` reads `Rss` and not `Size:`, so it cannot say which, and #233 is the
+arm64 comparison that would.
 
 The live hub shows what that means under pressure. On a GCP e2-micro with 969 MB of RAM, after a
 day of service, `smaps_rollup` reported 41.1 MB of RSS split into 15.0 MB anonymous and 26.2 MB of
