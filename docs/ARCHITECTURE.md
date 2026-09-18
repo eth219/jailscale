@@ -2694,15 +2694,24 @@ open, against arm64 Linux's +6.7 and darwin's +8.0. So the gap is at its widest 
 connect and any join, and the daemon's own work then closes a little of it. It is not a bigger
 binary either: v0.1.10 ships `jailscale-linux-amd64` at 27.1 MiB against `linux-arm64`'s 26.2.
 
-*Which* file-backed pages is measured for part of it and asserted for the rest, and the two figures
-are not two halves of one quantity. Of the 12.6 MB gap at that first state, **2.9 MB** is the
-binary's own executable mappings — 10,388 KB against arm64's 7,420. Separately, of the 29.3 MB of
-file-backed memory the amd64 process holds there, **about 19 MB is outside those mappings** and
-nothing has named it: `decompose.sh` sums the executable mappings of `/proc/PID/exe` and cannot tell
-the binary's rodata and image heap from anything else the loader brought in. 32.3 MB is more
-file-backed memory than the whole binary at either size the table above and `main` disagree about
-(26.4 MiB and 27.3, which is #228), so this paragraph still names the binary for more than anything
-has taken apart. #227 is the run that would settle it.
+*Which* file-backed pages is measured now, for the node at that first state, and the two figures are
+not two halves of one quantity. Of the 12.6 MB gap, **2.9 MB** is the binary's own executable
+mappings — 10,388 KB against arm64's 7,420. Separately, of the 19.5 MB the amd64 process holds
+there outside those mappings and under a path, **17.0 MB is the binary's non-executable
+mappings** — the rodata and the image heap, which is what "text and rodata" above means and what
+nothing had taken apart — and **2.5 MB that is not the binary at all**, 1.9 of it `libc.so.6`
+(#227). So this paragraph names the binary for 2.5 MB of the loader's and is right about the rest:
+27.2 MB of that state's 30.0 is resident under the binary, and 0.3 of the 0.7 the process owns sits
+inside the binary's own mappings as pages it has written, so the binary as it is on disk is 26.9 of
+the 30.0. The 30.0 and the 29.9 above are the same state in two runs of the same job. The 27.2 is
+resident memory and the 27.3 below is a file size, which are two quantities that read alike here.
+
+That the process holds more file-backed memory than the whole binary is the binary mapped more than
+once. At the joined state its mappings hold 31.1 MiB, of which 0.5 is anonymous — pages the image
+heap has written, which are no longer the file — so **30.7 MiB of the file is resident out of a
+27.3 MiB file**, which no single private mapping can do. The mappings span 40.5 MiB, which is room
+for the same bytes at two addresses. The binary's size there is `main`'s 27.3 MiB and not the 26.4
+in the table above, which is #228.
 
 The live hub shows what that means under pressure. On a GCP e2-micro with 969 MB of RAM, after a
 day of service, `smaps_rollup` reported 41.1 MB of RSS split into 15.0 MB anonymous and 26.2 MB of
