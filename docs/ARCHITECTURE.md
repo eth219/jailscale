@@ -212,24 +212,13 @@ the class this project's threading makes easy to write. Its exclusions are in
 `spotbugs-exclude.xml` and each one states its reason, because an exclusion with no reason and a
 finding nobody answered look identical six months later.
 
-**Coverage is a profile too, and nothing is gated on the number.** `./mvnw -Pcoverage verify`
-writes a report to `coverage/target/site/jacoco-aggregate`. JaCoCo is a third party with a
-dependency tree, so it lives behind a profile for the same supply-chain reason SpotBugs does; what
-it is *not* is a threshold. `node.Main` reads 3.9% of its lines covered while being one of the
-better tested classes here, because `CliTest` runs the CLI as a process and an agent attached to the
-test JVM cannot see into a child. A threshold would have punished that test for having the right
-shape and pushed its assertions back in-process, giving up the argument parsing, the exit codes and
-the daemon spawn that are the point of it. Coverage here is a way to find code nothing runs, not a
-number to defend.
-
-**The number is only right when it is aggregated, and getting that wrong is silent.** Per-module
-figures mislead badly in this build: hub's end-to-end tests exercise most of `node`, which alone
-reports 23.2% against 68.1% merged. The aggregation lives in `coverage/`, a module that exists only
-inside the profile, because jacoco's `report-aggregate` reads the *direct compile* dependencies of
-wherever it runs — run from `hub` it covered hub and proto and dropped `node` (a test-scope
-dependency) and `crypto` (reached through proto), printing a plausible number for two thirds of the
-code. `CoverageModuleTest` holds the root pom's module list against that module's dependency list,
-because the next module added is the next one silently left out.
+**There is no coverage tooling, by decision.** A JaCoCo profile and an aggregating module existed
+until 2026-09-18 and were removed with the PGO profiles (#249): no workflow ran the report and
+nothing was gated on its number, and the number was only right when aggregated across all four
+modules — `node` alone read 23.2% against 68.1% merged, because hub's end-to-end tests exercise
+most of it, and `node.Main` read 3.9% while being among the better tested classes, because
+`CliTest` runs the CLI as a process an agent cannot see into. A figure that misleads unless read a
+particular way, kept for nobody, was one more build path to keep working.
 
 **Three workflows.** `ci` is the gate: the tests on ubuntu, macos and
 Windows for every push and pull request, and on main and nightly two more jobs that are too heavy
@@ -2543,7 +2532,7 @@ about below: of the last thirty-two `ci-full` runs on `main`, the twelve whose c
 Java at all and whose `budget` job ran read between **52.5 and 58.5** for the node, so 54.2 against 55 is well inside the
 spread and says nothing. And the hub idle
 baseline is in dispute — this table says 35.6 where the v0.1.0 comparison above, the edition table,
-the Linux paragraph below, `profiles/README.md` and `measure.sh`'s own header all say 35.1 (#246).
+the Linux paragraph below and `measure.sh`'s own header all say 35.1 (#246).
 
 **What did move is the node's idle RSS and the binary, together and by the same sign**: +0.8 MB
 against +0.9 MiB. Idle RSS on this platform is mostly the binary mapped into the process —
@@ -2836,7 +2825,8 @@ licence.** Two independent routes arrive at about the same place, and only one o
 anything.
 
 PGO was adopted for releases and dropped again within the day, once it could be measured on both
-platforms rather than one; the profiles stay as a local option (`profiles/README.md`). The
+platforms rather than one; the profiles were kept as a local option until 2026-09-18, then
+removed with the toolchain branch that used them (#249). The
 25.3 line costs one release target -- it does not build macos-amd64 -- and is not the LTS line, so
 `version:` has to be moved forward as GraalVM's feature releases land. Both were judged worth
 17,560 warm requests a second against 7,697.

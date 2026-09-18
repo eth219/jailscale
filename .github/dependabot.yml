@@ -22,7 +22,7 @@ updates:
     open-pull-requests-limit: 5
     ignore:
       # 3.2 argues the native-image toolchain is chosen by measurement, not by recency: the GraalVM
-      # version the release builds with is set in the workflow and in profiles/, and bumping this
-      # plugin alone would make the two disagree. Majors stay a deliberate, measured change.
+      # version the release builds with is pinned in release.yml, images.yml and native.sh, and
+      # bumping this plugin alone would make them disagree. Majors stay a deliberate, measured change.
       - dependency-name: org.graalvm.buildtools:native-maven-plugin
         update-types: [version-update:semver-major]

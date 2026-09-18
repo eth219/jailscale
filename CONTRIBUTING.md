@@ -32,12 +32,12 @@ which this project's hand-off path hits directly ([ARCHITECTURE.md §3.2](docs/A
 ```sh
 ./mvnw package                            # the JARs, and the tests
 ./mvnw -Panalyze verify -DskipTests       # SpotBugs
-./mvnw -Pcoverage verify                  # a report, gated on nothing (§3.2 says why)
 ./native.sh -DskipTests                   # the native binaries, GraalVM CE 25.3
 ```
 
-Building from source needs nothing but a JDK. That is why SpotBugs and JaCoCo live behind profiles:
-they are the only third parties in the build, and keeping them off `package` is the point.
+Building from source needs nothing but a JDK. That is why SpotBugs lives behind a profile: beyond
+the test framework and the native-image plugin it is the only third party in the build, and keeping
+it off `package` is the point.
 
 ### Moving the JDK or GraalVM pin
 

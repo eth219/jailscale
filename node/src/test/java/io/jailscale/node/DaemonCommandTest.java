@@ -40,9 +40,9 @@ class DaemonCommandTest {
     @Test
     void optionsComeStraightAfterTheExecutable() {
         List<String> cmd = Service.daemonCommand(cfgIn(Path.of("nodehome")),
-            "-XX:MaxHeapSize=128m -XX:ProfilesDumpFile=/tmp/node.iprof");
+            "-XX:MaxHeapSize=128m -XX:PrintFlags=/tmp/node.flags");
         assertEquals("-XX:MaxHeapSize=128m", cmd.get(1));
-        assertEquals("-XX:ProfilesDumpFile=/tmp/node.iprof", cmd.get(2));
+        assertEquals("-XX:PrintFlags=/tmp/node.flags", cmd.get(2));
         assertTrue(cmd.indexOf("daemon") > 2, cmd.toString());
         // Whatever the runtime is, nothing may sit between the executable and its own options.
         assertEquals(cmd.get(0), ProcessHandle.current().info().command().orElse("jailscale"));
