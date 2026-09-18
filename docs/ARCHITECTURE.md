@@ -2171,20 +2171,15 @@ went inactive. Under systemd the upgrade is `systemctl restart`, which costs a f
 nodes reconnect. `deploy/jailhub.service` therefore has no `ExecReload`. Making the two work
 together would need the listening sockets handed over rather than rebound, which is not implemented.
 
-**Readiness can be reported, and the reference unit does not ask for it.** The hub speaks the
-readiness half of `sd_notify`, so under `Type=notify` `systemctl start` returns when it is serving
-rather than when the process exists; on a first boot those are minutes of ACME apart. It is off by
-default because it is not free: `start` does not return until a certificate is installed and
-issuance retries for as long as that takes, so an ordinary first boot outlives systemd's 90-second
-`TimeoutStartSec` and the unit has to say `TimeoutStartSec=infinity` as well, or systemd kills the
-hub part-way through its first issuance and `Restart=on-failure` does it again forever. The
-notification is sent by running `systemd-notify`, because `NOTIFY_SOCKET` is an AF_UNIX *datagram*
-socket and the JDK will not open one, so the unit also needs `NotifyAccess=all` and the host needs
-**systemd 246 or newer** — a notification from a child that has already exited is one the manager
-cannot attribute to a unit and drops, and `systemd-notify` waiting for it to be processed is a 246
-feature (Ubuntu 20.04 has 245, RHEL 8 has 239). The exit status is 0 either way, so a hub cannot
-detect it; the unit just never leaves `activating`. `deploy/jailhub.service` lists the three lines
-and what each is for. None of it makes the hand-off compose with a unit.
+**Readiness is not reported.** The hub spoke the readiness half of `sd_notify` until 2026-09-18,
+opt-in under `Type=notify`, and the reference unit never turned it on: a first boot spends minutes
+in ACME before it serves, so the unit would have needed `TimeoutStartSec=infinity` too or systemd
+would kill the hub mid-issuance and `Restart=on-failure` would do it again forever; the message
+had to go through `systemd-notify` because the JDK will not open a datagram socket, which needed
+`NotifyAccess=all` and systemd 246. Code the shipped unit ignored was removed (#250), and a unit
+of your own that said `Type=notify` has to say `Type=simple` from this release, or it never leaves
+`activating`. `systemctl start` returns when the process exists, and the status page says when it
+serves.
 
 ### 13.1 A standby hub
 
@@ -3038,8 +3033,7 @@ say so and name the issue. An entry that does neither has not been through that 
   it, or with registration open (the default there is off), it waits for `jailhub promote`. With
   three records at the parent instead, the DNS change is the operator's too.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
-  is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
-  calls the unit started; the listening sockets are still rebound rather than handed over. Socket
+  is not zero-downtime; the listening sockets are rebound rather than handed over. Socket
   activation is decided work (§1.2, [#71](https://github.com/eth219/jailscale/issues/71)).
 - **Two hubs, not more.** The standby holds the store, so it can serve and be promoted; a third
   host would need a role without the store, which is designed, not built, and decided work
@@ -3077,21 +3071,6 @@ say so and name the issue. An entry that does neither has not been through that 
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
-- **The CLI copies a link to the clipboard only when its stdout is a terminal, and that is verified
-  on two of the three platforms that have a clipboard.** `Console.isTerminal()` is the question
-  asked, rather than `System.console() != null`, which since JDK 22 is non-null for a redirected
-  stream as well. The tests assert the negative direction everywhere — piped, nothing is copied —
-  and that is the direction that would still pass if the detection were broken and the feature
-  simply dead, so the positive direction has to be checked by hand against a real terminal.
-  Done on **darwin-arm64** and on **linux-arm64**, both on the native binary, the second under
-  `xvfb-run` with `script -q FILE -c` so that stdout is genuinely the pty: the CLI printed
-  `<- copied to clipboard`, `xclip` held the selection, and the clipboard contained exactly the
-  link that was printed. **windows-amd64 is unverified.** It is the platform where the feature is
-  most certainly live — `clip.exe` is in System32, so it is always found — and the hardest to test,
-  since there is no `script` and driving a ConPTY from CI is more machinery than a convenience
-  feature is worth. A Linux node is usually headless and has no `xclip` at all, so there the
-  feature is normally inactive whatever `isTerminal()` answers.
-
 - **A node's visitors are first come, first served, so one name can starve the others on it, and
   whether that is a delay or a blackout is decided by the neighbour's connection lifetime.** The
   bound of §9.3 is per node, and a node may serve up to `MAX_LINKS_PER_NODE` = 20 links; nothing

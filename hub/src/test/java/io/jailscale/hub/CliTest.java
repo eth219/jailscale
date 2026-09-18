@@ -51,14 +51,11 @@ import io.jailscale.proto.net.TestPorts;
  * by moving assertions in-process, which would give up the argument parsing, the process exit code
  * and the daemon spawn that are the point.
  *
- * <p>The child's stdout is a pipe, so the CLI does not touch the clipboard and these tests cannot
- * replace the clipboard of whoever runs them. That is the CLI's rule and not an arrangement here:
- * it copies only when someone is looking at the output. This was first attempted by emptying the
- * child's {@code PATH} so {@code pbcopy}/{@code xclip}/{@code clip.exe} could not be found, which
- * worked everywhere except the one platform nobody could test locally -- {@code CreateProcess}
- * searches System32 before {@code PATH}, and that is where {@code clip.exe} is, so the windows-2025
- * job failed against a comment claiming the copy could not happen "by construction". The PATH is
- * still emptied, now as a second lock on the same door rather than the only one.
+ * <p>The child's {@code PATH} is emptied, so that nothing the CLI prints can depend on a tool that
+ * happens to be on the machine running the suite. On Windows {@code CreateProcess} searches
+ * System32 before {@code PATH}, so an empty PATH is a weaker guarantee there. The one process the
+ * CLI starts on the paths this suite runs is its own daemon, on {@code up}; {@code admin} opens a
+ * browser and {@code service} runs the platform's service manager, and neither is run here.
  */
 @Timeout(180)
 class CliTest {
@@ -188,7 +185,7 @@ class CliTest {
         cmd.add(main.getName());
         cmd.addAll(args);
         ProcessBuilder pb = new ProcessBuilder(cmd);
-        // See the class comment: no pbcopy, no xclip, no clip.exe.
+        // See the class comment.
         pb.environment().put("PATH", emptyPath.toString());
         pb.environment().remove("JAILSCALE_DAEMON_OPTS");
         Process p = pb.start();
@@ -323,8 +320,7 @@ class CliTest {
         join();
 
         // The whole of what `open` prints, not a substring of it: this is the line the user reads,
-        // and one line is all of it into a pipe. A second line here means the clipboard was taken
-        // from a process nobody is watching, on whatever machine ran this.
+        // and one line is all of it.
         Run open = ok(cli("open", String.valueOf(app.getLocalPort()), "--name", "demo"));
         assertEquals("https://demo.hub.test:" + port + "  ->  127.0.0.1:" + app.getLocalPort(),
             open.out().strip(), open.all());

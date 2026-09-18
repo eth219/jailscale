@@ -105,9 +105,6 @@ public final class Main {
         HubConfig cfg = HubConfig.fromArgs(a);
         Hub hub = new Hub(cfg, a.flag("takeover"));
         hub.start();
-        // start() blocks until there is a certificate and 443 is bound, so this is the first moment
-        // the answer to "is the hub up" is yes (ARCHITECTURE.md §13).
-        SystemdNotify.ready();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 hub.close();
