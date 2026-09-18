@@ -118,7 +118,7 @@ public final class Main {
                     JsonObject r = call(cfg, b.build(), false);
                     if (r.optBool("gate", false)) {
                         String v = r.string("visitUrl");
-                        System.out.println("visit link: " + v + (copyToClipboard(v) ? "        (copied to clipboard)" : ""));
+                        System.out.println("visit link: " + v);
                     } else {
                         System.out.println("turned the gate off. anyone can now reach " + name + ".");
                     }
@@ -288,13 +288,9 @@ public final class Main {
             return;
         }
         String visit = r.optString("visitUrl", null);
-        String copied = visit != null ? visit : url;
         System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (gate on)" : ""));
         if (visit != null) {
             System.out.println("visit link: " + visit);
-        }
-        if (copyToClipboard(copied)) {
-            System.out.println("(" + (visit != null ? "visit link" : "link") + " copied to clipboard)");
         }
     }
 
@@ -341,7 +337,7 @@ public final class Main {
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
         System.out.println("created an invite.");
-        System.out.println("  link:  " + url + (copyToClipboard(url) ? "        <- copied to clipboard" : ""));
+        System.out.println("  link:  " + url);
         if (r.has("code")) {
             System.out.println("  code:  " + r.string("code") + "                             <- for reading out over the phone (10 min)");
         }
@@ -470,41 +466,4 @@ public final class Main {
         }
     }
 
-    /**
-     * Puts {@code text} on the clipboard, and says whether it got there so the caller can say so.
-     *
-     * <p>Only when someone is looking at the output. A clipboard is for a person about to paste,
-     * and this used to copy whenever the platform had a tool for it: {@code jailscale open 8080 |
-     * tee log} replaced the clipboard of whoever ran it, and so did the test suite, on any machine
-     * where the tool was findable -- which on Windows is every machine, because
-     * {@code CreateProcess} looks in System32 before PATH and that is where {@code clip.exe} is.
-     * {@code isTerminal} is the question that separates the two, and it has to be asked rather than
-     * inferred from {@code System.console() != null}, which since JDK 22 is non-null for a
-     * redirected stream as well.
-     */
-    private static boolean copyToClipboard(String text) {
-        java.io.Console console = System.console();
-        if (console == null || !console.isTerminal()) {
-            return false;
-        }
-        String os = HubLink.osName();
-        List<String> cmd = switch (os) {
-            case "macos" -> List.of("pbcopy");
-            case "linux" -> List.of("xclip", "-selection", "clipboard");
-            case "windows" -> List.of("clip.exe");
-            default -> null;
-        };
-        if (cmd == null) {
-            return false;
-        }
-        try {
-            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-            try (var out = p.getOutputStream()) {
-                out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            }
-            return p.waitFor() == 0;
-        } catch (IOException | InterruptedException e) {
-            return false;
-        }
-    }
 }

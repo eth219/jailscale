@@ -18,34 +18,15 @@
 # starting a second process that takes the listeners and lets the first exit. Under a unit that
 # first process is the one systemd tracks, so its exit stops the unit and takes the new process
 # down with the cgroup. Tried it: the hub went inactive. The hand-off is for operators who run
-# jailhub outside a unit; the readiness reporting below does not change that, it only moves when
-# systemd calls the unit started.
+# jailhub outside a unit.
 #
-# Readiness reporting is available and is deliberately not turned on here. jailhub can tell systemd
-# when it is actually serving, so that `systemctl start` returns then rather than as soon as the
-# process exists -- on a first boot those are minutes of ACME apart. Turning it on is three lines:
-#
-#   Type=notify
-#   NotifyAccess=all
-#   TimeoutStartSec=infinity
-#
-# All three, or it is worse than not doing it. jailhub does not return from startup until it has a
-# certificate, and issuance retries for as long as that takes: one failed self-check is 60s and one
-# validation is up to 120s, so an ordinary first boot is already past systemd's 90s default
-# TimeoutStartSec. Without `infinity` systemd kills the hub part-way through getting its first
-# certificate, and Restart=on-failure below does it again, forever.
-#
-# NotifyAccess=all is needed because the notification comes from a child process: NOTIFY_SOCKET is
-# an AF_UNIX datagram socket and the JDK will not open one, so jailhub runs systemd-notify. On a
-# host without systemd-notify the unit stays in `activating` although the hub is serving normally.
-#
-# And it needs systemd 246 or newer. A notification from a child that has already exited is one the
-# manager cannot attribute to a unit, so it drops it even with NotifyAccess=all; systemd-notify
-# avoids that by waiting for the message to be processed, which arrived in 246 along with the
-# --no-block switch that turns it off. Older systemd does not wait, so the readiness message is
-# lost: Ubuntu 20.04 has 245, Debian 10 has 241, RHEL 8 has 239. Combined with
-# TimeoutStartSec=infinity that is a `systemctl start` which never returns, so check
-# `systemctl --version` before turning any of this on.
+# Type=simple, so `systemctl start` returns when the process exists, not when it is serving; on a
+# first boot those are minutes of ACME apart, and the status page is what says which. A Type=notify
+# hub was tried and removed (#250): it needed TimeoutStartSec=infinity to survive its own first
+# issuance, NotifyAccess=all because the JDK cannot open the datagram socket, and systemd 246, and
+# this unit never asked for it. A unit of your own that says Type=notify has to go back to
+# Type=simple before this release: the hub no longer sends the message, so under Type=notify the
+# unit would stay `activating` forever, or be killed at TimeoutStartSec.
 
 [Unit]
 Description=jailhub — jailscale hub (SNI router, control channel, ACME)

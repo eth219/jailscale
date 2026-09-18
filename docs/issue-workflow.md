@@ -57,10 +57,11 @@ a decision. It sits beside the three the way `security` sits beside a type, and 
 can carry a label none of the three axes accounts for and still satisfy the sentence at the top of
 this section.
 
-**What is left** is the whole of it. #80 needs a real Windows console, because the feature only runs
-when `isTerminal()` is true. #81 needs a Windows machine for `schtasks`, a reboot and a logon —
-which is a machine and specifically not a console — and a `linux-amd64` box for the architecture its
-run did not cover; the Linux half that was reachable was done first, and while it was reachable this
+**What is left** is the whole of it. #80 needed a real Windows console, because the feature only ran
+when `isTerminal()` was true; it closed when the clipboard copy was removed (#250), which is the
+other way a remainder goes. #81 needs a Windows machine for `schtasks`, a reboot and a logon — which
+is a machine and specifically not a console — and a `linux-amd64` box for the architecture its run
+did not cover; the Linux half that was reachable was done first, and while it was reachable this
 label would have been wrong on it. So the label is about the remainder, and it comes off when a
 reachable part appears, the same way any label that disagrees with its body comes off.
 
@@ -399,8 +400,8 @@ comment — and name it at the stop, so a person reading the session's output se
 That silence is for an issue the label fits. A label that disagrees with its body is the case the
 paragraph above governs, and it is the work rather than a walk-past: the reading is the same body
 that paragraph already asks for, the label goes on or comes off, and the line saying why goes with
-it. The third run is the worked example in both directions. #80's remainder is a machine and the
-label belongs on it; #81's did not become one until the half that was reachable had been done and
+it. The third run is the worked example in both directions. #80's remainder was a machine and the
+label belonged on it until the feature was removed (#250); #81's did not become one until the half that was reachable had been done and
 merged, and a session that had walked past #81 in silence would have left that work undone.
 
 ### Each issue

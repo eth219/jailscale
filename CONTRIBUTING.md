@@ -93,7 +93,8 @@ to assume was not measured.
 
 - **English everywhere** — code, comments, docs, commit messages, CLI output.
 - **A test that can fail in the direction it claims.** A suite asserting only the negative case
-  passes just as well when the feature is dead. That is a real open issue here (#80).
+  passes just as well when the feature is dead. That was #80, and the feature went before the test
+  did.
 - **A new dependency is a design change**, not an implementation detail, and needs its own argument.
 - **A number in a document says where it came from**, on which platform, and what it does not cover.
   `docs/jsse-idle-cost/README.md` and `docs/name-starvation/README.md` are the precedent: each ends
