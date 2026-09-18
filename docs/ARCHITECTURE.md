@@ -2696,14 +2696,15 @@ binary either: v0.1.10 ships `jailscale-linux-amd64` at 27.1 MiB against `linux-
 
 *Which* file-backed pages is measured now, for the node at that first state, and the two figures are
 not two halves of one quantity. Of the 12.6 MB gap, **2.9 MB** is the binary's own executable
-mappings — 10,388 KB against arm64's 7,420. Separately, of the file-backed memory the amd64 process
-holds there, the 19.5 MB outside those mappings is **17.0 MB of the binary's non-executable
+mappings — 10,388 KB against arm64's 7,420. Separately, of the 19.5 MB the amd64 process holds
+there outside those mappings and under a path, **17.0 MB is the binary's non-executable
 mappings** — the rodata and the image heap, which is what "text and rodata" above means and what
 nothing had taken apart — and **2.5 MB that is not the binary at all**, 1.9 of it `libc.so.6`
 (#227). So this paragraph names the binary for 2.5 MB of the loader's and is right about the rest:
 27.2 MB of that state's 30.0 is resident under the binary, and 0.3 of the 0.7 the process owns sits
-inside the binary's own mappings as pages it has written. The 27.2 is resident memory and the 27.3
-below is the file, which are two different quantities that read alike here.
+inside the binary's own mappings as pages it has written, so the binary as it is on disk is 26.9 of
+the 30.0. The 30.0 and the 29.9 above are the same state in two runs of the same job. The 27.2 is
+resident memory and the 27.3 below is a file size, which are two quantities that read alike here.
 
 That the process holds more file-backed memory than the whole binary is the binary mapped more than
 once. At the joined state its mappings hold 31.1 MiB, of which 0.5 is anonymous — pages the image
