@@ -2,13 +2,25 @@ package io.jailscale.node;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.jailscale.proto.http.Http;
+import io.jailscale.proto.http.HttpException;
+import io.jailscale.proto.http.HttpRequest;
+import io.jailscale.proto.http.HttpResponse;
+import io.jailscale.proto.net.TestPorts;
 import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -57,18 +69,15 @@ class UpdatesTest {
     }
 
     private static Updates.Result result(String running, String tag, boolean newer, String error) {
-        return new Updates.Result(running, tag, newer, 0, error, 0, 0,
-            error != null ? Updates.Outcome.UNREACHABLE : newer ? Updates.Outcome.NEWER : Updates.Outcome.CURRENT);
-    }
-
-    /** The same outcome, with the pointer that named it past its expiry. */
-    private static Updates.Result stale(String running, String tag, boolean newer) {
-        return new Updates.Result(running, tag, newer, 0, null, 1_760_000_000_000L, 7, Updates.Outcome.STALE);
+        return new Updates.Result(running, tag, newer, 0, error,
+            error != null ? Updates.Outcome.UNKNOWN : newer ? Updates.Outcome.NEWER : Updates.Outcome.CURRENT);
     }
 
     @Test
     void everyOutcomeSaysSomethingUseful() {
-        assertEquals("jailscale 0.1.0 is the latest release.", result("0.1.0", "v0.1.0", false, null).line());
+        // "GitHub lists", not "is the latest release": which release is current is GitHub's word
+        // and nothing signs it, and the line says so rather than promising more than it knows.
+        assertEquals("jailscale 0.1.0 is the latest release GitHub lists.", result("0.1.0", "v0.1.0", false, null).line());
         assertTrue(result("0.1.0", "v0.2.0", true, null).line().contains("0.2.0 is out"));
         assertTrue(result("0.1.0", "v0.2.0", true, null).line().contains(Updates.PAGE));
         assertEquals("could not check for updates: no route to host",
@@ -80,34 +89,181 @@ class UpdatesTest {
     }
 
     @Test
-    void aStaleIndexIsNeverReportedAsBeingUpToDate() {
-        // The whole point of the expiry (docs/update-freshness): withholding an upgrade is invisible
-        // as long as a node answers "you are the latest release" to a pointer nobody is re-issuing.
-        // What it can honestly say is that it cannot tell, and since when.
-        String line = stale("0.1.0", "v0.1.0", false).line();
-        assertFalse(line.contains("is the latest release"));
-        assertTrue(line.startsWith("cannot tell whether jailscale 0.1.0 is current"), line);
-        assertTrue(line.contains("2025-10-09"), line); // the expiry, so "since when" is answerable
-        // A stale pointer is not evidence against the release it names, only against it being the
-        // last one, so an upgrade it announces is still announced -- with the caveat attached.
-        String newer = stale("0.1.0", "v0.2.0", true).line();
-        assertTrue(newer.startsWith("jailscale 0.2.0 is out"), newer);
-        assertTrue(newer.contains("there may be something newer still"), newer);
-    }
-
-    @Test
     void theUpdateUrlIsNotSomethingAPeerCanChoose() throws Exception {
         // The hub is trusted to route bytes, not to say what this node should run (§11.2). If this
         // ever becomes configurable, a compromised hub can point every node at a binary it picked --
-        // and the pointer that says which release is current is the first thing it would move.
-        assertEquals("https://github.com/eth219/jailscale/releases/download/release-index/latest.txt",
-            Updates.assetUrl(Updates.DOWNLOADS, Updates.INDEX_TAG, Updates.INDEX).toString());
-        assertEquals("https", Updates.assetUrl(Updates.DOWNLOADS, Updates.INDEX_TAG, Updates.INDEX).getScheme());
+        // and the page that says which release is current is the first thing it would move.
+        assertEquals("https://github.com/eth219/jailscale/releases/latest", Updates.PAGE);
+        assertEquals("https://github.com/eth219/jailscale/releases/tag/", Updates.TAG_PAGE);
+        assertEquals("https", URI.create(Updates.PAGE).getScheme());
         // And the same for where a download comes from and the key it must be signed with: the pair
         // production uses is built from two constants, so there is no configuration that moves it.
         assertEquals("https://github.com/eth219/jailscale/releases/download/", Updates.DOWNLOADS);
         assertEquals(Updates.DOWNLOADS, Updates.Source.compiledIn().base());
         assertEquals(ReleaseKey.PUBLIC_KEYS, Updates.Source.compiledIn().keys());
+    }
+
+    // --- what GitHub's answer is read as ---------------------------------------------------------
+
+    /** 2026-01-01T00:00:00Z. */
+    private static final long NOW = 1_767_225_600_000L;
+
+    /** What releases/latest answers: a redirect to the newest release's own page. */
+    private static Updates.Latest redirect(String location) {
+        return () -> HttpResponse.redirect(location);
+    }
+
+    /** {@link Updates#check} as the CLI calls it, with the compiled-in key list and a canned answer. */
+    private static Updates.Result check(String running, Updates.Latest latest) {
+        return Updates.check(running, latest, ReleaseKey.PUBLIC_KEYS, NOW);
+    }
+
+    @Test
+    void aHigherTagInTheRedirectIsNewerAndTheSameTagIsCurrent() {
+        Updates.Result r = check("0.1.0", redirect(Updates.TAG_PAGE + "v0.2.0"));
+        assertEquals(Updates.Outcome.NEWER, r.outcome(), r.line());
+        assertTrue(r.newer());
+        assertEquals("v0.2.0", r.tag());
+        assertEquals("0.2.0", r.latest());
+        assertNull(r.error());
+        assertEquals(NOW, r.checkedAt());
+        assertTrue(r.line().startsWith("jailscale 0.2.0 is out; this is 0.1.0."), r.line());
+
+        Updates.Result same = check("0.2.0", redirect(Updates.TAG_PAGE + "v0.2.0"));
+        assertEquals(Updates.Outcome.CURRENT, same.outcome(), same.line());
+        assertFalse(same.newer());
+        assertEquals("v0.2.0", same.tag());
+        assertNull(same.error());
+        assertEquals("jailscale 0.2.0 is the latest release GitHub lists.", same.line());
+        // A build ahead of the newest release -- the snapshot this is developed on -- is not
+        // behind, and not an error either; and it is not "the latest release", so the line does
+        // not say it is.
+        Updates.Result ahead = check("0.3.0-SNAPSHOT", redirect(Updates.TAG_PAGE + "v0.2.0"));
+        assertEquals(Updates.Outcome.CURRENT, ahead.outcome(), ahead.line());
+        assertFalse(ahead.newer());
+        assertEquals("jailscale 0.3.0-SNAPSHOT is not behind the latest release GitHub lists, 0.2.0.", ahead.line());
+        // A relative Location resolves against the page that was asked, which is a way GitHub
+        // could legitimately spell the same answer.
+        assertEquals("v0.2.0", check("0.1.0", redirect("/eth219/jailscale/releases/tag/v0.2.0")).tag());
+    }
+
+    @Test
+    void aBuildWithNoSigningKeyDoesNotAnnounceWhatItCouldNotCheck() {
+        // --download refuses on an empty key list; announcing NEWER first would promise the check
+        // it then cannot make, so the announcement is refused one step earlier, whatever GitHub said.
+        Updates.Result r = Updates.check("0.1.0", redirect(Updates.TAG_PAGE + "v0.2.0"), List.of(), NOW);
+        assertEquals(Updates.Outcome.UNKNOWN, r.outcome(), r.line());
+        assertFalse(r.newer());
+        assertNull(r.tag());
+        assertTrue(r.line().contains("carries no release signing key"), r.line());
+        // And the list this build compiles in is not empty, or the check above is the whole product.
+        assertFalse(ReleaseKey.PUBLIC_KEYS.isEmpty());
+    }
+
+    @Test
+    void noAnswerIsUnknownRatherThanUpToDate() {
+        // "You are the latest release" is the sentence a withheld upgrade produces, so every way
+        // of not getting an answer has to come out as something other than that -- and other than
+        // "newer", which would send --download after a tag nobody named.
+        Updates.Latest down = () -> {
+            throw new IOException("no route to host");
+        };
+        Updates.Result r = check("0.1.0", down);
+        assertEquals(Updates.Outcome.UNKNOWN, r.outcome());
+        assertFalse(r.newer());
+        assertNull(r.tag());
+        assertEquals("could not check for updates: no route to host", r.line());
+        List<Updates.Latest> odd = List.of(
+            () -> new HttpResponse(302), // a redirect with nowhere in it
+            () -> HttpResponse.redirect("   "),
+            () -> HttpResponse.html(200, "<html>"), // a page where the redirect should be
+            () -> HttpResponse.text(503, "later"),
+            // 3xx with a Location that is not a redirect a download would follow either: the one
+            // rule, HttpCall.isRedirect, and not a range check that lets these two through.
+            () -> new HttpResponse(300).header("Location", Updates.TAG_PAGE + "v0.2.0"),
+            () -> new HttpResponse(305).header("Location", Updates.TAG_PAGE + "v0.2.0"),
+            () -> {
+                throw new HttpException(429, "slow down");
+            },
+            () -> {
+                throw new IllegalStateException("a bug, not a network");
+            });
+        for (Updates.Latest o : odd) {
+            Updates.Result u = check("0.1.0", o);
+            assertEquals(Updates.Outcome.UNKNOWN, u.outcome(), u.line());
+            assertFalse(u.newer(), u.line());
+            assertNull(u.tag(), u.line());
+            assertNotNull(u.error(), u.line());
+            assertTrue(u.line().startsWith("could not check for updates: "), u.line());
+        }
+    }
+
+    @Test
+    void onlyARedirectToAReleasePageNamesARelease() {
+        // The tag is pasted into a download URL, so a Location that is not exactly a release page
+        // under this repository is not an answer -- not a login page, not the releases list, not a
+        // release on another host, and not a tag with a path step in it.
+        for (String elsewhere : List.of(
+                "https://github.com/login?return_to=%2Feth219%2Fjailscale%2Freleases%2Flatest",
+                "https://github.com/eth219/jailscale/releases",
+                "https://github.com/eth219/jailscale/releases/",
+                "https://github.com/eth219/jailscale/releases/tag/",
+                "https://github.com/eth219/jailscale/releases/download/v0.2.0/jailscale.jar",
+                "https://github.com/eth219/other/releases/tag/v0.2.0",
+                "https://example.com/eth219/jailscale/releases/tag/v0.2.0",
+                "http://github.com/eth219/jailscale/releases/tag/v0.2.0",
+                "https://github.com/eth219/jailscale/releases/tag/v0.2.0/../../../evil",
+                "https://github.com/eth219/jailscale/releases/tag/../download/v9",
+                "https://github.com/eth219/jailscale/releases/tag/v0.2.0?x=1",
+                "https://github.com/eth219/jailscale/releases/tag/" + "v".repeat(65),
+                "::not a url::")) {
+            Updates.Result r = check("0.1.0", redirect(elsewhere));
+            assertEquals(Updates.Outcome.UNKNOWN, r.outcome(), elsewhere + " -> " + r.line());
+            assertFalse(r.newer(), elsewhere);
+            assertNull(r.tag(), elsewhere);
+        }
+    }
+
+    @Test
+    void aDevBuildCannotTellAndSaysSo() {
+        // A source build has nothing to compare with. Not "current" -- that would report a dev
+        // build up to date for ever -- and not a network failure either; what GitHub said is kept.
+        Updates.Result r = check("dev", redirect(Updates.TAG_PAGE + "v0.2.0"));
+        assertEquals(Updates.Outcome.UNKNOWN, r.outcome());
+        assertFalse(r.newer());
+        assertEquals("v0.2.0", r.tag());
+        assertTrue(r.line().startsWith("could not check for updates: cannot compare this build (dev)"), r.line());
+    }
+
+    @Test
+    void theRedirectIsReadAndNotFollowed() throws Exception {
+        // GitHub answers releases/latest with a 302 to the release's own page, and the tag is in
+        // the Location. Following it would fetch a page of HTML for nothing; here it would also
+        // leave loopback for github.com, find no v9.9.9 there, and come out UNKNOWN rather than
+        // NEWER. And a HEAD, because nothing of a body is wanted from either answer.
+        AtomicReference<String> asked = new AtomicReference<>();
+        try (ServerSocket ss = TestPorts.listen(5)) {
+            Thread t = new Thread(() -> {
+                try (Socket s = ss.accept()) {
+                    HttpRequest req = Http.readRequest(s.getInputStream(), 0);
+                    asked.set(req.method() + " " + req.path());
+                    s.getOutputStream().write(("HTTP/1.1 302 Found\r\nLocation: " + Updates.TAG_PAGE + "v9.9.9"
+                        + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
+                    s.getOutputStream().flush();
+                } catch (Exception e) {
+                    asked.set("failed: " + e);
+                }
+            }, "canned-latest");
+            t.setDaemon(true);
+            t.start();
+            URI page = URI.create("http://" + ss.getInetAddress().getHostAddress() + ":" + ss.getLocalPort()
+                + "/eth219/jailscale/releases/latest");
+            Updates.Result r = check("0.1.0", Updates.Latest.at(page));
+            t.join(5_000);
+            assertEquals("HEAD /eth219/jailscale/releases/latest", asked.get());
+            assertEquals(Updates.Outcome.NEWER, r.outcome(), r.line());
+            assertEquals("v9.9.9", r.tag());
+        }
     }
 
     // --- what a download is checked against ------------------------------------------------------
@@ -184,7 +340,7 @@ class UpdatesTest {
     void aTagFromTheNetworkDoesNotGetToSteerTheUrl() throws Exception {
         assertEquals("https://github.com/eth219/jailscale/releases/download/v0.2.0/SHA256SUMS.txt",
             Updates.assetUrl(Updates.DOWNLOADS, "v0.2.0", Updates.SUMS).toString());
-        // tag_name is whatever the release index says, and it is pasted into a URL. A relative step
+        // The tag is whatever GitHub's redirect said, and it is pasted into a URL. A relative step
         // or a second host in there would leave the releases path while looking like a version.
         assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "../../../evil", "x"));
         assertThrows(IOException.class, () -> Updates.assetUrl(Updates.DOWNLOADS, "v0.2.0/../..", "x"));

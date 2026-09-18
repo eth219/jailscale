@@ -102,10 +102,10 @@ to assume was not measured.
 - **A change that makes a document untrue fixes the document.** The sentence being written is
   covered by the bullet above; the sentence that was already there and stops being right is not, and
   it is the one nobody is looking at. `ARCHITECTURE.md` §15 is where this costs the most — it is
-  what `CLAUDE.md` points a reader at to find out what the system cannot do, and seven of its
-  entries are limits that name the issue which would remove them (#63, #65, #70, #71, #72, #74,
-  #75). Building one and leaving §15 stating it is how that document becomes fiction a paragraph at
-  a time, and §14 is the same for a number. Nothing can check this — no test can tell that a
+  what `CLAUDE.md` points a reader at to find out what the system cannot do, and five of its
+  entries are limits that name the issue which would remove them (#63, #70, #71, #72, #75).
+  Building one and leaving §15 stating it is how that document becomes fiction a paragraph at a
+  time, and §14 is the same for a number. Nothing can check this — no test can tell that a
   sentence became false — which is why it is asked for at the pull request and not by CI.
 - **A timing a test needs to move goes on the config record, not in a static and not in a new
   constructor parameter.** `HubConfig.Tuning` and `NodeConfig.Tuning` are where they live, both

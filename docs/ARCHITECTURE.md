@@ -55,7 +55,7 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2), and `service install` is verified on macOS and `linux-arm64`, not on `linux-amd64` and not on Windows ([#81](https://github.com/eth219/jailscale/issues/81)) |
 | Availability | two hubs, a delegated subdomain, the standby serving throughout, promotion without a person (§13) | promotion is automatic only with a witness node attached to the standby (§13.5) |
 | Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
-| Upgrading | a signed release index, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
+| Upgrading | a check against GitHub's newest release, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | which release is current is GitHub's unsigned word and only what is in it is signed (§15), the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
 | Joining | invite links, machine keys, no account anywhere (§10) | the hub is what decides name ownership, and a compromised one can impersonate every name under its domain (§11.2) |
 
 ### 1.2 Decided, and not built
@@ -69,8 +69,6 @@ behind it, so that "not built" is never read as "not wanted".
 | tls-alpn-01, so port 80 stops being required for your own domains | it makes 80 a preference; http-01 stays, since not every CA offers the alternative | [#70](https://github.com/eth219/jailscale/issues/70) |
 | A third hub in a store-less relay role | designed in [docs/ha-design](ha-design/README.md) and unbuilt; two hubs is the current ceiling, not the intended one | [#72](https://github.com/eth219/jailscale/issues/72) |
 | systemd socket activation | it is the one mechanism that also helps the single-hub operator, who is most deployments | [#71](https://github.com/eth219/jailscale/issues/71) |
-| Installing a verified upgrade, opt-in and off by default | a fleet should not need somebody to type something on every node; the default stays manual | [#74](https://github.com/eth219/jailscale/issues/74) |
-| A minimum release-index sequence compiled into the binary | a CLI-only install has no stored floor and never will, so the floor has to arrive with the binary | [#65](https://github.com/eth219/jailscale/issues/65) |
 | A gauge for the soonest certificate expiry among absent nodes | the lapse the node cannot report is one the hub can already see, and alerting can watch a gauge | [#75](https://github.com/eth219/jailscale/issues/75) |
 
 ### 1.3 Not supported
@@ -1348,12 +1346,13 @@ are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `n
 what the OS already has (a launchd agent; a systemd unit, `systemctl --user` or a system unit when
 the installer is root; or a logon scheduled task) with no service wrapper.
 
-**`update` reports; `update --download` fetches; neither installs.** The plain form reads the
-signed pointer below, prints the version it names and where to get it, and the daemon does the same
-once a day so `status` carries the answer without anyone asking. The check runs in the CLI process,
-so it answers while the daemon is down, and a check that could not be made is an error like any
-other command's: the reason goes to stderr and the exit status is 1, so a script can tell "up to
-date" from "could not tell" -- a distinction the pointer's expiry gives something to say.
+**`update` reports; `update --download` fetches; neither installs.** The plain form asks GitHub
+which release is newest, prints the version it names and where to get it, and the daemon does the
+same once a day so `status` carries the answer without anyone asking. The check runs in the CLI
+process, so it answers while the daemon is down, and a check that could not be made is an error like
+any other command's: the reason goes to stderr and the exit status is 1, so a script can tell "up to
+date" from "could not tell". The answer is GitHub's word and the line says so; what is signed is
+what is in the release, below.
 
 **What `--download` adds is the checking, not the installing.** It works out which asset this build
 should run — target from `os.name` and `os.arch`, or `jailscale.jar` when this is not a native image
@@ -1413,70 +1412,42 @@ published the binaries proves that the download was not corrupted on the way and
 produced it: whoever could replace the binary could replace the list beside it. So the release
 workflow leaves a draft, and `tools/sign-release.sh` — run on a machine that is not the pipeline,
 with a key the pipeline cannot reach — downloads every asset, re-hashes it against `SHA256SUMS.txt`,
-checks that the key it is about to sign with is the one the previous release compiled in, signs
-that file and publishes. **"Published" is made to mean "signed"** rather than left as a convention
-the web UI's Publish button does not know: `published.yml` runs `tools/verify-release.sh` the
-moment a release is published, against the keys that tag's own `ReleaseKey.java` lists, and a
-release that fails is put back into draft. Nodes no longer read `releases/latest` at all — they
-read the signed pointer below, which no unsigned release can move — so what that window now bounds
-is what a person following a link would see, not what a node would install. The same check is what lets `:latest` on
-GHCR move — after it, and after the tag push's image build has finished, which runs on its own
-clock. A release tag has to match `vMAJOR.MINOR.PATCH[-suffix]`, checked before the four native
-builds and again by the signing script; the rule is written once, in `tools/release-keys.sh`,
-because the hyphen in it is what marks a pre-release for the workflow and for `Updates.compare`
-alike, and a tag outside the grammar would have been a full release every node reports "cannot
-compare" on. The public half is compiled into the binary, like `DOWNLOADS` and the pointer's own
-tag below, and for the same reason (§11.2). A build that carries no key refuses to download rather than falling back to the checksum
-alone; the check that cannot be made is not quietly skipped.
+checks that the key it is about to sign with is the one the previous release compiled in, signs that
+file and publishes. **"Published" is made to mean "signed"** rather than left as a convention the
+web UI's Publish button does not know: `published.yml` runs `tools/verify-release.sh` the moment a
+release is published, against the keys that tag's own `ReleaseKey.java` lists, and a release that
+fails is put back into draft. `releases/latest` never shows a draft, so the window in which a node
+could be told of an unsigned release is the seconds this takes — and `--download` would refuse it
+anyway. The same check is what lets `:latest` on GHCR move — after it, and after the tag push's
+image build has finished, which runs on its own clock. A release tag has to match
+`vMAJOR.MINOR.PATCH[-suffix]`, checked before the four native builds and again by the signing
+script; the rule is written once, in `tools/release-keys.sh`, because the hyphen in it is what marks
+a pre-release for the workflow and for `Updates.compare` alike, and a tag outside the grammar would
+have been a full release every node reports "cannot compare" on. The public half is compiled into
+the binary, like `DOWNLOADS` and `PAGE`, and for the same reason (§11.2). A build that carries no
+key refuses to download rather than falling back to the checksum alone; the check that cannot be
+made is not quietly skipped.
 
-**A signed pointer says which release is current, and `update` reads it.**
-`RELEASE.txt` says which release it *is*, and nothing used to say which one is *current*.
-`latest.txt`, under
-the fixed `release-index` pre-release, is that missing sentence: a sequence number, the tag, and an
-expiry, signed with the same key. `tools/sign-release.sh` moves it forward whenever it publishes a
-full release — never backwards, and never onto a draft or a pre-release — and `tools/refresh-index.sh`
-re-issues it between releases, because an expiry is only worth what re-issuing it is. The sequence
-is taken from the published pointer and incremented, so a fetch that fails stops the script rather
-than starting a new sequence. A sequence only ever starts where a person typed
-`refresh-index.sh --first`, which is also what puts the first pointer up at all.
-
-**What the node does with it.** `check` fetches `latest.txt` and its signature, verifies the
-signature against the same compiled-in key list a download is checked with, and takes the tag from
-there — so the version a node announces is now authenticated, where it used to come from an
-unsigned `tag_name`. That API index is gone rather than kept as a fallback: falling back to the
-unsigned answer is the check being skipped by default, which is the shape §9.4 refuses everywhere
-else. A build with no key cannot check at all and says so, as it already refused to download.
-**An expired pointer is not "up to date"** — it is "cannot tell whether this is current", with the
-date, because "you are the latest release" is exactly the sentence a withheld upgrade produces, and
-saying it is how the withholding stays invisible. It is deliberately **not** a reason to refuse a
-download: the signature, the tag binding and never-below-running all still hold over a stale
-pointer, so refusing would forbid a genuine upgrade to avert a risk the refusal does not reduce.
-The node's clock is allowed to be wrong for the same reason — the worst a bad one does is report
-"cannot tell".
-
-**The floor is what makes the expiry a defence rather than a notice.** `update.json`, beside the
-state file, holds the highest `seq` this node has accepted, and a pointer below it is refused with
-what it said and what this node has already seen. Without it, whoever can publish can put an old —
-genuinely signed, so every other check passes — pointer back up and hold a node on the release it
-names. It is written only after every other check has passed, under a lock the other writer takes too —
-the daemon's daily check and a `jailscale update` in a terminal are two processes on one file, and
-this is the first file in the state directory that the daemon lock does not already serialise — and
-kept beside `node.json` rather than inside it: `update` runs in the CLI process so that it
-answers while the daemon is down, and a second writer on the file that holds the MachineKey is not a
-race worth introducing for a counter. A node with nowhere to keep it still checks — there the floor
-is the one it has always had, the version this binary is — and a file that cannot be read is rebuilt
-from the next pointer that verifies rather than being fatal, because whoever could corrupt it is
-already on the machine as that user.
-
-**Both ends say it before it lapses.** Fourteen days out, `update` adds a line on stderr and the
-daemon logs one a day -- independent of what the check concluded, because a pointer can name an
-upgrade and be about to expire, and only the second has nobody else watching it. The nightly `index`
-job in `ci.yml` checks the published pointer from outside, which is the reminder that does not
-depend on anyone running a node: it annotates the run at the same fortnight and **fails** once the
-pointer has expired or stops verifying. It annotates rather than fails for the fortnight on purpose
--- a nightly build that is red for fourteen days running is a build people stop reading, and the
-thing that has to happen in those fourteen days is a person's. Re-issuing is that person at a laptop
-calling KMS, so a warning that arrives after the fact is not a warning.
+**Which release is current is GitHub's word, and that is a decision.** `RELEASE.txt` says which
+release it *is*; which one is *current* comes from `releases/latest`, which answers with a redirect
+to the newest full release's own page, and `check` reads the tag out of that redirect without
+following it — a HEAD, no body, no API token, no JSON. Nothing signs that answer. What it can
+therefore not promise is that the release it names is the newest that exists: whoever controls the
+download host can keep naming an older, genuinely signed release, which is the one attack §15
+records. What bounds it is that a node is never moved below what it runs and that `--download`
+verifies everything about the release it was pointed at, so this withholds an upgrade rather than
+forcing a downgrade — and the same party could equally delete the newer release. A signed pointer
+that closed the gap was built and then removed on 2026-09-18
+([#254](https://github.com/eth219/jailscale/issues/254)): it cost a pre-release re-issued every
+ninety days by a person with the signing key, a nightly job whose purpose was to notice when that
+had been forgotten, a floor file on every node, and about 2,800 lines, against a bound on a party
+who already had an equivalent move. That is a maintenance schedule for a project with one operator,
+and the schedule was the bigger risk. The pointer that is up stays up until it expires on 2026-12-14
+and is deleted after that, never re-issued: a node on v0.1.7–v0.1.10 keeps reading it until then and
+afterwards says "cannot tell", which is what this section promised for an expired pointer, while a
+node that upgrades stops reading it at once. A build with no key still refuses to download — and,
+one step earlier, does not announce a release it could not check — and a `dev` build still says it
+cannot compare rather than that it is current.
 
 **The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
 key that has to move: every binary in the field accepts that one and nothing else, so publishing
@@ -2957,23 +2928,19 @@ say so and name the issue. An entry that does neither has not been through that 
 - **Upgrading stops one step short of automatic.** `jailscale update`, and the daemon's daily check
   behind `status`, say that a newer release exists; `update --download` fetches it and checks it
   against a signed `RELEASE.txt` (§9.4); the command that puts it in place is printed for the
-  operator to run. An opt-in install, off by default, is decided work
-  (§1.2, [#74](https://github.com/eth219/jailscale/issues/74)); installing by default is not (§1.3). A binary released before the signing key existed carries no key and refuses to
-  download at all, so the first release able to verify another is the one after the key was
-  compiled in.
-- **Withholding an upgrade is bounded now, not impossible.** Which release is current comes from a
-  signed pointer (§9.4) rather than from an unsigned `releases/latest`, so the version a node
-  announces is authenticated; the pointer expires, and past that a node says it cannot tell instead
-  of saying it is up to date; and a sequence below the highest it has recorded is refused, so an old
-  pointer cannot be put back up in front of a node that has seen a later one. What remains is **first
-  contact**: a node with no floor yet -- a fresh install -- has nothing to compare with, and can be
-  handed any genuinely signed, unexpired pointer, so it can be started on an older release and kept
-  there until that pointer expires. What bounds the damage throughout is that a node is never moved
+  operator to run. Installing, by default or opt-in, is not planned (§1.3): an install step, if
+  wanted later, is a new question against the check as it now is. A binary released before the
+  signing key existed carries no key and refuses to download at all, so the first release able to
+  verify another is the one after the key was compiled in.
+- **Withholding an upgrade is not prevented.** Which release is current is GitHub's word: an
+  unsigned `releases/latest`, read from its redirect (§9.4). So whoever controls the download host
+  can keep a node on an older, genuinely signed release for as long as they keep naming it, and a
+  node has nothing that would tell it so. What bounds the damage is that a node is never moved
   below what it runs (`newer` is strictly above the running version) and the binary installed is
-  always the version announced, so this withholds an upgrade rather than forcing a downgrade, and
-  the same party could equally delete the newer release. A minimum sequence compiled into the binary,
-  which gives a fresh install and a CLI-only one a floor, is decided work
-  (§1.2, [#65](https://github.com/eth219/jailscale/issues/65)).
+  always the version announced, verified against the maintainer's signature, so this withholds an
+  upgrade rather than forcing a downgrade — and the same party could equally delete the newer
+  release. A signed pointer that bounded this further was built and removed (§9.4 says why); it is
+  not planned again.
 - **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
   sides at a third of the lifetime remaining. When it does not happen the node logs the name and
   the time left once a day inside the last fortnight, the hub says how long the installed wildcard

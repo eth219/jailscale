@@ -82,7 +82,7 @@ public final class Main {
                 // last compiled against, not the one `proto` holds now. A clean build is what
                 // makes them the same, and a clean build is what CI and every release do.
                 case "version" -> System.out.println("jailscale " + Version.string() + " (protocol " + Message.PROTO + ")");
-                case "update" -> update(cfg, a);
+                case "update" -> update(a);
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
@@ -150,40 +150,27 @@ public final class Main {
      * {@code update [--download]}. In this process rather than through the daemon: a node that is
      * down is exactly when someone asks, and the check needs nothing the daemon holds.
      *
-     * <p>{@code --download} stops at a verified file on disk and the command that installs it
-     * (ARCHITECTURE.md §9.4). What it removes is the part of installing by hand that goes wrong
-     * quietly -- picking the right target, and checking a checksum in a way that can report success
-     * for having checked nothing. What it deliberately leaves is the step that needs a privilege
-     * this process does not have.
+     * <p>Which release is current is GitHub's word -- {@code releases/latest}, unsigned -- and the
+     * output says so. {@code --download} stops at a verified file on disk and the command that
+     * installs it (ARCHITECTURE.md §9.4): what is in the release is checked against the
+     * maintainer's signature, which is the part of installing by hand that goes wrong quietly --
+     * picking the right target, and checking a checksum in a way that can report success for
+     * having checked nothing. What it deliberately leaves is the step that needs a privilege this
+     * process does not have.
      */
-    private static void update(NodeConfig cfg, Args a) throws Exception {
-        // The config directory is where the highest release-index sequence this node has seen is
-        // kept (docs/update-freshness). It is passed even though this command talks to no daemon:
-        // the floor belongs to the node, not to whichever process happened to ask.
-        Updates.Result r = Updates.check(Version.string(), cfg.updateFile());
-        if (!r.cannotTell() && r.error() != null) {
-            throw new IOException(r.line()); // like every other command: stderr, exit 1
+    private static void update(Args a) throws Exception {
+        Updates.Result r = Updates.check(Version.string());
+        if (r.error() != null) {
+            // No answer -- GitHub unreachable, or a `dev` build with nothing to compare -- is an
+            // error like every other command's: stderr, exit 1, so a script can tell it from "up to
+            // date". Not a refusal of anything: nothing was checked, so nothing failed a check.
+            throw new IOException(r.line());
         }
-        // One table, rather than a policy per outcome. A node that cannot say whether what it runs
-        // is current -- an expired pointer, a clock that disagrees -- has not answered the question,
-        // so the line goes to stderr; but it has not failed at anything either, so the exit status
-        // follows the work that was asked for. Nothing to do and no answer is the one case a script
-        // has to be able to tell from "up to date", and that is the one that exits 1.
-        //
-        // Staleness is deliberately not a reason to refuse a download: the signature, the tag
-        // binding and never-below-running all still hold over a stale pointer, so refusing would
-        // forbid a genuine upgrade to avert a risk the refusal does not reduce (docs/update-freshness).
-        (r.cannotTell() ? System.err : System.out).println(r.line());
-        // The answer is good and stays on stdout; this is about the answer running out, so it goes
-        // to stderr and changes no exit status. A node whose operator is also the maintainer is the
-        // reminder that the pointer needs re-issuing (docs/update-freshness, step 5).
-        String soon = r.warning(System.currentTimeMillis());
-        if (soon != null) {
-            System.err.println(soon);
-        }
+        System.out.println(r.line());
         if (!a.flag("download") || !r.newer()) {
-            if (r.cannotTell() && !r.newer()) {
-                System.exit(1);
+            if (r.newer()) {
+                System.out.println("that it is the newest is GitHub's word; `update --download` checks what"
+                    + " is in it against the maintainer's signature.");
             }
             return; // nothing to fetch: there is no newer release, or nobody asked for it
         }
@@ -208,6 +195,8 @@ public final class Main {
         System.out.println("verified    sha256 " + d.sha256());
         System.out.println("            against a " + Updates.MANIFEST + " for " + r.tag()
             + " signed by release key " + d.key());
+        System.out.println("            (that " + r.tag() + " is the newest release is GitHub's word;"
+            + " what is in it is the signature's)");
         System.out.println();
         System.out.println("install it with:");
         System.out.println("  " + Updates.installCommand(d.file(), Updates.self(), Updates.windows()));
