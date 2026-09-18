@@ -1068,13 +1068,15 @@ is a precondition**; `--http-listen none` means user domains are refused.
 
 ### 8.4 Raw TCP and UDP ports
 
-Clients that do not speak TLS (SSH, game servers, plaintext databases, DNS, WireGuard) send no SNI
-and cannot be told apart by name, so the hub assigns **a port instead of a name**, the same shape as
-ngrok's tcp mode or frp's tcp and udp types.
+Clients that do not speak TLS (SSH, plaintext databases, DNS) send no SNI and cannot be told apart
+by name, so the hub assigns **a port instead of a name**, the same shape as ngrok's tcp mode or frp's
+tcp and udp types. The UDP side is for request-reply protocols; the carrier is the node's one TCP
+connection, so WireGuard and game netcode get delivery they can rely on and timing they cannot, and
+are out of scope (§1.3).
 
 ```
 $ jailscale open 22 --tcp      ->  tcp://hub.example.com:10042  ->  127.0.0.1:22
-$ jailscale open 51820 --udp   ->  udp://hub.example.com:10043  ->  127.0.0.1:51820
+$ jailscale open 5353 --udp    ->  udp://hub.example.com:10043  ->  127.0.0.1:5353    # request-reply UDP, DNS here
 $ jailscale open 22 --tcp --port 10022      # request a specific port in the range
 ```
 

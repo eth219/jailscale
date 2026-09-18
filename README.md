@@ -148,7 +148,7 @@ Other things a node can do:
 ```sh
 jailscale open 3000 --gate                    # visitors need a one-time link
 jailscale open 22 --tcp                       # a raw TCP port, no TLS
-jailscale open 51820 --udp                    # a raw UDP port, carried over TCP
+jailscale open 5353 --udp                     # a raw UDP port for request-reply traffic (DNS, here), carried over TCP
 jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
 jailscale verify                              # check that this node, not the hub, terminated the TLS
 jailscale update                              # say whether a newer release is out; never installs it
