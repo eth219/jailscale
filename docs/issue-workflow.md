@@ -401,8 +401,8 @@ That silence is for an issue the label fits. A label that disagrees with its bod
 paragraph above governs, and it is the work rather than a walk-past: the reading is the same body
 that paragraph already asks for, the label goes on or comes off, and the line saying why goes with
 it. The third run is the worked example in both directions. #80's remainder was a machine and the
-label belonged on it until the feature was removed (#250); #81's did not become one until the half that was reachable had been done and
-merged, and a session that had walked past #81 in silence would have left that work undone.
+label belonged on it until the feature was removed (#250); #81's did not become one until the half
+that was reachable had been done and merged, and a session that had walked past #81 in silence would have left that work undone.
 
 ### Each issue
 

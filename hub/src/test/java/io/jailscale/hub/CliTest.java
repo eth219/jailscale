@@ -53,9 +53,9 @@ import io.jailscale.proto.net.TestPorts;
  *
  * <p>The child's {@code PATH} is emptied, so that nothing the CLI prints can depend on a tool that
  * happens to be on the machine running the suite. On Windows {@code CreateProcess} searches
- * System32 before {@code PATH}, so an empty PATH is a weaker guarantee there; none of the commands
- * this suite runs starts a process ({@code admin} opens a browser and {@code service} runs the
- * platform's service manager, and neither is run here).
+ * System32 before {@code PATH}, so an empty PATH is a weaker guarantee there. The one process the
+ * CLI starts on the paths this suite runs is its own daemon, on {@code up}; {@code admin} opens a
+ * browser and {@code service} runs the platform's service manager, and neither is run here.
  */
 @Timeout(180)
 class CliTest {
