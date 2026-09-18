@@ -324,7 +324,8 @@ it starts at step 1.
 ## Running the loop unattended
 
 One session, one issue after another, with no person reading the diff between the claim and the
-merge. It is the loop above with a pick rule, a merge rule, and a rule for `main` afterwards.
+merge. It is the loop above with a rule for what it reads first, a pick rule, a merge rule, and a
+rule for `main` afterwards.
 
 It was shut until #184 said what the suite can and cannot fail without a person, and it opened on
 2026-09-17 when the three things that survey named were done: `tools/flake-rate.sh` (#187), the
@@ -344,6 +345,33 @@ released issues and nothing to show. The two readings have the same words and ve
 mornings. The session names the released ones when it stops, with a line each on why, because a
 release is invisible from `gh issue list`: the label is back to what it was, and only the comment on
 the issue says a session was ever there.
+
+**Before the first pick, fetch and read this document and `CLAUDE.md` from `origin/main`** —
+
+```sh
+git fetch origin main
+git show origin/main:docs/issue-workflow.md
+git show origin/main:CLAUDE.md
+```
+
+— because the checkout a session starts in is shared, and it is not the copy the session will be
+judged against. On 2026-09-18 it was nine commits behind `main`, two of them to this document, and
+the run that read it claimed an issue a paragraph merged seven hours earlier told it to walk past,
+commented on it, and filed a duplicate of the issue that paragraph names. That is #241, and the
+shape is the part worth keeping: the procedure had already been fixed, and the failure was
+indistinguishable from never having written the fix.
+
+Both files, because the rules live in both and `CLAUDE.md` is the one a session has before it asks
+for anything — which is exactly why a stale copy of it is not noticed.
+
+Once per run and not per issue: this is a long document, and the context it spends is the budget the
+last stop below is about. Keep the revision the fetch landed on — `git rev-parse --short
+origin/main`, taken **then** and not at the stop, where it would name whatever `main` has become by
+then and would read the same for a run that never looked. What moves under a session mid-run is
+caught more cheaply by `git diff <that revision>..origin/main -- docs/issue-workflow.md CLAUDE.md`.
+The stop says which revision it was, because nothing else distinguishes a run that did this from one
+that did not, and the last one to skip it was found only by re-deriving it from the duplicate it
+filed.
 
 ### Pick
 
@@ -377,8 +405,10 @@ merged, and a session that had walked past #81 in silence would have left that w
 
 ### Each issue
 
-1. **A fresh worktree from the current `main`.** Reusing the last one means the second pull request
-   is based on a `main` that has moved, and the merge is what finds out.
+1. **A fresh worktree from the current `main`** — `git fetch origin main` and then
+   `git worktree add -b <branch> <path> origin/main`, naming the remote branch rather than the local
+   one, which is the shared checkout's and can be behind. Reusing the last worktree means the second
+   pull request is based on a `main` that has moved, and the merge is what finds out.
 2. Steps 2 to 5 exactly as above.
 3. `/code-review xhigh`, without `--fix` (step 6 says why), then every finding answered — written
    or refused with a reason — and then the gate, step 6 with the table's row if the change touches
@@ -459,6 +489,9 @@ the start; the merge rule is for the label that was added on the way.
 - A revert on `main`.
 - The context was summarised. What the session knows about the issue in hand is now a summary of
   it; finish that issue and stop rather than start the next on a summary.
+
+The stop also names the revision the run read this document at, which the read rule at the top of
+this section asks it to keep.
 
 Every stop leaves the tracker true — nothing claimed, every pull request merged, `status:in-review`
 or `status:needs-decision` — because the next session starts by reading it, and the one stop above
