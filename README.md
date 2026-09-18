@@ -280,13 +280,12 @@ What a compromised hub can and cannot do is written out in
   available of the two, and next to a node on a laptop it is not
   ([ARCHITECTURE.md §13.2](docs/ARCHITECTURE.md)).
 - Upgrading stops one step short of automatic: `update --download` verifies,
-  you run the `install` it prints. Which release is *current* comes from a signed
-  pointer that expires, and a node refuses one older than the newest it has seen,
-  so being held back on an old release is visible and cannot be repeated. A node
-  installed fresh has nothing to compare with yet, which is the gap that remains.
-  It is never moved below what it runs. An opt-in install and a floor compiled
-  into the binary are decided work ([§1.2](docs/ARCHITECTURE.md)); installing
-  by default is not.
+  you run the `install` it prints. Which release is *current* is GitHub's word
+  and nothing signs it; what is *in* that release is the maintainer's signature,
+  checked on download. So whoever controls the download host can keep a node on
+  an older release, exactly as they could delete the newer one; what they cannot
+  do is move it below what it runs or change what it installs
+  ([§15](docs/ARCHITECTURE.md)). Installing by default is not planned.
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).

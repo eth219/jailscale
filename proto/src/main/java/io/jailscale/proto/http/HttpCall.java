@@ -89,7 +89,8 @@ public final class HttpCall {
         }
     }
 
-    static boolean isRedirect(int status) {
+    /** The statuses {@link #get} follows; public so a caller reading a redirect by hand applies the same rule. */
+    public static boolean isRedirect(int status) {
         return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
     }
 
