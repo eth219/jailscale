@@ -3,8 +3,8 @@ package io.jailscale.node;
 /**
  * Build version, taken from the jar manifest when present (maven-jar-plugin adds it).
  *
- * <p>This deliberately does not say whether the binary was built against a PGO profile, though it
- * was tried: a {@code -D} on the native-image command line is set for the builder and does not
+ * <p>This deliberately does not say which build options the binary was built with, though it was
+ * tried: a {@code -D} on the native-image command line is set for the builder and does not
  * reach the image's run time, and every other way of baking a constant in either needs build-time
  * class initialisation (§3.1 forbids it) or reuses a manifest field for something it does not mean.
  * The release answers it beside the binary instead: the published BUILDINFO.txt names the target,

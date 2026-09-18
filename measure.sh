@@ -17,7 +17,7 @@
 #                RATE_HANDSHAKES= offered handshakes a second (400), RATE_CONNS= warm ones (32)
 #                RATE_PHASES="warm" runs one phase instead of both
 #   HUB_OPTS=    runtime options for the hub, and JAILSCALE_DAEMON_OPTS for the node's daemon:
-#                -XX:MaxHeapSize= to lift the build's ceiling, -XX:ProfilesDumpFile= to profile
+#                -XX:MaxHeapSize= to lift the build's ceiling
 # HOW THIS HARNESS HAS MISLED PEOPLE. Every item below produced a confident, wrong conclusion that
 # somebody acted on, and in every one the numbers looked plausible -- which is the only reason the
 # list is worth keeping. Read it before trusting a surprising result from here.
@@ -107,9 +107,7 @@ CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 # printed. ARCHITECTURE.md §14 has both numbers and which is which.)
 # These describe what the release ships: GraalVM CE 25.3, -O2, no profile-guided optimization, on
 # both the gate's runner and the machine this is developed on. Measured: binaries 25.3 to 26.2 MiB,
-# idle 24.8 to 35.1 MB, peak with 1,000 held 53.5 to 70.0 MB, CLI 2.4 to 6.3 ms. A profile-guided
-# build (-Ppgo) is smaller again and passes all of these with room to spare; the budgets describe
-# what ships, not the best build available.
+# idle 24.8 to 35.1 MB, peak with 1,000 held 53.5 to 70.0 MB, CLI 2.4 to 6.3 ms.
 # The load budget is the one with teeth: without the heap ceilings the peak was 91.7 (hub) and
 # 94.0 (node), so a build that lost them fails here. The node runs closer to it on the 25.3 line,
 # which expands the heap more eagerly under the same ceiling -- at -XX:MaxHeapSize=32m the same
@@ -533,8 +531,7 @@ if [ -n "${RATE:-}" ]; then
   # and what survives both the hub's signing limit and a slow client. Handshakes are offered at a
   # fixed rate under NodeGroup.SIGN_PER_SECOND on purpose (tools/throughput.py says why).
   echo "throughput, ${RATE}s per phase (reported, not gated)"
-  # RATE_PHASES picks which of them to run, which is how a PGO profile can be collected from one
-  # kind of work and the result measured on the other.
+  # RATE_PHASES picks which of them to run, so one kind of work can be measured on its own.
   for phase in ${RATE_PHASES:-handshake warm}; do
     case "$phase" in
       handshake) n=${RATE_HANDSHAKES:-400} ;;

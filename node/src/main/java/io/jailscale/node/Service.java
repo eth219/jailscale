@@ -36,12 +36,12 @@ final class Service {
      * As above, with the runtime options taken as an argument so a test can supply them.
      *
      * <p>{@code JAILSCALE_DAEMON_OPTS} is a way in for the options the native runtime reads before
-     * {@code main} does -- {@code -XX:MaxHeapSize=} to lift the ceiling the build set (§14),
-     * {@code -XX:ProfilesDumpFile=} to make an instrumented binary write a profile. It is a
-     * measurement and diagnosis hatch rather than a product surface, which is why it is an
-     * environment variable and not a flag on {@code up}: nothing measured so far asks for a
-     * different ceiling. They go straight after the executable, which is where both a native image and a JVM look, and
-     * whatever is set when {@code service install} runs is what the unit carries from then on.
+     * {@code main} does, {@code -XX:MaxHeapSize=} to lift the ceiling the build set (§14) being the
+     * one in use. It is a measurement and diagnosis hatch rather than a product surface, which is
+     * why it is an environment variable and not a flag on {@code up}: nothing measured so far asks
+     * for a different ceiling. They go straight after the executable, which is where both a native
+     * image and a JVM look, and whatever is set when {@code service install} runs is what the unit
+     * carries from then on.
      */
     static List<String> daemonCommand(NodeConfig cfg, String opts) {
         List<String> cmd = new ArrayList<>();
