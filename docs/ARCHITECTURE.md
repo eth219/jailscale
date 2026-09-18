@@ -1442,10 +1442,10 @@ that closed the gap was built and then removed on 2026-09-18
 ninety days by a person with the signing key, a nightly job whose purpose was to notice when that
 had been forgotten, a floor file on every node, and about 2,800 lines, against a bound on a party
 who already had an equivalent move. That is a maintenance schedule for a project with one operator,
-and the schedule was the bigger risk. The pointer that is up stays up until it expires on 2026-12-14
-and is deleted after that, never re-issued: a node on v0.1.7–v0.1.10 keeps reading it until then and
-afterwards says "cannot tell", which is what this section promised for an expired pointer, while a
-node that upgrades stops reading it at once. A build with no key still refuses to download — and,
+and the schedule was the bigger risk. The pointer that was up was never re-issued and was deleted on
+2026-09-19, the day v0.1.11 shipped and the one fielded node moved to it, rather than left until its
+2026-12-14 expiry: a node still on v0.1.7–v0.1.10 says "cannot tell", which is what this section
+promised for an expired pointer, while a node that upgrades stops reading it at once. A build with no key still refuses to download — and,
 one step earlier, does not announce a release it could not check — and a `dev` build still says it
 cannot compare rather than that it is current.
 
