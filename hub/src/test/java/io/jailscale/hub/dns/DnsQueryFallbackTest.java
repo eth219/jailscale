@@ -201,7 +201,8 @@ class DnsQueryFallbackTest {
      * where both of {@code start}'s do: an exclusive bind is what makes "the twin is free" mean
      * anything, and SO_REUSEADDR on Windows would let this bind on top of a listener that is
      * already there and then test that listener instead of this one. And the budget is
-     * {@value #TRIES} rather than {@code start}'s sixteen, which is what it has always been -- a
+     * {@value #TRIES} rather than {@code start}'s {@value DnsResponder#PAIR_TRIES}, which is what
+     * it has always been -- a
      * fixture that cannot find a number fails one test, where a hub that cannot is a hub that did
      * not start.
      *

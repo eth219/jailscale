@@ -2,6 +2,7 @@ package io.jailscale.hub.dns;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -14,8 +15,10 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class DnsResponderTest {
@@ -359,8 +362,23 @@ class DnsResponderTest {
         }
     }
 
-    /** How wide a band of held UDP ports the test below builds, in ports. */
-    private static final int BAND = 32;
+    /**
+     * How wide a band of held UDP ports the test below builds, in ports: the attempt budget, plus
+     * room for the allocator to have moved between the two draws.
+     *
+     * <p>Derived from {@link DnsResponder#PAIR_TRIES} rather than written as a number, because a
+     * band only as wide as the budget is one a stepping loop walks straight out of the top of --
+     * and the premises below could then not be met at all. That is #230: the band was 32 against a
+     * budget of 16 and the draw was allowed anywhere in it, so from the upper half a stepping loop
+     * reached past the top and the test passed against the defect it is here to catch.
+     *
+     * <p>What makes the test sound is the premise loop and not this width: every number the loop
+     * would try has to be one this test holds. What the margin buys is how often that premise can
+     * be met -- it tolerates the second draw landing up to fifteen numbers above the first, and an
+     * allocator that leaves more than that between two draws skips this test rather than failing
+     * it. {@code DnsQueryFallbackTest} is the worked example, from #220.
+     */
+    private static final int BAND = DnsResponder.PAIR_TRIES + 16;
 
     @Test
     void aBandOfHeldUdpPortsIsEscapedRatherThanSteppedThrough() throws Exception {
@@ -370,6 +388,7 @@ class DnsResponderTest {
         // adjacent TCP numbers, every one of their UDP twins taken. So this is built as a band and
         // not as a coin flip, which is what the issue asks any fix to be measured against.
         List<DatagramSocket> band = new ArrayList<>();
+        Set<Integer> bandPorts = new HashSet<>();
         try {
             // Where the TCP allocator is about to go. Drawn and given straight back, so that the
             // next draw lands on it or just past it wherever the allocator is sequential.
@@ -378,40 +397,63 @@ class DnsResponderTest {
             // range is about to wrap, and `from + BAND` is then not a port at all -- which
             // InetSocketAddress reports as IllegalArgumentException, not as the IOException the
             // loop below catches, so this would be an error rather than a skip.
-            assumeTrue(from + BAND <= 65_535,
-                "the allocator drew " + from + ", within " + BAND + " of 65535, so the band would run off the end");
+            // 65_536 and not 65_535: the band's topmost port is from + BAND - 1, which is the
+            // bound the loop below uses. The tighter number threw away a run that would have been
+            // fine.
+            assumeTrue(from + BAND <= 65_536,
+                "the allocator drew " + from + ", within " + BAND + " of the top of the range");
             for (int p = from; p < from + BAND; p++) {
                 DatagramSocket s = new DatagramSocket(null);
                 try {
                     s.bind(new InetSocketAddress("127.0.0.1", p));
                     band.add(s);
+                    bandPorts.add(p);
                 } catch (IOException taken) {
                     // Somebody else holds this one. It is unavailable now, but it is not this
                     // test's to keep unavailable, and a number that comes free part-way through is
-                    // one the old stepping loop could have landed on -- so a hole would fail the
-                    // assertion below on the hole rather than on the behaviour. The premise check
-                    // right after this loop is what turns that into a skip.
+                    // one the old stepping loop could have landed on. That only matters inside the
+                    // window the premises below check, so a hole above it is harmless rather than
+                    // a skip.
                     s.close();
                 }
             }
-            // The premises, checked rather than assumed, in the style of the test below: without a
-            // band -- an unbroken one, and one the allocator steps into -- there is nothing to
-            // escape and this test would pass against the old stepping loop just as well. A
-            // platform or a machine that says no to either says so here and skips.
-            assumeTrue(band.size() == BAND,
-                "somebody else holds " + (BAND - band.size()) + " of " + from + ".." + (from + BAND - 1)
-                    + ", so the band has holes the old loop could have stepped into");
+            // Where the allocator is now, and therefore where a stepping loop would start. This is
+            // deliberately the last draw before start(): what follows binds nothing, so start()'s
+            // own first attempt is one step from here.
             int next = drawTcpPort();
-            assumeTrue(next >= from && next < from + BAND,
-                "this allocator drew " + next + " after " + from + ", so it does not step and there is no band");
+
+            // Three premises, checked and not assumed. Without them there is nothing to escape and
+            // this test would pass against the old stepping loop -- which it did, when the band was
+            // only as wide as the budget and `next` could be anywhere in it: a draw at from + 20
+            // let a loop stepping sixteen numbers up reach from + 36, and from + 32 upwards was
+            // never held. That is #230, and it was half the allowed window.
+            //
+            // The first two are implied by the loop after them -- bandPorts holds nothing outside
+            // the band -- and they are kept because the skip message is the whole value of a skip:
+            // "the allocator does not step" and "not enough band above it" are two different
+            // machines, and neither is "the band has a hole".
+            assumeTrue(next >= from,
+                "the allocator drew " + next + " after " + from + ", so it does not step and there is no band");
+            assumeTrue(next + DnsResponder.PAIR_TRIES < from + BAND,
+                "the allocator drew " + next + " after " + from + ", leaving fewer than "
+                    + DnsResponder.PAIR_TRIES + " of the band above it, so a stepping loop could walk out of the top");
+            for (int p = next; p <= next + DnsResponder.PAIR_TRIES; p++) {
+                final int held = p;
+                assumeTrue(bandPorts.contains(p),
+                    () -> "the band has a hole at " + held + ", inside the " + DnsResponder.PAIR_TRIES
+                        + " numbers a stepping loop would try, so it could succeed on the hole");
+            }
 
             try (DnsResponder d = new DnsResponder("hub.example.com")) {
-                // Stepping from `from`, every attempt the old loop had lands inside BAND and it
-                // threw here. Alternating gives UDP the draw on attempt 1, and a UDP allocator
-                // will not hand out a number it has already given to the band.
+                // Stepping from `next`, every number the old loop would try is one this test holds
+                // and it threw here. Alternating gives UDP the draw on attempt 1, and a UDP
+                // allocator will not hand out a number it has already given to the band.
                 d.start("127.0.0.1", 0);
-                assertTrue(d.port() < from || d.port() >= from + BAND,
-                    "started on " + d.port() + ", which is inside the band " + from + ".." + (from + BAND - 1));
+                // One assertion and not two: the premise loop above put every number in
+                // [next, next + PAIR_TRIES] into bandPorts, so "not a number this test holds"
+                // already says "not one a stepping loop would have reached".
+                assertFalse(bandPorts.contains(d.port()),
+                    "started on " + d.port() + ", which this test is holding, so it did not escape the band");
                 // And it is a working responder on that number, not merely a pair of bound sockets.
                 assertEquals(List.of(), DnsQuery.txt("127.0.0.1", d.port(), "_acme-challenge.hub.example.com", 2000));
             }
