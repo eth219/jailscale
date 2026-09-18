@@ -12,8 +12,9 @@ Reference files for operators. The reasoning behind them is in
 | `haproxy.cfg` | The same with HAProxy, using `send-proxy-v2` |
 
 Registering the node as a service is a command rather than a file:
-`jailscale service install` (launchd on macOS, `systemctl --user` on Linux, a
-logon task on Windows).
+`jailscale service install` (launchd on macOS; a systemd unit on Linux,
+`systemctl --user` or a system unit when run as root; a logon task on
+Windows).
 
 Behind a proxy, the hub must either listen on loopback with `--proxy-protocol`
 or be given `--trusted-proxy <cidr>`. Otherwise anyone could forge a visitor

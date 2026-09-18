@@ -52,7 +52,7 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Raw UDP ports | request–reply protocols — DNS, and anything that tolerates reliable delivery (§8.4) | the carrier is the node's one TCP connection, so delivery is stronger and timing weaker than UDP promises |
 | IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
 | Behind a TCP proxy | nginx or HAProxy in front, PROXY protocol v1 and v2 (§8.5) | the proxy forwards bytes without opening TLS, and `--proxy-protocol` needs loopback or `--trusted-proxy` |
-| Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2), and `service install` is verified on macOS only |
+| Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2), and `service install` is verified on macOS and `linux-arm64`, not on `linux-amd64` and not on Windows ([#81](https://github.com/eth219/jailscale/issues/81)) |
 | Availability | two hubs, a delegated subdomain, the standby serving throughout, promotion without a person (§13) | promotion is automatic only with a witness node attached to the standby (§13.5) |
 | Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
 | Upgrading | a signed release index, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
@@ -1403,8 +1403,8 @@ session started in `/run/user/<uid>`. The path is used only if something answers
 left behind by a daemon that has died sends nobody anywhere. Commands
 are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify`
 (§11.3), `leave`, `update` and `service install|uninstall|status`; service registration uses only
-what the OS already has (a launchd agent, a `systemctl --user` unit, or a logon scheduled task) with
-no service wrapper.
+what the OS already has (a launchd agent; a systemd unit, `systemctl --user` or a system unit when
+the installer is root; or a logon scheduled task) with no service wrapper.
 
 **`update` reports; `update --download` fetches; neither installs.** The plain form reads the
 signed pointer below, prints the version it names and where to get it, and the daemon does the same
