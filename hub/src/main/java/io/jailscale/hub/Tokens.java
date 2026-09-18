@@ -6,7 +6,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Locale;
 
-/** Invite tokens, short codes, auth-keys and their stored hashes (ARCHITECTURE.md §10). */
+/** Invite tokens, short codes and their stored hashes (ARCHITECTURE.md §10). */
 final class Tokens {
 
     private static final SecureRandom RNG = new SecureRandom();
@@ -19,11 +19,6 @@ final class Tokens {
         byte[] b = new byte[16];
         RNG.nextBytes(b);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(b);
-    }
-
-    /** {@code jk_} + 128 bits. */
-    static String authKey() {
-        return "jk_" + inviteToken();
     }
 
     /** 40-bit Crockford base32 code formatted {@code XXXX-XXXX}. */

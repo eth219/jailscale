@@ -298,23 +298,6 @@ final class AdminWeb {
                 lastInvite = c;
             }
             case "/admin/invite/revoke" -> store.revokeInvite(need(f, "id"));
-            case "/admin/authkey/create" -> {
-                String owner = blankToNull(f.get("owner"));
-                String tag = blankToNull(f.get("tag"));
-                if ((owner == null) == (tag == null)) {
-                    throw new IllegalArgumentException("enter either owner or tag, not both");
-                }
-                // Blank means the default, as it does one form above and as omitting the flag
-                // does on the CLI. Cleared fields used to reach parseInt and parseSeconds as "",
-                // and the admin got a 400 quoting a Java parse error.
-                int uses = f.getOrDefault("uses", "1").isBlank() ? 1 : Integer.parseInt(f.get("uses").trim());
-                long ttl = f.getOrDefault("ttl", "7d").isBlank() ? 7 * 86400
-                    : io.jailscale.proto.util.Args.parseSeconds(f.get("ttl"));
-                String secret = Tokens.authKey();
-                store.createAuthKey(secret, owner, tag, uses, ttl);
-                lastAuthKey = secret;
-            }
-            case "/admin/authkey/revoke" -> store.revokeAuthKey(need(f, "id"));
             case "/admin/name/release" -> {
                 String name = need(f, "name");
                 store.releaseName(name);
@@ -335,7 +318,6 @@ final class AdminWeb {
     }
 
     private volatile Invites.Created lastInvite;
-    private volatile String lastAuthKey;
 
     private String render(Session s) {
         Store store = hub.store();
@@ -397,22 +379,6 @@ final class AdminWeb {
             b.append("<tr><td><code>").append(HttpFront.escape(r.id())).append("</code></td><td>").append(HttpFront.escape(String.valueOf(r.user())))
                 .append("</td><td>").append(r.usesLeft()).append("</td><td>").append(new java.util.Date(r.expiresAt())).append("</td><td>")
                 .append(HttpFront.escape(String.valueOf(r.createdBy()))).append("</td><td><form method=post action=/admin/invite/revoke>").append(csrf)
-                .append("<input type=hidden name=id value=\"").append(HttpFront.escape(r.id())).append("\"><button>Revoke</button></form></td></tr>");
-        }
-        b.append("</table>");
-
-        b.append("<h2>auth-key</h2>");
-        if (lastAuthKey != null) {
-            b.append("<p class=new>New auth-key (shown only now): <code>").append(HttpFront.escape(lastAuthKey)).append("</code></p>");
-            lastAuthKey = null;
-        }
-        b.append("<form method=post action=/admin/authkey/create class=row>").append(csrf)
-            .append("Owner <input name=owner size=10> or tag <input name=tag size=8> Uses <input name=uses value=1 size=3> TTL <input name=ttl value=7d size=5> <button>Create</button></form>");
-        b.append("<table><tr><th>id</th><th>Owner/tag</th><th>Uses left</th><th>Expires</th><th></th></tr>");
-        for (Store.AuthKeyRec r : store.authKeys()) {
-            b.append("<tr><td><code>").append(HttpFront.escape(r.id())).append("</code></td><td>")
-                .append(HttpFront.escape(r.owner() != null ? r.owner() : "tag:" + r.tag())).append("</td><td>").append(r.usesLeft())
-                .append("</td><td>").append(new java.util.Date(r.expiresAt())).append("</td><td><form method=post action=/admin/authkey/revoke>").append(csrf)
                 .append("<input type=hidden name=id value=\"").append(HttpFront.escape(r.id())).append("\"><button>Revoke</button></form></td></tr>");
         }
         b.append("</table>");

@@ -835,12 +835,12 @@ final class HttpFront {
             // about the traffic while it is moving. These are what stays afterwards, and the last
             // line is the important one: the process can speak for the process and no further.
             // Not an inventory. Three attempts at one were each found short -- the pending
-            // record's address, then the hostname and system, then the invites, auth keys,
-            // domains, raw-port targets and notices -- and a list that has to be complete to be
+            // record's address, then the hostname and system, then the invites, domains,
+            // raw-port targets and notices -- and a list that has to be complete to be
             // honest is a list that goes stale the next time anything is added to the store. So:
             // the shape of it, the part a visitor is actually asking about, and where it stops.
             b.append("<p>What it keeps is what an operator administers: the nodes and who owns them,")
-                .append(" the names, domains and ports they hold, the invitations and keys that let")
+                .append(" the names, domains and ports they hold, the invitations that let")
                 .append(" them in, and what each machine said about itself when it joined -- its")
                 .append(" hostname, its system, and the address it knocked from. That stays until the")
                 .append(" operator removes it. Beside it, thirty days of uptime record and the")

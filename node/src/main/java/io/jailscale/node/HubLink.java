@@ -34,7 +34,7 @@ final class HubLink implements AutoCloseable {
     static final int CONN_SHIFT = 24;
 
     /** Credentials for the next RegisterRequest; cleared once registered. */
-    record Credentials(String invite, String code, String authKey, String user) {}
+    record Credentials(String invite, String code, String user) {}
 
     /** The connection index a relay connection uses (§13.4): the last one, so extras keep 1 and 2. */
     static final int RELAY_CONN = 3;
@@ -397,7 +397,7 @@ final class HubLink implements AutoCloseable {
         if (!state.registered) {
             Credentials cr = credentials;
             send(new Message.RegisterRequest(hostname(), osName(), cr == null ? null : cr.user(),
-                cr == null ? null : cr.invite(), cr == null ? null : cr.code(), cr == null ? null : cr.authKey()));
+                cr == null ? null : cr.invite(), cr == null ? null : cr.code(), null));
         } else {
             onRegistered();
         }

@@ -20,7 +20,7 @@ public final class Main {
      */
     static final String USAGE = """
         jailscale up --invite https://hub.example.com/join/TOKEN [--user NAME]
-        jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
+        jailscale up --hub HOST [--code XXXX-XXXX] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate] [--proxy-protocol]
         jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (ARCHITECTURE.md §8.4)
@@ -234,9 +234,14 @@ public final class Main {
     }
 
     private static void up(NodeConfig cfg, Args a) throws Exception {
+        if (a.has("auth-key")) {
+            // Args keeps any --flag value it is handed, so without this the flag would parse, be
+            // ignored, and the join would proceed as a knock (#251).
+            throw new IllegalArgumentException("--auth-key was removed; join with --invite <link> or --code XXXX-XXXX");
+        }
         JsonObject.Builder b = JsonObject.builder().put("cmd", "up")
             .put("invite", a.get("invite")).put("hub", a.get("hub")).put("port", a.integer("port", 443))
-            .put("code", a.get("code")).put("authKey", a.get("auth-key")).put("user", a.get("user"))
+            .put("code", a.get("code")).put("user", a.get("user"))
             .put("hubKey", a.get("hub-key")).put("tlsInsecure", a.flag("tls-insecure")).put("caFile", a.get("ca-file"))
             .put("addr", a.get("hub-addr")).put("connections", a.has("connections") ? Integer.valueOf(a.integer("connections", 1)) : null);
         JsonObject r = call(cfg, b.build(), true);

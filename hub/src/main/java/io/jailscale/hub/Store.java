@@ -40,8 +40,6 @@ final class Store implements AutoCloseable {
     record InviteRec(String id, String tokenHash, String codeHash, String user, int usesLeft, long expiresAt,
         long codeExpiresAt, String createdBy, boolean admin) {}
 
-    record AuthKeyRec(String id, String hash, String owner, String tag, int usesLeft, long expiresAt) {}
-
     record PendingRec(String mkey, String hostname, String os, String ip, String user, long at) {}
 
     /** A claimed name: who owns it and which node/local target last used it (ARCHITECTURE.md §8.2). */
@@ -74,7 +72,13 @@ final class Store implements AutoCloseable {
     private long nextNodeId = 1;
     private final Map<String, NodeRec> nodesByKey = new LinkedHashMap<>();
     private final Map<String, InviteRec> invites = new LinkedHashMap<>();
-    private final Map<String, AuthKeyRec> authKeys = new LinkedHashMap<>();
+    /** {@code authkey-created} events seen on load, for the one warning that says they were dropped. */
+    private int authKeyEventsDropped;
+
+    /** How many auth-key records this load dropped (#251); a test's view of the warning above. */
+    int authKeyEventsDropped() {
+        return authKeyEventsDropped;
+    }
     private final Set<String> admins = new LinkedHashSet<>();
     private final Map<String, PendingRec> pending = new LinkedHashMap<>();
     private final Map<String, NameRec> names = new LinkedHashMap<>();
@@ -110,7 +114,7 @@ final class Store implements AutoCloseable {
      * {@link #snapshot} cannot install the snapshot and empty the log in one step, so a crash
      * between them leaves both — and replaying a log the snapshot already counts has to be a no-op.
      * Most events are {@code put}s and are; the arithmetic ones ({@code invite-used},
-     * {@code authkey-used}, {@code notice-added}) are not, and this is what makes them so
+     * {@code notice-added}) are not, and this is what makes them so
      * ({@code StoreCrashTest}).
      *
      * <p>Local and monotonic. A standby stamps its own rather than the primary's, because the number
@@ -152,10 +156,6 @@ final class Store implements AutoCloseable {
 
     synchronized List<InviteRec> invites() {
         return new ArrayList<>(invites.values());
-    }
-
-    synchronized List<AuthKeyRec> authKeys() {
-        return new ArrayList<>(authKeys.values());
     }
 
     synchronized List<PendingRec> pending() {
@@ -444,44 +444,6 @@ final class Store implements AutoCloseable {
         }
     }
 
-    /**
-     * Checked here rather than in either caller, because there are two of them -- {@code jailhub
-     * authkey create} and the /admin form -- and an auth key's uses go to the record as given,
-     * unlike an invite's, where 0 is the sentinel that means "your default". A key created with
-     * none left is refused by {@link #consumeAuthKey} on its first use and reported to the node as
-     * {@code authkey-invalid}, days later and nowhere near the flag that caused it.
-     */
-    synchronized AuthKeyRec createAuthKey(String secret, String owner, String tag, int uses, long ttlSeconds) throws IOException {
-        if (uses < 1) {
-            throw new IllegalArgumentException("uses must be at least 1; an auth key with none left can never be redeemed");
-        }
-        AuthKeyRec r = new AuthKeyRec(Tokens.id("ak_"), Tokens.hash(secret), owner, tag, uses,
-            System.currentTimeMillis() + ttlSeconds * 1000);
-        append(JsonObject.builder().put("e", "authkey-created").put("id", r.id()).put("hash", r.hash())
-            .put("owner", owner).put("tag", tag).put("uses", uses).put("expiresAt", r.expiresAt()));
-        return r;
-    }
-
-    synchronized AuthKeyRec consumeAuthKey(String secret) throws IOException {
-        String h = Tokens.hash(secret);
-        for (AuthKeyRec r : authKeys.values()) {
-            if (h.equals(r.hash())) {
-                if (r.usesLeft() <= 0 || System.currentTimeMillis() > r.expiresAt()) {
-                    return null;
-                }
-                append(JsonObject.builder().put("e", "authkey-used").put("id", r.id()));
-                return r;
-            }
-        }
-        return null;
-    }
-
-    synchronized void revokeAuthKey(String id) throws IOException {
-        if (authKeys.containsKey(id)) {
-            append(JsonObject.builder().put("e", "authkey-revoked").put("id", id));
-        }
-    }
-
     synchronized void addPending(String mkey, String hostname, String os, String ip, String user) throws IOException {
         append(JsonObject.builder().put("e", "pending-added").put("mkey", mkey).put("hostname", hostname)
             .put("os", os).put("ip", ip).put("user", user).put("at", System.currentTimeMillis()));
@@ -604,7 +566,7 @@ final class Store implements AutoCloseable {
             append(b, "domains", domains);
             append(b, "ports", ports);
             if (credentials > 0) {
-                b.append(b.length() == 0 ? "" : ", ").append(credentials).append(" unused invites or auth-keys");
+                b.append(b.length() == 0 ? "" : ", ").append(credentials).append(" unused invites");
             }
             return b.length() == 0 ? "nothing" : b.toString();
         }
@@ -646,7 +608,6 @@ final class Store implements AutoCloseable {
         Superseded lost = supersededBy(s);
         nodesByKey.clear();
         invites.clear();
-        authKeys.clear();
         admins.clear();
         pending.clear();
         names.clear();
@@ -712,9 +673,6 @@ final class Store implements AutoCloseable {
         int credentials = 0;
         for (String id : invites.keySet()) {
             credentials += theirs.invites.containsKey(id) ? 0 : 1;
-        }
-        for (String id : authKeys.keySet()) {
-            credentials += theirs.authKeys.containsKey(id) ? 0 : 1;
         }
         // And the collections replaceWith clears that nothing compared: an admin added and a CIDR
         // banned on the losing side of a partition are rights granted and rights taken away, which
@@ -831,20 +789,12 @@ final class Store implements AutoCloseable {
                 }
             }
             case "invite-revoked" -> invites.remove(ev.string("id"));
-            case "authkey-created" -> authKeys.put(ev.string("id"), new AuthKeyRec(ev.string("id"), ev.string("hash"),
-                ev.optString("owner", null), ev.optString("tag", null), ev.integer("uses"), ev.lng("expiresAt")));
-            case "authkey-used" -> {
-                AuthKeyRec r = authKeys.get(ev.string("id"));
-                if (r != null) {
-                    AuthKeyRec u = new AuthKeyRec(r.id(), r.hash(), r.owner(), r.tag(), r.usesLeft() - 1, r.expiresAt());
-                    if (u.usesLeft() <= 0) {
-                        authKeys.remove(r.id());
-                    } else {
-                        authKeys.put(r.id(), u);
-                    }
-                }
-            }
-            case "authkey-revoked" -> authKeys.remove(ev.string("id"));
+            // Auth-keys were removed (#251). A log written before that carries their events; they
+            // are not unknown, so they are counted rather than warned about one by one, and load()
+            // says once what was dropped, because the next snapshot this binary writes will not
+            // carry them and a rollback would find them gone.
+            case "authkey-created" -> authKeyEventsDropped++;
+            case "authkey-used", "authkey-revoked" -> { }
             case "pending-added" -> pending.put(ev.string("mkey"), new PendingRec(ev.string("mkey"), ev.optString("hostname", ""),
                 ev.optString("os", ""), ev.optString("ip", null), ev.optString("user", null), ev.lng("at")));
             case "pending-cleared" -> pending.remove(ev.string("mkey"));
@@ -952,8 +902,13 @@ final class Store implements AutoCloseable {
                 LOG.info("{} log events were already in the snapshot and were not replayed", folded);
             }
         }
-        LOG.info("loaded {} nodes, {} names, {} invites, {} auth-keys, {} admins, {} pending",
-            nodesByKey.size(), names.size(), invites.size(), authKeys.size(), admins.size(), pending.size());
+        LOG.info("loaded {} nodes, {} names, {} invites, {} admins, {} pending",
+            nodesByKey.size(), names.size(), invites.size(), admins.size(), pending.size());
+        if (authKeyEventsDropped > 0) {
+            LOG.warn("{} auth-key records in this state were dropped: auth-keys were removed in #251, and the next"
+                + " snapshot will not carry them. A machine that had not yet joined with one needs an invite instead",
+                authKeyEventsDropped);
+        }
     }
 
     /**
@@ -1009,10 +964,6 @@ final class Store implements AutoCloseable {
             events.add(JsonObject.builder().put("e", "invite-created").put("id", r.id()).put("tokenHash", r.tokenHash())
                 .put("codeHash", r.codeHash()).put("user", r.user()).put("uses", r.usesLeft()).put("expiresAt", r.expiresAt())
                 .put("codeExpiresAt", r.codeExpiresAt()).put("createdBy", r.createdBy()).put("admin", r.admin()).build().asMap());
-        }
-        for (AuthKeyRec r : authKeys.values()) {
-            events.add(JsonObject.builder().put("e", "authkey-created").put("id", r.id()).put("hash", r.hash())
-                .put("owner", r.owner()).put("tag", r.tag()).put("uses", r.usesLeft()).put("expiresAt", r.expiresAt()).build().asMap());
         }
         for (PendingRec p : pending.values()) {
             events.add(JsonObject.builder().put("e", "pending-added").put("mkey", p.mkey()).put("hostname", p.hostname())

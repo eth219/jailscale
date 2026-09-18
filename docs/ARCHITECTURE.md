@@ -478,9 +478,14 @@ additive case above, pinned in `WireFormatTest` against v0.1.0's own `Hello` lin
 message types only two hubs exchange, which a node never sees; v0.1.4 and v0.1.5 changed nothing a
 node sees; v0.1.6 added a flag to `Hello` and a list to its response, both omitted when there is
 nothing to say; v0.1.7 added two messages a node only carries between two hubs; v0.1.8 to v0.1.10
-changed nothing on the wire. Both additive steps have also run mismatched on the live hub: a
-released v0.1.0 node against a hub that reads `host`, and the hub on v0.1.2 for half an hour while
-its node was not, the capacity row reading `not advertised` throughout. So a hub and its nodes can
+changed nothing on the wire. The release after v0.1.10 is the first to take a credential away, the
+auth-key (#251), and the wire did not move for it: the `RegisterRequest` field keeps its name and
+is still read, so a node that presents one is refused with `authkey-removed` rather than misread as
+a knock, no node sends it any more, and `PROTO` stays at 1 because nothing was added, removed or
+renamed. That mismatch, an older node presenting an auth-key to a newer hub, is held by
+`Registrar`'s test and has not run live. Both additive steps have also run mismatched on the live
+hub: a released v0.1.0 node against a hub that reads `host`, and the hub on v0.1.2 for half an hour
+while its node was not, the capacity row reading `not advertised` throughout. So a hub and its nodes can
 be replaced separately rather than together. Not tried: the other order, a newer node against an
 older hub, and rolling either half back.
 
@@ -501,7 +506,7 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 |---|---|
 | `Hello` / `HelloResponse` | Version negotiation: `proto`, `version`, `os`, `conn`, and `host`, the name the node resolved to reach the hub or null when it was handed an address (§7.2); the reply adds `minProto` and `dnsSuffix` |
 | `Goodbye` | `upgrade-required`, `revoked`, `shutdown`, `draining`, plus an optional human `detail` |
-| `RegisterRequest` / `RegisterResponse` | hostname, os, self-chosen user, and one of `invite` / `code` / `authKey` or none to knock. Reply is `approved{nodeId, user}`, `pending` or `rejected{reason}` |
+| `RegisterRequest` / `RegisterResponse` | hostname, os, self-chosen user, and one of `invite` / `code` or none to knock. Reply is `approved{nodeId, user}`, `pending` or `rejected{reason}` |
 | `CertUpdate` | Wildcard chain (public part) and its `keyId`, on connect and on renewal |
 | `LinkOpen` / `LinkOpened` | `kind: https\|tcp\|udp`, optional name, domain, port, local target, and for user domains the certificate chain. Reply carries `linkId` and a URL or hub port, or a reason |
 | `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name, domain or port (§11.4) |
@@ -538,12 +543,14 @@ instead.** `snapshot()` renames the new file into place and then truncates the l
 folded in; between those the directory holds both, and nothing forces the truncation to disk, so a
 machine that loses power inside the filesystem's commit interval comes back to that pair rather than
 to a state that merely passed through it. Most events survive being replayed twice because they are
-`put`s landing on the value already there. Three do not: `invite-used` and `authkey-used` subtract,
-`notice-added` appends. Replayed twice, an invite quietly spends a use nobody spent, a two-use
-auth-key with one use to go is **deleted** — `authkey-used` removes the record at zero, so the CI
-runner holding it is locked out with nothing in any log to say why — and a node is told twice about
-one revoked name. So every appended event carries a sequence number `s`, each snapshot records the
-last it folded in as `seq`, and a line at or below that is skipped on load. The numbering is local
+`put`s landing on the value already there. Two do not: `invite-used` subtracts and `notice-added`
+appends. Replayed twice, an invite quietly spends a use nobody spent and a node is told twice about
+one revoked name. (Auth-keys had the same arithmetic and a worse failure, a two-use key deleted at
+what should have been one use left; they were removed in #251. A log written before that still
+carries their events: the store skips them by name, counts the records, and warns once on load that
+they were dropped, since the next snapshot will not carry them.) So every appended event carries a
+sequence number `s`, each snapshot records the last it folded in as `seq`, and a line at or below
+that is skipped on load. The numbering is local
 to one log and carries on across a restart; a standby stamps its own rather than the primary's,
 since the number means a place in a particular file. Between the rename and the truncation the
 directory entry is fsynced, which is what keeps the *other* order — a durably emptied log beside a
@@ -591,8 +598,8 @@ the usability principle. There is no password and no IdP: **an admin node's Mach
 identity**. `jailscale admin` asks for an `AdminLink` over stream 0, the hub returns a 60-second
 one-shot URL, and the CLI opens a browser; the visit sets a `__Host-` prefixed session cookie
 (`HttpOnly; Secure; SameSite=Lax`, 12 hours), and `jailhub admin login-link` covers the case with no
-node available. The pages approve or deny the queue, manage nodes, names and domains, issue invites
-and auth-keys, and toggle the three settings, as server-rendered HTML with no JavaScript, no template
+node available. The pages approve or deny the queue, manage nodes, names and domains, issue invites,
+and toggle the three settings, as server-rendered HTML with no JavaScript, no template
 engine, and a session-bound CSRF token on every form.
 
 The hub's own page at `/` is the same machinery seen from the other side. It states what the hub is,
@@ -641,7 +648,7 @@ is stripped before either test, so a blank name is never a third state between s
 **The whole section is drawn only when one of the three is set**, and with it the only honest
 retention sentence the hub has -- which is deliberately **not an inventory**. Three attempts at one
 were each found short: the pending record's address, then the hostname and system in both records,
-then the invites, auth keys, domains, raw-port targets and notices. A list that has to be complete
+then the invites, domains, raw-port targets and notices. A list that has to be complete
 to be honest goes stale the next time anything is added to the store, so the page says the shape
 instead: what an operator administers stays until they remove it, including what a machine said
 about itself when it joined -- its hostname, its system, the address it knocked from -- beside
@@ -1586,8 +1593,8 @@ local UDP, no root.
 
 ## 10. Joining
 
-There is no IdP. The right to join is a **capability**: an invite link, a short code and an auth-key
-are all secrets where possession is the permission, and the hub registers whichever MachineKey
+There is no IdP. The right to join is a **capability**: an invite link and its short code are
+secrets where possession is the permission, and the hub registers whichever MachineKey
 arrives with one. Joining is the right to publish; visitors never join.
 
 **Why no IdP.** An IdP answers "who is this person", not "may they publish", so an invite and
@@ -1605,8 +1612,8 @@ proposes its own name only when the credential does not fix one, and a proposal 
 existing user is refused with `user-taken` — otherwise joining as "alice" would be enough to *be*
 alice, with her admin rights and her names. Joining as an existing user is a real thing to want, and
 it is authorised the same way everything else here is, by a credential that names them: an invite
-pinned to that user (the second machine of a person runs `jailscale invite --self` on the first), an
-auth-key whose owner is them, or an operator typing the name at approval. For the same reason a
+pinned to that user (the second machine of a person runs `jailscale invite --self` on the first) or
+an operator typing the name at approval. For the same reason a
 member may pin an invite to a *new* user or to themselves, but naming an existing user in an invite
 is an admin's call.
 
@@ -1621,8 +1628,11 @@ given a new credential, since a new credential is a new question.
 the issuer is recorded, and an admin can narrow it with `--invite-policy admins`. `jailscale invite`
 prints a link carrying a 128-bit token (one use, 24 hours by default) and a short code that is an
 alias for the same invite, 40 bits in Crockford base32 as `XXXX-XXXX`, valid 10 minutes and
-normalised on entry. The hub stores only hashes. An **auth-key** (`jk_` plus 128 bits) is the
-unattended form for CI jobs, containers and servers, optionally bound to a tag instead of a person.
+normalised on entry. The hub stores only hashes. The unattended form for CI jobs, containers and
+servers is the same invite pinned to a user, with more uses and a longer life: `jailhub invite
+create --user ci --uses N --ttl 7d`, so every machine that joins with it is `ci` and none has to
+choose a name. A separate auth-key with an owner or a tag existed until #251 and was the same
+capability with a second record, a second set of commands and a second form to keep consistent.
 
 **Joining.** `jailscale up --invite <link>` takes the hostname from the link, pins the hub key
 through `/v1/key` (§5.2), opens the Noise channel, negotiates versions, asks for a name only when the
@@ -1659,7 +1669,7 @@ Four axes. None of them implies any other.
 | Axis | Question | Answer |
 |---|---|---|
 | **Transport** | Who can read between visitor and node | Nobody, the hub included. It sees SNI, IP, byte counts, timing (§8.1) |
-| **Right to publish** | Who can open a name | Only nodes that joined through an invite, auth-key or approval. No open registration by default |
+| **Right to publish** | Who can open a name | Only nodes that joined through an invite or approval. No open registration by default |
 | **Right to visit** | Who can reach a published link | Public by default; with `--gate`, only holders of the visit link (§9.3) |
 | **Name identity** | Who vouches that `myapp.hub.example.com` is alice's node | **The hub.** It owns the routing table and the wildcard key (§11.2) |
 
@@ -1859,7 +1869,7 @@ operator's job. Unauthenticated work is metered with per-source token buckets:
 | Target | Burst | Sustained | On excess |
 |---|---|---|---|
 | `/v1/noise` handshake | 30 | 1/s | HTTP 429, Upgrade refused |
-| Credential presentation (invite token, code, auth-key) | 20 | 0.2/s | `rejected{reason: rate-limited}` |
+| Credential presentation (invite token, code) | 20 | 0.2/s | `rejected{reason: rate-limited}` |
 | Registration under `--registration open` | 5 | 1 per 12 min | `rejected{reason: rate-limited}` |
 | Knock queue | 5 entries per address | n/a | `rejected{reason: too-many-pending}` |
 | DNS answer on UDP 53, per /24 or /64 | 50 | 20/s | dropped; one in two answered `TC=1` |
@@ -2024,8 +2034,8 @@ hours, and every POST carries a CSRF token. On top of that, **admin status is re
 request**, because checking only at issuance would leave `admin remove` ineffective for 12 hours; a
 link issued over the IPC socket is exempt, since socket permission is the authorisation. The cookie
 uses the `__Host-` prefix, which forbids a `Domain` attribute, so a node controlling a sibling
-subdomain under `*.<hub>` cannot plant an admin cookie. Auth-keys, invite tokens, codes, gate tokens
-and admin login URLs are never written to logs.
+subdomain under `*.<hub>` cannot plant an admin cookie. Invite tokens, codes, gate tokens and admin
+login URLs are never written to logs.
 
 ---
 
@@ -2072,7 +2082,7 @@ one. The comparisons that do decide something:
 | What is compared | How | Where that leaves it |
 |---|---|---|
 | Self-probe keying material (§11.3) | `MessageDigest.isEqual` | Constant time, deliberately: the verdict is the whole feature |
-| Invite token, short code, auth-key (§10) | SHA-256, then a lookup by the hash | Timing follows the hash of what was presented, which does not walk back to the secret |
+| Invite token, short code (§10) | SHA-256, then a lookup by the hash | Timing follows the hash of what was presented, which does not walk back to the secret |
 | `/admin` CSRF token (§11.5) | `MessageDigest.isEqual` over the bytes | Constant time. It was `String.equals`, and nothing reachable turned on that; a comparison of a presented secret is the wrong place to keep the cheaper habit |
 | `/admin` session cookie and login link (§11.5) | 128-bit random, a `ConcurrentHashMap` key | **Not constant time, and not made so:** a hash lookup has no byte compare to replace. Reaching a useful prefix of 128 random bits over HTTP is not a path anyone has, and a correct guess needs no timing |
 
