@@ -9,11 +9,14 @@ and an agent session does not have one. So the claim is a comment, plus a label 
 ## The three axes
 
 An issue carries **one type**, **one or more areas**, and — while it is open — **exactly one
-status**. A closed issue carries none: the status axis says where something is in the process,
-and a closed issue is not in it. Step 8 is where that comes off.
+status**, and beside those it may carry `needs:hardware`. A closed issue carries no status: that
+axis says where something is in the process, and a closed issue is not in it. Step 8 is where that
+comes off.
 
 A pull request carries the **type and area of the issue it closes** — copied at
-`gh pr create --label` — and no status. Its own state is its status: draft, open, checks, merged.
+`gh pr create --label` — and no status, and not `needs:hardware` either: that label says what
+closing the *issue* needs, and nobody needs a machine to read a diff. A pull request's own state is
+its status: draft, open, checks, merged.
 The issue it closes already carries `status:in-review`, and a second copy of that on the pull
 request is a second thing to go stale, which is what step 8 is about. The one exception is
 `status:needs-decision`, which a pull request carries only while a question raised after it was
@@ -46,6 +49,24 @@ delegated signing is `area:tls` and `area:node` both.
 
 `status:parked` is not `wontfix`. Parked issues stay open because the alternative is that the
 same limitation is rediscovered from the docs every few months and filed again.
+
+**Beside the axes** — `needs:hardware`. What is left to close the issue is a machine or a device,
+so a session without one cannot finish it however well it is scoped. It is not a status: the issue
+stays `status:ready`, because a person with the machine can start it today and nothing is waiting on
+a decision. It sits beside the three the way `security` sits beside a type, and it is the reason an
+issue can carry four labels and still satisfy the sentence at the top of this section.
+
+**What is left** is the whole of it. #80 needs a real Windows console, because the feature only runs
+when `isTerminal()` is true. #81 needs a Windows machine for `schtasks`, a reboot and a logon —
+which is a machine and specifically not a console — and a `linux-amd64` box for the architecture its
+run did not cover; the Linux half that was reachable was done first, and while it was reachable this
+label would have been wrong on it. So the label is about the remainder, and it comes off when a
+reachable part appears, the same way any label that disagrees with its body comes off.
+
+What it costs is that its absence is invisible. The first issue that needs it and has not got it is
+found by a session spending a cycle on it, which is what #80 cost three runs before this label
+existed. Set it when filing, and correct it — on or off — when a body says something the label does
+not.
 
 ## Claiming
 
@@ -127,6 +148,11 @@ gh issue create --title "..." --body-file /tmp/issue.md \
 An issue filed with no status is invisible to everything above. `status:triage` is the honest one
 when you do not yet know.
 
+And `needs:hardware` if what would close it is a machine — a console on a particular OS, a box of a
+particular architecture, a device. It is the one label a filer is better placed to set than anyone
+afterwards: whoever writes "what would close it" already knows whether the answer names a machine.
+Step 5 and step 7 of the loop below file issues too, and the same applies there.
+
 ## The loop
 
 One issue, start to finish. Each step says what it is protecting, because a step whose reason is
@@ -137,7 +163,8 @@ not written down is a step somebody skips the first time it is inconvenient.
 `status:ready`, or `status:needs-measurement` when you are the one taking the measurement.
 `status:needs-decision` is not ready by definition, `status:blocked` and `status:parked` are waiting
 on something that is not you, and `status:triage` has not been classified yet — classifying it is
-itself a small piece of work, and a worthwhile one.
+itself a small piece of work, and a worthwhile one. `needs:hardware` is not a status and does not
+stop a person, but it stops you if the machine it names is one you have not got.
 
 ### 2. Claim
 
@@ -171,8 +198,8 @@ Releasing costs re-reading the issue later; holding costs everyone else.
 
 ### 5. When work uncovers a different problem
 
-File it. Title, the three axes, and a link both ways. An observation that stays in a branch is an
-observation nobody else has.
+File it. Title, the three axes, `needs:hardware` if what would close it is a machine, and a link
+both ways. An observation that stays in a branch is an observation nobody else has.
 
 Then choose, honestly:
 
@@ -319,7 +346,9 @@ the issue says a session was ever there.
 
 The oldest `status:ready` whose newest CLAIM has expired or does not exist. There is no priority
 axis, so age is the one rule a reader can check afterwards. Skip — do not even claim — anything
-carrying `security`, `area:proto` or `area:release`; the merge rule below says why.
+carrying `security`, `area:proto` or `area:release`, for the reason the merge rule below gives, or
+`needs:hardware`, for the reason the axes section gives: the session cannot finish it, and no amount
+of scoping changes that.
 
 **The label is a claim about the body, not a reading of it, and the first run found two that
 disagreed with their own.** #71 was `status:ready` under a heading reading "Why this is a decision
@@ -328,12 +357,19 @@ up — step 2 already says to read the comments, and this is the same reflex one
 the two disagree, the label the body asks for is what the issue gets, with a line saying why. That
 relabelling is the work, it is worth doing, and it does not spend the count.
 
-**Ready means scoped, not reachable.** #80 wants a run on a real Windows console and #81 one VM per
-platform, and a session on a Mac can start neither; both are correctly `status:ready`, and nothing
-in the three axes says so. Walk past those the way the three labels above are walked past — no
-claim, no comment — and name them at the stop, so that the next session reads it rather than
-spending its own first cycle finding out. Two runs have now each paid for that reading. What would
-save the third is something on the issue itself that says so, and which of those is #223.
+**Ready means scoped, not reachable**, and `needs:hardware` is what says so. Three runs paid for
+that reading before the label existed, and each paid differently: the first two read #80 and #81 and
+walked past without claiming, which is the four issues' worth of reading #215 recorded; the third
+claimed #80, found the wall, released it a minute later, and filed an issue the tracker already had.
+Walk past a `needs:hardware` issue the way the three labels above are walked past — no claim, no
+comment — and name it at the stop, so a person reading the session's output sees what was skipped.
+
+That silence is for an issue the label fits. A label that disagrees with its body is the case the
+paragraph above governs, and it is the work rather than a walk-past: the reading is the same body
+that paragraph already asks for, the label goes on or comes off, and the line saying why goes with
+it. The third run is the worked example in both directions. #80's remainder is a machine and the
+label belongs on it; #81's did not become one until the half that was reachable had been done and
+merged, and a session that had walked past #81 in silence would have left that work undone.
 
 ### Each issue
 
@@ -399,8 +435,9 @@ save the third is something on the issue itself that says so, and which of those
    script itself has to pass; the `tools` job runs it, and every other self-test in `tools/`,
    through `tools/self-test.sh`.
 
-7. A problem seen anywhere in this is step 5: filed with all three axes and linked both ways. That
-   is how the tracker grows from the loop, and it is the only way it may.
+7. A problem seen anywhere in this is step 5: filed with all three axes, `needs:hardware` where it
+   applies, and linked both ways. That is how the tracker grows from the loop, and it is the only
+   way it may.
 
 ### What is never merged unattended
 
@@ -421,9 +458,10 @@ the start; the merge rule is for the label that was added on the way.
 
 Every stop leaves the tracker true — nothing claimed, every pull request merged, `status:in-review`
 or `status:needs-decision` — because the next session starts by reading it, and the one stop above
-that cannot say so says which job on which run beat it. The session's own last word carries the two
-things no label can: which issues it walked past unclaimed, and which it claimed and released
-without work. Both are what the next session would otherwise pay to discover again.
+that cannot say so says which job on which run beat it. The session's own last word carries what a
+label carries only half of: `gh issue list --label needs:hardware` says which issues are unreachable
+to everyone, and the stop says which of them *this* run reached and skipped, and which it claimed
+and released without work. Both are what the next session would otherwise pay to discover again.
 
 ## What this does not do
 
