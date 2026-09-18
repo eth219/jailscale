@@ -198,9 +198,11 @@ split_linux() {
 # Three columns and not one, because Rss alone reads as more binary than there is. `anon` is the
 # per-mapping Anonymous: line: a private file mapping whose pages have been written is resident
 # under the file's path and owned by the process, so a bucket by path alone counts the image heap's
-# copy-on-write pages as binary. `mapped` is Size:, the span, which is what says whether resident
-# pages beyond the file's length are the same bytes mapped twice or pages that stopped being the
-# file when they were dirtied. Both lines were in the smaps copy all along and neither was read.
+# copy-on-write pages as binary. `mapped` is Size:, the span, and it is context for the other two
+# rather than proof on its own -- a file mapping may be longer than its file. What separates "the
+# same bytes mapped twice" from "pages that stopped being the file when they were written" is rss
+# minus anon, the part that is still the file. Both lines were in the smaps copy all along, and
+# neither was read.
 #
 # It is one state of one run, the last of RUNS, and it is not averaged: this asks where the memory
 # is and not how much, and the run-to-run spread of the table above is under 0.2 MB. The `code`
@@ -224,7 +226,9 @@ breakdown() {
     # " (deleted)" appended to it.
     /^[0-9a-f]+-[0-9a-f]+ / {
       p = ""
-      if (!match($0, /^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[0-9]+ +/)) { bad++; next }
+      # A header this parse cannot read gets a bucket of its own rather than the one before it:
+      # leaving b alone would put these pages in whatever mapping came before, silently.
+      if (!match($0, /^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[0-9]+ +/)) { bad++; b = "unparsed"; path = ""; next }
       p = substr($0, RSTART + RLENGTH)
       if (p == exe)            b = ($2 ~ /x/) ? "binary, executable" : "binary, not executable"
       else if (p == "")        b = "no path"
@@ -233,6 +237,11 @@ breakdown() {
       if (b != "other file-backed") path = ""
       next
     }
+    # Every other line of smaps is "Key:  N kB" or VmFlags. One that is neither is a mapping header
+    # this pass did not recognise, and the fields under it would otherwise accumulate into the
+    # bucket of the mapping before it -- which is the silent misattribution the count below exists
+    # to catch. Tested with a line that is not a header at all, which is how it was found.
+    !/^[A-Za-z][A-Za-z0-9_]*:/ { if (NF > 0) { bad++; b = "unparsed"; path = "" } next }
     /^Rss:/       { sum[b] += $2; total += $2; if (path != "") per[path] += $2 }
     /^Anonymous:/ { anon[b] += $2; anontotal += $2 }
     /^Size:/      { size[b] += $2; sizetotal += $2 }
@@ -248,20 +257,26 @@ breakdown() {
       # clean and the tail of the bucket is not invisible.
       n = 0; rest = 0
       for (q in per) { if (per[q] > 256) n++; else rest += per[q] }
-      if (n > 0) {
-        printf "  other file-backed over 256 KB:\n"
+      if (n > 0 || rest > 0) {
+        printf "  what the other file-backed bucket is, named where it is over 256 KB:\n"
         for (q in per) if (per[q] > 256) printf "    %7d KB  %s\n", per[q], q | "sort -rn"
         close("sort -rn")
+        if (rest > 0) printf "    %7d KB  (everything else in that bucket)\n", rest
       }
-      if (rest > 0) printf "    %7d KB  (everything else in that bucket)\n", rest
-      if (bad > 0)  printf "  WARNING: %d mapping headers this pass could not parse\n", bad
-      # The one condition the whole table rests on, asserted rather than left to a reader to
-      # subtract. A mapping in no bucket accumulates into a name nothing prints. 64 KB is drift
-      # between two reads of two files; more than that is a bucket that is not there.
-      if (rollup > 0 && (total - rollup > 64 || rollup - total > 64))
+      # Two conditions, and they exit rather than print: the header of this script says every
+      # state asserts it is the state it claims to be, and a wrong table is worse than no table.
+      if (bad > 0) {
+        printf "  FAILED: %d mapping headers this pass could not read, holding %d KB\n", bad, sum["unparsed"]
+        exit 1
+      }
+      # 64 KB and not exact: the map and the rollup are two reads of two files a moment apart, so
+      # a few pages of drift are the sampler. More than that is a mapping in no bucket, which the
+      # four lines above cannot show -- each of them still prints.
+      if (rollup > 0 && (total - rollup > 64 || rollup - total > 64)) {
         printf "  FAILED: the buckets sum to %d KB and smaps_rollup said %d\n", total, rollup
-      else
-        printf "  (smaps_rollup said %d KB, and the buckets sum to %d)\n", rollup, total
+        exit 1
+      }
+      printf "  (smaps_rollup said %d KB, and the buckets sum to %d)\n", rollup, total
     }' "$W/$1.map"
 }
 
