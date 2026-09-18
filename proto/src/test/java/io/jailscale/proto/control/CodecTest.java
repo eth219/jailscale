@@ -19,7 +19,7 @@ class CodecTest {
             new Message.Goodbye(Message.Goodbye.UPGRADE_REQUIRED, "this hub speaks protocol 2 and newer"),
             new Message.Ping(7), new Message.Pong(7),
             new Message.RegisterRequest("wq-macbook", "macos", "wq", "9f1c", null, null),
-            new Message.RegisterRequest("ci-1", "linux", null, null, null, "jk_abc"),
+            new Message.RegisterRequest("ci-1", "linux", null, null, "7F3K-92QX", null),
             Message.RegisterResponse.approved(12, "wq"),
             Message.RegisterResponse.pending(),
             Message.RegisterResponse.rejected("invite-expired"),

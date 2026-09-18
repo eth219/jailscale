@@ -52,7 +52,7 @@ separate decision; the design here does not depend on it and does not block it.
 One binary, two roles, both on by default so `jailhub serve` on one host is exactly what it is now.
 
 **Control.** Owns the state directory: `hub.key`, `tls/`, `state.*`. Approves joins, assigns names,
-ports and domains, issues invites and auth-keys, bans, and issues and renews the wildcard through
+ports and domains, issues invites, bans, and issues and renews the wildcard through
 its own `_acme-challenge` responder. Signs handshakes. Signs *leases* (below). Serves the hub's own
 name: control channel, `/join`, `/admin`, `/v1/status`. There is one **primary** control host that
 writes, and one **standby** that follows the primary's event log over a hub-to-hub channel, receives

@@ -48,7 +48,6 @@ class StoreSnapshotTest {
             assertEquals(before.nodes(), after.nodes(), "nodes");
             assertEquals(before.admins(), after.admins(), "admins");
             assertEquals(before.invites(), after.invites(), "invites");
-            assertEquals(before.authKeys(), after.authKeys(), "auth keys");
             assertEquals(before.pending(), after.pending(), "pending");
             assertEquals(before.names(), after.names(), "names");
             assertEquals(before.domains(), after.domains(), "domains");
@@ -86,7 +85,6 @@ class StoreSnapshotTest {
         s.registerNode(NODE, "alice", "laptop", "macOS");
         s.addAdmin("alice");
         s.createInvite("token-one", "CODE-ABCD", "bob", 3, 3600, 600, "alice", true);
-        s.createAuthKey("secret-one", "carol", "ci-runner", 5, 7200);
         s.addPending("mkeydavedesktop", "desktop", "linux", "203.0.113.9", "dave");
         s.claimName("myapp", "alice", NODE, "127.0.0.1:3000");
         s.claimDomain("app.example.com", "alice", NODE);
@@ -99,13 +97,13 @@ class StoreSnapshotTest {
 
     /** Everything the store can be asked for, as one value, so the comparison is total. */
     private static Everything capture(Store s) {
-        return new Everything(s.nodes(), s.admins(), s.invites(), s.authKeys(), s.pending(), s.names(),
+        return new Everything(s.nodes(), s.admins(), s.invites(), s.pending(), s.names(),
             s.domains(), s.ports(), s.notices(NODE), s.bans(), s.setting("registration", null),
             s.nextHubKey(), s.hubKeyActivatesAt());
     }
 
     private record Everything(List<Store.NodeRec> nodes, Set<String> admins, List<Store.InviteRec> invites,
-        List<Store.AuthKeyRec> authKeys, List<Store.PendingRec> pending, List<Store.NameRec> names,
+        List<Store.PendingRec> pending, List<Store.NameRec> names,
         List<Store.DomainRec> domains, List<Store.PortRec> ports, List<Store.NoticeRec> notices,
         List<Store.BanRec> bans, String setting, String nextHubKey, long hubKeyActivatesAt) {}
 }

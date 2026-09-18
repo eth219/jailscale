@@ -214,29 +214,6 @@ final class AdminIpc implements Ipc.Handler {
                 store.revokeInvite(req.string("id"));
                 reply.ok();
             }
-            case "authkey-create" -> {
-                String owner = req.optString("owner", null);
-                String tag = req.optString("tag", null);
-                if ((owner == null) == (tag == null)) {
-                    throw new IllegalArgumentException("exactly one of --owner or --tag");
-                }
-                String secret = Tokens.authKey();
-                Store.AuthKeyRec r = store.createAuthKey(secret, owner, tag, req.optInt("uses", 1),
-                    req.has("ttl") ? req.lng("ttl") : 7 * 86400);
-                reply.done(JsonObject.builder().put("ok", true).put("id", r.id()).put("key", secret).put("expiresAt", r.expiresAt()));
-            }
-            case "authkey-list" -> {
-                List<Object> rows = new ArrayList<>();
-                for (Store.AuthKeyRec r : store.authKeys()) {
-                    rows.add(JsonObject.builder().put("id", r.id()).put("owner", r.owner()).put("tag", r.tag())
-                        .put("usesLeft", r.usesLeft()).put("expiresAt", r.expiresAt()).build().asMap());
-                }
-                reply.done(JsonObject.builder().put("ok", true).put("authKeys", rows));
-            }
-            case "authkey-revoke" -> {
-                store.revokeAuthKey(req.string("id"));
-                reply.ok();
-            }
             case "admin-add" -> {
                 store.addAdmin(req.string("user"));
                 reply.ok();
@@ -380,9 +357,7 @@ final class AdminIpc implements Ipc.Handler {
             case "domain-release" -> b.put("domain", need(a.positional(2), "<domain>"));
             case "invite-create" -> b.put("user", a.get("user")).put("uses", a.integer("uses", 0))
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null).put("admin", a.flag("admin"));
-            case "invite-revoke", "authkey-revoke" -> b.put("id", need(a.positional(2), "<id>"));
-            case "authkey-create" -> b.put("owner", a.get("owner")).put("tag", a.get("tag")).put("uses", a.integer("uses", 1))
-                .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null);
+            case "invite-revoke" -> b.put("id", need(a.positional(2), "<id>"));
             case "admin-add", "admin-remove" -> b.put("user", need(a.positional(2), "<user>"));
             case "key-rotate" -> b.put("grace", a.has("grace") ? a.seconds("grace", 0) : null);
             case "setting" -> {

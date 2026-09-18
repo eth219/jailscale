@@ -95,7 +95,12 @@ public sealed interface Message {
 
     // --- registration ----------------------------------------------------------------------
 
-    /** Exactly one of invite / code / authKey, or none to knock. {@code user} is the self-chosen name. */
+    /**
+     * One of invite / code, or none to knock. {@code user} is the self-chosen name. {@code authKey}
+     * is a credential kind that was removed (#251): the field is still read so that a node older
+     * than that which presents one is refused with a reason rather than treated as a knock, and no
+     * node sends it any more. Kept on the wire under its old name, as §5.4 asks.
+     */
     record RegisterRequest(String hostname, String os, String user, String invite, String code, String authKey)
         implements Message {
         @Override public String type() { return "RegisterRequest"; }

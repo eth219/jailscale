@@ -1301,7 +1301,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         reply.progress("joining " + host + " as " + state.machineKeyText());
 
         HubLink.Credentials creds = new HubLink.Credentials(invite, req.optString("code", null),
-            req.optString("authKey", null), req.optString("user", null));
+            req.optString("user", null));
         link.start(creds);
         if (state.registered) {
             waitConnected();

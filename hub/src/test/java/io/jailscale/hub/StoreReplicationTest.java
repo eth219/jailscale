@@ -100,7 +100,7 @@ class StoreReplicationTest {
             loser.claimName("bobapp", "bob", "mkey:bob", "127.0.0.1:8080");
             loser.claimDomain("app.example.com", "bob", "mkey:bob");
             loser.assignPort(2222, "tcp", "bob", "mkey:bob", "127.0.0.1:22");
-            loser.createAuthKey("jk_partition", "bob", null, 1, 3600);
+            loser.createInvite("tok_partition", "PART-0001", null, 1, 3600, 600, "bob", false);
 
             Store.Superseded lost = loser.replaceWith(winner.snapshotJson());
 
@@ -109,7 +109,7 @@ class StoreReplicationTest {
             assertEquals(List.of("bobapp"), lost.names());
             assertEquals(List.of("app.example.com"), lost.domains());
             assertEquals(List.of(2222), lost.ports());
-            assertEquals(1, lost.credentials(), "the auth-key created here");
+            assertEquals(1, lost.credentials(), "the invite created here");
             // Not what they agreed on, and not what the winner has that this host never had.
             assertFalse(lost.names().contains("web"), "a name both held is not lost");
             assertFalse(lost.nodes().contains("carol/ci-box"), "the winner's own node is not a loss here");
