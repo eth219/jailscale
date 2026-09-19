@@ -37,6 +37,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * stands down is discarded rather than kept as a primary's verdict. Giving this class a monitor of
  * its own would leave all four of those free to interleave with a promotion. Nothing here
  * synchronizes, and that is deliberate.
+ *
+ * <p>{@link #promote} and {@link #demote} open with {@code assert Thread.holdsLock(hub)}, because
+ * without it the rule above is a paragraph rather than a check: the {@code synchronized} keyword
+ * that used to enforce it now sits one file away, and no test fails if it is dropped. Surefire runs
+ * with assertions on, so that assert is what fails instead.
  */
 final class Standby {
 
@@ -97,10 +102,18 @@ final class Standby {
         return "on".equals(hub.store().setting(Store.SETTING_AUTO_PROMOTE, dflt));
     }
 
-    /** Opens the channel to the peer named by {@code --peer}, on either role. */
+    /**
+     * Opens the channel to the peer named by {@code --peer}, on either role.
+     *
+     * <p>Started through the local and not through the field, which is what the promotion path did
+     * before this class existed. Reading {@code peerClient} back to call {@code start()} on it lets
+     * a promotion that runs in between -- which sets the field to null -- turn this into a
+     * NullPointerException on an unnamed virtual thread, where nothing would report it.
+     */
     void startPeerClient() {
-        peerClient = new PeerClient(hub, config.peer(), config.peerCa(), config.peerAddr());
-        peerClient.start();
+        PeerClient pc = new PeerClient(hub, config.peer(), config.peerCa(), config.peerAddr());
+        peerClient = pc;
+        pc.start();
     }
 
     void closePeerClient() {
@@ -245,6 +258,7 @@ final class Standby {
      * <p>Called only under {@link Hub}'s monitor; see this class's note on it.
      */
     void promote(String why) throws IOException {
+        assert Thread.holdsLock(hub) : "promote must hold the Hub monitor";
         if (!standby) {
             throw new IOException("this hub is already the primary");
         }
@@ -281,6 +295,7 @@ final class Standby {
      * <p>Called only under {@link Hub}'s monitor; see this class's note on it.
      */
     void demote(long theirEpoch, String theirHost) throws IOException {
+        assert Thread.holdsLock(hub) : "demote must hold the Hub monitor";
         if (standby) {
             return;
         }
