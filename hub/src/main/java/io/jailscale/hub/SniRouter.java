@@ -322,7 +322,7 @@ final class SniRouter {
             HttpFront.secured(HttpResponse.html(404, "<!doctype html><meta charset=utf-8>" + HttpFront.NOINDEX
                 + "<title>jailscale</title><p><b>" + HttpFront.escape(name) + "</b> is not open right now.</p>"))
                 .writeTo(s.getOutputStream(), req.isHead());
-        } catch (HttpException e) {
+        } catch (HttpException _) {
             // not HTTP; nothing to say
         }
     }

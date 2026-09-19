@@ -174,7 +174,7 @@ final class Peers {
                         eventsSent.incrementAndGet();
                     }
                 }
-            } catch (InterruptedException ignored) {
+            } catch (InterruptedException _) {
                 // closing
             } catch (IOException e) {
                 if (!closed) {

@@ -107,7 +107,7 @@ public final class Main {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 hub.close();
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // exiting
             }
         }, "shutdown"));

@@ -156,7 +156,7 @@ final class HttpFront {
                 // before the line that was rejected, and an error is still an answer to a HEAD.
                 write(HttpResponse.text(e.status(), e.getMessage()), out, e.isHead());
                 return;
-            } catch (EOFException e) {
+            } catch (EOFException _) {
                 return;
             }
             LOG.debug("{} {} from {}", req.method(), req.path(), ip);
@@ -710,83 +710,91 @@ final class HttpFront {
         // the role is live state, and a hub promoted between two readings of it renders a page that
         // contradicts itself -- here, "it is the standby" above a table that says primary.
         boolean standby = hub.isStandby();
-        b.append("<p><code>").append(host).append("</code> is a jailscale hub. It publishes a port on your")
-            .append(" machine over HTTPS without opening an inbound port: the hub relays the bytes and your")
-            .append(" machine terminates the TLS. <a href=\"").append(REPO).append("\">What this is</a>.</p>");
+        b.append("""
+            <p><code>%s</code> is a jailscale hub. It publishes a port on your \
+            machine over HTTPS without opening an inbound port: the hub relays the bytes and your \
+            machine terminates the TLS. <a href="%s">What this is</a>.</p>""".formatted(host, REPO));
 
         // In the order someone has to do it. The page used to say how to join and stop there, which
         // leaves out both where the binary comes from and what joining was for.
         b.append("<h2>Publish a port</h2>");
-        b.append("<p><a href=\"").append(REPO).append("/releases/latest\">Download <code>jailscale</code></a>")
-            .append(" for Linux, Apple-silicon macOS or Windows: one file, no runtime to install")
-            .append(" underneath it, no root. Intel Macs run <code>jailscale.jar</code> on a JVM.</p>");
+        b.append("""
+            <p><a href="%s/releases/latest">Download <code>jailscale</code></a> \
+            for Linux, Apple-silicon macOS or Windows: one file, no runtime to install \
+            underneath it, no root. Intel Macs run <code>jailscale.jar</code> on a JVM.</p>""".formatted(REPO));
         // "latest" is a moving target and this hub is not: it can say which copies it will talk to,
         // and what happens to one it will not, so nobody has to find that out from a failed join.
         // What it must not say is that any recent release will do: the floor is enforced from both
         // ends -- a jailscale has its own minimum hub protocol and refuses a hub below it -- and
         // this page can only speak for this end of it.
-        b.append("<p>This hub speaks <b>protocol ")
-            .append(Message.PROTO).append("</b> and takes ").append(TAKES)
-            .append(". One that is too old is turned away at the handshake with a line saying so and")
-            .append(" which version this hub runs, rather than half-working; a jailscale newer than")
-            .append(" this hub decides for itself whether it will still talk to it.")
-            // Naming the number is only half of it: the reader also has to get the same number out
-            // of the copy they hold. #140 gave them the command; this names it, because the
-            // paragraph is the only place the two numbers meet and it stated one of them (#168).
-            // "a current copy", not "your copy": every jailscale released before #140 prints the
-            // build alone, and that reader -- holding an existing copy, checking it against this
-            // hub's floor -- is this paragraph's whole audience. Telling them their binary does
-            // something it does not is the mistake the comment above is about, in the other
-            // direction: this page can only speak for its own end.
-            .append(" <code>jailscale version</code> prints the protocol a current copy speaks,")
-            .append(" beside its build. A copy that prints no protocol is older than the release")
-            .append(" this hub came from.</p>");
+        // The second half of the paragraph names the command, because the reader also has to get
+        // the same number out of the copy they hold. #140 gave them the command; this names it,
+        // because the paragraph is the only place the two numbers meet and it stated one of them
+        // (#168). "a current copy", not "your copy": every jailscale released before #140 prints
+        // the build alone, and that reader -- holding an existing copy, checking it against this
+        // hub's floor -- is this paragraph's whole audience. Telling them their binary does
+        // something it does not is the mistake the comment above is about, in the other direction:
+        // this page can only speak for its own end.
+        b.append("""
+            <p>This hub speaks <b>protocol %d</b> and takes %s. One that is too old is turned away \
+            at the handshake with a line saying so and which version this hub runs, rather than \
+            half-working; a jailscale newer than this hub decides for itself whether it will still \
+            talk to it. <code>jailscale version</code> prints the protocol a current copy speaks, \
+            beside its build. A copy that prints no protocol is older than the release this hub \
+            came from.</p>""".formatted(Message.PROTO, TAKES));
         // The page already says how to check the hub's binary. It said nothing about the file the
         // reader is about to download, which is the one they can actually do something about.
-        b.append("<p>The releases are signed. Once you have <code>jailscale</code>,")
-            .append(" <code>jailscale update --download</code> checks the signature of everything it")
-            .append(" fetches after that, so this is the one copy you check by hand: the signature is")
-            .append(" over <code>RELEASE.txt</code>, which names the tag and carries the digest of")
-            .append(" <code>SHA256SUMS.txt</code>, and your download's hash is in that.")
-            .append(" <a href=\"").append(REPO).append("/blob/main/docs/release-verification.md\">")
-            .append("How to check it</a> is one command from a clone, or four by hand. The first copy")
-            .append(" is the one nothing of ours can vouch for yet; every copy after it is checked")
-            .append(" against a key this one pinned.</p>");
+        b.append("""
+            <p>The releases are signed. Once you have <code>jailscale</code>, \
+            <code>jailscale update --download</code> checks the signature of everything it \
+            fetches after that, so this is the one copy you check by hand: the signature is \
+            over <code>RELEASE.txt</code>, which names the tag and carries the digest of \
+            <code>SHA256SUMS.txt</code>, and your download's hash is in that. \
+            <a href="%s/blob/main/docs/release-verification.md">How to check it</a> is one command \
+            from a clone, or four by hand. The first copy is the one nothing of ours can vouch for \
+            yet; every copy after it is checked against a key this one pinned.</p>""".formatted(REPO));
         if (standby) {
             // A standby answers Goodbye{standby} to every control connection (§13.4), so the join
             // below is not printed here at all rather than printed beside a warning: a page that
             // invites a join it will refuse is worse than one that says nothing, and while the
             // primary is down the apex this would tell them to type resolves to nothing.
-            b.append("<p><b>Not on this host, though:</b> it is the standby. It serves links that are")
-                .append(" already open and takes no joins; the primary is where joining happens.</p>");
+            b.append("""
+                <p><b>Not on this host, though:</b> it is the standby. It serves links that are already \
+                open and takes no joins; the primary is where joining happens.</p>""");
         } else {
             // Say what this hub actually accepts rather than assuming a default.
             boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
             if (open) {
+                // Not a text block with formatted(), which the paragraph above and below both are:
+                // the <pre> needs a real newline, and a newline in a format string is
+                // VA_FORMAT_STRING_USES_NEWLINE. SpotBugs wants %n there, and %n is the platform's
+                // separator -- CRLF on Windows -- which would change the bytes this hub serves
+                // depending on where it runs. So the host goes in by append instead.
                 b.append("<p>Registration is open, so joining takes effect immediately:</p>")
                     .append("<pre>jailscale up --hub ").append(host).append("\njailscale open 3000</pre>");
             } else {
-                b.append("<p>Joining needs an invitation. Members create them with <code>jailscale invite</code>;")
-                    .append(" with one in hand:</p>")
-                    .append("<pre>jailscale up --invite &lt;url&gt;\njailscale open 3000</pre>");
+                b.append("""
+                    <p>Joining needs an invitation. Members create them with <code>jailscale invite</code>; \
+                    with one in hand:</p><pre>jailscale up --invite &lt;url&gt;
+                    jailscale open 3000</pre>""");
             }
-            b.append("<p>That serves <code>127.0.0.1:3000</code> at <code>https://&lt;name&gt;.").append(host)
-                .append("</code>, with a certificate your own machine terminates. <code>--name myapp</code> asks for")
-                .append(" a particular name, <code>--tcp</code> forwards a raw port instead, and")
-                .append(" <code>--domain app.example.com</code> uses a domain of yours, whose key never leaves your")
-                .append(" machine.</p>");
+            b.append("""
+                <p>That serves <code>127.0.0.1:3000</code> at <code>https://&lt;name&gt;.%s</code>, with a \
+                certificate your own machine terminates. <code>--name myapp</code> asks for a particular \
+                name, <code>--tcp</code> forwards a raw port instead, and <code>--domain app.example.com</code> \
+                uses a domain of yours, whose key never leaves your machine.</p>""".formatted(host));
         }
 
         // A public hub is asking people to route their traffic through a stranger's machine. What it
         // can and cannot do with that traffic belongs on its own front page, not only in the docs.
         b.append("<h2>What this hub can see</h2>");
-        b.append("<p>Not the traffic. It reads the TLS SNI to pick a node and forwards the rest untouched;")
-            .append(" the session key belongs to the machine at the other end. It does hold the wildcard")
-            .append(" private key for <code>*.").append(host).append("</code> and signs one handshake digest")
-            .append(" per visitor, so a dishonest hub could point a name at a machine of its own instead.")
-            .append(" That is what <code>jailscale verify</code> checks from your side, and what the daemon")
-            .append(" re-checks on its own every half hour. A domain you bring yourself never involves this")
-            .append(" hub's key at all.</p>");
+        b.append("""
+            <p>Not the traffic. It reads the TLS SNI to pick a node and forwards the rest untouched; the \
+            session key belongs to the machine at the other end. It does hold the wildcard private key for \
+            <code>*.%s</code> and signs one handshake digest per visitor, so a dishonest hub could point a \
+            name at a machine of its own instead. That is what <code>jailscale verify</code> checks from \
+            your side, and what the daemon re-checks on its own every half hour. A domain you bring \
+            yourself never involves this hub's key at all.</p>""".formatted(host));
 
         // Who runs this hub, and what it keeps. Drawn only when the operator has said so: a hub
         // somebody runs for themselves has nobody to name and no terms to point at, and a section
@@ -828,17 +836,16 @@ final class HttpFront {
             // raw-port targets and notices -- and a list that has to be complete to be
             // honest is a list that goes stale the next time anything is added to the store. So:
             // the shape of it, the part a visitor is actually asking about, and where it stops.
-            b.append("<p>What it keeps is what an operator administers: the nodes and who owns them,")
-                .append(" the names, domains and ports they hold, the invitations that let")
-                .append(" them in, and what each machine said about itself when it joined -- its")
-                .append(" hostname, its system, and the address it knocked from. That stays until the")
-                .append(" operator removes it. Beside it, thirty days of uptime record and the")
-                .append(" addresses they have barred.</p>");
-            b.append("<p><b>Not the visitors.</b> A visit to a link is relayed and not recorded: the")
-                .append(" hub counts them and keeps no list, and at its default log level it names")
-                .append(" nodes, not visitors. And what the machine underneath keeps -- the system")
-                .append(" journal, a proxy in front, a backup of the state directory -- is the")
-                .append(" operator's and not something this page can answer for.</p>");
+            b.append("""
+                <p>What it keeps is what an operator administers: the nodes and who owns them, the names, \
+                domains and ports they hold, the invitations that let them in, and what each machine said \
+                about itself when it joined -- its hostname, its system, and the address it knocked from. \
+                That stays until the operator removes it. Beside it, thirty days of uptime record and the \
+                addresses they have barred.</p>\
+                <p><b>Not the visitors.</b> A visit to a link is relayed and not recorded: the hub counts \
+                them and keeps no list, and at its default log level it names nodes, not visitors. And what \
+                the machine underneath keeps -- the system journal, a proxy in front, a backup of the state \
+                directory -- is the operator's and not something this page can answer for.</p>""");
         }
 
         int online = hub.registry().size();
@@ -962,14 +969,15 @@ final class HttpFront {
         b.append("</table>");
         // Saying what these two lines are not is the point of printing them. A hub that has been
         // tampered with writes this page, so they catch a mistake and nothing more (§11.2).
-        b.append("<p><small>The hub key is the one a node pins when it joins, and <code>jailscale status</code>")
-            .append(" prints the one yours pinned. The binary hash is of the file this process is running: compare it")
-            .append(" with <code>SHA256SUMS.txt</code> in <a href=\"").append(REPO).append("/releases\">the release")
-            .append("</a> it claims to be -- checked through <code>RELEASE.txt</code>'s signature the same way as")
-            .append(" above, since an unchecked checksum list says nothing about which release it belongs to --")
-            .append(" and remembering that a container or source build is its own binary. Both are")
-            .append(" what this hub says about itself, so they tell you an operator is running what they think they")
-            .append(" are; a dishonest hub prints whatever it likes here.</small></p>");
+        b.append("""
+            <p><small>The hub key is the one a node pins when it joins, and <code>jailscale status</code> \
+            prints the one yours pinned. The binary hash is of the file this process is running: compare it \
+            with <code>SHA256SUMS.txt</code> in <a href="%s/releases">the release</a> it claims to be -- \
+            checked through <code>RELEASE.txt</code>'s signature the same way as above, since an unchecked \
+            checksum list says nothing about which release it belongs to -- and remembering that a container \
+            or source build is its own binary. Both are what this hub says about itself, so they tell you an \
+            operator is running what they think they are; a dishonest hub prints whatever it likes \
+            here.</small></p>""".formatted(REPO));
 
         // How many, and not which. This page is the one page here a crawler is asked to index
         // (ROBOTS, NOINDEX), and an address on it is text on a page that says it may be listed;
@@ -1013,10 +1021,12 @@ final class HttpFront {
         // "here is who to ask". A hub that has named nobody keeps the warning, because for that one
         // it is still true.
         b.append(named
-            ? "<p>The operator can remove a node or bar an address. Who that is, and on what terms,"
-                + " is under <a href=\"#who\">Who runs this hub</a> above.</p>"
-            : "<p>The operator can remove a node or bar an address, so treat an open hub you do not run"
-                + " as a place to try this rather than one to depend on.</p>");
+            ? """
+                <p>The operator can remove a node or bar an address. Who that is, and on what terms, is \
+                under <a href="#who">Who runs this hub</a> above.</p>"""
+            : """
+                <p>The operator can remove a node or bar an address, so treat an open hub you do not run as \
+                a place to try this rather than one to depend on.</p>""");
 
         return b.toString();
     }

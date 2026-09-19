@@ -413,7 +413,7 @@ final class Links {
             try {
                 g.send(m);
                 return;
-            } catch (IOException | RuntimeException e) {
+            } catch (IOException | RuntimeException _) {
                 // Connected but on its way out: fall through and store it for the next connection.
             }
         }
@@ -449,7 +449,7 @@ final class Links {
         while ((l = map.get(name)) == null && System.currentTimeMillis() < deadline) {
             try {
                 Thread.sleep(100);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 Thread.currentThread().interrupt();
                 return null;
             }

@@ -46,7 +46,7 @@ final class HttpChallengeFront implements AutoCloseable {
             Socket s;
             try {
                 s = server.accept();
-            } catch (IOException e) {
+            } catch (IOException _) {
                 break;
             }
             Thread.ofVirtual().name("http80-" + s.getPort()).start(() -> serve(s));
@@ -62,7 +62,7 @@ final class HttpChallengeFront implements AutoCloseable {
             } catch (HttpException e) {
                 HttpResponse.text(e.status(), e.getMessage()).writeTo(socket.getOutputStream(), e.isHead());
                 return;
-            } catch (EOFException e) {
+            } catch (EOFException _) {
                 return;
             }
             route(req).writeTo(socket.getOutputStream(), req.isHead());
@@ -101,7 +101,7 @@ final class HttpChallengeFront implements AutoCloseable {
     public void close() {
         try {
             server.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // closing
         }
     }
