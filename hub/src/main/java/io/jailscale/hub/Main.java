@@ -42,7 +42,7 @@ public final class Main {
         jailhub domain list | release <domain>
         jailhub ban list | add <ip|cidr> [--reason R] | remove <ip|cidr>
         jailhub invite create [--user NAME] [--uses N] [--ttl 24h] [--admin] | list | revoke <id>
-        jailhub admin add <user> | remove <user> | login-link
+        jailhub admin add <user> | remove <user>
         jailhub key rotate [--grace 30d]
         jailhub setting invitePolicy members|admins | registration invite|open | knock on|off | autoPromote on|off
         jailhub setting operator "NAME" | contact https://...|mailto:... | terms https://...

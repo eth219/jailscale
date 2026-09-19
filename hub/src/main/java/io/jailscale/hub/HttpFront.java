@@ -58,17 +58,18 @@ final class HttpFront {
      * say {@code noindex} themselves ({@link #NOINDEX}); being crawled costs them nothing, since
      * opening an invitation has never spent it.
      *
-     * <p>{@code /admin} is the exception and is here for a different reason than secrecy: a login
-     * link is one-shot and {@code AdminWeb} consumes it on the GET, so a machine that fetches one
-     * to see what is there burns it. Nothing under it is indexable anyway -- without a session it
-     * answers 403 -- so the meta stays on those pages as the second layer.
+     * <p>There is nothing left to disallow. {@code /admin} was the one entry, and it was there for
+     * a different reason than secrecy: a login link was one-shot and the admin page consumed it on
+     * the GET, so a machine that fetched one to see what was there burned it. The page is gone
+     * (#253) and the path now 404s, so the file keeps its empty {@code Disallow} -- the canonical
+     * way to say "all of it" -- rather than naming a route that no longer exists.
      *
      * <p>All of it is advice a crawler may ignore, so this raises the floor and is not a control.
      * The one part here that is not advice is that {@code /} names no link at all (§6.3): an
      * address is kept out of an index by not being on the page that asks to be indexed, not by
      * what the markup around it says about itself.
      */
-    private static final String ROBOTS = "User-agent: *\nDisallow: /admin\n";
+    private static final String ROBOTS = "User-agent: *\nDisallow:\n";
 
     /**
      * {@code nofollow} as well as {@code noindex}: an invitation and the wildcard's "not open" page
@@ -80,14 +81,15 @@ final class HttpFront {
      * What every answer on this name carries. The front end's own shape is what makes the policy
      * exact rather than aspirational: there is no script, no external stylesheet, no font, and
      * nothing is ever fetched from a node, so {@code default-src 'none'} is the truth and not an
-     * aspiration. {@code form-action} and {@code frame-ancestors} are the two that matter, and they
-     * matter for {@link AdminWeb}: its forms change the hub's state, and they are the reason this
-     * is applied to every response rather than only to the pages.
+     * aspiration. {@code form-action} and {@code frame-ancestors} are kept although the admin page
+     * that needed them is gone (#253) and no page here posts anything any more: they cost a header
+     * either way, and the next form to appear should find the policy already in front of it rather
+     * than have to remember to bring it. Applied to every response rather than only to the pages.
      *
      * <p>{@code img-src 'self'} for the icon, which is a route here and not a data URI; if it ever
      * becomes one this has to say {@code data:} instead. {@code Referrer-Policy: no-referrer}
-     * because an invitation URL and an admin login URL are credentials in a path, and a Referer
-     * header is the one way a path travels somewhere nobody chose to send it.
+     * because an invitation URL is a credential in a path, and a Referer header is the one way a
+     * path travels somewhere nobody chose to send it.
      */
     private static final String[][] SECURITY_HEADERS = {
         {"Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; "
@@ -116,10 +118,11 @@ final class HttpFront {
         + "<circle cx=\"26\" cy=\"16\" r=\"5\"/></svg>";
 
     /**
-     * How a page asks for {@link #FAVICON}. A constant and not a literal in each frame because there
-     * are two frames on this name -- {@link #page} here and {@link AdminWeb}'s own -- and the second
-     * one is how the icon came to be missing from half the hub in the first place, exactly as
-     * {@link #NOINDEX} is shared for the same reason.
+     * How a page asks for {@link #FAVICON}. A constant and not a literal because this name used to
+     * carry two frames -- {@link #page} here and the admin page's own -- and the second one is how
+     * the icon came to be missing from half the hub in the first place. The admin page is gone
+     * (#253) and {@link #page} is the only frame left, but the constant stays for the reason
+     * {@link #NOINDEX} is shared: the next frame should not have to rediscover this.
      */
     static final String ICON = "<link rel=\"icon\" href=\"/favicon.svg\">";
 
@@ -239,7 +242,7 @@ final class HttpFront {
      * {@link #page} builds every other page here, and a 500 handler that calls the machinery that
      * just failed is a handler that fails twice and answers nothing.
      */
-    private static final String ERROR_PAGE = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    static final String ERROR_PAGE = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         + NOINDEX + ICON + "<title>Something went wrong</title>"
         + "<style>body{font-family:system-ui,sans-serif;max-width:48rem;margin:4rem auto;padding:0 1.5rem;"
         + "line-height:1.65;color-scheme:light dark}</style></head><body><h1>Something went wrong</h1>"
@@ -248,15 +251,13 @@ final class HttpFront {
 
     HttpResponse route(HttpRequest req) throws IOException {
         String path = req.path();
-        if (path.equals("/admin") || path.startsWith("/admin/")) {
-            return hub.adminWeb().handle(req);
-        }
         if (!req.method().equals("GET") && !req.method().equals("HEAD")) {
             // The guard is above the dispatch, so it answers for paths of both kinds and has to
             // pick the shape the way each of them would: a POST to /v1/key is a client that got
             // the method wrong, and a page is bytes it has to skip to find that out.
             // Allow, because a 405 without it is the one thing RFC 9110 §15.5.6 requires of this
-            // status, and /admin -- the only path here that takes anything else -- never arrives.
+            // status. Since #253 removed the admin page, every path here is a GET or a HEAD, so
+            // this now answers for all of them rather than for all but one.
             return (machinePath(path) ? HttpResponse.text(405, "method not allowed")
                 : errorPage(405, "Not that way", "That method is not one this page answers."
                     + " Everything here is a GET.")).header("Allow", "GET, HEAD");
@@ -310,7 +311,7 @@ final class HttpFront {
                 .header("Cache-Control", "no-store");
         }
         if (path.equals("/")) {
-            return HttpResponse.html(200, page("jailscale hub", preview(), home(req), true))
+            return HttpResponse.html(200, page("jailscale hub", preview(), home(), true))
                 .header("Cache-Control", "no-store");
         }
         return errorPage(404, "Not found", "There is no page at <code>" + escape(path)
@@ -323,8 +324,9 @@ final class HttpFront {
      * out -- the last being the one that takes every name down at once and the one worth alerting
      * on. That is the whole list. It used to carry the counters and the hub's state as well, which
      * made the public name's health check a second copy of {@code /metrics}; the counters live on
-     * the metrics listener now and the per-node detail behind {@code /admin} (ARCHITECTURE.md
-     * §6.3). Fields may be added; a monitor that reads the ones it knows keeps working (§5.4).
+     * the metrics listener now and the per-node detail on the {@code jailhub} socket CLI, which
+     * since #253 is the one admin surface (ARCHITECTURE.md §6.3). Fields may be added; a monitor
+     * that reads the ones it knows keeps working (§5.4).
      */
     private JsonObject status() {
         JsonObject.Builder b = JsonObject.builder()
@@ -698,9 +700,10 @@ final class HttpFront {
     /**
      * The hub's own page: what it is, how to join it, and how it is doing. Counts and resource
      * use are public; they describe the service, not the people on it. Per-node detail and the
-     * controls over it appear only for a signed-in admin, since that is who and where.
+     * controls over it are not here at all: since #253 they are the {@code jailhub} socket CLI's,
+     * whose file permissions are the authorisation.
      */
-    private String home(HttpRequest req) {
+    private String home() {
         StringBuilder b = new StringBuilder();
         String host = escape(hub.config().hostname());
         // Sampled once for the whole page, for the reason the status section below already gives:
@@ -1015,14 +1018,6 @@ final class HttpFront {
             : "<p>The operator can remove a node or bar an address, so treat an open hub you do not run"
                 + " as a place to try this rather than one to depend on.</p>");
 
-        // The admin tables and their forms come last, under everything a visitor came for.
-        AdminWeb.Session s = hub.adminWeb().adminSession(req);
-        if (s != null) {
-            b.append("<p>Signed in as <b>").append(escape(s.user())).append("</b>. ")
-                .append("<a href=\"/admin\">Full admin page</a>.</p>");
-            b.append(hub.adminWeb().nodesAndBans(
-                "<input type=hidden name=csrf value=\"" + escape(s.csrf()) + "\">", "/"));
-        }
         return b.toString();
     }
 

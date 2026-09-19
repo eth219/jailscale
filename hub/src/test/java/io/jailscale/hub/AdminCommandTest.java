@@ -61,7 +61,6 @@ class AdminCommandTest {
             new Route("invite-revoke", "invite", "revoke", "inv_1"),
             new Route("admin-add", "admin", "add", "alice"),
             new Route("admin-remove", "admin", "remove", "alice"),
-            new Route("admin-login-link", "admin", "login-link"),
             new Route("key-rotate", "key", "rotate"),
             new Route("setting", "setting", "knock", "off"),
             new Route("promote", "promote"),

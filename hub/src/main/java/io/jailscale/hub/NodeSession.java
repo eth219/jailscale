@@ -360,14 +360,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 }
             }
             case Message.InviteCreate ic -> send(hub.invites().createForNode(this, ic));
-            case Message.AdminLinkRequest a -> {
-                if (node == null || !hub.store().isAdmin(node.user())) {
-                    send(new Message.Error(a.type(), "not-an-admin"));
-                } else {
-                    send(new Message.AdminLink(hub.adminWeb().loginLink(node.user()),
-                        (System.currentTimeMillis() + AdminWeb.LOGIN_LINK_TTL_MS) / 1000));
-                }
-            }
             case Message.LinkOpen lo -> send(hub.links().open(this, lo));
             case Message.ChallengeSet cs -> {
                 String domain = cs.domain() == null ? null : cs.domain().toLowerCase(Locale.ROOT);

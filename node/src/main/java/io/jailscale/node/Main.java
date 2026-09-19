@@ -28,7 +28,7 @@ public final class Main {
                                                               your own domain, CNAME'd to the hub (ARCHITECTURE.md §8.3)
         jailscale gate NAME [--ttl 24h | --off]              each run issues a fresh visit link
         jailscale ls | close NAME
-        jailscale status | down | leave | netcheck | admin | daemon
+        jailscale status | down | leave | netcheck | daemon
         jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
         jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
@@ -100,12 +100,6 @@ public final class Main {
                 case "invite" -> invite(cfg, a);
                 case "open" -> open(cfg, a);
                 case "ls" -> ls(cfg);
-                case "admin" -> {
-                    JsonObject r = call(cfg, JsonObject.builder().put("cmd", "admin").build(), false);
-                    String url = r.string("url");
-                    System.out.println("admin page (open it within 60 seconds): " + url);
-                    openBrowser(url);
-                }
                 case "gate" -> {
                     String name = a.positional(1);
                     if (name == null) {
@@ -444,20 +438,6 @@ public final class Main {
             // no log to quote
         }
         throw new IOException("daemon did not start" + why + " (see " + cfg.daemonLog() + ")");
-    }
-
-    /** Opens a URL in the user's browser without AWT (ARCHITECTURE.md §3.1). */
-    static void openBrowser(String url) {
-        List<String> cmd = switch (HubLink.osName()) {
-            case "macos" -> List.of("open", url);
-            case "windows" -> List.of("rundll32", "url.dll,FileProtocolHandler", url);
-            default -> List.of("xdg-open", url);
-        };
-        try {
-            new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
-        } catch (IOException e) {
-            // headless: the URL is printed anyway
-        }
     }
 
 }
