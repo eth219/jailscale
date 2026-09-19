@@ -110,7 +110,7 @@ public final class HttpCall {
         URI next;
         try {
             next = from.resolve(new URI(location.trim()));
-        } catch (URISyntaxException | IllegalArgumentException e) {
+        } catch (URISyntaxException | IllegalArgumentException _) {
             throw new IOException("a redirect from " + from.getHost() + " named " + location);
         }
         String scheme = next.getScheme() == null ? "" : next.getScheme().toLowerCase(Locale.ROOT);

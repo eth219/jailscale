@@ -67,7 +67,7 @@ public final class Ipc {
         ch.bind(UnixDomainSocketAddress.of(path));
         try {
             Files.setPosixFilePermissions(path, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
-        } catch (UnsupportedOperationException e) {
+        } catch (UnsupportedOperationException _) {
             // Windows: the directory ACL (current user only) is the authorisation.
         }
         Server s = new Server(ch, path, handler);
@@ -91,7 +91,7 @@ public final class Ipc {
         private static Object fileKey(Path p) {
             try {
                 return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class).fileKey();
-            } catch (IOException e) {
+            } catch (IOException _) {
                 return null;
             }
         }
@@ -101,7 +101,7 @@ public final class Ipc {
                 SocketChannel c;
                 try {
                     c = ch.accept();
-                } catch (IOException e) {
+                } catch (IOException _) {
                     return;
                 }
                 Thread.ofVirtual().name("ipc-conn").start(() -> serveOne(c));
@@ -131,7 +131,7 @@ public final class Ipc {
                         reply.error(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
                     }
                 }
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // client went away
             }
         }
@@ -187,7 +187,7 @@ public final class Ipc {
         try (SocketChannel c = SocketChannel.open(StandardProtocolFamily.UNIX)) {
             c.connect(UnixDomainSocketAddress.of(path));
             return true;
-        } catch (IOException e) {
+        } catch (IOException _) {
             return false;
         }
     }

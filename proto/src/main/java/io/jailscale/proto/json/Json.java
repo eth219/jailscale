@@ -164,28 +164,25 @@ public final class Json {
                 throw error("unexpected end");
             }
             char c = s.charAt(pos);
-            switch (c) {
-                case '{':
-                    return object(depth);
-                case '[':
-                    return array(depth);
-                case '"':
-                    return string();
-                case 't':
+            return switch (c) {
+                case '{' -> object(depth);
+                case '[' -> array(depth);
+                case '"' -> string();
+                case 't' -> {
                     literal("true");
-                    return Boolean.TRUE;
-                case 'f':
+                    yield Boolean.TRUE;
+                }
+                case 'f' -> {
                     literal("false");
-                    return Boolean.FALSE;
-                case 'n':
+                    yield Boolean.FALSE;
+                }
+                case 'n' -> {
                     literal("null");
-                    return null;
-                default:
-                    if (c == '-' || (c >= '0' && c <= '9')) {
-                        return number();
-                    }
-                    throw error("unexpected character '" + c + "'");
-            }
+                    yield null;
+                }
+                case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' -> number();
+                default -> throw error("unexpected character '" + c + "'");
+            };
         }
 
         private Map<String, Object> object(int depth) {
@@ -278,7 +275,7 @@ public final class Json {
                             int cp;
                             try {
                                 cp = Integer.parseInt(s, pos, pos + 4, 16);
-                            } catch (NumberFormatException ex) {
+                            } catch (NumberFormatException _) {
                                 throw error("bad \\u escape");
                             }
                             pos += 4;
@@ -338,7 +335,7 @@ public final class Json {
                     return Long.parseLong(t);
                 }
                 return Double.parseDouble(t);
-            } catch (NumberFormatException ex) {
+            } catch (NumberFormatException _) {
                 // integer too large for long: fall back to double like most parsers do
                 return Double.parseDouble(t);
             }

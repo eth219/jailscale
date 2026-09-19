@@ -49,7 +49,7 @@ public final class NetKey {
         }
         try {
             return of(InetAddress.getByName(ip));
-        } catch (UnknownHostException | RuntimeException e) {
+        } catch (UnknownHostException | RuntimeException _) {
             return ip;
         }
     }

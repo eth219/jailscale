@@ -224,7 +224,7 @@ public final class MuxStream {
                     while (credits == 0 && !localClosed && error == null) {
                         try {
                             lock.wait();
-                        } catch (InterruptedException e) {
+                        } catch (InterruptedException _) {
                             Thread.currentThread().interrupt();
                             throw new IOException("interrupted");
                         }
@@ -369,7 +369,7 @@ public final class MuxStream {
         }
         try {
             lock.wait(left);
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted");
         }
@@ -415,7 +415,7 @@ public final class MuxStream {
             while (credits < datagram.length && !localClosed && error == null) {
                 try {
                     lock.wait();
-                } catch (InterruptedException e) {
+                } catch (InterruptedException _) {
                     Thread.currentThread().interrupt();
                     throw new IOException("interrupted");
                 }

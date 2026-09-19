@@ -1,9 +1,11 @@
 package io.jailscale.proto.http;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Stream;
 
 /** Case-insensitive, order-preserving HTTP header list. */
 public final class Headers {
@@ -26,22 +28,15 @@ public final class Headers {
 
     /** First value, or null. */
     public String get(String name) {
-        for (String[] e : entries) {
-            if (e[0].equalsIgnoreCase(name)) {
-                return e[1];
-            }
-        }
-        return null;
+        return values(name).findFirst().orElse(null);
     }
 
     public List<String> all(String name) {
-        List<String> out = new ArrayList<>();
-        for (String[] e : entries) {
-            if (e[0].equalsIgnoreCase(name)) {
-                out.add(e[1]);
-            }
-        }
-        return out;
+        return values(name).toList();
+    }
+
+    private Stream<String> values(String name) {
+        return entries.stream().filter(e -> e[0].equalsIgnoreCase(name)).map(e -> e[1]);
     }
 
     public boolean contains(String name) {
@@ -50,14 +45,9 @@ public final class Headers {
 
     /** True if a comma-separated header contains {@code token} (case-insensitive), e.g. Connection: Upgrade. */
     public boolean hasToken(String name, String token) {
-        for (String v : all(name)) {
-            for (String part : v.split(",")) {
-                if (part.trim().toLowerCase(Locale.ROOT).equals(token.toLowerCase(Locale.ROOT))) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        String want = token.toLowerCase(Locale.ROOT);
+        return values(name).flatMap(v -> Arrays.stream(v.split(",")))
+            .anyMatch(part -> part.trim().toLowerCase(Locale.ROOT).equals(want));
     }
 
     public int size() {
