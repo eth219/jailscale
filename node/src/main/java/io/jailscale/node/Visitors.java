@@ -397,7 +397,7 @@ final class Visitors {
             } finally {
                 RemoteSigning.exit();
             }
-        } catch (MuxTimeoutException e) {
+        } catch (MuxTimeoutException _) {
             stalled(sni);
             stream.reset(5);
             return;
@@ -448,11 +448,11 @@ final class Visitors {
                         return;
                     }
                 }
-            } catch (MuxTimeoutException e) {
+            } catch (MuxTimeoutException _) {
                 stalled(sni);
                 stream.reset(6);
                 return;
-            } catch (IOException e) {
+            } catch (IOException _) {
                 stream.reset(6);
                 return;
             }
@@ -465,7 +465,7 @@ final class Visitors {
             badGateway(tls, plain, replay, stream, target);
             try {
                 stream.close();
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // closing
             }
             return;
@@ -523,21 +523,21 @@ final class Visitors {
                 }
                 copy(stream.in(), local.getOutputStream());
                 local.shutdownOutput();
-            } catch (IOException e) {
+            } catch (IOException _) {
                 closeQuietly(local);
             }
         });
         try {
             copy(local.getInputStream(), stream.out());
             stream.close();
-        } catch (IOException e) {
+        } catch (IOException _) {
             stream.reset(1);
         } finally {
             closeQuietly(local);
         }
         try {
             toLocal.join();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
         }
     }
@@ -561,7 +561,7 @@ final class Visitors {
                     local.receive(p);
                     stream.send(java.util.Arrays.copyOf(p.getData(), p.getLength()));
                 }
-            } catch (IOException e) {
+            } catch (IOException _) {
                 // idle timeout, stream reset or socket closed: the flow is over
                 stream.reset(0);
             }
@@ -579,7 +579,7 @@ final class Visitors {
         }
         try {
             back.join();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
         }
     }
@@ -627,7 +627,7 @@ final class Visitors {
                 closeQuietly(s);
                 try {
                     Thread.sleep(50L << attempt);
-                } catch (InterruptedException ie) {
+                } catch (InterruptedException _) {
                     Thread.currentThread().interrupt();
                     throw e;
                 }
@@ -662,7 +662,7 @@ final class Visitors {
                     drain(tls, local.getOutputStream());
                 }
                 local.shutdownOutput();
-            } catch (MuxTimeoutException e) {
+            } catch (MuxTimeoutException _) {
                 // The ungated case, and the common one: nothing cleared the deadline because the
                 // visitor never said its first word, so it expires here rather than in the handshake
                 // or the gate. Counted and reported like the other two, or `visitorsStalled` reads
@@ -670,7 +670,7 @@ final class Visitors {
                 // visitors from a node held open by visitors that are not there.
                 stalled(sni);
                 closeQuietly(local);
-            } catch (IOException e) {
+            } catch (IOException _) {
                 // Deliberately silent, unlike its opposite number below. An ordinary visit ends with
                 // the relay thread closing `local` in its finally while this one is still in drain,
                 // so this catch sees "Socket is closed" on the happy path -- one exception line per
@@ -697,7 +697,7 @@ final class Visitors {
         }
         try {
             toLocal.join();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
         }
     }
@@ -745,7 +745,7 @@ final class Visitors {
                         }
                         n += r;
                     }
-                } catch (MuxTimeoutException ignored) {
+                } catch (MuxTimeoutException _) {
                     // The visitor stopped part-way through its request line. Answer with what it
                     // did say rather than hold the slot: fewer bytes than the method is not a
                     // HEAD, so the page goes out whole, which is what a client that said nothing
@@ -760,7 +760,7 @@ final class Visitors {
                 + "<p>The node cannot reach <b>" + target.host() + ":" + target.port() + "</b>.</p>")
                 .writeTo(tls.plainOut(), headOnly);
             tls.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // visitor gone
         }
     }
@@ -786,7 +786,7 @@ final class Visitors {
     private static void closeQuietly(Socket s) {
         try {
             s.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // closing
         }
     }

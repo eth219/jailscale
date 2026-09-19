@@ -18,6 +18,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
 
 /**
@@ -115,7 +116,7 @@ final class HubLink implements AutoCloseable {
             mux.close();
             try {
                 connected.socket().close();
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // closing
             }
         }
@@ -228,17 +229,11 @@ final class HubLink implements AutoCloseable {
 
     /** Why each draining connection is still held, for diagnosing a hand-off that will not finish. */
     public String drainingDetail() {
-        StringBuilder b = new StringBuilder();
-        for (Session s : draining) {
-            if (b.length() > 0) {
-                b.append("; ");
-            }
-            b.append("conn ").append(s.conn)
-                .append(" muxClosed=").append(s.mux.isClosed())
-                .append(" streams=").append(s.mux.streamCount())
-                .append(" socketClosed=").append(s.connected.socket().isClosed());
-        }
-        return b.length() == 0 ? "none" : b.toString();
+        String detail = draining.stream()
+            .map(s -> "conn " + s.conn + " muxClosed=" + s.mux.isClosed()
+                + " streams=" + s.mux.streamCount() + " socketClosed=" + s.connected.socket().isClosed())
+            .collect(Collectors.joining("; "));
+        return detail.isEmpty() ? "none" : detail;
     }
 
     String lastError() {
@@ -291,7 +286,7 @@ final class HubLink implements AutoCloseable {
                         state.registered = false;
                         try {
                             state.save();
-                        } catch (IOException ignored) {
+                        } catch (IOException _) {
                             // the in-memory flag is what stops the loop
                         }
                     }
@@ -301,7 +296,7 @@ final class HubLink implements AutoCloseable {
                 if (running && !stopReconnecting) {
                     LOG.warn("connection lost: {}", lastError);
                 }
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 return;
             } finally {
                 if (p != null && primary == p) {
@@ -320,7 +315,7 @@ final class HubLink implements AutoCloseable {
             long wait = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
             try {
                 Thread.sleep(wait);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 return;
             }
         }
@@ -469,7 +464,7 @@ final class HubLink implements AutoCloseable {
                 Thread.ofVirtual().start(() -> {
                     try {
                         Thread.sleep(1000);
-                    } catch (InterruptedException ignored) {
+                    } catch (InterruptedException _) {
                         return;
                     }
                     openExtras();
@@ -510,7 +505,7 @@ final class HubLink implements AutoCloseable {
             while (!s.mux.isClosed() && s.mux.streamCount() > 0 && System.currentTimeMillis() < deadline) {
                 Thread.sleep(200);
             }
-        } catch (InterruptedException ignored) {
+        } catch (InterruptedException _) {
             // fall through
         }
         s.close();
@@ -595,10 +590,10 @@ final class HubLink implements AutoCloseable {
                     events.onRelays(this, lastRelays);
                 }
             }
-            case Message.Pong p -> complete("Pong", m);
-            case Message.InviteCreated ic -> complete("InviteCreated", m);
-            case Message.LinkOpened lo -> complete("LinkOpened", m);
-            case Message.Ack a -> complete("Ack", m);
+            case Message.Pong _ -> complete("Pong", m);
+            case Message.InviteCreated _ -> complete("InviteCreated", m);
+            case Message.LinkOpened _ -> complete("LinkOpened", m);
+            case Message.Ack _ -> complete("Ack", m);
             case Message.SignResponse sr -> complete("SignResponse:" + sr.streamId(), m);
             case Message.Error e -> {
                 String key = e.inReplyTo() == null ? "" : replyKeyFor(e.inReplyTo());
@@ -669,7 +664,7 @@ final class HubLink implements AutoCloseable {
         try {
             send(m);
             return f.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted");
         } catch (java.util.concurrent.ExecutionException e) {
@@ -695,7 +690,7 @@ final class HubLink implements AutoCloseable {
         try {
             s.mux.control(Codec.encode(m));
             return f.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted");
         } catch (java.util.concurrent.ExecutionException e) {
@@ -759,7 +754,7 @@ final class HubLink implements AutoCloseable {
         if (h == null || h.isBlank()) {
             try {
                 h = java.net.InetAddress.getLocalHost().getHostName();
-            } catch (java.net.UnknownHostException e) {
+            } catch (java.net.UnknownHostException _) {
                 h = "node";
             }
         }

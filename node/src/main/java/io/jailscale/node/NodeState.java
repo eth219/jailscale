@@ -203,7 +203,7 @@ final class NodeState {
         Files.writeString(tmp, json + "\n", StandardCharsets.UTF_8);
         try {
             Files.setPosixFilePermissions(tmp, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
-        } catch (UnsupportedOperationException ignored) {
+        } catch (UnsupportedOperationException _) {
             // Windows: directory ACL
         }
         Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);

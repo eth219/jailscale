@@ -65,7 +65,7 @@ final class DaemonLock implements Closeable {
         FileLock l;
         try {
             l = ch.tryLock(SENTINEL, 1, false);
-        } catch (OverlappingFileLockException e) {
+        } catch (OverlappingFileLockException _) {
             l = null; // another thread of this process already holds it, which counts as held
         } catch (IOException e) {
             ch.close();
@@ -89,7 +89,7 @@ final class DaemonLock implements Closeable {
     static JsonObject holder(NodeConfig cfg) {
         try {
             return Json.parseObject(Files.readString(file(cfg), StandardCharsets.UTF_8).strip());
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException _) {
             return null;
         }
     }

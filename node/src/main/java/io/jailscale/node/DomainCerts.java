@@ -118,7 +118,7 @@ final class DomainCerts {
             for (String t : tokens) {
                 try {
                     ask(link, new Message.ChallengeClear(t));
-                } catch (IOException | InterruptedException ignored) {
+                } catch (IOException | InterruptedException _) {
                     // the hub expires it anyway
                 }
             }
@@ -128,7 +128,7 @@ final class DomainCerts {
     private static Message ask(HubLink link, Message m) throws IOException, InterruptedException {
         try {
             return link.request(m, "Ack", ACK_TIMEOUT_MS);
-        } catch (TimeoutException e) {
+        } catch (TimeoutException _) {
             throw new IOException("hub did not answer " + m.type());
         }
     }

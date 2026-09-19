@@ -251,7 +251,7 @@ final class Updates {
         for (int i = 0; i < parts.length; i++) {
             try {
                 out[i] = Integer.parseInt(parts[i]);
-            } catch (NumberFormatException e) {
+            } catch (NumberFormatException _) {
                 return null;
             }
             if (out[i] < 0) {
@@ -386,7 +386,7 @@ final class Updates {
             if (made) {
                 try {
                     Files.deleteIfExists(dir); // the leaf only; empty, since the .part is gone
-                } catch (IOException ignored) {
+                } catch (IOException _) {
                     // the download's own reason is the one to report
                 }
             }
@@ -595,7 +595,7 @@ final class Updates {
         if (nativeImage()) {
             try {
                 return ProcessHandle.current().info().command().map(Path::of).orElse(null);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException _) {
                 return null;
             }
         }
@@ -606,7 +606,7 @@ final class Updates {
             }
             Path p = Path.of(src.getLocation().toURI());
             return p.toString().endsWith(".jar") ? p : null;
-        } catch (java.net.URISyntaxException | RuntimeException e) {
+        } catch (java.net.URISyntaxException | RuntimeException _) {
             return null;
         }
     }
@@ -639,7 +639,7 @@ final class Updates {
     private static void executable(Path file) {
         try {
             Files.setPosixFilePermissions(file, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
-        } catch (IOException | UnsupportedOperationException e) {
+        } catch (IOException | UnsupportedOperationException _) {
             // Windows has no POSIX bits and does not need them; anywhere else this is a convenience,
             // and the install command below would have set the mode anyway.
         }
