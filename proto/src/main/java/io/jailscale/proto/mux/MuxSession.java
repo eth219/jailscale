@@ -169,7 +169,7 @@ public final class MuxSession implements AutoCloseable {
         reader = DuplexThread.start("mux-reader", this::readLoop);
         try {
             reader.join();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
             close();
         }
@@ -262,7 +262,7 @@ public final class MuxSession implements AutoCloseable {
     void sendReset(long id, int reason) {
         try {
             write(Frame.rst(id, reason));
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // session is going away
         }
     }
@@ -319,7 +319,7 @@ public final class MuxSession implements AutoCloseable {
                 while (!dataQueue.isEmpty() && dataQueueBytes + f.payload().length > DATA_QUEUE_BYTES && !closed) {
                     try {
                         sendLock.wait();
-                    } catch (InterruptedException e) {
+                    } catch (InterruptedException _) {
                         Thread.currentThread().interrupt();
                         throw new IOException("interrupted");
                     }
@@ -449,7 +449,7 @@ public final class MuxSession implements AutoCloseable {
                 }
                 SOCKET_WRITE.record(System.nanoTime() - beforeWrite);
             }
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
         } catch (IOException e) {
             cause = e;
@@ -468,7 +468,7 @@ public final class MuxSession implements AutoCloseable {
                 long beforeRead = System.nanoTime();
                 try {
                     f = ch.read();
-                } catch (SocketTimeoutException e) {
+                } catch (SocketTimeoutException _) {
                     throw new IOException("peer idle too long");
                 } catch (NoiseException e) {
                     throw new IOException("undecryptable frame", e);
@@ -564,7 +564,7 @@ public final class MuxSession implements AutoCloseable {
                     write(Frame.keepalive());
                 }
             }
-        } catch (InterruptedException ignored) {
+        } catch (InterruptedException _) {
             // session ended
         } catch (IOException e) {
             shutdown(e);
@@ -596,7 +596,7 @@ public final class MuxSession implements AutoCloseable {
         }
         try {
             ch.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // closing
         }
         listener.onClosed(this, cause);

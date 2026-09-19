@@ -3,7 +3,6 @@ package io.jailscale.proto.acme;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.Signature;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -26,11 +25,9 @@ public final class Csr {
         }
         byte[] subject = Der.sequence(Der.set(Der.sequence(Der.oid(OID_CN), Der.utf8(dnsNames.get(0)))));
         byte[] spki = key.getPublic().getEncoded(); // X.509 SubjectPublicKeyInfo, already DER
-        List<byte[]> names = new ArrayList<>();
-        for (String n : dnsNames) {
-            names.add(Der.context(2, false, n.getBytes(java.nio.charset.StandardCharsets.US_ASCII))); // dNSName
-        }
-        byte[] generalNames = Der.sequence(names.toArray(new byte[0][]));
+        byte[] generalNames = Der.sequence(dnsNames.stream()
+            .map(n -> Der.context(2, false, n.getBytes(java.nio.charset.StandardCharsets.US_ASCII))) // dNSName
+            .toArray(byte[][]::new));
         byte[] extensions = Der.sequence(Der.sequence(Der.oid(OID_SAN), Der.octetString(generalNames)));
         byte[] attributes = Der.context(0, true, Der.sequence(Der.oid(OID_EXTENSION_REQUEST), Der.set(extensions)));
         byte[] info = Der.sequence(Der.integer(0), subject, spki, attributes);

@@ -89,7 +89,7 @@ public final class Args {
         }
         try {
             return Integer.parseInt(v);
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException _) {
             throw new IllegalArgumentException("--" + key + " must be a number");
         }
     }
@@ -122,7 +122,7 @@ public final class Args {
         }
         try {
             return Long.parseLong(s) * mult;
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException _) {
             throw new IllegalArgumentException("bad duration " + v);
         }
     }

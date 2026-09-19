@@ -27,7 +27,7 @@ public final class Cidr {
         byte[] net;
         try {
             net = InetAddress.getByName(addr).getAddress();
-        } catch (UnknownHostException e) {
+        } catch (UnknownHostException _) {
             throw new IllegalArgumentException("bad CIDR " + s);
         }
         if (bits < 0) {
@@ -59,11 +59,6 @@ public final class Cidr {
     }
 
     public static boolean anyContains(List<Cidr> list, InetAddress a) {
-        for (Cidr c : list) {
-            if (c.contains(a)) {
-                return true;
-            }
-        }
-        return false;
+        return list.stream().anyMatch(c -> c.contains(a));
     }
 }

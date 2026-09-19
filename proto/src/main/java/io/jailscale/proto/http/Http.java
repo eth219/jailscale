@@ -126,7 +126,7 @@ public final class Http {
         int status;
         try {
             status = Integer.parseInt(line.substring(sp + 1, sp + 4));
-        } catch (RuntimeException e) {
+        } catch (RuntimeException _) {
             throw new HttpException(502, "bad status line");
         }
         HttpResponse resp = new HttpResponse(status);
@@ -200,7 +200,7 @@ public final class Http {
         long len;
         try {
             len = Long.parseLong(cl.trim());
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException _) {
             throw new HttpException(400, "bad Content-Length");
         }
         if (len < 0) {
@@ -226,7 +226,7 @@ public final class Http {
             long size;
             try {
                 size = Long.parseLong(hex, 16);
-            } catch (NumberFormatException e) {
+            } catch (NumberFormatException _) {
                 throw new HttpException(502, "bad chunk size");
             }
             // Written as a subtraction because the addition overflows: a chunk header of

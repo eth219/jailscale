@@ -43,33 +43,26 @@ public final class JsonObject {
     }
 
     public String string(String key) {
-        Object v = required(key);
-        if (v instanceof String s) {
-            return s;
-        }
-        throw wrongType(key, "string");
+        return switch (required(key)) {
+            case String s -> s;
+            default -> throw wrongType(key, "string");
+        };
     }
 
     public String optString(String key, String dflt) {
-        Object v = map.get(key);
-        if (v == null) {
-            return dflt;
-        }
-        if (v instanceof String s) {
-            return s;
-        }
-        throw wrongType(key, "string");
+        return switch (map.get(key)) {
+            case null -> dflt;
+            case String s -> s;
+            default -> throw wrongType(key, "string");
+        };
     }
 
     public long lng(String key) {
-        Object v = required(key);
-        if (v instanceof Long l) {
-            return l;
-        }
-        if (v instanceof Double d && d == Math.rint(d) && Math.abs(d) < 9.007199254740992E15) {
-            return d.longValue();
-        }
-        throw wrongType(key, "integer");
+        return switch (required(key)) {
+            case Long l -> l;
+            case Double d when d == Math.rint(d) && Math.abs(d) < 9.007199254740992E15 -> d.longValue();
+            default -> throw wrongType(key, "integer");
+        };
     }
 
     public Long optLong(String key) {
@@ -89,11 +82,10 @@ public final class JsonObject {
     }
 
     public boolean bool(String key) {
-        Object v = required(key);
-        if (v instanceof Boolean b) {
-            return b;
-        }
-        throw wrongType(key, "boolean");
+        return switch (required(key)) {
+            case Boolean b -> b;
+            default -> throw wrongType(key, "boolean");
+        };
     }
 
     public boolean optBool(String key, boolean dflt) {
@@ -101,8 +93,7 @@ public final class JsonObject {
     }
 
     public JsonObject object(String key) {
-        Object v = required(key);
-        if (v instanceof Map<?, ?> m) {
+        if (required(key) instanceof Map<?, ?> m) {
             @SuppressWarnings("unchecked")
             Map<String, Object> mm = (Map<String, Object>) m;
             return new JsonObject(mm);
@@ -111,8 +102,7 @@ public final class JsonObject {
     }
 
     public List<Object> array(String key) {
-        Object v = required(key);
-        if (v instanceof List<?> l) {
+        if (required(key) instanceof List<?> l) {
             @SuppressWarnings("unchecked")
             List<Object> ll = (List<Object>) l;
             return Collections.unmodifiableList(ll);
@@ -135,7 +125,7 @@ public final class JsonObject {
     public byte[] bytes(String key) {
         try {
             return Base64.getUrlDecoder().decode(string(key));
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException _) {
             throw wrongType(key, "base64url");
         }
     }
