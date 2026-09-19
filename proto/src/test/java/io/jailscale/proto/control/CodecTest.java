@@ -27,8 +27,6 @@ class CodecTest {
             new Message.InviteCreate("bob", 3, 86400, false),
             new Message.InviteCreate(null, 0, 0, true),
             new Message.InviteCreated("https://hub/join/x", "7F3K-92QX", 1789000000L),
-            new Message.AdminLinkRequest(),
-            new Message.AdminLink("https://hub/admin/login/x", 1789000060L),
             new Message.Error("InviteCreate", "policy"),
             new Message.CertUpdate(List.of("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----"), "sha256:ab"),
             new Message.LinkOpen("https", "myapp", null, null, "127.0.0.1:3000", null, null),

@@ -222,8 +222,6 @@ final class AdminIpc implements Ipc.Handler {
                 store.removeAdmin(req.string("user"));
                 reply.ok();
             }
-            case "admin-login-link" -> reply.done(JsonObject.builder().put("ok", true).put("url", hub.adminWeb().loginLink("shell", true))
-                .put("expiresAt", System.currentTimeMillis() + AdminWeb.LOGIN_LINK_TTL_MS));
             case "setting" -> {
                 String key = req.string("key");
                 // Trimmed before anything looks at it, and for every setting rather than only the

@@ -376,16 +376,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                     reply.error("unexpected " + r.type());
                 }
             }
-            case "admin" -> {
-                Message r = link.request(new Message.AdminLinkRequest(), "AdminLink", REPLY_TIMEOUT_MS);
-                if (r instanceof Message.AdminLink al) {
-                    reply.done(JsonObject.builder().put("ok", true).put("url", al.url()).put("expiresAt", al.expiresAt()));
-                } else if (r instanceof Message.Error e) {
-                    reply.error(e.reason());
-                } else {
-                    reply.error("unexpected " + r.type());
-                }
-            }
             case "open" -> open(req, reply);
             case "gate" -> {
                 NodeState.LinkRec rec = state.linkByName(req.string("name"));

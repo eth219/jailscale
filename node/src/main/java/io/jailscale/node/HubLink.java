@@ -597,7 +597,6 @@ final class HubLink implements AutoCloseable {
             }
             case Message.Pong p -> complete("Pong", m);
             case Message.InviteCreated ic -> complete("InviteCreated", m);
-            case Message.AdminLink al -> complete("AdminLink", m);
             case Message.LinkOpened lo -> complete("LinkOpened", m);
             case Message.Ack a -> complete("Ack", m);
             case Message.SignResponse sr -> complete("SignResponse:" + sr.streamId(), m);
@@ -617,7 +616,6 @@ final class HubLink implements AutoCloseable {
     private static String replyKeyFor(String request) {
         return switch (request) {
             case "InviteCreate" -> "InviteCreated";
-            case "AdminLinkRequest" -> "AdminLink";
             case "Ping" -> "Pong";
             case "LinkOpen" -> "LinkOpened";
             case "ChallengeSet", "ChallengeClear" -> "Ack";

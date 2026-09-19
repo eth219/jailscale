@@ -69,7 +69,6 @@ public final class Hub implements AutoCloseable {
     private volatile HttpChallengeFront http;
     private MetricsFront metrics;
     private final SniRouter router;
-    private final AdminWeb adminWeb;
     private io.jailscale.hub.dns.DnsResponder dns;
     private AcmeManager acme;
     private final Availability availability;
@@ -178,8 +177,7 @@ public final class Hub implements AutoCloseable {
         }
         this.links.standby(() -> standby);
         this.router = new SniRouter(this);
-        this.adminWeb = new AdminWeb(this);
-        // Flags seed the runtime settings once; afterwards /admin and `jailhub setting` own them.
+        // Flags seed the runtime settings once; afterwards `jailhub setting` owns them.
         // Not on a standby: its settings are the primary's, and arrive with the snapshot.
         if (!standby && !store.hasSetting(Store.SETTING_INVITE_POLICY)) {
             store.setSetting(Store.SETTING_INVITE_POLICY, config.invitePolicy());
@@ -1160,10 +1158,6 @@ public final class Hub implements AutoCloseable {
 
     SniRouter router() {
         return router;
-    }
-
-    AdminWeb adminWeb() {
-        return adminWeb;
     }
 
     Challenges challenges() {

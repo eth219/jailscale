@@ -109,7 +109,7 @@ on it, and this section edited in the same change ([docs/issue-workflow.md](issu
           │   through untouched)     │  coordinator: invites, names     │ in   │     127.0.0.1:3000   │
           │                          │  ACME: wildcard via own DNS-01   │ TLS  │                      │
           │                          │  :53   _acme-challenge TXT       │<─────│ CLI <-> daemon       │
-          │                          │  admin IPC and /admin web        │      │      (AF_UNIX)       │
+          │                          │  admin IPC (AF_UNIX socket)      │      │      (AF_UNIX)       │
           │                          │  signing service: wildcard key   │      └──────────────────────┘
           │                          └──────────────────────────────────┘
 ```
@@ -265,7 +265,7 @@ condition, in `docs/windows-virtual-thread-stall/`.
 
 | Key | Held by | Purpose | Lifetime |
 |---|---|---|---|
-| **MachineKey** (`mkey:`) | node | Noise static key of the control-channel client. The machine's identity, and its `/admin` login identity | Life of the machine |
+| **MachineKey** (`mkey:`) | node | Noise static key of the control-channel client. The machine's identity | Life of the machine |
 | **hub key** (`hkey:`) | hub | Noise static key of the control-channel server. Pinned by nodes | Rotatable (§5.2) |
 | **Wildcard certificate key** | hub | ECDSA P-256 for `hub.example.com` and `*.hub.example.com`. **Never leaves the hub** | New on each ACME renewal |
 | **User domain key** | node | Certificate key for a domain the user brought. Not on the hub | New on each node-side renewal |
@@ -293,7 +293,7 @@ TCP 443, SNI = hub.example.com
 ```
 
 Both HTTP ends are hand-written (§3.1): the hub's front is about 1,100 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, `/favicon.svg` and a root page, the
+`/v1/noise`, `/join/<token>`, `/robots.txt`, `/favicon.svg` and a root page, the
 node's client about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier
 because its 4-byte client-to-server masking would touch every visitor byte again, frame headers and
 close semantics come with it, and it would only help behind proxies passing `Upgrade: websocket`
@@ -306,7 +306,7 @@ rather than something later. A transport message is at most 65535 bytes, which i
 prefix is two bytes.
 
 **Why keep the TLS.** Noise alone authenticates the channel, but the hub-key bootstrap needs some
-reason to trust a first contact and web PKI is it, `/join` and `/admin` are browser paths, and
+reason to trust a first contact and web PKI is it, `/join` is a browser path, and
 corporate firewalls pass TLS on 443 while dropping unidentifiable binary streams. The hub obtains the
 certificate itself, so this costs the operator nothing.
 
@@ -510,7 +510,7 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 | `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name, domain or port (§11.4) |
 | `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `content`, `serverHello`, `encryptedExtensions`, optional `helloRetryRequest`; then a signature or a reason (§9.2) |
 | `ChallengeSet` / `ChallengeClear` | Register or drop a user-domain http-01 token (§8.3) |
-| `InviteCreate` / `InviteCreated`, `AdminLinkRequest` / `AdminLink` | A member node issuing an invite; a one-shot `/admin` login URL for an admin node |
+| `InviteCreate` / `InviteCreated` | A member node issuing an invite. `AdminLinkRequest` / `AdminLink` sat here until #253 removed the admin web; §5.4 covers what an older peer sending one now gets |
 | `HubKeyRotation`, `Ping` / `Pong`, `Ack` / `Error` | §5.2; on-demand round trip; generic replies |
 
 **Versioning.** `proto` versions the message schema and the frame set together, and the hub accepts
@@ -583,7 +583,7 @@ read its state should stop rather than come up holding part of it. In memory the
 domains, ports, credential hashes, admins, the pending queue, undelivered notices), which is the
 simplest thing that works up to thousands of names.
 
-### 6.3 Admin IPC, the status page, and the admin web
+### 6.3 Admin IPC and the status page
 
 Admin commands are separate processes and the state is in memory, so they talk to the running server
 over an AF_UNIX socket at `$JAILHUB_STATE/jailhub.sock`, mode 0600, exchanging line-delimited JSON
@@ -591,22 +591,25 @@ through the `proto` codec. **The socket file permission is the authorisation.** 
 at run time (invite policy, registration mode, knocking) live in the store, and `serve` flags only
 seed them on first start.
 
-`/admin` exists because an approval queue that can only be drained from a shell on the hub violates
-the usability principle. There is no password and no IdP: **an admin node's MachineKey is the
-identity**. `jailscale admin` asks for an `AdminLink` over stream 0, the hub returns a 60-second
-one-shot URL, and the CLI opens a browser; the visit sets a `__Host-` prefixed session cookie
-(`HttpOnly; Secure; SameSite=Lax`, 12 hours), and `jailhub admin login-link` covers the case with no
-node available. The pages approve or deny the queue, manage nodes, names and domains, issue invites,
-and toggle the three settings, as server-rendered HTML with no JavaScript, no template
-engine, and a session-bound CSRF token on every form.
+**The socket is the only admin surface.** There was a second one -- a web page at `/admin`, reached
+by a 60-second one-shot login link, holding a `__Host-` session cookie for 12 hours and a CSRF token
+on every form -- and it was removed (#253). Every action it offered exists as a `jailhub` subcommand
+over the socket above, so the page was a second authorisation, on the public 443 listener, for
+things that already had one. One surface with one authorisation is easier to state and to keep true
+than two.
+
+What that costs is the case the page was built for: an approval queue drained from a shell on the
+hub is worse for whoever is not at that shell. The answer is that `jailhub` runs wherever the state
+directory is reachable, and that `--invite-policy members` lets a member issue an invitation without
+an admin in the loop at all, so the queue is not the only way in.
 
 The hub's own page at `/` is the same machinery seen from the other side. It states what the hub is,
 how to join *this* hub (read from the stored registration setting rather than assumed), which copies
 of `jailscale` it will talk to, and how it is doing: version, uptime, nodes online against nodes
 registered, links open, whether a certificate is loaded, and resident memory. Those are properties
 of the service, so they are public. The node list, the addresses nodes connect from, and the
-controls over them are rendered only when the request carries a current admin session, and the
-rights are re-checked on that request rather than trusted from the cookie. Resident set size is read
+controls over them are not on this page at all: they are `jailhub node list` and its neighbours on
+the socket, where the file permission is the authorisation. Resident set size is read
 from `/proc/self/status` where it exists and omitted elsewhere rather than guessed at, because a
 native image's heap is a small part of what it occupies.
 
@@ -688,7 +691,9 @@ and not in each handler, so a route nobody thought about gets them too. The fron
 what makes the policy exact rather than aspirational -- no script, no external stylesheet, no font,
 and nothing ever fetched from a node -- so `default-src 'none'` is the truth: with `style-src
 'unsafe-inline'` for the one inline stylesheet, `img-src 'self'` for the icon, and `form-action`
-and `frame-ancestors` for `/admin`, whose forms are the only things here that change state. Then
+and `frame-ancestors`, which were there for `/admin`'s forms and are kept now that #253 has removed
+them: they cost a header either way, and the next form to appear should find the policy already in
+front of it. Then
 `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`, because an invitation URL and
 an admin login URL are credentials in a path and a `Referer` is how a path travels somewhere nobody
 chose to send it. `set` and not `add`, so a handler that sets one of these itself is replaced rather
@@ -729,10 +734,12 @@ markup around it says; that is why `/` carries a count and no name, and why the 
 whoever holds their URL -- an invitation, the wildcard's "not open" page -- say `noindex,nofollow`
 themselves and are **left fetchable**: a page named in `Disallow` is never fetched, so its
 `noindex` is never read, and a URL linked from elsewhere can be listed on the strength of that
-link alone, which for an invitation would be the token in the result. `/robots.txt` names only
-`/admin`, and for a different reason than secrecy: a login link is one-shot and consumed on the
-GET, so a machine that fetches one to see what is there burns it -- and because that is advice,
-`/admin/login/<token>` also refuses every method but GET, so a link preview or a prefetch cannot
+link alone, which for an invitation would be the token in the result. `/robots.txt` now names
+nothing: its one entry was `/admin`, for a different reason than secrecy -- a login link was
+one-shot and consumed on the GET, so a machine that fetched one to see what was there burned it --
+and #253 removed the page, so the file carries an empty `Disallow` rather than a route that 404s.
+What that entry protected is gone with it: `/admin/login/<token>` also refused every method but GET,
+so that a link preview or a prefetch could not
 spend it by looking. Behind all of it, `HttpFront.serve` answers **500 for any unchecked throw**
 out of a handler: every handler runs on the connection's own virtual thread and nothing above it
 caught more than `IOException`, so one bad query string once closed the socket with no response
@@ -790,7 +797,7 @@ busy is not a property, it is a coincidence.
 **No metric names anything.** Not a link, not a node, not an address -- a scrape says how much the
 hub is doing and never who is doing it, and the test asserts that no line carries a label except
 `jailhub_build_info`, which is about the binary. That is the line that would be easy to cross: one
-label per name and the metrics become the directory the admin page deliberately is not. Counting
+label per name and the metrics become the directory the status page deliberately is not. Counting
 lives in `Metrics`, six `LongAdder`s written from every visitor thread and read once a scrape, and
 the signature counter sits at the one point that decides, so a refusal added later cannot forget to
 be counted.
@@ -904,7 +911,7 @@ it already knows rather than stored from the wire.
 
 **Where the answer goes.** The check runs once the hub knows what it answers for its own name, and
 again every hour, and the verdict it reaches is kept rather than written to the log and dropped:
-`jailhub status` carries it, `/admin` shows it above the node list, and `/metrics` exports
+`jailhub status` carries it, `jailhub node list` shows it beside each node, and `/metrics` exports
 `jailhub_address_check_fault` — 1 only for a fault an operator has to fix, so inconclusive never
 pages anyone — beside `jailhub_address_check{verdict="..."}` and `jailhub_address_check_age_seconds`.
 The log line is written when the verdict **changes**, not on every pass — for a fault, a change of
@@ -940,7 +947,7 @@ A single `ServerSocket` accepts on 443. Without opening TLS the router reads the
 
 | SNI | Handling |
 |---|---|
-| `hub.example.com` | Handed to the hub's own `SSLServerSocket`: control channel, `/join`, `/admin`, `/v1/*` |
+| `hub.example.com` | Handed to the hub's own `SSLServerSocket`: control channel, `/join`, `/v1/*` |
 | `<name>.hub.example.com`, active | Open an `OPEN` stream on the owning node and replay the ClientHello bytes already read |
 | `<name>.hub.example.com`, claimed but offline | Wait up to 3 s for the node to return (hand-off, restarts), then serve a short "not open" page under the wildcard certificate, which the hub can do because it holds the key |
 | A registered user domain | Stream to the owning node with `keyId = domain:<domain>`. The hub has no key for it |
@@ -993,7 +1000,7 @@ under the hub's own. A token is therefore stored against the domain it was issue
 only when the request's `Host` is that domain; a token for `<hub>` or anything under it is refused
 outright, and a domain another user already holds is refused too. Answering any token under any Host
 would let one member pass validation for another member's domain, or for the hub's own name — the
-origin that serves `/admin`, `/join` and the first-contact key — and walk away with a publicly trusted
+origin that serves `/join` and the first-contact key — and walk away with a publicly trusted
 certificate for it.
 
 Then comes `LinkOpen{domain, chainPem, domainProof}`. **The chain says which certificate; the proof
@@ -1562,11 +1569,10 @@ their own hub, so the CLI prints which hub it is about to join and asks for conf
 victim joins, nothing local is exposed until they run `open`.
 
 **Knocking.** With only the hostname a node can knock: the hub queues MachineKey, hostname, OS,
-source address and self-chosen name, and an admin approves through `/admin` or `jailhub node
-approve`, which is pushed over the already-open stream 0. The queued name is the joiner's own
-suggestion and a knock is unauthenticated, so the approval form leaves the box **empty** when that
-suggestion is an existing user, and approving without naming anyone is refused in that case rather
-than handing a stranger someone else's account on one click. Knocking is unauthenticated, so pending
+source address and self-chosen name, and an admin approves with `jailhub node approve`, which is
+pushed over the already-open stream 0. The queued name is the joiner's own suggestion and a knock is
+unauthenticated, so approving without `--user` is refused when that suggestion is an existing user,
+rather than handing a stranger someone else's account on one word. Knocking is unauthenticated, so pending
 entries are capped at 5 per source address, and `--knock off` disables it. `--registration open`
 suits a personal hub or small team where the gate is overhead, approving a knocking node immediately;
 the default is still invite-only, and turning it on prints the consequence, which is that anyone who
@@ -1574,9 +1580,10 @@ knows the hostname can open names under `*.hub.example.com`. There is deliberate
 form, because that would be the same thing with more code.
 
 **First bootstrap.** When `jailhub serve` finds no admin it prints a one-use 24-hour invite on the
-console, and whoever joins with it becomes an admin. If every admin node is lost, `jailhub admin
-login-link` on the hub shell recovers access, because shell access is the top of the authority chain.
-Nodes do not expire by default; an admin removes them with `node remove`.
+console, and whoever joins with it becomes an admin. Losing every admin node is not a lockout: the
+`jailhub` socket is the admin surface (§6.3), so a shell on the hub is already the top of the
+authority chain and `jailhub admin add` names a new one. Nodes do not expire by default; an admin
+removes them with `node remove`.
 
 ---
 
@@ -1947,13 +1954,11 @@ still on the time of day, because its "never consumed" sentinel is zero and zero
 reading from a monotonic clock early in a process; changing it needs a different sentinel rather
 than a different clock.
 
-**`/admin` sessions.** The login link is one-shot and lives 60 seconds, the session cookie lasts 12
-hours, and every POST carries a CSRF token. On top of that, **admin status is rechecked on every
-request**, because checking only at issuance would leave `admin remove` ineffective for 12 hours; a
-link issued over the IPC socket is exempt, since socket permission is the authorisation. The cookie
-uses the `__Host-` prefix, which forbids a `Domain` attribute, so a node controlling a sibling
-subdomain under `*.<hub>` cannot plant an admin cookie. Invite tokens, codes, gate tokens and admin
-login URLs are never written to logs.
+**Admin sessions.** There are none: #253 removed the admin web page, and with it the 60-second
+one-shot login link, the 12-hour `__Host-` session cookie, the per-form CSRF token and the recheck
+of admin status on every request that kept `admin remove` from taking 12 hours to bite. What
+replaced all of it is the file permission on `$JAILHUB_STATE/jailhub.sock` (§6.3). Invite tokens,
+codes and gate tokens are still never written to logs.
 
 ---
 
@@ -2001,8 +2006,6 @@ one. The comparisons that do decide something:
 |---|---|---|
 | Self-probe keying material (§11.3) | `MessageDigest.isEqual` | Constant time, deliberately: the verdict is the whole feature |
 | Invite token, short code (§10) | SHA-256, then a lookup by the hash | Timing follows the hash of what was presented, which does not walk back to the secret |
-| `/admin` CSRF token (§11.5) | `MessageDigest.isEqual` over the bytes | Constant time. It was `String.equals`, and nothing reachable turned on that; a comparison of a presented secret is the wrong place to keep the cheaper habit |
-| `/admin` session cookie and login link (§11.5) | 128-bit random, a `ConcurrentHashMap` key | **Not constant time, and not made so:** a hash lookup has no byte compare to replace. Reaching a useful prefix of 128 random bits over HTTP is not a path anyone has, and a correct guess needs no timing |
 
 **Traffic analysis is not addressed at all.** The hub sees the SNI, the visitor's address, byte
 counts and timing (§8.1), and nothing on either side pads, batches or delays anything. Sizes and

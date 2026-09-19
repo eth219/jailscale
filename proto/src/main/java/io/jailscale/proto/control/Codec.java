@@ -47,8 +47,6 @@ public final class Codec {
             case Message.InviteCreate x -> b.put("user", x.user()).put("uses", x.uses())
                 .put("ttlSeconds", x.ttlSeconds()).put("self", x.self());
             case Message.InviteCreated x -> b.put("url", x.url()).put("code", x.code()).put("expiresAt", x.expiresAt());
-            case Message.AdminLinkRequest x -> { }
-            case Message.AdminLink x -> b.put("url", x.url()).put("expiresAt", x.expiresAt());
             case Message.Error x -> b.put("inReplyTo", x.inReplyTo()).put("reason", x.reason());
             case Message.CertUpdate x -> b.put("chainPem", x.chainPem()).put("keyId", x.keyId());
             case Message.LinkOpen x -> b.put("kind", x.kind()).put("name", x.name()).put("domain", x.domain()).put("port", x.port())
@@ -109,8 +107,6 @@ public final class Codec {
                 case "InviteCreate" -> new Message.InviteCreate(o.optString("user", null), o.optInt("uses", 0),
                     o.has("ttlSeconds") ? o.lng("ttlSeconds") : 0L, o.optBool("self", false));
                 case "InviteCreated" -> new Message.InviteCreated(o.string("url"), o.optString("code", null), o.lng("expiresAt"));
-                case "AdminLinkRequest" -> new Message.AdminLinkRequest();
-                case "AdminLink" -> new Message.AdminLink(o.string("url"), o.lng("expiresAt"));
                 case "Error" -> new Message.Error(o.optString("inReplyTo", null), o.string("reason"));
                 case "CertUpdate" -> new Message.CertUpdate(o.stringArray("chainPem"), o.string("keyId"));
                 case "LinkOpen" -> new Message.LinkOpen(o.string("kind"), o.optString("name", null), o.optString("domain", null),

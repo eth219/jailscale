@@ -54,7 +54,7 @@ One binary, two roles, both on by default so `jailhub serve` on one host is exac
 **Control.** Owns the state directory: `hub.key`, `tls/`, `state.*`. Approves joins, assigns names,
 ports and domains, issues invites, bans, and issues and renews the wildcard through
 its own `_acme-challenge` responder. Signs handshakes. Signs *leases* (below). Serves the hub's own
-name: control channel, `/join`, `/admin`, `/v1/status`. There is one **primary** control host that
+name: control channel, `/join`, `/v1/status`. There is one **primary** control host that
 writes, and one **standby** that follows the primary's event log over a hub-to-hub channel, receives
 each new certificate the way nodes do (`CertUpdate`), signs handshakes, verifies leases, and can be
 promoted. Signing is not a write, so the standby signs while standing by.

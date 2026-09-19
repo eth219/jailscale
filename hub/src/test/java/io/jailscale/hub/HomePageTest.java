@@ -23,8 +23,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,20 +81,27 @@ class HomePageTest {
         }
     }
 
-    /** Joins alice as the first admin and returns her session cookie for the web pages. */
-    private String loginAsAdmin() throws Exception {
+    /**
+     * Joins alice as the first admin. This used to go on and fetch a login link for the web pages;
+     * #253 removed them, so what is left is the join, and the admin surface is {@link #admin}.
+     */
+    private void joinAsAdmin() throws Exception {
         Invites.Created boot = hub.invites().create(null, 1, 3600, "test", true);
         alice = new Daemon(NodeConfig.in(root.resolve("alice")));
         alice.start();
         Path sock = root.resolve("alice/jailscale.sock");
         assertTrue(Ipc.call(sock, JsonObject.builder().put("cmd", "up").put("invite", boot.url())
             .put("addr", "127.0.0.1").put("user", "alice").put("caFile", CERT.toString()).build()).optBool("ok", false));
-        JsonObject link = Ipc.call(sock, JsonObject.builder().put("cmd", "admin").build());
-        HttpResponse login = http("GET", URI.create(link.string("url")).getPath(), null, null);
-        assertEquals(302, login.status());
-        String setCookie = login.headers().get("Set-Cookie");
-        assertNotNull(setCookie);
-        return setCookie.substring(0, setCookie.indexOf(';'));
+    }
+
+    /**
+     * One admin command through the handler behind the state-directory socket, which since #253 is
+     * the only admin surface there is. Returns the last line the command replied with.
+     */
+    private JsonObject admin(JsonObject req) throws Exception {
+        JsonObject[] last = new JsonObject[1];
+        new AdminIpc(hub).handle(req, obj -> last[0] = obj);
+        return last[0];
     }
 
     @Test
@@ -199,38 +204,32 @@ class HomePageTest {
         assertTrue(home.contains("<svg class=\"avail\""), home);
     }
 
+    /**
+     * Placing and lifting a ban. This used to go through the admin page's form; #253 removed the
+     * page, so it goes through the socket command that the form always stood in front of. The
+     * assertions are on the store, which is where they were, so what the ban does is still checked
+     * -- only the surface that asks for it has changed.
+     */
     @Test
-    void anAdminSeesTheNodesAndCanRemoveOrBanFromTheSamePage() throws Exception {
-        String cookie = loginAsAdmin();
-        String html = http("GET", "/", cookie, null).bodyText();
-        assertTrue(html.contains("Signed in as"), html);
-        assertTrue(html.contains("mkey:"), "an admin should see the node list");
-        assertTrue(html.contains("Remove"), html);
-        assertTrue(html.contains("Ban"), html);
-        assertTrue(html.contains("<code>127.0.0.1</code>"), "the address is needed to ban it: " + html);
-
-        String csrf = csrfOf(html);
-        // A ban placed from the status page returns to the status page, not to /admin.
-        HttpResponse post = http("POST", "/admin/ban/add", cookie, "csrf=" + csrf + "&back=%2F&cidr=198.51.100.4&reason=test");
-        assertEquals(302, post.status());
-        assertEquals("/", post.headers().get("Location"));
+    void anAddressCanBeBannedAndUnbanned() throws Exception {
+        joinAsAdmin();
+        assertTrue(admin(JsonObject.builder().put("cmd", "ban-add")
+            .put("cidr", "198.51.100.4").put("reason", "test").build()).optBool("ok", false));
         assertEquals(1, hub.store().bans().size());
         assertTrue(hub.bans().isBanned("198.51.100.4"));
 
-        assertTrue(http("GET", "/", cookie, null).bodyText().contains("198.51.100.4"));
-
-        // And lifting it works the same way.
-        String csrf2 = csrfOf(http("GET", "/", cookie, null).bodyText());
-        assertEquals(302, http("POST", "/admin/ban/remove", cookie, "csrf=" + csrf2 + "&back=%2F&cidr=198.51.100.4").status());
+        assertTrue(admin(JsonObject.builder().put("cmd", "ban-remove")
+            .put("cidr", "198.51.100.4").build()).optBool("ok", false));
         assertEquals(0, hub.store().bans().size());
+        assertFalse(hub.bans().isBanned("198.51.100.4"));
     }
 
     @Test
-    void rubbishInTheBanFormIsRefused() throws Exception {
-        String cookie = loginAsAdmin();
-        String csrf = csrfOf(http("GET", "/", cookie, null).bodyText());
-        HttpResponse r = http("POST", "/admin/ban/add", cookie, "csrf=" + csrf + "&cidr=" + enc("not-an-address"));
-        assertEquals(400, r.status());
+    void rubbishInABanIsRefused() throws Exception {
+        joinAsAdmin();
+        JsonObject r = admin(JsonObject.builder().put("cmd", "ban-add").put("cidr", "not-an-address").build());
+        assertFalse(r.optBool("ok", false), "a ban of rubbish was accepted: " + r);
+        assertTrue(r.optString("error", "").contains("not an address"), r.toString());
         assertEquals(0, hub.store().bans().size());
     }
 
@@ -253,12 +252,11 @@ class HomePageTest {
 
     @Test
     void banningAnAddressDisconnectsWhatItAlreadyHasAndKeepsItOut() throws Exception {
-        String cookie = loginAsAdmin();
+        joinAsAdmin();
         waitFor(() -> hub.registry().size() == 1);
 
-        String csrf = csrfOf(http("GET", "/", cookie, null).bodyText());
-        assertEquals(302, http("POST", "/admin/ban/add", cookie,
-            "csrf=" + csrf + "&back=%2F&cidr=127.0.0.1&reason=test").status());
+        assertTrue(admin(JsonObject.builder().put("cmd", "ban-add")
+            .put("cidr", "127.0.0.1").put("reason", "test").build()).optBool("ok", false));
 
         // Already connected is not good enough: the ban has to take the session down now.
         waitFor(() -> hub.registry().size() == 0);
@@ -284,12 +282,6 @@ class HomePageTest {
             Thread.sleep(50);
         }
         throw new AssertionError("condition not met in time");
-    }
-
-    private static String csrfOf(String html) {
-        Matcher m = Pattern.compile("name=csrf value=\"([^\"]+)\"").matcher(html);
-        assertTrue(m.find(), html);
-        return m.group(1);
     }
 
     private static String enc(String s) {
@@ -329,8 +321,10 @@ class HomePageTest {
         assertEquals("text/plain; charset=utf-8", robots.headers().get("Content-Type"));
         String txt = robots.bodyText();
         assertTrue(txt.contains("User-agent: *"), txt);
-        // Fetching a login link spends it, so that one is asked for by name.
-        assertTrue(txt.contains("Disallow: /admin"), txt);
+        // The one entry was /admin, because fetching a login link spent it. #253 removed the page,
+        // so what is left is an empty Disallow, which is how robots.txt says "all of it".
+        assertTrue(txt.contains("Disallow:"), txt);
+        assertFalse(txt.contains("Disallow: /admin"), "the admin page is gone; robots.txt should not name it: " + txt);
         // And these are not, on purpose: a crawler that is turned away at robots.txt never reads
         // the noindex, and a URL linked from somewhere else gets listed on the link alone -- which
         // for an invitation would publish the token.
@@ -344,7 +338,11 @@ class HomePageTest {
         // The one page here whose body is a credential is also the one that must not be kept: the
         // two that carry nothing secret said no-store while this one did not.
         assertEquals("no-store", invite.headers().get("Cache-Control"));
-        assertTrue(http("GET", "/admin", null, null).bodyText().contains(meta));
+        // The error pages too, and the 500 frame is built by hand rather than through page(), so
+        // it is asserted on directly -- it is the one frame left that could drift (#253 took the
+        // other one with the admin page).
+        assertTrue(http("GET", "/no-such-page", null, null).bodyText().contains(meta));
+        assertTrue(HttpFront.ERROR_PAGE.contains(meta), HttpFront.ERROR_PAGE);
 
         String home = http("GET", "/", null, null).bodyText();
         assertFalse(home.contains("name=\"robots\""), home);
@@ -367,13 +365,16 @@ class HomePageTest {
     }
 
     /**
-     * And the direction it fails in: a hub whose only node has gone is degraded, the line says which
-     * row to look at, and that row is marked. The node is registered throughout -- what changed is
+     * And the direction it fails in: a hub whose only node has gone is degraded, and the verdict
+     * line says so with the count behind it. The node is registered throughout -- what changed is
      * that it is not online -- so this cannot pass by the hub simply forgetting it.
+     *
+     * <p>It used to add "and that row is marked", which was the admin table #253 removed. The
+     * counts it asserts were always the public page's, so what is checked here is unchanged.
      */
     @Test
-    void aRegisteredNodeThatIsOfflineIsNamedInTheVerdictAndMarkedOnItsRow() throws Exception {
-        loginAsAdmin();
+    void aRegisteredNodeThatIsOfflineIsNamedInTheVerdict() throws Exception {
+        joinAsAdmin();
         assertEquals(1, hub.store().nodes().size());
         assertTrue(http("GET", "/", null, null).bodyText().contains("All systems operational"));
 
@@ -433,13 +434,14 @@ class HomePageTest {
     /**
      * The headers every answer on this name carries, checked on the four shapes of answer there
      * are: a page, the JSON, an error, and the admin front. They are applied at the write and not
-     * in each handler precisely so that this holds for a route nobody thought about, which is why
-     * the admin 403 is in the list -- its forms are what {@code form-action} and
-     * {@code frame-ancestors} are for.
+     * in each handler precisely so that this holds for a route nobody thought about, which is why a
+     * path with no handler at all is in the list. {@code form-action} and {@code frame-ancestors}
+     * were there for the admin page's forms and are asserted still, since #253 removed the forms
+     * and not the policy.
      */
     @Test
     void everyAnswerOnThisNameCarriesTheSameSecurityHeaders() throws Exception {
-        for (String path : new String[] {"/", "/v1/status", "/admin", "/no-such-page"}) {
+        for (String path : new String[] {"/", "/v1/status", "/no-such-page"}) {
             HttpResponse r = http("GET", path, null, null);
             String csp = r.headers().get("Content-Security-Policy");
             assertNotNull(csp, path);
@@ -466,10 +468,11 @@ class HomePageTest {
         }
         String link = "<link rel=\"icon\" href=\"/favicon.svg\">";
         assertTrue(http("GET", "/", null, null).bodyText().contains(link));
-        // The admin front builds a frame of its own, which is how it came to be the half of the hub
-        // without an icon. Its 403 is that frame with no session needed to reach it, so dropping the
-        // link there fails here rather than passing on the strength of the pages out front.
-        assertTrue(http("GET", "/admin", null, null).bodyText().contains(link), "the admin frame links it too");
+        // A second frame built by hand is how the hub came to have a half without an icon. The
+        // admin front was that second frame until #253; the 500 page is the one left, and it is a
+        // string constant rather than a route, so dropping the link from it fails here rather than
+        // passing on the strength of the pages out front.
+        assertTrue(HttpFront.ERROR_PAGE.contains(link), "the error frame links it too: " + HttpFront.ERROR_PAGE);
     }
 
     /**
