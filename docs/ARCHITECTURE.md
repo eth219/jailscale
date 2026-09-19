@@ -67,7 +67,6 @@ behind it, so that "not built" is never read as "not wanted".
 |---|---|---|
 | The hub answering AAAA itself | under delegation the hub *is* the authoritative server, so v6 has nowhere else to come from | [#63](https://github.com/eth219/jailscale/issues/63) |
 | tls-alpn-01, so port 80 stops being required for your own domains | it makes 80 a preference; http-01 stays, since not every CA offers the alternative | [#70](https://github.com/eth219/jailscale/issues/70) |
-| A third hub in a store-less relay role | designed in [docs/ha-design](ha-design/README.md) and unbuilt; two hubs is the current ceiling, not the intended one | [#72](https://github.com/eth219/jailscale/issues/72) |
 | systemd socket activation | it is the one mechanism that also helps the single-hub operator, who is most deployments | [#71](https://github.com/eth219/jailscale/issues/71) |
 | A gauge for the soonest certificate expiry among absent nodes | the lapse the node cannot report is one the hub can already see, and alerting can watch a gauge | [#75](https://github.com/eth219/jailscale/issues/75) |
 
@@ -2312,9 +2311,9 @@ named and closes what no longer is, each with the control connection's backoff.
 whole set, whenever it changes), so a published name resolves to the hosts its node is on and the
 apex to the primary alone, where joining and administering are. A name nobody holds resolves to
 every host serving, which is where the "not open" page is. In the two-host deployment that is
-already the shape step 3 of [docs/ha-design](ha-design/README.md) described, with the replicated
-store standing in for the signed lease; the lease is what a third, stateless relay would need,
-and it stays designed rather than built until there is one.
+already the shape a third, stateless relay would have taken, with the replicated store standing in
+for the signed lease that relay would have carried. That third host is decided against rather than
+pending; [docs/ha-design](ha-design/README.md) records what it would have needed.
 
 **What survives the primary now.** Streams in flight on the dead host are gone with its sockets;
 new visitors to every open name are served by the other host within the DNS TTL; nodes keep their
@@ -2963,8 +2962,10 @@ say so and name the issue. An entry that does neither has not been through that 
   is not zero-downtime; the listening sockets are rebound rather than handed over. Socket
   activation is decided work (§1.2, [#71](https://github.com/eth219/jailscale/issues/71)).
 - **Two hubs, not more.** The standby holds the store, so it can serve and be promoted; a third
-  host would need a role without the store, which is designed, not built, and decided work
-  (§1.2, [#72](https://github.com/eth219/jailscale/issues/72), [docs/ha-design](ha-design/README.md)). Streams in flight on a host that dies are cut with its
+  host would need a role without the store. That is **decided against** rather than pending: two
+  hubs is the design, and [docs/ha-design](ha-design/README.md) is the appendix recording what a
+  third would have needed and why it is not coming ([#72](https://github.com/eth219/jailscale/issues/72),
+  closed with [#255](https://github.com/eth219/jailscale/issues/255)). Streams in flight on a host that dies are cut with its
   sockets, raw TCP and UDP ports live on the primary alone, and a promotion with no node attached
   to the standby waits for a person (§13.5). Nor is the doubling end to end: a name still has
   exactly one node behind it (§8.2), so when that node's host is down the name is down whatever the
