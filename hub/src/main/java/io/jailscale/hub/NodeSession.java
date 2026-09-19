@@ -465,7 +465,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         try {
             send(Message.RegisterResponse.approved(n.id(), n.user()));
             sendCert();
-        } catch (IOException e) {
+        } catch (IOException _) {
             close();
         }
     }
@@ -491,7 +491,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         if (node != null && (conn == 0 || relay)) {
             try {
                 sendCert();
-            } catch (IOException e) {
+            } catch (IOException _) {
                 close();
             }
         }
@@ -500,7 +500,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     void goodbye(String reason) {
         try {
             send(new Message.Goodbye(reason));
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // closing anyway
         }
         close();
@@ -514,7 +514,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         draining = true;
         try {
             send(new Message.Goodbye(Message.Goodbye.DRAINING));
-        } catch (IOException e) {
+        } catch (IOException _) {
             close();
             return;
         }
@@ -528,7 +528,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                     }
                     Thread.sleep(200);
                 }
-            } catch (InterruptedException ignored) {
+            } catch (InterruptedException _) {
                 // fall through
             }
             close();
@@ -544,7 +544,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         }
         try {
             socket.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // nothing to do
         }
     }

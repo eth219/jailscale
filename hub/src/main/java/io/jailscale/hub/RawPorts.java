@@ -56,7 +56,7 @@ final class RawPorts implements AutoCloseable {
             if (!stopped.await(CLOSE_WAIT_MS, TimeUnit.MILLISECONDS)) {
                 LOG.warn("listener did not stop within {} ms; its port may still be busy", CLOSE_WAIT_MS);
             }
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
         }
     }
@@ -105,7 +105,7 @@ final class RawPorts implements AutoCloseable {
                     Socket s;
                     try {
                         s = server.accept();
-                    } catch (IOException e) {
+                    } catch (IOException _) {
                         break;
                     }
                     Thread.ofVirtual().name("raw-tcp-" + link.port() + "-" + s.getPort()).start(() -> serve(s));
@@ -166,7 +166,7 @@ final class RawPorts implements AutoCloseable {
         public void close() {
             try {
                 server.close();
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // closing
             }
             awaitRelease(stopped);
@@ -205,7 +205,7 @@ final class RawPorts implements AutoCloseable {
                 try {
                     buf.clear();
                     from = channel.receive(buf);
-                } catch (ClosedChannelException e) {
+                } catch (ClosedChannelException _) {
                     break;
                 } catch (IOException e) {
                     LOG.debug("udp {} receive: {}", link.port(), e.getMessage());
@@ -231,7 +231,7 @@ final class RawPorts implements AutoCloseable {
                 f.lastSeen()[0] = System.currentTimeMillis();
                 try {
                     f.stream().send(datagram);
-                } catch (IOException e) {
+                } catch (IOException _) {
                     end(from, f);
                 }
             }
@@ -256,7 +256,7 @@ final class RawPorts implements AutoCloseable {
                         f.lastSeen()[0] = System.currentTimeMillis();
                         channel.send(ByteBuffer.wrap(d), from);
                     }
-                } catch (IOException ignored) {
+                } catch (IOException _) {
                     // flow over
                 } finally {
                     end(from, f);
@@ -276,7 +276,7 @@ final class RawPorts implements AutoCloseable {
             while (!closed) {
                 try {
                     Thread.sleep(UDP_SWEEP_MS);
-                } catch (InterruptedException e) {
+                } catch (InterruptedException _) {
                     return;
                 }
                 long cutoff = System.currentTimeMillis() - UDP_IDLE_MS;
@@ -293,7 +293,7 @@ final class RawPorts implements AutoCloseable {
             closed = true;
             try {
                 channel.close();
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // closing
             }
             awaitRelease(stopped);

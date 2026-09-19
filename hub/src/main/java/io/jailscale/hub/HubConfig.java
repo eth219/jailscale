@@ -317,7 +317,7 @@ public record HubConfig(
             boolean loopback;
             try {
                 loopback = InetAddress.getByName(listenHost).isLoopbackAddress();
-            } catch (java.net.UnknownHostException e) {
+            } catch (java.net.UnknownHostException _) {
                 loopback = false;
             }
             if (!loopback) {

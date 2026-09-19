@@ -73,7 +73,7 @@ final class Relay {
                 }
                 drain(stream, visitor.getOutputStream());
                 visitor.shutdownOutput();
-            } catch (IOException e) {
+            } catch (IOException _) {
                 closeQuietly(visitor);
                 return;
             }
@@ -82,7 +82,7 @@ final class Relay {
                     LOG.debug("visitor did not close its half within {} ms; closing", lingerMs);
                     closeQuietly(visitor);
                 }
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 Thread.currentThread().interrupt();
                 closeQuietly(visitor);
             }
@@ -101,7 +101,7 @@ final class Relay {
         }
         try {
             toVisitor.join();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
         }
         closeQuietly(visitor);
@@ -143,7 +143,7 @@ final class Relay {
     static void closeQuietly(Socket s) {
         try {
             s.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // closing
         }
     }

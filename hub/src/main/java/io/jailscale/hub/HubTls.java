@@ -97,6 +97,8 @@ final class HubTls {
 
     /** The message that gives nodes the public half. */
     Message.CertUpdate certUpdate() throws GeneralSecurityException {
+        // Not a stream: Pem.encode throws a checked GeneralSecurityException, and the try/catch a
+        // lambda would need to swallow it in is longer than the loop.
         List<String> pem = new ArrayList<>();
         for (X509Certificate c : current.chain()) {
             pem.add(Pem.encode(c));

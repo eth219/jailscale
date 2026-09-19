@@ -75,7 +75,7 @@ final class DomainVerifier {
                 sb.append(p);
             }
             chain = Pem.certificates(sb.toString());
-        } catch (GeneralSecurityException e) {
+        } catch (GeneralSecurityException _) {
             return "domain-cert-unparseable";
         }
         if (chain.isEmpty()) {
@@ -84,7 +84,7 @@ final class DomainVerifier {
         X509Certificate leaf = chain.get(0);
         try {
             leaf.checkValidity();
-        } catch (CertificateException e) {
+        } catch (CertificateException _) {
             return "domain-cert-expired";
         }
         if (!coversName(leaf, domain)) {
@@ -92,7 +92,7 @@ final class DomainVerifier {
         }
         try {
             trust.checkServerTrusted(chain.toArray(new X509Certificate[0]), leaf.getPublicKey().getAlgorithm().equals("EC") ? "ECDHE_ECDSA" : "RSA");
-        } catch (CertificateException e) {
+        } catch (CertificateException _) {
             return "domain-cert-untrusted";
         }
         if (proof == null || handshakeHash == null) {
@@ -102,7 +102,7 @@ final class DomainVerifier {
             if (!DomainProof.verify(leaf.getPublicKey(), handshakeHash, domain, proof)) {
                 return "domain-proof-invalid";
             }
-        } catch (GeneralSecurityException e) {
+        } catch (GeneralSecurityException _) {
             return "domain-proof-invalid";
         }
         return null;
@@ -112,7 +112,7 @@ final class DomainVerifier {
         Collection<List<?>> sans;
         try {
             sans = leaf.getSubjectAlternativeNames();
-        } catch (CertificateException e) {
+        } catch (CertificateException _) {
             return false;
         }
         if (sans == null) {

@@ -149,14 +149,14 @@ final class PeerClient implements AutoCloseable {
                 if (suspended) {
                     try {
                         Thread.sleep(200);
-                    } catch (InterruptedException e) {
+                    } catch (InterruptedException _) {
                         return;
                     }
                     continue;
                 }
                 connectAndRun();
                 attempt = 0;
-            } catch (PeerIsNotAPrimary e) {
+            } catch (PeerIsNotAPrimary _) {
                 attempt = BACKOFF_SECONDS.length; // look again at the longest interval
             } catch (IOException | NoiseException | GeneralSecurityException e) {
                 lastError = e.getMessage();
@@ -171,7 +171,7 @@ final class PeerClient implements AutoCloseable {
             attempt++;
             try {
                 Thread.sleep(wait * 1000L);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 return;
             }
         }

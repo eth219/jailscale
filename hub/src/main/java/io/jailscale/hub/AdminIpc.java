@@ -77,19 +77,16 @@ final class AdminIpc implements Ipc.Handler {
             }
 
             case "node-list" -> {
-                List<Object> rows = new ArrayList<>();
-                for (Store.NodeRec n : store.nodes()) {
+                List<Object> rows = store.nodes().stream().<Object>map(n -> {
                     NodeGroup g = hub.registry().get(n.mkey());
-                    rows.add(JsonObject.builder().put("id", n.id()).put("mkey", n.mkey()).put("user", n.user())
+                    return JsonObject.builder().put("id", n.id()).put("mkey", n.mkey()).put("user", n.user())
                         .put("hostname", n.hostname()).put("os", n.os())
                         .put("ip", g == null ? null : g.remoteIp())
-                        .put("online", g != null).build().asMap());
-                }
-                List<Object> pend = new ArrayList<>();
-                for (Store.PendingRec p : store.pending()) {
-                    pend.add(JsonObject.builder().put("mkey", p.mkey()).put("hostname", p.hostname()).put("os", p.os())
-                        .put("ip", p.ip()).put("user", p.user()).put("at", p.at()).build().asMap());
-                }
+                        .put("online", g != null).build().asMap();
+                }).toList();
+                List<Object> pend = store.pending().stream().<Object>map(p -> JsonObject.builder()
+                    .put("mkey", p.mkey()).put("hostname", p.hostname()).put("os", p.os())
+                    .put("ip", p.ip()).put("user", p.user()).put("at", p.at()).build().asMap()).toList();
                 reply.done(JsonObject.builder().put("ok", true).put("nodes", rows).put("pending", pend));
             }
             case "handoff" -> {
@@ -123,12 +120,9 @@ final class AdminIpc implements Ipc.Handler {
                 reply.ok();
             }
             case "name-list" -> {
-                List<Object> rows = new ArrayList<>();
-                for (Store.NameRec n : store.names()) {
-                    Links.Link l = hub.links().byName(n.name());
-                    rows.add(JsonObject.builder().put("name", n.name()).put("user", n.user()).put("mkey", n.mkey())
-                        .put("local", n.local()).put("online", l != null).build().asMap());
-                }
+                List<Object> rows = store.names().stream().<Object>map(n -> JsonObject.builder()
+                    .put("name", n.name()).put("user", n.user()).put("mkey", n.mkey())
+                    .put("local", n.local()).put("online", hub.links().byName(n.name()) != null).build().asMap()).toList();
                 reply.done(JsonObject.builder().put("ok", true).put("names", rows));
             }
             case "name-reassign" -> {
@@ -141,11 +135,9 @@ final class AdminIpc implements Ipc.Handler {
                 reply.ok();
             }
             case "domain-list" -> {
-                List<Object> rows = new ArrayList<>();
-                for (Store.DomainRec d : store.domains()) {
-                    rows.add(JsonObject.builder().put("domain", d.domain()).put("user", d.user()).put("mkey", d.mkey())
-                        .put("open", hub.links().byDomain(d.domain()) != null).build().asMap());
-                }
+                List<Object> rows = store.domains().stream().<Object>map(d -> JsonObject.builder()
+                    .put("domain", d.domain()).put("user", d.user()).put("mkey", d.mkey())
+                    .put("open", hub.links().byDomain(d.domain()) != null).build().asMap()).toList();
                 reply.done(JsonObject.builder().put("ok", true).put("domains", rows));
             }
             case "domain-release" -> {
@@ -154,10 +146,8 @@ final class AdminIpc implements Ipc.Handler {
                 reply.ok();
             }
             case "ban-list" -> {
-                List<Object> rows = new ArrayList<>();
-                for (Store.BanRec b : store.bans()) {
-                    rows.add(JsonObject.builder().put("cidr", b.cidr()).put("reason", b.reason()).put("at", b.at()).build().asMap());
-                }
+                List<Object> rows = store.bans().stream().<Object>map(b -> JsonObject.builder()
+                    .put("cidr", b.cidr()).put("reason", b.reason()).put("at", b.at()).build().asMap()).toList();
                 reply.done(JsonObject.builder().put("ok", true).put("bans", rows));
             }
             case "ban-add" -> {
@@ -203,11 +193,9 @@ final class AdminIpc implements Ipc.Handler {
                     .put("code", c.code()).put("expiresAt", c.rec().expiresAt()));
             }
             case "invite-list" -> {
-                List<Object> rows = new ArrayList<>();
-                for (Store.InviteRec r : store.invites()) {
-                    rows.add(JsonObject.builder().put("id", r.id()).put("user", r.user()).put("usesLeft", r.usesLeft())
-                        .put("expiresAt", r.expiresAt()).put("createdBy", r.createdBy()).put("admin", r.admin()).build().asMap());
-                }
+                List<Object> rows = store.invites().stream().<Object>map(r -> JsonObject.builder()
+                    .put("id", r.id()).put("user", r.user()).put("usesLeft", r.usesLeft())
+                    .put("expiresAt", r.expiresAt()).put("createdBy", r.createdBy()).put("admin", r.admin()).build().asMap()).toList();
                 reply.done(JsonObject.builder().put("ok", true).put("invites", rows));
             }
             case "invite-revoke" -> {

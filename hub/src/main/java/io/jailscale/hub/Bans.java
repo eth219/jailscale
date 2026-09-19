@@ -64,7 +64,7 @@ final class Bans {
             host = text.substring(0, slash);
             try {
                 bits = Integer.parseInt(text.substring(slash + 1));
-            } catch (NumberFormatException e) {
+            } catch (NumberFormatException _) {
                 return null;
             }
         }
@@ -72,7 +72,7 @@ final class Bans {
         try {
             // Literal only: a hostname here would mean a DNS lookup driven by admin input.
             addr = parseLiteral(host);
-        } catch (UnknownHostException e) {
+        } catch (UnknownHostException _) {
             return null;
         }
         if (addr == null) {
@@ -110,7 +110,7 @@ final class Bans {
         byte[] addr;
         try {
             addr = parseLiteral(ip);
-        } catch (UnknownHostException e) {
+        } catch (UnknownHostException _) {
             return false;
         }
         if (addr == null) {
@@ -130,7 +130,7 @@ final class Bans {
         byte[] addr;
         try {
             addr = parseLiteral(ip);
-        } catch (UnknownHostException e) {
+        } catch (UnknownHostException _) {
             return null;
         }
         if (addr == null) {
