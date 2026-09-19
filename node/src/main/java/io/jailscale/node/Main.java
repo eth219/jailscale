@@ -179,7 +179,7 @@ public final class Main {
             if (temp) {
                 try {
                     Files.deleteIfExists(dir);
-                } catch (IOException ignored) {
+                } catch (IOException _) {
                     // the download's own reason is the one to report
                 }
             }
@@ -209,7 +209,7 @@ public final class Main {
             try {
                 d.close();
                 lock.close();
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // exiting
             }
         }));
@@ -434,7 +434,7 @@ public final class Main {
                     break;
                 }
             }
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // no log to quote
         }
         throw new IOException("daemon did not start" + why + " (see " + cfg.daemonLog() + ")");

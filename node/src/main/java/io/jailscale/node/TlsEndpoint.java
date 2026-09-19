@@ -370,7 +370,7 @@ final class TlsEndpoint implements AutoCloseable {
         try {
             engine.closeOutbound();
             wrapAndWrite(ByteBuffer.allocate(0));
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // best effort close_notify
         }
     }

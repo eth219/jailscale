@@ -52,9 +52,7 @@ final class Service {
         // native image parses -XX: before main sees the arguments, and a JVM only accepts them
         // before -cp and the main class.
         if (opts != null && !opts.isBlank()) {
-            for (String opt : opts.trim().split("\\s+")) {
-                cmd.add(opt);
-            }
+            cmd.addAll(List.of(opts.trim().split("\\s+")));
         }
         if (base.equals("java") || base.equals("java.exe")) {
             // Every entry absolute: a unit's ExecStart runs from a working directory of systemd's
@@ -222,7 +220,7 @@ final class Service {
             Process p = new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
             p.getOutputStream().close();
             return p.waitFor();
-        } catch (IOException e) {
+        } catch (IOException _) {
             return 127;
         }
     }
@@ -241,7 +239,7 @@ final class Service {
             String s = new String(p.getInputStream().readAllBytes(), StandardCharsets.US_ASCII).trim();
             p.waitFor();
             return s.isEmpty() ? "501" : s;
-        } catch (IOException | InterruptedException e) {
+        } catch (IOException | InterruptedException _) {
             return "501";
         }
     }
