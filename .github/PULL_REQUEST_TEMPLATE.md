@@ -48,7 +48,7 @@ Closes #
 ## Tests
 
 <!-- What each new test can fail. A test that cannot fail in the direction it claims passes just as
-     well when the feature is dead — that is #80. -->
+     well when the feature is dead — that was #80. -->
 
 ## Numbers
 

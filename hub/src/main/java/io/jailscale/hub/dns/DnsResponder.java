@@ -386,7 +386,7 @@ public final class DnsResponder implements AutoCloseable {
     private static void closeQuietly(Closeable s) {
         try {
             s.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // already given back
         }
     }
@@ -567,7 +567,7 @@ public final class DnsResponder implements AutoCloseable {
         tcpRefused.incrementAndGet();
         try {
             s.close();
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // refusing it is the point; it is gone either way
         }
         if (tcpLog.ready()) {
@@ -595,7 +595,7 @@ public final class DnsResponder implements AutoCloseable {
                 out.write(r);
                 out.flush();
             }
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // client gone, or out of time
         }
     }
@@ -1018,7 +1018,7 @@ public final class DnsResponder implements AutoCloseable {
         try {
             byte[] b = InetAddress.getByName(address).getAddress();
             return b.length == 4 ? b : null;
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException _) {
             return null;
         }
     }

@@ -212,7 +212,7 @@ public final class DnsQuery {
             if ((m[2] & 0x02) == 0) {
                 return m;
             }
-        } catch (IOException e) {
+        } catch (IOException _) {
             // Nothing usable came back over UDP: a lost or refused datagram, a server too busy to
             // answer, a flood on the path, or a reply that was not this question's -- which is what
             // an off-path forgery looks like from here. Every one of them is a reason to ask again

@@ -107,6 +107,22 @@ class UserIdentityTest {
         assertEquals("user-taken", taken.reason());
     }
 
+    /**
+     * Auth-keys were removed (#251) and the field stays on the wire so that this is the answer: a
+     * node from before that, presenting one, is told the kind is gone. Treating it as a knock would
+     * queue a machine that arrived with a credential, or on an open hub register it outright, and
+     * nobody at either end would learn that the flag had stopped meaning anything.
+     */
+    @Test
+    void aNodeFromBeforeAuthKeysWereRemovedIsRefusedNotQueued() throws Exception {
+        Message.RegisterResponse r = registrar.decide("mkey:old-ci",
+            new Message.RegisterRequest("ci-1", "linux", null, null, null, "jk_from_last_year"), "203.0.113.7").response();
+        assertEquals("rejected", r.status());
+        assertEquals("authkey-removed", r.reason());
+        assertEquals(0, store.pending().size(), "not queued as a knock");
+        assertEquals(0, store.nodes().size(), "not registered, open registration or not");
+    }
+
     @Test
     void approvingAKnockDoesNotHandOverAnExistingIdentity() throws Exception {
         assertEquals(Message.RegisterResponse.APPROVED, join("m_alice", "alice").status());

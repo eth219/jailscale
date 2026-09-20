@@ -27,17 +27,12 @@ public final class ProxyProtocol {
 
     /** Reads exactly one header. Throws on anything that is not a PROXY header. */
     public static Header read(InputStream in) throws IOException {
-        int first = in.read();
-        if (first < 0) {
-            throw new EOFException("no PROXY header");
-        }
-        if (first == 'P') {
-            return readV1(in);
-        }
-        if (first == 0x0D) {
-            return readV2(in);
-        }
-        throw new IOException("expected a PROXY protocol header");
+        return switch (in.read()) {
+            case 'P' -> readV1(in);
+            case 0x0D -> readV2(in);
+            case -1 -> throw new EOFException("no PROXY header");
+            default -> throw new IOException("expected a PROXY protocol header");
+        };
     }
 
     private static Header readV1(InputStream in) throws IOException {
@@ -76,7 +71,7 @@ public final class ProxyProtocol {
             InetAddress src = literal(p[2], v6);
             InetAddress dst = literal(p[3], v6);
             return new Header(src.getHostAddress(), port(p[4]), dst.getHostAddress(), port(p[5]));
-        } catch (IOException | IllegalArgumentException e) {
+        } catch (IOException | IllegalArgumentException _) {
             throw new IOException("bad PROXY v1 address");
         }
     }
@@ -111,7 +106,7 @@ public final class ProxyProtocol {
         int v;
         try {
             v = Integer.parseInt(s);
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException _) {
             throw new IOException("bad PROXY port");
         }
         if (v < 0 || v > 65535) {
@@ -154,7 +149,7 @@ public final class ProxyProtocol {
                 return new Header(InetAddress.getByAddress(slice(body, 0, 16)).getHostAddress(), u16(body, 32),
                     InetAddress.getByAddress(slice(body, 16, 16)).getHostAddress(), u16(body, 34));
             }
-        } catch (IOException e) {
+        } catch (IOException _) {
             throw new IOException("bad PROXY v2 address");
         }
         return new Header(null, 0, null, 0); // AF_UNSPEC / AF_UNIX: nothing usable

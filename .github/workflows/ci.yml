@@ -9,8 +9,7 @@ on:
   pull_request:
   schedule:
     - cron: '17 18 * * *'   # 03:17 KST: it catches drift in the runner images and in what the
-                            # pinned toolchain lines resolve to, and it is what watches the signed
-                            # release index for its expiry (the `index` job below).
+                            # pinned toolchain lines resolve to.
   workflow_dispatch:
 
 # A newer push supersedes an older one on the same ref; a tag build is never cancelled.
@@ -19,41 +18,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Nightly only. The signed pointer that says which release is current expires every 90 days and is
-  # re-issued by hand from the maintainer's machine (docs/update-freshness) -- which means the whole
-  # scheme rests on somebody noticing in time, and until this job existed the only reminder was the
-  # one printed by a command nobody had a reason to run. Here it is a red nightly build two weeks
-  # out instead. A repository with no pointer yet is not a failure: this has to be able to run
-  # before the first one is published.
-  index:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - name: The signed release index is current
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_KEYS_REV: HEAD # this checkout has no tags, and main's list is the one in the field
-        run: |
-          set -eu
-          rc=0
-          out=$(tools/verify-release.sh --index 2>&1) || rc=$?
-          printf '%s\n' "$out"
-          if [ "$rc" = 0 ]; then
-            case $out in
-              *"less than two weeks left"*)
-                echo "::warning::the release index expires soon; re-issue it with tools/refresh-index.sh" ;;
-            esac
-            exit 0
-          fi
-          case $out in
-            *'has no release-index pointer yet'*)
-              echo "::notice::no signed release index has been published yet; nothing to check."
-              exit 0 ;;
-          esac
-          echo "::error::the signed release index does not check out. Re-issue it with tools/refresh-index.sh"
-          exit 1
-
   # Every push and pull request. Each platform is here because it was measured clean rather than
   # assumed: ubuntu and macos produced no spurious failure in 240 runs per shard (§3.2), and Windows
   # joined them once the poller stall that used to fail about 2% of MuxSessionTest runs was fixed --

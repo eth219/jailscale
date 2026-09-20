@@ -15,7 +15,6 @@ import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.security.interfaces.ECPublicKey;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -92,10 +91,8 @@ public final class AcmeClient {
     }
 
     public Order newOrder(List<String> dnsNames) throws AcmeException {
-        List<Object> ids = new ArrayList<>();
-        for (String n : dnsNames) {
-            ids.add(JsonObject.builder().put("type", "dns").put("value", n).build().asMap());
-        }
+        List<Object> ids = dnsNames.stream()
+            .<Object>map(n -> JsonObject.builder().put("type", "dns").put("value", n).build().asMap()).toList();
         HttpResponse r = post(directory().newOrder(), JsonObject.builder().put("identifiers", ids).toJson(), false);
         String url = r.headers().get("Location");
         if (url == null) {
@@ -283,7 +280,7 @@ public final class AcmeClient {
         try {
             JsonObject p = Json.parseObject(r.bodyText());
             return new AcmeException(p.optString("type", "unknown"), r.status(), p.optString("detail", r.bodyText()));
-        } catch (RuntimeException e) {
+        } catch (RuntimeException _) {
             return new AcmeException("http", r.status(), "HTTP " + r.status() + ": " + r.bodyText());
         }
     }

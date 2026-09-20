@@ -95,7 +95,12 @@ public sealed interface Message {
 
     // --- registration ----------------------------------------------------------------------
 
-    /** Exactly one of invite / code / authKey, or none to knock. {@code user} is the self-chosen name. */
+    /**
+     * One of invite / code, or none to knock. {@code user} is the self-chosen name. {@code authKey}
+     * is a credential kind that was removed (#251): the field is still read so that a node older
+     * than that which presents one is refused with a reason rather than treated as a knock, and no
+     * node sends it any more. Kept on the wire under its old name, as §5.4 asks.
+     */
     record RegisterRequest(String hostname, String os, String user, String invite, String code, String authKey)
         implements Message {
         @Override public String type() { return "RegisterRequest"; }
@@ -124,7 +129,7 @@ public sealed interface Message {
         @Override public String type() { return "HubKeyRotation"; }
     }
 
-    // --- invites and admin -----------------------------------------------------------------
+    // --- invites -----------------------------------------------------------------------------
 
     /** {@code uses <= 0} and {@code ttlSeconds <= 0} mean "hub default". */
     record InviteCreate(String user, int uses, long ttlSeconds, boolean self) implements Message {
@@ -135,15 +140,15 @@ public sealed interface Message {
         @Override public String type() { return "InviteCreated"; }
     }
 
-    record AdminLinkRequest() implements Message {
-        @Override public String type() { return "AdminLinkRequest"; }
-    }
-
-    record AdminLink(String url, long expiresAt) implements Message {
-        @Override public String type() { return "AdminLink"; }
-    }
-
-    /** Generic failure reply to a request that has no dedicated rejected form. */
+    /**
+     * Generic failure reply to a request that has no dedicated rejected form.
+     *
+     * <p>{@code AdminLinkRequest} and {@code AdminLink} used to sit above this and were removed with
+     * the admin web page (#253). A node old enough to send one now gets {@code Error{unknown-type}}
+     * from {@link Codec}'s default arm, and a hub old enough to send an {@code AdminLink} is
+     * decoded as {@link Unknown} and ignored -- which is what §5.4 promises for a type the other
+     * side has no case for, in both directions. The names are not reused.
+     */
     record Error(String inReplyTo, String reason) implements Message {
         @Override public String type() { return "Error"; }
     }

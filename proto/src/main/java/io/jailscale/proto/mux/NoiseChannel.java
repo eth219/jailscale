@@ -125,7 +125,7 @@ public final class NoiseChannel implements AutoCloseable {
             byte[] ct;
             try {
                 ct = readRaw(in);
-            } catch (EOFException e) {
+            } catch (EOFException _) {
                 return null;
             }
             byte[] pt = transport.decrypt(ct);

@@ -55,7 +55,7 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2), and `service install` is verified on macOS and `linux-arm64`, not on `linux-amd64` and not on Windows ([#81](https://github.com/eth219/jailscale/issues/81)) |
 | Availability | two hubs, a delegated subdomain, the standby serving throughout, promotion without a person (§13) | promotion is automatic only with a witness node attached to the standby (§13.5) |
 | Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
-| Upgrading | a signed release index, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
+| Upgrading | a check against GitHub's newest release, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | which release is current is GitHub's unsigned word and only what is in it is signed (§15), the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
 | Joining | invite links, machine keys, no account anywhere (§10) | the hub is what decides name ownership, and a compromised one can impersonate every name under its domain (§11.2) |
 
 ### 1.2 Decided, and not built
@@ -67,10 +67,7 @@ behind it, so that "not built" is never read as "not wanted".
 |---|---|---|
 | The hub answering AAAA itself | under delegation the hub *is* the authoritative server, so v6 has nowhere else to come from | [#63](https://github.com/eth219/jailscale/issues/63) |
 | tls-alpn-01, so port 80 stops being required for your own domains | it makes 80 a preference; http-01 stays, since not every CA offers the alternative | [#70](https://github.com/eth219/jailscale/issues/70) |
-| A third hub in a store-less relay role | designed in [docs/ha-design](ha-design/README.md) and unbuilt; two hubs is the current ceiling, not the intended one | [#72](https://github.com/eth219/jailscale/issues/72) |
 | systemd socket activation | it is the one mechanism that also helps the single-hub operator, who is most deployments | [#71](https://github.com/eth219/jailscale/issues/71) |
-| Installing a verified upgrade, opt-in and off by default | a fleet should not need somebody to type something on every node; the default stays manual | [#74](https://github.com/eth219/jailscale/issues/74) |
-| A minimum release-index sequence compiled into the binary | a CLI-only install has no stored floor and never will, so the floor has to arrive with the binary | [#65](https://github.com/eth219/jailscale/issues/65) |
 | A gauge for the soonest certificate expiry among absent nodes | the lapse the node cannot report is one the hub can already see, and alerting can watch a gauge | [#75](https://github.com/eth219/jailscale/issues/75) |
 
 ### 1.3 Not supported
@@ -111,7 +108,7 @@ on it, and this section edited in the same change ([docs/issue-workflow.md](issu
           │   through untouched)     │  coordinator: invites, names     │ in   │     127.0.0.1:3000   │
           │                          │  ACME: wildcard via own DNS-01   │ TLS  │                      │
           │                          │  :53   _acme-challenge TXT       │<─────│ CLI <-> daemon       │
-          │                          │  admin IPC and /admin web        │      │      (AF_UNIX)       │
+          │                          │  admin IPC (AF_UNIX socket)      │      │      (AF_UNIX)       │
           │                          │  signing service: wildcard key   │      └──────────────────────┘
           │                          └──────────────────────────────────┘
 ```
@@ -267,7 +264,7 @@ condition, in `docs/windows-virtual-thread-stall/`.
 
 | Key | Held by | Purpose | Lifetime |
 |---|---|---|---|
-| **MachineKey** (`mkey:`) | node | Noise static key of the control-channel client. The machine's identity, and its `/admin` login identity | Life of the machine |
+| **MachineKey** (`mkey:`) | node | Noise static key of the control-channel client. The machine's identity | Life of the machine |
 | **hub key** (`hkey:`) | hub | Noise static key of the control-channel server. Pinned by nodes | Rotatable (§5.2) |
 | **Wildcard certificate key** | hub | ECDSA P-256 for `hub.example.com` and `*.hub.example.com`. **Never leaves the hub** | New on each ACME renewal |
 | **User domain key** | node | Certificate key for a domain the user brought. Not on the hub | New on each node-side renewal |
@@ -295,7 +292,7 @@ TCP 443, SNI = hub.example.com
 ```
 
 Both HTTP ends are hand-written (§3.1): the hub's front is about 1,100 lines serving `/v1/key`,
-`/v1/noise`, `/join/<token>`, `/admin/*`, `/robots.txt`, `/favicon.svg`, a root page and the link directory, the
+`/v1/noise`, `/join/<token>`, `/robots.txt`, `/favicon.svg` and a root page, the
 node's client about 40, and the socket read timeout is 60 s. WebSocket was rejected as the carrier
 because its 4-byte client-to-server masking would touch every visitor byte again, frame headers and
 close semantics come with it, and it would only help behind proxies passing `Upgrade: websocket`
@@ -308,7 +305,7 @@ rather than something later. A transport message is at most 65535 bytes, which i
 prefix is two bytes.
 
 **Why keep the TLS.** Noise alone authenticates the channel, but the hub-key bootstrap needs some
-reason to trust a first contact and web PKI is it, `/join` and `/admin` are browser paths, and
+reason to trust a first contact and web PKI is it, `/join` is a browser path, and
 corporate firewalls pass TLS on 443 while dropping unidentifiable binary streams. The hub obtains the
 certificate itself, so this costs the operator nothing.
 
@@ -478,9 +475,14 @@ additive case above, pinned in `WireFormatTest` against v0.1.0's own `Hello` lin
 message types only two hubs exchange, which a node never sees; v0.1.4 and v0.1.5 changed nothing a
 node sees; v0.1.6 added a flag to `Hello` and a list to its response, both omitted when there is
 nothing to say; v0.1.7 added two messages a node only carries between two hubs; v0.1.8 to v0.1.10
-changed nothing on the wire. Both additive steps have also run mismatched on the live hub: a
-released v0.1.0 node against a hub that reads `host`, and the hub on v0.1.2 for half an hour while
-its node was not, the capacity row reading `not advertised` throughout. So a hub and its nodes can
+changed nothing on the wire. The release after v0.1.10 is the first to take a credential away, the
+auth-key (#251), and the wire did not move for it: the `RegisterRequest` field keeps its name and
+is still read, so a node that presents one is refused with `authkey-removed` rather than misread as
+a knock, no node sends it any more, and `PROTO` stays at 1 because nothing was added, removed or
+renamed. That mismatch, an older node presenting an auth-key to a newer hub, is held by
+`Registrar`'s test and has not run live. Both additive steps have also run mismatched on the live
+hub: a released v0.1.0 node against a hub that reads `host`, and the hub on v0.1.2 for half an hour
+while its node was not, the capacity row reading `not advertised` throughout. So a hub and its nodes can
 be replaced separately rather than together. Not tried: the other order, a newer node against an
 older hub, and rolling either half back.
 
@@ -501,13 +503,13 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 |---|---|
 | `Hello` / `HelloResponse` | Version negotiation: `proto`, `version`, `os`, `conn`, and `host`, the name the node resolved to reach the hub or null when it was handed an address (§7.2); the reply adds `minProto` and `dnsSuffix` |
 | `Goodbye` | `upgrade-required`, `revoked`, `shutdown`, `draining`, plus an optional human `detail` |
-| `RegisterRequest` / `RegisterResponse` | hostname, os, self-chosen user, and one of `invite` / `code` / `authKey` or none to knock. Reply is `approved{nodeId, user}`, `pending` or `rejected{reason}` |
+| `RegisterRequest` / `RegisterResponse` | hostname, os, self-chosen user, and one of `invite` / `code` or none to knock. Reply is `approved{nodeId, user}`, `pending` or `rejected{reason}` |
 | `CertUpdate` | Wildcard chain (public part) and its `keyId`, on connect and on renewal |
 | `LinkOpen` / `LinkOpened` | `kind: https\|tcp\|udp`, optional name, domain, port, local target, and for user domains the certificate chain. Reply carries `linkId` and a URL or hub port, or a reason |
 | `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name, domain or port (§11.4) |
 | `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `content`, `serverHello`, `encryptedExtensions`, optional `helloRetryRequest`; then a signature or a reason (§9.2) |
 | `ChallengeSet` / `ChallengeClear` | Register or drop a user-domain http-01 token (§8.3) |
-| `InviteCreate` / `InviteCreated`, `AdminLinkRequest` / `AdminLink` | A member node issuing an invite; a one-shot `/admin` login URL for an admin node |
+| `InviteCreate` / `InviteCreated` | A member node issuing an invite. `AdminLinkRequest` / `AdminLink` sat here until #253 removed the admin web; §5.4 covers what an older peer sending one now gets |
 | `HubKeyRotation`, `Ping` / `Pong`, `Ack` / `Error` | §5.2; on-demand round trip; generic replies |
 
 **Versioning.** `proto` versions the message schema and the frame set together, and the hub accepts
@@ -538,12 +540,14 @@ instead.** `snapshot()` renames the new file into place and then truncates the l
 folded in; between those the directory holds both, and nothing forces the truncation to disk, so a
 machine that loses power inside the filesystem's commit interval comes back to that pair rather than
 to a state that merely passed through it. Most events survive being replayed twice because they are
-`put`s landing on the value already there. Three do not: `invite-used` and `authkey-used` subtract,
-`notice-added` appends. Replayed twice, an invite quietly spends a use nobody spent, a two-use
-auth-key with one use to go is **deleted** — `authkey-used` removes the record at zero, so the CI
-runner holding it is locked out with nothing in any log to say why — and a node is told twice about
-one revoked name. So every appended event carries a sequence number `s`, each snapshot records the
-last it folded in as `seq`, and a line at or below that is skipped on load. The numbering is local
+`put`s landing on the value already there. Two do not: `invite-used` subtracts and `notice-added`
+appends. Replayed twice, an invite quietly spends a use nobody spent and a node is told twice about
+one revoked name. (Auth-keys had the same arithmetic and a worse failure, a two-use key deleted at
+what should have been one use left; they were removed in #251. A log written before that still
+carries their events: the store skips them by name, counts the records, and warns once on load that
+they were dropped, since the next snapshot will not carry them.) So every appended event carries a
+sequence number `s`, each snapshot records the last it folded in as `seq`, and a line at or below
+that is skipped on load. The numbering is local
 to one log and carries on across a restart; a standby stamps its own rather than the primary's,
 since the number means a place in a particular file. Between the rename and the truncation the
 directory entry is fsynced, which is what keeps the *other* order — a durably emptied log beside a
@@ -578,7 +582,7 @@ read its state should stop rather than come up holding part of it. In memory the
 domains, ports, credential hashes, admins, the pending queue, undelivered notices), which is the
 simplest thing that works up to thousands of names.
 
-### 6.3 Admin IPC, the status page, and the admin web
+### 6.3 Admin IPC and the status page
 
 Admin commands are separate processes and the state is in memory, so they talk to the running server
 over an AF_UNIX socket at `$JAILHUB_STATE/jailhub.sock`, mode 0600, exchanging line-delimited JSON
@@ -586,22 +590,25 @@ through the `proto` codec. **The socket file permission is the authorisation.** 
 at run time (invite policy, registration mode, knocking) live in the store, and `serve` flags only
 seed them on first start.
 
-`/admin` exists because an approval queue that can only be drained from a shell on the hub violates
-the usability principle. There is no password and no IdP: **an admin node's MachineKey is the
-identity**. `jailscale admin` asks for an `AdminLink` over stream 0, the hub returns a 60-second
-one-shot URL, and the CLI opens a browser; the visit sets a `__Host-` prefixed session cookie
-(`HttpOnly; Secure; SameSite=Lax`, 12 hours), and `jailhub admin login-link` covers the case with no
-node available. The pages approve or deny the queue, manage nodes, names and domains, issue invites
-and auth-keys, and toggle the three settings, as server-rendered HTML with no JavaScript, no template
-engine, and a session-bound CSRF token on every form.
+**The socket is the only admin surface.** There was a second one -- a web page at `/admin`, reached
+by a 60-second one-shot login link, holding a `__Host-` session cookie for 12 hours and a CSRF token
+on every form -- and it was removed (#253). Every action it offered exists as a `jailhub` subcommand
+over the socket above, so the page was a second authorisation, on the public 443 listener, for
+things that already had one. One surface with one authorisation is easier to state and to keep true
+than two.
+
+What that costs is the case the page was built for: an approval queue drained from a shell on the
+hub is worse for whoever is not at that shell. The answer is that `jailhub` runs wherever the state
+directory is reachable, and that `--invite-policy members` lets a member issue an invitation without
+an admin in the loop at all, so the queue is not the only way in.
 
 The hub's own page at `/` is the same machinery seen from the other side. It states what the hub is,
 how to join *this* hub (read from the stored registration setting rather than assumed), which copies
 of `jailscale` it will talk to, and how it is doing: version, uptime, nodes online against nodes
 registered, links open, whether a certificate is loaded, and resident memory. Those are properties
 of the service, so they are public. The node list, the addresses nodes connect from, and the
-controls over them are rendered only when the request carries a current admin session, and the
-rights are re-checked on that request rather than trusted from the cookie. Resident set size is read
+controls over them are not on this page at all: they are `jailhub node list` and its neighbours on
+the socket, where the file permission is the authorisation. Resident set size is read
 from `/proc/self/status` where it exists and omitted elsewhere rather than guessed at, because a
 native image's heap is a small part of what it occupies.
 
@@ -641,7 +648,7 @@ is stripped before either test, so a blank name is never a third state between s
 **The whole section is drawn only when one of the three is set**, and with it the only honest
 retention sentence the hub has -- which is deliberately **not an inventory**. Three attempts at one
 were each found short: the pending record's address, then the hostname and system in both records,
-then the invites, auth keys, domains, raw-port targets and notices. A list that has to be complete
+then the invites, domains, raw-port targets and notices. A list that has to be complete
 to be honest goes stale the next time anything is added to the store, so the page says the shape
 instead: what an operator administers stays until they remove it, including what a machine said
 about itself when it joined -- its hostname, its system, the address it knocked from -- beside
@@ -683,7 +690,9 @@ and not in each handler, so a route nobody thought about gets them too. The fron
 what makes the policy exact rather than aspirational -- no script, no external stylesheet, no font,
 and nothing ever fetched from a node -- so `default-src 'none'` is the truth: with `style-src
 'unsafe-inline'` for the one inline stylesheet, `img-src 'self'` for the icon, and `form-action`
-and `frame-ancestors` for `/admin`, whose forms are the only things here that change state. Then
+and `frame-ancestors`, which were there for `/admin`'s forms and are kept now that #253 has removed
+them: they cost a header either way, and the next form to appear should find the policy already in
+front of it. Then
 `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`, because an invitation URL and
 an admin login URL are credentials in a path and a `Referer` is how a path travels somewhere nobody
 chose to send it. `set` and not `add`, so a handler that sets one of these itself is replaced rather
@@ -706,88 +715,35 @@ and `/favicon.ico` both, and linked from every page on the hub's own name -- not
 "not open" page, whose `/favicon.svg` is a different origin that `img-src 'self'` refuses and whose
 own name answers that path with the same page. A description and `og:` tags on `/` and **only**
 there, so the hub introduces itself when its address is pasted into a chat: an invitation's URL is a
-credential and the directory carries other people's names, and neither wants a card made of it. And
-the answers a person can arrive at by mistyping -- 404, and 405 on a page -- go through the same
-frame as everything else, with the nav on them, instead of `not found` in the browser's default
-serif with no way back. The machine answers do not: the 426 and 429 that answer a control
+credential, and nobody wants a card made of it. And the answers a person can arrive at by mistyping
+-- 404, and 405 on a page -- go through the same frame as everything else, with a link back to `/`,
+instead of `not found` in the browser's default serif with no way back. The machine answers do not: the 426 and 429 that answer a control
 connection, and the JSON under `/v1`, are read by something that is not a browser, and a frame would
 be bytes it has to skip. The 500 is the one page held as a literal, because it is written when
 something else has just thrown and a handler that calls the machinery that failed fails twice.
 
-**The link list is a page of its own** at `/links`. Everything else on `/` has a fixed length; the
-open links are the one part that grows with the hub -- twenty per node (§8.2) and no bound on nodes
--- so the front page says how many are open and points at the directory, and names none of them
-(the indexing paragraphs below are why). The pair are two real URLs with a nav between them rather
-than one page with scripted tabs, so either half can be sent to someone and neither needs a script
-to arrive at. The status went nowhere: the availability record is what tells a first visitor this
-hub is real, and it belongs where they land.
-
-Each row of the directory carries the address, the kind and how long the link has been open -- every
-one of them something the hub already holds for its own routing. **Nothing on either page is fetched
-from the link.** A thumbnail or a favicon would mean the hub connecting to a node's app as a visitor
-and republishing what came back under its own name, which is the one thing the front page tells
-people it does not do, and it would put whatever anyone who can join chooses to serve on the
-operator's name. **Nor how many visitors a link is serving**, though the hub has that number and
-this page carried it briefly: that a name is open was already public, that somebody is on it right
-now was not, and a page anyone can poll turns the second into a live activity feed for a machine
-belonging to somebody else. It is also the figure `AdminWeb` keeps for the operator in as many words
--- "how close a particular node is to its bound ... is the operator's business and nobody else's" --
-and the one this section refuses on `/metrics`, which listens on loopback and so has a narrower
-audience than a page on 443. The reader loses little: someone deciding whether to click a link
-learns more by clicking it. "Open" is since the *link* opened, so
-a node that restarts or hands its name on starts the clock again -- it counts the current link, not
-the name. Who owns a name and which local port it reaches stay behind the admin session, as the node
-list does. **And none of it is for a search index.** That a link's address is public because a
-visitor reaches it by typing it is an argument about that visitor, not about a result that hands the
-whole list to somebody who never heard of this hub and keeps saying "open 3 days" after the node has
-gone; an indexed `/join/<token>` would be a live invitation, the token in the result. The two
-mechanisms for saying so pull in opposite directions and only one of them works: a page named in
-`Disallow` is never fetched, so its `noindex` is never read, and a URL linked from anywhere else can
-be listed on the strength of that link alone -- for an invitation, exactly the outcome being
-avoided. **So the pages that must stay out of an index are deliberately left crawlable** and say
-`noindex,nofollow` themselves; being fetched costs them nothing, since opening an invitation has
-never spent it, and the page-level `nofollow` keeps a crawler from walking the directory into other
-people's machines or paging it one `?from=` at a time. `/robots.txt` names only `/admin`, and for a
-different reason than secrecy: a login link is one-shot and consumed on the GET, so a machine that
-fetches one to see what is there burns it -- and because that is advice, `/admin/login/<token>` also
-refuses every method but GET, so a link preview or a prefetch cannot spend it by looking.
-
-`/` stays indexable -- it is the page an operator wants found -- and **names no link at all**: the
-section says how many are open and links to the directory. It showed the first eight as rows for a
-while, each carrying `rel=nofollow`, and that was the weaker half and the known gap. The robots
-meta's `nofollow` is a directive and the `rel` attribute has been a hint since 2020, but neither was
-the problem: an address on that page is *text on a page that asks to be indexed*, and no annotation
-on the row around it changes what an indexer keeps. Dropping only the `href` would have left the
-same text behind, which is why the rows went rather than their links. A count is not a name, and the
-one link out of the section goes to a page that says `noindex`, so no name under this hub is now
-reachable from an indexable page here. What it costs is the at-a-glance view of what is open, which
-is one click away at `/links`; the alternative considered and rejected was listing a link only when
-the node asks to be, which leaves an opted-in link exactly as indexable as before and makes the
-directory incomplete by default. Everything on `/links` is still advice a crawler may ignore rather
-than a control.
-
-The directory renders at most 200 rows at a time, like every other unauthenticated
-answer here, and `?from=<key>` starts the list at a given row so the ones past the cap are still
-reachable -- the sentence at the top counts every open link, so every one of them has to be. A
-row's address carries the port the hub answers on, the same `portSuffix` the node was told when the
-link opened, because a row is a link someone is meant to click. The cursor is a string a visitor
-sends, so it is treated as one: a query is percent-decoded per escape
-and a malformed one throws, which on a path where nothing but `IOException` is caught took the
-response down with it, so an unreadable cursor is simply no cursor; and one that sorts past the
-last row -- what a forwarded cursor becomes once the links it started from close -- says so rather
-than drawing an empty table under a sentence that has just counted the links. The key is built in
-`Locale.ROOT` and percent-encoded on the way out, because it is read back by machine and a JVM
-numbering in Arabic-Indic digits would otherwise mint a cursor no other hub can match; and the list
-it indexes is already sorted by it, so finding the start is a binary search, not a walk that rebuilt
-a key per row it passed. Behind all of it, `HttpFront.serve` now answers **500 for any unchecked
-throw** out of a handler: every one of these runs on the connection's own virtual thread and nothing
-above it caught more than `IOException`, so one bad cursor closed the socket with no response at all
-and killed the thread printing a stack trace outside `Log`. Catching it per handler is one fix per
-handler; catching it at the boundary is the one that holds for the next one. The
-order is the order the rows *read* in, not the links' internal names: a raw port is named
-`tcp/<port>` and drawn as `<hub>:<port>`, so sorting by the name put it among the names beginning
-with "t", at a position matching nothing on the page. Its port is zero-padded in the key so 9000
-sorts before 20000, which also makes every key distinct and lets it double as the paging cursor.
+**There is no list of links.** The front page says how many are open and names none of them.
+A directory at `/links` existed until 2026-09-18 -- one row per link with its address, kind and how
+long it had been open, paginated, `noindex,nofollow`, deliberately left crawlable so the meta could
+be read -- and was removed (#252): a page that enumerates every name on the hub is a scanner's
+index, no tunnel this stands beside publishes one, and everything it told the operator, the count
+and `/metrics` already say. What that page had worked out about indexing survives it. `/` is the
+one page here that asks to be indexed, so an address on it is text an indexer keeps whatever the
+markup around it says; that is why `/` carries a count and no name, and why the pages served to
+whoever holds their URL -- an invitation, the wildcard's "not open" page -- say `noindex,nofollow`
+themselves and are **left fetchable**: a page named in `Disallow` is never fetched, so its
+`noindex` is never read, and a URL linked from elsewhere can be listed on the strength of that
+link alone, which for an invitation would be the token in the result. `/robots.txt` now names
+nothing: its one entry was `/admin`, for a different reason than secrecy -- a login link was
+one-shot and consumed on the GET, so a machine that fetched one to see what was there burned it --
+and #253 removed the page, so the file carries an empty `Disallow` rather than a route that 404s.
+What that entry protected is gone with it: `/admin/login/<token>` also refused every method but GET,
+so that a link preview or a prefetch could not
+spend it by looking. Behind all of it, `HttpFront.serve` answers **500 for any unchecked throw**
+out of a handler: every handler runs on the connection's own virtual thread and nothing above it
+caught more than `IOException`, so one bad query string once closed the socket with no response
+at all and killed the thread printing a stack trace outside `Log`. Catching it at the boundary is
+the one fix that holds for the next handler.
 
 The page is one column, 48rem. It was 40rem, and what was wrong there was not the margins but the
 measure: a 64-character binary hash ran to the edge of its cell and a two-word label wrapped onto two
@@ -840,21 +796,20 @@ busy is not a property, it is a coincidence.
 **No metric names anything.** Not a link, not a node, not an address -- a scrape says how much the
 hub is doing and never who is doing it, and the test asserts that no line carries a label except
 `jailhub_build_info`, which is about the binary. That is the line that would be easy to cross: one
-label per name and the metrics become the directory the admin page deliberately is not. Counting
+label per name and the metrics become the directory the status page deliberately is not. Counting
 lives in `Metrics`, six `LongAdder`s written from every visitor thread and read once a scrape, and
 the signature counter sits at the one point that decides, so a refusal added later cannot forget to
 be counted.
 
 It says how many links are open as well -- the number and not one of the addresses -- because a hub
-that serves nothing and a hub that is busy look identical without it, and points at `/links` for the
-rest. It showed the first few of them as rows for a while and does not any more, for the reason
-above: `/` is the page that asks to be indexed. The number sits under "Open links" beside the way
-through to them rather than in the status table, so it is where a reader looking for links is
-already looking. The addresses `/links` carries are public by construction: a visitor reaches one by
-typing it. (Not because "a DNS lookup finds it either way", which this document used to say and
-which `DnsResponder` makes false -- a held name and a name nobody holds are answered identically, so
-DNS neither confirms nor enumerates.) What stays behind the admin session is the part that is nobody
-else's business: who opened a name and which local port it reaches.
+that serves nothing and a hub that is busy look identical without it. It showed the first few of
+them as rows for a while, then pointed at a directory, and now does neither, for the reason above:
+`/` is the page that asks to be indexed, and a list of every name is not something the hub should
+publish anywhere (#252). What is left to an outsider is confirming a guess one name at a time --
+a ClientHello naming an open link is relayed where one naming nothing gets the "not open" page
+(§8.1) -- and not a list: a held name and a name nobody holds are answered identically by
+`DnsResponder`, so DNS neither confirms nor enumerates. What stays behind the admin session is the part that is nobody else's business: who
+opened a name and which local port it reaches.
 
 It also names the build and the key it is running: the SHA-256 of the executable the kernel has
 mapped, taken from `/proc/self/exe` where that exists and the command otherwise, and the hub's
@@ -955,7 +910,7 @@ it already knows rather than stored from the wire.
 
 **Where the answer goes.** The check runs once the hub knows what it answers for its own name, and
 again every hour, and the verdict it reaches is kept rather than written to the log and dropped:
-`jailhub status` carries it, `/admin` shows it above the node list, and `/metrics` exports
+`jailhub status` carries it, `jailhub node list` shows it beside each node, and `/metrics` exports
 `jailhub_address_check_fault` — 1 only for a fault an operator has to fix, so inconclusive never
 pages anyone — beside `jailhub_address_check{verdict="..."}` and `jailhub_address_check_age_seconds`.
 The log line is written when the verdict **changes**, not on every pass — for a fault, a change of
@@ -991,7 +946,7 @@ A single `ServerSocket` accepts on 443. Without opening TLS the router reads the
 
 | SNI | Handling |
 |---|---|
-| `hub.example.com` | Handed to the hub's own `SSLServerSocket`: control channel, `/join`, `/admin`, `/v1/*` |
+| `hub.example.com` | Handed to the hub's own `SSLServerSocket`: control channel, `/join`, `/v1/*` |
 | `<name>.hub.example.com`, active | Open an `OPEN` stream on the owning node and replay the ClientHello bytes already read |
 | `<name>.hub.example.com`, claimed but offline | Wait up to 3 s for the node to return (hand-off, restarts), then serve a short "not open" page under the wildcard certificate, which the hub can do because it holds the key |
 | A registered user domain | Stream to the owning node with `keyId = domain:<domain>`. The hub has no key for it |
@@ -1044,7 +999,7 @@ under the hub's own. A token is therefore stored against the domain it was issue
 only when the request's `Host` is that domain; a token for `<hub>` or anything under it is refused
 outright, and a domain another user already holds is refused too. Answering any token under any Host
 would let one member pass validation for another member's domain, or for the hub's own name — the
-origin that serves `/admin`, `/join` and the first-contact key — and walk away with a publicly trusted
+origin that serves `/join` and the first-contact key — and walk away with a publicly trusted
 certificate for it.
 
 Then comes `LinkOpen{domain, chainPem, domainProof}`. **The chain says which certificate; the proof
@@ -1068,13 +1023,15 @@ is a precondition**; `--http-listen none` means user domains are refused.
 
 ### 8.4 Raw TCP and UDP ports
 
-Clients that do not speak TLS (SSH, game servers, plaintext databases, DNS, WireGuard) send no SNI
-and cannot be told apart by name, so the hub assigns **a port instead of a name**, the same shape as
-ngrok's tcp mode or frp's tcp and udp types.
+Clients that do not speak TLS (SSH, plaintext databases, DNS) send no SNI and cannot be told apart
+by name, so the hub assigns **a port instead of a name**, the same shape as ngrok's tcp mode or frp's
+tcp and udp types. The UDP side is for request-reply protocols; the carrier is the node's one TCP
+connection, so WireGuard and game netcode get delivery they can rely on and timing they cannot, and
+are out of scope (§1.3).
 
 ```
 $ jailscale open 22 --tcp      ->  tcp://hub.example.com:10042  ->  127.0.0.1:22
-$ jailscale open 51820 --udp   ->  udp://hub.example.com:10043  ->  127.0.0.1:51820
+$ jailscale open 5353 --udp    ->  udp://hub.example.com:10043  ->  127.0.0.1:5353    # request-reply UDP, DNS here
 $ jailscale open 22 --tcp --port 10022      # request a specific port in the range
 ```
 
@@ -1395,12 +1352,13 @@ are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `n
 what the OS already has (a launchd agent; a systemd unit, `systemctl --user` or a system unit when
 the installer is root; or a logon scheduled task) with no service wrapper.
 
-**`update` reports; `update --download` fetches; neither installs.** The plain form reads the
-signed pointer below, prints the version it names and where to get it, and the daemon does the same
-once a day so `status` carries the answer without anyone asking. The check runs in the CLI process,
-so it answers while the daemon is down, and a check that could not be made is an error like any
-other command's: the reason goes to stderr and the exit status is 1, so a script can tell "up to
-date" from "could not tell" -- a distinction the pointer's expiry gives something to say.
+**`update` reports; `update --download` fetches; neither installs.** The plain form asks GitHub
+which release is newest, prints the version it names and where to get it, and the daemon does the
+same once a day so `status` carries the answer without anyone asking. The check runs in the CLI
+process, so it answers while the daemon is down, and a check that could not be made is an error like
+any other command's: the reason goes to stderr and the exit status is 1, so a script can tell "up to
+date" from "could not tell". The answer is GitHub's word and the line says so; what is signed is
+what is in the release, below.
 
 **What `--download` adds is the checking, not the installing.** It works out which asset this build
 should run — target from `os.name` and `os.arch`, or `jailscale.jar` when this is not a native image
@@ -1460,70 +1418,43 @@ published the binaries proves that the download was not corrupted on the way and
 produced it: whoever could replace the binary could replace the list beside it. So the release
 workflow leaves a draft, and `tools/sign-release.sh` — run on a machine that is not the pipeline,
 with a key the pipeline cannot reach — downloads every asset, re-hashes it against `SHA256SUMS.txt`,
-checks that the key it is about to sign with is the one the previous release compiled in, signs
-that file and publishes. **"Published" is made to mean "signed"** rather than left as a convention
-the web UI's Publish button does not know: `published.yml` runs `tools/verify-release.sh` the
-moment a release is published, against the keys that tag's own `ReleaseKey.java` lists, and a
-release that fails is put back into draft. Nodes no longer read `releases/latest` at all — they
-read the signed pointer below, which no unsigned release can move — so what that window now bounds
-is what a person following a link would see, not what a node would install. The same check is what lets `:latest` on
-GHCR move — after it, and after the tag push's image build has finished, which runs on its own
-clock. A release tag has to match `vMAJOR.MINOR.PATCH[-suffix]`, checked before the four native
-builds and again by the signing script; the rule is written once, in `tools/release-keys.sh`,
-because the hyphen in it is what marks a pre-release for the workflow and for `Updates.compare`
-alike, and a tag outside the grammar would have been a full release every node reports "cannot
-compare" on. The public half is compiled into the binary, like `DOWNLOADS` and the pointer's own
-tag below, and for the same reason (§11.2). A build that carries no key refuses to download rather than falling back to the checksum
-alone; the check that cannot be made is not quietly skipped.
+checks that the key it is about to sign with is the one the previous release compiled in, signs that
+file and publishes. **"Published" is made to mean "signed"** rather than left as a convention the
+web UI's Publish button does not know: `published.yml` runs `tools/verify-release.sh` the moment a
+release is published, against the keys that tag's own `ReleaseKey.java` lists, and a release that
+fails is put back into draft. `releases/latest` never shows a draft, so the window in which a node
+could be told of an unsigned release is the seconds this takes — and `--download` would refuse it
+anyway. The same check is what lets `:latest` on GHCR move — after it, and after the tag push's
+image build has finished, which runs on its own clock. A release tag has to match
+`vMAJOR.MINOR.PATCH[-suffix]`, checked before the four native builds and again by the signing
+script; the rule is written once, in `tools/release-keys.sh`, because the hyphen in it is what marks
+a pre-release for the workflow and for `Updates.compare` alike, and a tag outside the grammar would
+have been a full release every node reports "cannot compare" on. The public half is compiled into
+the binary, like `DOWNLOADS` and `PAGE`, and for the same reason (§11.2). A build that carries no
+key refuses to download rather than falling back to the checksum alone; the check that cannot be
+made is not quietly skipped.
 
-**A signed pointer says which release is current, and `update` reads it.**
-`RELEASE.txt` says which release it *is*, and nothing used to say which one is *current*.
-`latest.txt`, under
-the fixed `release-index` pre-release, is that missing sentence: a sequence number, the tag, and an
-expiry, signed with the same key. `tools/sign-release.sh` moves it forward whenever it publishes a
-full release — never backwards, and never onto a draft or a pre-release — and `tools/refresh-index.sh`
-re-issues it between releases, because an expiry is only worth what re-issuing it is. The sequence
-is taken from the published pointer and incremented, so a fetch that fails stops the script rather
-than starting a new sequence. A sequence only ever starts where a person typed
-`refresh-index.sh --first`, which is also what puts the first pointer up at all.
-
-**What the node does with it.** `check` fetches `latest.txt` and its signature, verifies the
-signature against the same compiled-in key list a download is checked with, and takes the tag from
-there — so the version a node announces is now authenticated, where it used to come from an
-unsigned `tag_name`. That API index is gone rather than kept as a fallback: falling back to the
-unsigned answer is the check being skipped by default, which is the shape §9.4 refuses everywhere
-else. A build with no key cannot check at all and says so, as it already refused to download.
-**An expired pointer is not "up to date"** — it is "cannot tell whether this is current", with the
-date, because "you are the latest release" is exactly the sentence a withheld upgrade produces, and
-saying it is how the withholding stays invisible. It is deliberately **not** a reason to refuse a
-download: the signature, the tag binding and never-below-running all still hold over a stale
-pointer, so refusing would forbid a genuine upgrade to avert a risk the refusal does not reduce.
-The node's clock is allowed to be wrong for the same reason — the worst a bad one does is report
-"cannot tell".
-
-**The floor is what makes the expiry a defence rather than a notice.** `update.json`, beside the
-state file, holds the highest `seq` this node has accepted, and a pointer below it is refused with
-what it said and what this node has already seen. Without it, whoever can publish can put an old —
-genuinely signed, so every other check passes — pointer back up and hold a node on the release it
-names. It is written only after every other check has passed, under a lock the other writer takes too —
-the daemon's daily check and a `jailscale update` in a terminal are two processes on one file, and
-this is the first file in the state directory that the daemon lock does not already serialise — and
-kept beside `node.json` rather than inside it: `update` runs in the CLI process so that it
-answers while the daemon is down, and a second writer on the file that holds the MachineKey is not a
-race worth introducing for a counter. A node with nowhere to keep it still checks — there the floor
-is the one it has always had, the version this binary is — and a file that cannot be read is rebuilt
-from the next pointer that verifies rather than being fatal, because whoever could corrupt it is
-already on the machine as that user.
-
-**Both ends say it before it lapses.** Fourteen days out, `update` adds a line on stderr and the
-daemon logs one a day -- independent of what the check concluded, because a pointer can name an
-upgrade and be about to expire, and only the second has nobody else watching it. The nightly `index`
-job in `ci.yml` checks the published pointer from outside, which is the reminder that does not
-depend on anyone running a node: it annotates the run at the same fortnight and **fails** once the
-pointer has expired or stops verifying. It annotates rather than fails for the fortnight on purpose
--- a nightly build that is red for fourteen days running is a build people stop reading, and the
-thing that has to happen in those fourteen days is a person's. Re-issuing is that person at a laptop
-calling KMS, so a warning that arrives after the fact is not a warning.
+**Which release is current is GitHub's word, and that is a decision.** `RELEASE.txt` says which
+release it *is*; which one is *current* comes from `releases/latest`, which answers with a redirect
+to the newest full release's own page, and `check` reads the tag out of that redirect without
+following it — a HEAD, no body, no API token, no JSON. Nothing signs that answer. What it can
+therefore not promise is that the release it names is the newest that exists: whoever controls the
+download host can keep naming an older, genuinely signed release, which is the one attack §15
+records. What bounds it is that a node is never moved below what it runs and that `--download`
+verifies everything about the release it was pointed at, so this withholds an upgrade rather than
+forcing a downgrade — and the same party could equally delete the newer release. A signed pointer
+that closed the gap was built and then removed on 2026-09-18
+([#254](https://github.com/eth219/jailscale/issues/254)): it cost a pre-release re-issued every
+ninety days by a person with the signing key, a nightly job whose purpose was to notice when that
+had been forgotten, a floor file on every node, and about 2,800 lines, against a bound on a party
+who already had an equivalent move. That is a maintenance schedule for a project with one operator,
+and the schedule was the bigger risk. The pointer that was up was never re-issued and was deleted on
+2026-09-18, the day v0.1.11 shipped, rather than left until its 2026-12-14 expiry — which cost
+nothing, because no released binary ever read it: the reader landed after v0.1.10 was tagged, and
+the one tag that contains it, v0.1.11, is the commit that removed it. Every node in the field had
+gone on asking GitHub which release is latest, and still does. A build with no key still
+refuses to download — and, one step earlier, does not announce a release it could not check —
+and a `dev` build still says it cannot compare rather than that it is current.
 
 **The key is a list, so that it can be changed.** With one compiled-in key there is no way out of a
 key that has to move: every binary in the field accepts that one and nothing else, so publishing
@@ -1586,8 +1517,8 @@ local UDP, no root.
 
 ## 10. Joining
 
-There is no IdP. The right to join is a **capability**: an invite link, a short code and an auth-key
-are all secrets where possession is the permission, and the hub registers whichever MachineKey
+There is no IdP. The right to join is a **capability**: an invite link and its short code are
+secrets where possession is the permission, and the hub registers whichever MachineKey
 arrives with one. Joining is the right to publish; visitors never join.
 
 **Why no IdP.** An IdP answers "who is this person", not "may they publish", so an invite and
@@ -1605,8 +1536,8 @@ proposes its own name only when the credential does not fix one, and a proposal 
 existing user is refused with `user-taken` — otherwise joining as "alice" would be enough to *be*
 alice, with her admin rights and her names. Joining as an existing user is a real thing to want, and
 it is authorised the same way everything else here is, by a credential that names them: an invite
-pinned to that user (the second machine of a person runs `jailscale invite --self` on the first), an
-auth-key whose owner is them, or an operator typing the name at approval. For the same reason a
+pinned to that user (the second machine of a person runs `jailscale invite --self` on the first) or
+an operator typing the name at approval. For the same reason a
 member may pin an invite to a *new* user or to themselves, but naming an existing user in an invite
 is an admin's call.
 
@@ -1621,8 +1552,11 @@ given a new credential, since a new credential is a new question.
 the issuer is recorded, and an admin can narrow it with `--invite-policy admins`. `jailscale invite`
 prints a link carrying a 128-bit token (one use, 24 hours by default) and a short code that is an
 alias for the same invite, 40 bits in Crockford base32 as `XXXX-XXXX`, valid 10 minutes and
-normalised on entry. The hub stores only hashes. An **auth-key** (`jk_` plus 128 bits) is the
-unattended form for CI jobs, containers and servers, optionally bound to a tag instead of a person.
+normalised on entry. The hub stores only hashes. The unattended form for CI jobs, containers and
+servers is the same invite pinned to a user, with more uses and a longer life: `jailhub invite
+create --user ci --uses N --ttl 7d`, so every machine that joins with it is `ci` and none has to
+choose a name. A separate auth-key with an owner or a tag existed until #251 and was the same
+capability with a second record, a second set of commands and a second form to keep consistent.
 
 **Joining.** `jailscale up --invite <link>` takes the hostname from the link, pins the hub key
 through `/v1/key` (§5.2), opens the Noise channel, negotiates versions, asks for a name only when the
@@ -1634,11 +1568,10 @@ their own hub, so the CLI prints which hub it is about to join and asks for conf
 victim joins, nothing local is exposed until they run `open`.
 
 **Knocking.** With only the hostname a node can knock: the hub queues MachineKey, hostname, OS,
-source address and self-chosen name, and an admin approves through `/admin` or `jailhub node
-approve`, which is pushed over the already-open stream 0. The queued name is the joiner's own
-suggestion and a knock is unauthenticated, so the approval form leaves the box **empty** when that
-suggestion is an existing user, and approving without naming anyone is refused in that case rather
-than handing a stranger someone else's account on one click. Knocking is unauthenticated, so pending
+source address and self-chosen name, and an admin approves with `jailhub node approve`, which is
+pushed over the already-open stream 0. The queued name is the joiner's own suggestion and a knock is
+unauthenticated, so approving without `--user` is refused when that suggestion is an existing user,
+rather than handing a stranger someone else's account on one word. Knocking is unauthenticated, so pending
 entries are capped at 5 per source address, and `--knock off` disables it. `--registration open`
 suits a personal hub or small team where the gate is overhead, approving a knocking node immediately;
 the default is still invite-only, and turning it on prints the consequence, which is that anyone who
@@ -1646,9 +1579,10 @@ knows the hostname can open names under `*.hub.example.com`. There is deliberate
 form, because that would be the same thing with more code.
 
 **First bootstrap.** When `jailhub serve` finds no admin it prints a one-use 24-hour invite on the
-console, and whoever joins with it becomes an admin. If every admin node is lost, `jailhub admin
-login-link` on the hub shell recovers access, because shell access is the top of the authority chain.
-Nodes do not expire by default; an admin removes them with `node remove`.
+console, and whoever joins with it becomes an admin. Losing every admin node is not a lockout: the
+`jailhub` socket is the admin surface (§6.3), so a shell on the hub is already the top of the
+authority chain and `jailhub admin add` names a new one. Nodes do not expire by default; an admin
+removes them with `node remove`.
 
 ---
 
@@ -1659,7 +1593,7 @@ Four axes. None of them implies any other.
 | Axis | Question | Answer |
 |---|---|---|
 | **Transport** | Who can read between visitor and node | Nobody, the hub included. It sees SNI, IP, byte counts, timing (§8.1) |
-| **Right to publish** | Who can open a name | Only nodes that joined through an invite, auth-key or approval. No open registration by default |
+| **Right to publish** | Who can open a name | Only nodes that joined through an invite or approval. No open registration by default |
 | **Right to visit** | Who can reach a published link | Public by default; with `--gate`, only holders of the visit link (§9.3) |
 | **Name identity** | Who vouches that `myapp.hub.example.com` is alice's node | **The hub.** It owns the routing table and the wildcard key (§11.2) |
 
@@ -1859,7 +1793,7 @@ operator's job. Unauthenticated work is metered with per-source token buckets:
 | Target | Burst | Sustained | On excess |
 |---|---|---|---|
 | `/v1/noise` handshake | 30 | 1/s | HTTP 429, Upgrade refused |
-| Credential presentation (invite token, code, auth-key) | 20 | 0.2/s | `rejected{reason: rate-limited}` |
+| Credential presentation (invite token, code) | 20 | 0.2/s | `rejected{reason: rate-limited}` |
 | Registration under `--registration open` | 5 | 1 per 12 min | `rejected{reason: rate-limited}` |
 | Knock queue | 5 entries per address | n/a | `rejected{reason: too-many-pending}` |
 | DNS answer on UDP 53, per /24 or /64 | 50 | 20/s | dropped; one in two answered `TC=1` |
@@ -2019,13 +1953,11 @@ still on the time of day, because its "never consumed" sentinel is zero and zero
 reading from a monotonic clock early in a process; changing it needs a different sentinel rather
 than a different clock.
 
-**`/admin` sessions.** The login link is one-shot and lives 60 seconds, the session cookie lasts 12
-hours, and every POST carries a CSRF token. On top of that, **admin status is rechecked on every
-request**, because checking only at issuance would leave `admin remove` ineffective for 12 hours; a
-link issued over the IPC socket is exempt, since socket permission is the authorisation. The cookie
-uses the `__Host-` prefix, which forbids a `Domain` attribute, so a node controlling a sibling
-subdomain under `*.<hub>` cannot plant an admin cookie. Auth-keys, invite tokens, codes, gate tokens
-and admin login URLs are never written to logs.
+**Admin sessions.** There are none: #253 removed the admin web page, and with it the 60-second
+one-shot login link, the 12-hour `__Host-` session cookie, the per-form CSRF token and the recheck
+of admin status on every request that kept `admin remove` from taking 12 hours to bite. What
+replaced all of it is the file permission on `$JAILHUB_STATE/jailhub.sock` (§6.3). Invite tokens,
+codes and gate tokens are still never written to logs.
 
 ---
 
@@ -2072,9 +2004,7 @@ one. The comparisons that do decide something:
 | What is compared | How | Where that leaves it |
 |---|---|---|
 | Self-probe keying material (§11.3) | `MessageDigest.isEqual` | Constant time, deliberately: the verdict is the whole feature |
-| Invite token, short code, auth-key (§10) | SHA-256, then a lookup by the hash | Timing follows the hash of what was presented, which does not walk back to the secret |
-| `/admin` CSRF token (§11.5) | `MessageDigest.isEqual` over the bytes | Constant time. It was `String.equals`, and nothing reachable turned on that; a comparison of a presented secret is the wrong place to keep the cheaper habit |
-| `/admin` session cookie and login link (§11.5) | 128-bit random, a `ConcurrentHashMap` key | **Not constant time, and not made so:** a hash lookup has no byte compare to replace. Reaching a useful prefix of 128 random bits over HTTP is not a path anyone has, and a correct guess needs no timing |
+| Invite token, short code (§10) | SHA-256, then a lookup by the hash | Timing follows the hash of what was presented, which does not walk back to the secret |
 
 **Traffic analysis is not addressed at all.** The hub sees the SNI, the visitor's address, byte
 counts and timing (§8.1), and nothing on either side pads, batches or delays anything. Sizes and
@@ -2171,20 +2101,15 @@ went inactive. Under systemd the upgrade is `systemctl restart`, which costs a f
 nodes reconnect. `deploy/jailhub.service` therefore has no `ExecReload`. Making the two work
 together would need the listening sockets handed over rather than rebound, which is not implemented.
 
-**Readiness can be reported, and the reference unit does not ask for it.** The hub speaks the
-readiness half of `sd_notify`, so under `Type=notify` `systemctl start` returns when it is serving
-rather than when the process exists; on a first boot those are minutes of ACME apart. It is off by
-default because it is not free: `start` does not return until a certificate is installed and
-issuance retries for as long as that takes, so an ordinary first boot outlives systemd's 90-second
-`TimeoutStartSec` and the unit has to say `TimeoutStartSec=infinity` as well, or systemd kills the
-hub part-way through its first issuance and `Restart=on-failure` does it again forever. The
-notification is sent by running `systemd-notify`, because `NOTIFY_SOCKET` is an AF_UNIX *datagram*
-socket and the JDK will not open one, so the unit also needs `NotifyAccess=all` and the host needs
-**systemd 246 or newer** — a notification from a child that has already exited is one the manager
-cannot attribute to a unit and drops, and `systemd-notify` waiting for it to be processed is a 246
-feature (Ubuntu 20.04 has 245, RHEL 8 has 239). The exit status is 0 either way, so a hub cannot
-detect it; the unit just never leaves `activating`. `deploy/jailhub.service` lists the three lines
-and what each is for. None of it makes the hand-off compose with a unit.
+**Readiness is not reported.** The hub spoke the readiness half of `sd_notify` until 2026-09-18,
+opt-in under `Type=notify`, and the reference unit never turned it on: a first boot spends minutes
+in ACME before it serves, so the unit would have needed `TimeoutStartSec=infinity` too or systemd
+would kill the hub mid-issuance and `Restart=on-failure` would do it again forever; the message
+had to go through `systemd-notify` because the JDK will not open a datagram socket, which needed
+`NotifyAccess=all` and systemd 246. Code the shipped unit ignored was removed (#250), and a unit
+of your own that said `Type=notify` has to say `Type=simple` from this release, or it never leaves
+`activating`. `systemctl start` returns when the process exists, and the status page says when it
+serves.
 
 ### 13.1 A standby hub
 
@@ -2386,9 +2311,9 @@ named and closes what no longer is, each with the control connection's backoff.
 whole set, whenever it changes), so a published name resolves to the hosts its node is on and the
 apex to the primary alone, where joining and administering are. A name nobody holds resolves to
 every host serving, which is where the "not open" page is. In the two-host deployment that is
-already the shape step 3 of [docs/ha-design](ha-design/README.md) described, with the replicated
-store standing in for the signed lease; the lease is what a third, stateless relay would need,
-and it stays designed rather than built until there is one.
+already the shape a third, stateless relay would have taken, with the replicated store standing in
+for the signed lease that relay would have carried. That third host is decided against rather than
+pending; [docs/ha-design](ha-design/README.md) records what it would have needed.
 
 **What survives the primary now.** Streams in flight on the dead host are gone with its sockets;
 new visitors to every open name are served by the other host within the DNS TTL; nodes keep their
@@ -3006,23 +2931,19 @@ say so and name the issue. An entry that does neither has not been through that 
 - **Upgrading stops one step short of automatic.** `jailscale update`, and the daemon's daily check
   behind `status`, say that a newer release exists; `update --download` fetches it and checks it
   against a signed `RELEASE.txt` (§9.4); the command that puts it in place is printed for the
-  operator to run. An opt-in install, off by default, is decided work
-  (§1.2, [#74](https://github.com/eth219/jailscale/issues/74)); installing by default is not (§1.3). A binary released before the signing key existed carries no key and refuses to
-  download at all, so the first release able to verify another is the one after the key was
-  compiled in.
-- **Withholding an upgrade is bounded now, not impossible.** Which release is current comes from a
-  signed pointer (§9.4) rather than from an unsigned `releases/latest`, so the version a node
-  announces is authenticated; the pointer expires, and past that a node says it cannot tell instead
-  of saying it is up to date; and a sequence below the highest it has recorded is refused, so an old
-  pointer cannot be put back up in front of a node that has seen a later one. What remains is **first
-  contact**: a node with no floor yet -- a fresh install -- has nothing to compare with, and can be
-  handed any genuinely signed, unexpired pointer, so it can be started on an older release and kept
-  there until that pointer expires. What bounds the damage throughout is that a node is never moved
+  operator to run. Installing, by default or opt-in, is not planned (§1.3): an install step, if
+  wanted later, is a new question against the check as it now is. A binary released before the
+  signing key existed carries no key and refuses to download at all, so the first release able to
+  verify another is the one after the key was compiled in.
+- **Withholding an upgrade is not prevented.** Which release is current is GitHub's word: an
+  unsigned `releases/latest`, read from its redirect (§9.4). So whoever controls the download host
+  can keep a node on an older, genuinely signed release for as long as they keep naming it, and a
+  node has nothing that would tell it so. What bounds the damage is that a node is never moved
   below what it runs (`newer` is strictly above the running version) and the binary installed is
-  always the version announced, so this withholds an upgrade rather than forcing a downgrade, and
-  the same party could equally delete the newer release. A minimum sequence compiled into the binary,
-  which gives a fresh install and a CLI-only one a floor, is decided work
-  (§1.2, [#65](https://github.com/eth219/jailscale/issues/65)).
+  always the version announced, verified against the maintainer's signature, so this withholds an
+  upgrade rather than forcing a downgrade — and the same party could equally delete the newer
+  release. A signed pointer that bounded this further was built and removed (§9.4 says why); it is
+  not planned again.
 - **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
   sides at a third of the lifetime remaining. When it does not happen the node logs the name and
   the time left once a day inside the last fortnight, the hub says how long the installed wildcard
@@ -3038,12 +2959,13 @@ say so and name the issue. An entry that does neither has not been through that 
   it, or with registration open (the default there is off), it waits for `jailhub promote`. With
   three records at the parent instead, the DNS change is the operator's too.
 - **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
-  is not zero-downtime. Readiness reporting exists but is opt-in and is only about when systemd
-  calls the unit started; the listening sockets are still rebound rather than handed over. Socket
+  is not zero-downtime; the listening sockets are rebound rather than handed over. Socket
   activation is decided work (§1.2, [#71](https://github.com/eth219/jailscale/issues/71)).
 - **Two hubs, not more.** The standby holds the store, so it can serve and be promoted; a third
-  host would need a role without the store, which is designed, not built, and decided work
-  (§1.2, [#72](https://github.com/eth219/jailscale/issues/72), [docs/ha-design](ha-design/README.md)). Streams in flight on a host that dies are cut with its
+  host would need a role without the store. That is **decided against** rather than pending: two
+  hubs is the design, and [docs/ha-design](ha-design/README.md) is the appendix recording what a
+  third would have needed and why it is not coming ([#72](https://github.com/eth219/jailscale/issues/72),
+  closed with [#255](https://github.com/eth219/jailscale/issues/255)). Streams in flight on a host that dies are cut with its
   sockets, raw TCP and UDP ports live on the primary alone, and a promotion with no node attached
   to the standby waits for a person (§13.5). Nor is the doubling end to end: a name still has
   exactly one node behind it (§8.2), so when that node's host is down the name is down whatever the
@@ -3077,21 +2999,6 @@ say so and name the issue. An entry that does neither has not been through that 
   `stackSize` does not move it), so 60 MB at a thousand connections and nothing worth counting at
   ten. Linux and macOS are untouched. New code that gives a socket two threads has to remember to
   do the same.
-- **The CLI copies a link to the clipboard only when its stdout is a terminal, and that is verified
-  on two of the three platforms that have a clipboard.** `Console.isTerminal()` is the question
-  asked, rather than `System.console() != null`, which since JDK 22 is non-null for a redirected
-  stream as well. The tests assert the negative direction everywhere — piped, nothing is copied —
-  and that is the direction that would still pass if the detection were broken and the feature
-  simply dead, so the positive direction has to be checked by hand against a real terminal.
-  Done on **darwin-arm64** and on **linux-arm64**, both on the native binary, the second under
-  `xvfb-run` with `script -q FILE -c` so that stdout is genuinely the pty: the CLI printed
-  `<- copied to clipboard`, `xclip` held the selection, and the clipboard contained exactly the
-  link that was printed. **windows-amd64 is unverified.** It is the platform where the feature is
-  most certainly live — `clip.exe` is in System32, so it is always found — and the hardest to test,
-  since there is no `script` and driving a ConPTY from CI is more machinery than a convenience
-  feature is worth. A Linux node is usually headless and has no `xclip` at all, so there the
-  feature is normally inactive whatever `isTerminal()` answers.
-
 - **A node's visitors are first come, first served, so one name can starve the others on it, and
   whether that is a delay or a blackout is decided by the neighbour's connection lifetime.** The
   bound of §9.3 is per node, and a node may serve up to `MAX_LINKS_PER_NODE` = 20 links; nothing

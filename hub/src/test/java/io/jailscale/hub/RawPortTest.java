@@ -7,8 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.node.Daemon;
 import io.jailscale.node.NodeConfig;
-import io.jailscale.proto.http.Headers;
-import io.jailscale.proto.http.HttpRequest;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.net.DuplexThread;
@@ -58,13 +56,6 @@ class RawPortTest {
         if (echoUdp != null) {
             echoUdp.close();
         }
-    }
-
-    /** The {@code ?from=} value in a directory page's "next" link. */
-    private static String cursorOf(String html) {
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("/links\\?from=([^\"]+)").matcher(html);
-        assertTrue(m.find(), html);
-        return m.group(1);
     }
 
     @Test
@@ -129,40 +120,6 @@ class RawPortTest {
         int tcpPort = tcp.integer("hubPort");
         assertEquals("tcp://hub.test:" + tcpPort, tcp.string("url"));
         assertTrue(tcpPort >= lo && tcpPort <= lo + 3);
-
-        // The directory is ordered by what each row says, not by the link's internal name. A raw
-        // port is named "tcp/<port>" and drawn as "<hub>:<port>", so ordering by the name put it
-        // under "t" -- after every https name up to "s" -- at a position matching nothing a reader
-        // can see. Between "bravo" and "sierra" is where "hub.test:<port>" reads as belonging.
-        for (String n : new String[] {"bravo", "sierra"}) {
-            assertTrue(Ipc.call(sock, JsonObject.builder().put("cmd", "open")
-                .put("port", echoTcp.getLocalPort()).put("name", n).build()).optBool("ok", false));
-        }
-        String dir = hub.front().route(new HttpRequest("GET", "/links", "HTTP/1.1", new Headers(), null)).bodyText();
-        int bravo = dir.indexOf("bravo.hub.test");
-        int rawRow = dir.indexOf("hub.test:" + tcpPort);
-        int sierra = dir.indexOf("sierra.hub.test");
-        assertTrue(bravo >= 0 && rawRow >= 0 && sierra >= 0, dir);
-        assertTrue(bravo < rawRow && rawRow < sierra, "the raw port is not where its address reads: " + dir);
-
-        // The key doubles as the paging cursor, so it is read back by machine: by a standby, or by
-        // this hub after a restart under a different LANG. A raw port's number goes into it, and
-        // built in the JVM's default locale that number comes out in Arabic-Indic or Devanagari
-        // digits -- so the same link yields a different cursor on two hosts of the same pair, and
-        // neither can follow the other's "next page". The cursor has to be the same string
-        // whatever the host is set to. Page size 1 so the emitted cursor is the raw port's own.
-        HttpRequest page1 = new HttpRequest("GET", "/links", "HTTP/1.1", new Headers(), null);
-        String here = cursorOf(hub.front().directory(page1, 1));
-        java.util.Locale previous = java.util.Locale.getDefault();
-        String elsewhere;
-        try {
-            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG"));
-            elsewhere = cursorOf(hub.front().directory(page1, 1));
-        } finally {
-            java.util.Locale.setDefault(previous);
-        }
-        assertTrue(here.contains("hub.test"), "expected the raw port to be the cursor, got " + here);
-        assertEquals(here, elsewhere, "the cursor must not follow the JVM's numbering system");
 
         // Bytes both ways, more than one frame, through hub port -> node -> local echo.
         byte[] payload = new byte[200_000];

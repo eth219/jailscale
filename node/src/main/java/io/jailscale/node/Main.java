@@ -20,7 +20,7 @@ public final class Main {
      */
     static final String USAGE = """
         jailscale up --invite https://hub.example.com/join/TOKEN [--user NAME]
-        jailscale up --hub HOST [--code XXXX-XXXX | --auth-key jk_... ] [--user NAME]
+        jailscale up --hub HOST [--code XXXX-XXXX] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate] [--proxy-protocol]
         jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (ARCHITECTURE.md §8.4)
@@ -28,7 +28,7 @@ public final class Main {
                                                               your own domain, CNAME'd to the hub (ARCHITECTURE.md §8.3)
         jailscale gate NAME [--ttl 24h | --off]              each run issues a fresh visit link
         jailscale ls | close NAME
-        jailscale status | down | leave | netcheck | admin | daemon
+        jailscale status | down | leave | netcheck | daemon
         jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
         jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
@@ -82,7 +82,7 @@ public final class Main {
                 // last compiled against, not the one `proto` holds now. A clean build is what
                 // makes them the same, and a clean build is what CI and every release do.
                 case "version" -> System.out.println("jailscale " + Version.string() + " (protocol " + Message.PROTO + ")");
-                case "update" -> update(cfg, a);
+                case "update" -> update(a);
                 case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
@@ -100,12 +100,6 @@ public final class Main {
                 case "invite" -> invite(cfg, a);
                 case "open" -> open(cfg, a);
                 case "ls" -> ls(cfg);
-                case "admin" -> {
-                    JsonObject r = call(cfg, JsonObject.builder().put("cmd", "admin").build(), false);
-                    String url = r.string("url");
-                    System.out.println("admin page (open it within 60 seconds): " + url);
-                    openBrowser(url);
-                }
                 case "gate" -> {
                     String name = a.positional(1);
                     if (name == null) {
@@ -118,7 +112,7 @@ public final class Main {
                     JsonObject r = call(cfg, b.build(), false);
                     if (r.optBool("gate", false)) {
                         String v = r.string("visitUrl");
-                        System.out.println("visit link: " + v + (copyToClipboard(v) ? "        (copied to clipboard)" : ""));
+                        System.out.println("visit link: " + v);
                     } else {
                         System.out.println("turned the gate off. anyone can now reach " + name + ".");
                     }
@@ -150,40 +144,27 @@ public final class Main {
      * {@code update [--download]}. In this process rather than through the daemon: a node that is
      * down is exactly when someone asks, and the check needs nothing the daemon holds.
      *
-     * <p>{@code --download} stops at a verified file on disk and the command that installs it
-     * (ARCHITECTURE.md §9.4). What it removes is the part of installing by hand that goes wrong
-     * quietly -- picking the right target, and checking a checksum in a way that can report success
-     * for having checked nothing. What it deliberately leaves is the step that needs a privilege
-     * this process does not have.
+     * <p>Which release is current is GitHub's word -- {@code releases/latest}, unsigned -- and the
+     * output says so. {@code --download} stops at a verified file on disk and the command that
+     * installs it (ARCHITECTURE.md §9.4): what is in the release is checked against the
+     * maintainer's signature, which is the part of installing by hand that goes wrong quietly --
+     * picking the right target, and checking a checksum in a way that can report success for
+     * having checked nothing. What it deliberately leaves is the step that needs a privilege this
+     * process does not have.
      */
-    private static void update(NodeConfig cfg, Args a) throws Exception {
-        // The config directory is where the highest release-index sequence this node has seen is
-        // kept (docs/update-freshness). It is passed even though this command talks to no daemon:
-        // the floor belongs to the node, not to whichever process happened to ask.
-        Updates.Result r = Updates.check(Version.string(), cfg.updateFile());
-        if (!r.cannotTell() && r.error() != null) {
-            throw new IOException(r.line()); // like every other command: stderr, exit 1
+    private static void update(Args a) throws Exception {
+        Updates.Result r = Updates.check(Version.string());
+        if (r.error() != null) {
+            // No answer -- GitHub unreachable, or a `dev` build with nothing to compare -- is an
+            // error like every other command's: stderr, exit 1, so a script can tell it from "up to
+            // date". Not a refusal of anything: nothing was checked, so nothing failed a check.
+            throw new IOException(r.line());
         }
-        // One table, rather than a policy per outcome. A node that cannot say whether what it runs
-        // is current -- an expired pointer, a clock that disagrees -- has not answered the question,
-        // so the line goes to stderr; but it has not failed at anything either, so the exit status
-        // follows the work that was asked for. Nothing to do and no answer is the one case a script
-        // has to be able to tell from "up to date", and that is the one that exits 1.
-        //
-        // Staleness is deliberately not a reason to refuse a download: the signature, the tag
-        // binding and never-below-running all still hold over a stale pointer, so refusing would
-        // forbid a genuine upgrade to avert a risk the refusal does not reduce (docs/update-freshness).
-        (r.cannotTell() ? System.err : System.out).println(r.line());
-        // The answer is good and stays on stdout; this is about the answer running out, so it goes
-        // to stderr and changes no exit status. A node whose operator is also the maintainer is the
-        // reminder that the pointer needs re-issuing (docs/update-freshness, step 5).
-        String soon = r.warning(System.currentTimeMillis());
-        if (soon != null) {
-            System.err.println(soon);
-        }
+        System.out.println(r.line());
         if (!a.flag("download") || !r.newer()) {
-            if (r.cannotTell() && !r.newer()) {
-                System.exit(1);
+            if (r.newer()) {
+                System.out.println("that it is the newest is GitHub's word; `update --download` checks what"
+                    + " is in it against the maintainer's signature.");
             }
             return; // nothing to fetch: there is no newer release, or nobody asked for it
         }
@@ -198,7 +179,7 @@ public final class Main {
             if (temp) {
                 try {
                     Files.deleteIfExists(dir);
-                } catch (IOException ignored) {
+                } catch (IOException _) {
                     // the download's own reason is the one to report
                 }
             }
@@ -208,6 +189,8 @@ public final class Main {
         System.out.println("verified    sha256 " + d.sha256());
         System.out.println("            against a " + Updates.MANIFEST + " for " + r.tag()
             + " signed by release key " + d.key());
+        System.out.println("            (that " + r.tag() + " is the newest release is GitHub's word;"
+            + " what is in it is the signature's)");
         System.out.println();
         System.out.println("install it with:");
         System.out.println("  " + Updates.installCommand(d.file(), Updates.self(), Updates.windows()));
@@ -226,7 +209,7 @@ public final class Main {
             try {
                 d.close();
                 lock.close();
-            } catch (IOException ignored) {
+            } catch (IOException _) {
                 // exiting
             }
         }));
@@ -234,9 +217,14 @@ public final class Main {
     }
 
     private static void up(NodeConfig cfg, Args a) throws Exception {
+        if (a.has("auth-key")) {
+            // Args keeps any --flag value it is handed, so without this the flag would parse, be
+            // ignored, and the join would proceed as a knock (#251).
+            throw new IllegalArgumentException("--auth-key was removed; join with --invite <link> or --code XXXX-XXXX");
+        }
         JsonObject.Builder b = JsonObject.builder().put("cmd", "up")
             .put("invite", a.get("invite")).put("hub", a.get("hub")).put("port", a.integer("port", 443))
-            .put("code", a.get("code")).put("authKey", a.get("auth-key")).put("user", a.get("user"))
+            .put("code", a.get("code")).put("user", a.get("user"))
             .put("hubKey", a.get("hub-key")).put("tlsInsecure", a.flag("tls-insecure")).put("caFile", a.get("ca-file"))
             .put("addr", a.get("hub-addr")).put("connections", a.has("connections") ? Integer.valueOf(a.integer("connections", 1)) : null);
         JsonObject r = call(cfg, b.build(), true);
@@ -288,13 +276,9 @@ public final class Main {
             return;
         }
         String visit = r.optString("visitUrl", null);
-        String copied = visit != null ? visit : url;
         System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (gate on)" : ""));
         if (visit != null) {
             System.out.println("visit link: " + visit);
-        }
-        if (copyToClipboard(copied)) {
-            System.out.println("(" + (visit != null ? "visit link" : "link") + " copied to clipboard)");
         }
     }
 
@@ -341,7 +325,7 @@ public final class Main {
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
         System.out.println("created an invite.");
-        System.out.println("  link:  " + url + (copyToClipboard(url) ? "        <- copied to clipboard" : ""));
+        System.out.println("  link:  " + url);
         if (r.has("code")) {
             System.out.println("  code:  " + r.string("code") + "                             <- for reading out over the phone (10 min)");
         }
@@ -450,61 +434,10 @@ public final class Main {
                     break;
                 }
             }
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // no log to quote
         }
         throw new IOException("daemon did not start" + why + " (see " + cfg.daemonLog() + ")");
     }
 
-    /** Opens a URL in the user's browser without AWT (ARCHITECTURE.md §3.1). */
-    static void openBrowser(String url) {
-        List<String> cmd = switch (HubLink.osName()) {
-            case "macos" -> List.of("open", url);
-            case "windows" -> List.of("rundll32", "url.dll,FileProtocolHandler", url);
-            default -> List.of("xdg-open", url);
-        };
-        try {
-            new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
-        } catch (IOException e) {
-            // headless: the URL is printed anyway
-        }
-    }
-
-    /**
-     * Puts {@code text} on the clipboard, and says whether it got there so the caller can say so.
-     *
-     * <p>Only when someone is looking at the output. A clipboard is for a person about to paste,
-     * and this used to copy whenever the platform had a tool for it: {@code jailscale open 8080 |
-     * tee log} replaced the clipboard of whoever ran it, and so did the test suite, on any machine
-     * where the tool was findable -- which on Windows is every machine, because
-     * {@code CreateProcess} looks in System32 before PATH and that is where {@code clip.exe} is.
-     * {@code isTerminal} is the question that separates the two, and it has to be asked rather than
-     * inferred from {@code System.console() != null}, which since JDK 22 is non-null for a
-     * redirected stream as well.
-     */
-    private static boolean copyToClipboard(String text) {
-        java.io.Console console = System.console();
-        if (console == null || !console.isTerminal()) {
-            return false;
-        }
-        String os = HubLink.osName();
-        List<String> cmd = switch (os) {
-            case "macos" -> List.of("pbcopy");
-            case "linux" -> List.of("xclip", "-selection", "clipboard");
-            case "windows" -> List.of("clip.exe");
-            default -> null;
-        };
-        if (cmd == null) {
-            return false;
-        }
-        try {
-            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-            try (var out = p.getOutputStream()) {
-                out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            }
-            return p.waitFor() == 0;
-        } catch (IOException | InterruptedException e) {
-            return false;
-        }
-    }
 }

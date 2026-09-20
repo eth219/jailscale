@@ -89,7 +89,8 @@ public final class HttpCall {
         }
     }
 
-    static boolean isRedirect(int status) {
+    /** The statuses {@link #get} follows; public so a caller reading a redirect by hand applies the same rule. */
+    public static boolean isRedirect(int status) {
         return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
     }
 
@@ -109,7 +110,7 @@ public final class HttpCall {
         URI next;
         try {
             next = from.resolve(new URI(location.trim()));
-        } catch (URISyntaxException | IllegalArgumentException e) {
+        } catch (URISyntaxException | IllegalArgumentException _) {
             throw new IOException("a redirect from " + from.getHost() + " named " + location);
         }
         String scheme = next.getScheme() == null ? "" : next.getScheme().toLowerCase(Locale.ROOT);

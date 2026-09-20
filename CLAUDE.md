@@ -54,8 +54,8 @@ LOAD=1000 SLOW=1000 ./measure.sh --check  # the §14 budget, against binaries na
    header of `measure.sh` lists the conclusions this harness has produced that were plausible and
    wrong; read it before believing a surprising number.
 5. **A test has to be able to fail in the direction it claims.** A suite that only asserts the
-   negative case passes just as well when the feature is dead — that is #80, and it is why the
-   clipboard is unverified on Windows.
+   negative case passes just as well when the feature is dead — that was #80, the clipboard copy
+   whose tests could only show it not happening, and the feature went before the test did.
 
 ## Where things are
 

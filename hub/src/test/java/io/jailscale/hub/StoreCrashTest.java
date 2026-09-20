@@ -1,6 +1,7 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -20,9 +21,9 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Replaying that log on top of that snapshot has to be a no-op, and for most events it is,
  * because they are {@code put}s that land on the value already there. The ones that are not are the
- * arithmetic: {@code invite-used} and {@code authkey-used} subtract, {@code notice-added} appends.
- * Replayed twice they spend a use that was never spent and duplicate a notice, which is a credential
- * quietly worth less than it says and an operator told twice about one revocation.
+ * arithmetic: {@code invite-used} subtracts, {@code notice-added} appends. Replayed twice they
+ * spend a use that was never spent and duplicate a notice, which is a credential quietly worth less
+ * than it says and an operator told twice about one revocation.
  *
  * <p>Every test here reads its result out of a <b>copy</b> of the state directory rather than
  * reopening the one still in use. That is what a restart really sees — a directory, with no live
@@ -45,25 +46,6 @@ class StoreCrashTest {
 
         try (Store r = new Store(crashDuringSnapshot(s, dir))) {
             assertEquals(2, r.invites().get(0).usesLeft(), "uses left after a lost truncation");
-        }
-    }
-
-    @Test
-    void anAuthKeyDoesNotSpendAUseItNeverSpent() throws Exception {
-        Path dir = TestDirs.newRoot("crash");
-        Store s = new Store(dir);
-        s.createAuthKey("jk_secret", "carol", null, 2, 7200);
-        s.snapshot();
-        s.consumeAuthKey("jk_secret");
-        assertEquals(1, s.authKeys().get(0).usesLeft());
-
-        try (Store r = new Store(crashDuringSnapshot(s, dir))) {
-            // The size first, because a second subtraction here does not cost a use, it costs the
-            // key: `authkey-used` removes the record once nothing is left, so a two-use key with one
-            // use to go comes back gone and whoever holds it — a CI runner, usually — is locked out
-            // with nothing in any log to say why.
-            assertEquals(1, r.authKeys().size(), "the auth-key should still be there at all");
-            assertEquals(1, r.authKeys().get(0).usesLeft(), "uses left after a lost truncation");
         }
     }
 
@@ -139,6 +121,38 @@ class StoreCrashTest {
             s.snapshot();
             assertTrue(Files.readString(dir.resolve("state.snapshot"), StandardCharsets.UTF_8).contains("\"seq\":"),
                 "the snapshot it writes should carry the sequence it folded through");
+        }
+    }
+
+    @Test
+    void stateWrittenWhenAuthKeysExistedStillLoads() throws Exception {
+        // Auth-keys were removed (#251). Every hub that ran before that has their events in its
+        // log and its snapshot, and those are not unknown events: the store skips them by name and
+        // loads everything around them. Written by hand, since no Store can write them any more.
+        Path dir = TestDirs.newRoot("authkeys");
+        Files.writeString(dir.resolve("state.snapshot"),
+            "{\"v\":" + Store.STATE_VERSION + ",\"nextNodeId\":2,\"events\":["
+                + "{\"e\":\"authkey-created\",\"id\":\"ak_1\",\"hash\":\"h1\",\"tag\":\"ci\",\"uses\":5,\"expiresAt\":9999999999999},"
+                + "{\"e\":\"node-registered\",\"id\":1,\"mkey\":\"mkeyalice\",\"user\":\"alice\","
+                + "\"hostname\":\"laptop\",\"os\":\"linux\",\"at\":1}]}",
+            StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("state.jsonl"),
+            "{\"e\":\"authkey-used\",\"id\":\"ak_1\"}\n"
+                + "{\"e\":\"invite-created\",\"id\":\"inv_1\",\"tokenHash\":\"t\",\"codeHash\":\"c\",\"user\":\"bob\","
+                + "\"uses\":1,\"expiresAt\":9999999999999,\"codeExpiresAt\":9999999999999,\"createdBy\":\"alice\",\"admin\":false}\n"
+                + "{\"e\":\"authkey-revoked\",\"id\":\"ak_1\"}\n",
+            StandardCharsets.UTF_8);
+
+        try (Store s = new Store(dir)) {
+            assertEquals(1, s.nodes().size(), "the node beside the auth-key in the snapshot");
+            assertEquals(1, s.invites().size(), "the invite between the auth-key events in the log");
+            // Counted by name, not swallowed by the unknown-event default: that count is what the
+            // one warning on load reports, and the difference between the two is this assertion.
+            assertEquals(1, s.authKeyEventsDropped(), "the dropped record was counted");
+            // And the next snapshot is this binary's: nothing of the old kind is written back.
+            s.snapshot();
+            assertFalse(Files.readString(dir.resolve("state.snapshot"), StandardCharsets.UTF_8).contains("authkey"),
+                "a snapshot written after #251 should not carry auth-key events");
         }
     }
 

@@ -55,7 +55,7 @@ public final class AcmeKeys {
         Files.writeString(p, pem, StandardCharsets.UTF_8);
         try {
             Files.setPosixFilePermissions(p, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
-        } catch (UnsupportedOperationException ignored) {
+        } catch (UnsupportedOperationException _) {
             // Windows
         }
     }

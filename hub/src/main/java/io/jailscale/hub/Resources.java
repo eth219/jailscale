@@ -38,7 +38,7 @@ final class Resources {
                     return Long.parseLong(parts[1]) * 1024; // reported in kB
                 }
             }
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException _) {
             return -1;
         }
         return -1;

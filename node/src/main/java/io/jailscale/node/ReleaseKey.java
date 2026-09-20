@@ -81,7 +81,7 @@ final class ReleaseKey {
                 if (v.verify(signature)) {
                     return fp;
                 }
-            } catch (SignatureException e) {
+            } catch (SignatureException _) {
                 // Malformed for this key is malformed for all of them; keep going so the message
                 // below names every key that was tried rather than only the first.
             }
@@ -94,7 +94,7 @@ final class ReleaseKey {
     static String fingerprint(String base64Spki) {
         try {
             return fingerprint(decode(base64Spki));
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException _) {
             return "unreadable";
         }
     }

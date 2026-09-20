@@ -11,8 +11,8 @@ final class Registrar {
     private static final Log LOG = Log.get("registrar");
     private static final int MAX_PENDING_PER_IP = 5;
     /**
-     * Credential attempts per source address (ARCHITECTURE.md §11.5): invite tokens, invite codes and
-     * auth-keys. An invite code is eight characters, so guessing has to be slow to be hopeless.
+     * Credential attempts per source address (ARCHITECTURE.md §11.5): invite tokens and invite
+     * codes. An invite code is eight characters, so guessing has to be slow to be hopeless.
      * The burst lets a site onboard a batch of machines from one address in one go; the sustained
      * rate of twelve a minute is what a guesser is left with.
      */
@@ -74,12 +74,9 @@ final class Registrar {
             return inv == null ? rejected("code-invalid") : registerFrom(mkey, inv, self, hostname, os);
         }
         if (req.authKey() != null) {
-            Store.AuthKeyRec ak = store.consumeAuthKey(req.authKey());
-            if (ak == null) {
-                return rejected("authkey-invalid");
-            }
-            String owner = ak.owner() != null ? ak.owner() : "tag:" + ak.tag();
-            return register(mkey, owner, hostname, os, false, true);
+            // A node from before #251. Not a knock: it came with a credential, and the answer is
+            // that this kind no longer exists, so the person running it goes and gets an invite.
+            return rejected("authkey-removed");
         }
         // knock
         if ("off".equals(store.setting(Store.SETTING_KNOCK, "on"))) {

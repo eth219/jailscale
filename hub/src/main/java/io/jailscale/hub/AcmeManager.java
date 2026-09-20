@@ -212,7 +212,7 @@ final class AcmeManager implements AutoCloseable {
                     LOG.info("renewing certificate ({} left)", tls.leaf().getNotAfter());
                     issueWithRetries();
                 }
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 return;
             }
         }

@@ -315,15 +315,14 @@ final class SniRouter {
             HttpRequest req = Http.readRequest(s.getInputStream(), 4096);
             // noindex,nofollow like every other page the hub writes (HttpFront.NOINDEX): this one
             // is served under the wildcard for any name at all, so it says of whatever name a
-            // crawler was handed that this hub knows it, which is the thing /links is kept out of
-            // an index for.
+            // crawler was handed that this hub knows it, and that is not for an index.
             // Through HttpFront.secured for the same reason as everything on the hub's own name:
             // this is an HTML page in a browser, and it is reached under the wildcard, which is the
             // widest surface the hub has.
             HttpFront.secured(HttpResponse.html(404, "<!doctype html><meta charset=utf-8>" + HttpFront.NOINDEX
                 + "<title>jailscale</title><p><b>" + HttpFront.escape(name) + "</b> is not open right now.</p>"))
                 .writeTo(s.getOutputStream(), req.isHead());
-        } catch (HttpException e) {
+        } catch (HttpException _) {
             // not HTTP; nothing to say
         }
     }

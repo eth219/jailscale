@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -38,8 +40,6 @@ class WireFormatTest {
         "{\"t\":\"HubKeyRotation\",\"nextHubKey\":\"hkey:AAAA\",\"activatesAt\":1789000000}",
         "{\"t\":\"InviteCreate\",\"user\":\"bob\",\"uses\":3,\"ttlSeconds\":86400,\"self\":true}",
         "{\"t\":\"InviteCreated\",\"url\":\"https://hub.example.com/join/x\",\"code\":\"7F3K-92QX\",\"expiresAt\":1789000000}",
-        "{\"t\":\"AdminLinkRequest\"}",
-        "{\"t\":\"AdminLink\",\"url\":\"https://hub.example.com/admin/login/x\",\"expiresAt\":1789000060}",
         "{\"t\":\"Error\",\"inReplyTo\":\"InviteCreate\",\"reason\":\"policy\"}",
         "{\"t\":\"CertUpdate\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],\"keyId\":\"sha256:ab\"}",
         "{\"t\":\"LinkOpen\",\"kind\":\"https\",\"name\":\"myapp\",\"domain\":\"app.example.com\",\"port\":10022,"
@@ -120,21 +120,39 @@ class WireFormatTest {
         // A rename that changes the encoder and decoder together passes the round trip above, and a
         // swap of two same-typed fields passes it too. These are the ones where being wrong is a
         // signature over the wrong handshake or a challenge answered for the wrong domain.
-        Message.SignRequest sr = assertInstanceOf(Message.SignRequest.class, Codec.decode(GOLDEN[19]));
+        Message.SignRequest sr = only(Message.SignRequest.class);
         assertEquals((2L << 24) | 40, sr.streamId());
         assertArrayEquals(new byte[] {1, 2, 3}, sr.content());
         assertArrayEquals(new byte[] {2, 0, 0, 0}, sr.serverHello());
         assertArrayEquals(new byte[] {8, 0, 0, 0}, sr.encryptedExtensions());
         assertArrayEquals(new byte[] {(byte) 0xfe, 9}, sr.helloRetryRequest());
 
-        Message.LinkOpen lo = assertInstanceOf(Message.LinkOpen.class, Codec.decode(GOLDEN[15]));
+        Message.LinkOpen lo = only(Message.LinkOpen.class);
         assertEquals("app.example.com", lo.domain());
         assertArrayEquals(new byte[] {1, 2, 3}, lo.domainProof());
 
-        Message.ChallengeSet cs = assertInstanceOf(Message.ChallengeSet.class, Codec.decode(GOLDEN[21]));
+        Message.ChallengeSet cs = only(Message.ChallengeSet.class);
         assertEquals("app.example.com", cs.domain());
         assertEquals("tok", cs.token());
         assertEquals("tok.thumb", cs.keyAuthorization());
+    }
+
+    /**
+     * The one {@link #GOLDEN} line of this type, decoded. Looked up by type and not by index: these
+     * three assertions used to name GOLDEN[15], [19] and [21], and removing two message types with
+     * the admin web (#253) shifted every line after them, so the indices pointed at the wrong
+     * messages. Asserting there is exactly one is what keeps the lookup as precise as the index was.
+     */
+    private static <T extends Message> T only(Class<T> type) throws Exception {
+        List<T> found = new ArrayList<>();
+        for (String line : GOLDEN) {
+            Message m = Codec.decode(line);
+            if (type.isInstance(m)) {
+                found.add(type.cast(m));
+            }
+        }
+        assertEquals(1, found.size(), type.getSimpleName() + " should appear exactly once in GOLDEN");
+        return found.get(0);
     }
 
     @Test

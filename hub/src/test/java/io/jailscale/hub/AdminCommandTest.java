@@ -59,12 +59,8 @@ class AdminCommandTest {
             new Route("invite-create", "invite", "create"),
             new Route("invite-list", "invite", "list"),
             new Route("invite-revoke", "invite", "revoke", "inv_1"),
-            new Route("authkey-create", "authkey", "create", "--tag", "ci"),
-            new Route("authkey-list", "authkey", "list"),
-            new Route("authkey-revoke", "authkey", "revoke", "ak_1"),
             new Route("admin-add", "admin", "add", "alice"),
             new Route("admin-remove", "admin", "remove", "alice"),
-            new Route("admin-login-link", "admin", "login-link"),
             new Route("key-rotate", "key", "rotate"),
             new Route("setting", "setting", "knock", "off"),
             new Route("promote", "promote"),
@@ -189,25 +185,6 @@ class AdminCommandTest {
         assertTrue(full.bool("admin"));
     }
 
-    /**
-     * Unlike an invite, an auth key's uses go to the store as given -- 0 would create a key that is
-     * already spent -- so the 1 is the CLI's, and has to survive here.
-     */
-    @Test
-    void authkeyCreateDefaultsToOneUseAndLetsTheServerPickTheTtl() {
-        JsonObject bare = req("authkey", "create", "--owner", "alice");
-        assertEquals("alice", bare.string("owner"));
-        assertFalse(bare.has("tag"));
-        assertEquals(1, bare.lng("uses"));
-        assertFalse(bare.has("ttl"));
-
-        JsonObject tagged = req("authkey", "create", "--tag", "ci", "--uses", "5", "--ttl", "7d");
-        assertEquals("ci", tagged.string("tag"));
-        assertFalse(tagged.has("owner"));
-        assertEquals(5, tagged.lng("uses"));
-        assertEquals(604800, tagged.lng("ttl"));
-    }
-
     @Test
     void keyRotateLeavesTheGraceToTheServerUnlessAsked() {
         assertFalse(req("key", "rotate").has("grace"));
@@ -221,7 +198,6 @@ class AdminCommandTest {
         assertEquals("alice", req("admin", "add", "alice").string("user"));
         assertEquals("alice", req("admin", "remove", "alice").string("user"));
         assertEquals("inv_1", req("invite", "revoke", "inv_1").string("id"));
-        assertEquals("ak_1", req("authkey", "revoke", "ak_1").string("id"));
         assertEquals("web", req("name", "release", "web").string("name"));
         assertEquals("app.example.com", req("domain", "release", "app.example.com").string("domain"));
         assertEquals("bob", req("name", "reassign", "web", "--user", "bob").string("user"));
@@ -250,7 +226,6 @@ class AdminCommandTest {
             new Missing("missing <name>", "name", "release"),
             new Missing("missing <domain>", "domain", "release"),
             new Missing("missing <id>", "invite", "revoke"),
-            new Missing("missing <id>", "authkey", "revoke"),
             new Missing("missing <user>", "admin", "add"),
             new Missing("missing <user>", "admin", "remove"),
             new Missing("missing <key>", "setting"),
@@ -383,41 +358,6 @@ class AdminCommandTest {
             // clear the value nor be refused, and the page would keep the section around a blank.
             assertNull(set(ipc, "operator", "   "));
             assertEquals("", hub.store().setting(Store.SETTING_OPERATOR, "unset"));
-        } finally {
-            hub.close();
-        }
-    }
-
-    /**
-     * An auth key's uses go to the record as given, unlike an invite's, where 0 is the sentinel
-     * meaning "your default" -- and the two sit on adjacent lines of the usage text under the same
-     * {@code --uses N}. Asked for 0, the hub used to create the key, print the secret and list it
-     * as "Uses left: 0"; the first machine to use it days later was told {@code authkey-invalid},
-     * which reads as a wrong or expired key rather than as one that was born spent.
-     *
-     * <p>Driven over the real socket, because the refusal an operator sees is the error reply
-     * {@code Ipc} makes out of the exception, not the exception.
-     */
-    @Test
-    void anAuthKeyWithNoUsesLeftIsRefusedRatherThanCreatedDead() throws Exception {
-        Hub hub = startedHub();
-        try {
-            // Not something the CLI does on its own: omitting --uses asks for one use.
-            assertEquals(1, req("authkey", "create", "--tag", "ci").lng("uses"));
-
-            for (int uses : new int[] {0, -1}) {
-                JsonObject r = Ipc.call(hub.config().socketPath(),
-                    JsonObject.builder().put("cmd", "authkey-create").put("tag", "ci").put("uses", uses).build());
-                assertFalse(r.optBool("ok", false), "--uses " + uses + " was accepted: " + r);
-                assertTrue(r.string("error").startsWith("uses must be at least 1"), r.toString());
-            }
-            assertEquals(0, hub.store().authKeys().size(), "a refused key must not have been written");
-
-            JsonObject ok = Ipc.call(hub.config().socketPath(),
-                JsonObject.builder().put("cmd", "authkey-create").put("tag", "ci").put("uses", 2).build());
-            assertTrue(ok.optBool("ok", false), ok.toString());
-            assertEquals(1, hub.store().authKeys().size());
-            assertEquals(2, hub.store().authKeys().get(0).usesLeft());
         } finally {
             hub.close();
         }

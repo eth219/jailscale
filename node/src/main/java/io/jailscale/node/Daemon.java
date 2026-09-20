@@ -235,12 +235,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     /** The relay connections and whether each is up, for {@code status}. */
     private List<Object> relayRows() {
-        List<Object> rows = new ArrayList<>();
-        for (java.util.Map.Entry<String, HubLink> e : relays.entrySet()) {
-            rows.add(JsonObject.builder().put("address", e.getKey()).put("connected", e.getValue().isConnected())
-                .put("lastError", e.getValue().lastError()).build().asMap());
-        }
-        return rows;
+        return relays.entrySet().stream().<Object>map(e -> JsonObject.builder()
+            .put("address", e.getKey()).put("connected", e.getValue().isConnected())
+            .put("lastError", e.getValue().lastError()).build().asMap()).toList();
     }
 
     @Override
@@ -368,22 +365,11 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             case "invite" -> {
                 Message r = link.request(new Message.InviteCreate(req.optString("user", null), req.optInt("uses", 0),
                     req.has("ttl") ? req.lng("ttl") : 0, req.optBool("self", false)), "InviteCreated", REPLY_TIMEOUT_MS);
-                if (r instanceof Message.InviteCreated ic) {
-                    reply.done(JsonObject.builder().put("ok", true).put("url", ic.url()).put("code", ic.code()).put("expiresAt", ic.expiresAt()));
-                } else if (r instanceof Message.Error e) {
-                    reply.error(e.reason());
-                } else {
-                    reply.error("unexpected " + r.type());
-                }
-            }
-            case "admin" -> {
-                Message r = link.request(new Message.AdminLinkRequest(), "AdminLink", REPLY_TIMEOUT_MS);
-                if (r instanceof Message.AdminLink al) {
-                    reply.done(JsonObject.builder().put("ok", true).put("url", al.url()).put("expiresAt", al.expiresAt()));
-                } else if (r instanceof Message.Error e) {
-                    reply.error(e.reason());
-                } else {
-                    reply.error("unexpected " + r.type());
+                switch (r) {
+                    case Message.InviteCreated(String url, String code, long expiresAt) ->
+                        reply.done(JsonObject.builder().put("ok", true).put("url", url).put("code", code).put("expiresAt", expiresAt));
+                    case Message.Error e -> reply.error(e.reason());
+                    default -> reply.error("unexpected " + r.type());
                 }
             }
             case "open" -> open(req, reply);
@@ -470,7 +456,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 Thread.ofVirtual().start(() -> {
                     try {
                         Thread.sleep(100);
-                    } catch (InterruptedException ignored) {
+                    } catch (InterruptedException _) {
                         // exiting
                     }
                     System.exit(0);
@@ -512,23 +498,17 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private List<Object> linkRows() {
-        List<Object> rows = new ArrayList<>();
-        for (NodeState.LinkRec l : state.links) {
-            rows.add(JsonObject.builder().put("name", l.name).put("kind", l.kind).put("local", l.local())
-                .put("url", l.url).put("gate", l.gateHash != null).put("open", isOpen(l))
-                .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
-                .put("probe", l.lastProbe == null ? null : l.lastProbe.json()).build().asMap());
-        }
-        return rows;
+        return state.links.stream().<Object>map(l -> JsonObject.builder()
+            .put("name", l.name).put("kind", l.kind).put("local", l.local())
+            .put("url", l.url).put("gate", l.gateHash != null).put("open", isOpen(l))
+            .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
+            .put("probe", l.lastProbe == null ? null : l.lastProbe.json()).build().asMap()).toList();
     }
 
     /** Names the hub took away, so `status` keeps saying it after the log line has scrolled. */
     private List<Object> revokedRows() {
-        List<Object> rows = new ArrayList<>();
-        for (NodeState.RevokedRec r : state.revoked) {
-            rows.add(JsonObject.builder().put("name", r.name()).put("reason", r.reason()).put("at", r.at()).build().asMap());
-        }
-        return rows;
+        return state.revoked.stream().<Object>map(r -> JsonObject.builder()
+            .put("name", r.name()).put("reason", r.reason()).put("at", r.at()).build().asMap()).toList();
     }
 
     /** "count mean/max" in milliseconds, which is how these read next to the hub's own line. */
@@ -570,7 +550,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("links", linkRows())
             .put("revoked", revokedRows())
             .put("lastError", link.lastError())
-            .put("update", lastUpdate == null ? null : lastUpdate.json(System.currentTimeMillis()).build());
+            .put("update", lastUpdate == null ? null : lastUpdate.json().build());
         Message.RegisterResponse r = link.lastRegister();
         if (r != null) {
             b.put("registration", r.status());
@@ -593,7 +573,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 m = domainCerts.issue(rec.domain, directory, rec.acmeEmail, link);
             } catch (AcmeException | GeneralSecurityException e) {
                 throw new IOException("certificate for " + rec.domain + ": " + e.getMessage(), e);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 Thread.currentThread().interrupt();
                 throw new IOException("interrupted");
             }
@@ -617,30 +597,17 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         try {
             Thread.sleep(ThreadLocalRandom.current().nextLong(60_000, 300_000));
             while (!closed) {
-                Updates.Result r = Updates.check(Version.string(), config.updateFile());
+                Updates.Result r = Updates.check(Version.string());
                 if (r.newer()) {
                     LOG.info("{}", r.line());
-                } else if (r.outcome() == Updates.Outcome.REFUSED || r.outcome() == Updates.Outcome.STALE) {
-                    // The two a node has to say on its own, because nobody runs `status` daily: a
-                    // pointer that was refused (a sequence that went backwards, a signature no key
-                    // here accepts), and one that has expired -- which is what a withheld upgrade
-                    // looks like from inside. Everything else stays quiet: a node with no route to
-                    // the internet, a clock that disagrees and a `dev` build are all conditions that
-                    // would otherwise fill this log with the same line every day for ever.
-                    LOG.warn("{}", r.line());
                 }
-                // Independent of what the check concluded: a pointer can name an upgrade and be
-                // about to expire, and the second is the one nobody else will notice. Once a day
-                // for the last fortnight is the cadence the certificate warning already uses, and
-                // for the same reason -- what has to happen is a person's (docs/update-freshness).
-                String soon = r.warning(System.currentTimeMillis());
-                if (soon != null) {
-                    LOG.warn("{}", soon);
-                }
+                // Nothing else is said: a node with no route to the internet and a `dev` build are
+                // both conditions that would otherwise fill this log with the same line every day
+                // for ever. `status` carries the reason for whoever asks.
                 lastUpdate = r;
                 Thread.sleep(UPDATE_CHECK_MS);
             }
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             Thread.currentThread().interrupt();
         }
     }
@@ -664,7 +631,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         while (!closed) {
             try {
                 Thread.sleep(RENEW_CHECK_MS);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException _) {
                 return;
             }
             for (NodeState.LinkRec rec : state.links) {
@@ -875,7 +842,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private SSLContext probeContext() {
         try {
             return HubClient.clientContext(state);
-        } catch (IOException | GeneralSecurityException e) {
+        } catch (IOException | GeneralSecurityException _) {
             return null;
         }
     }
@@ -889,7 +856,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         try {
             String host = URI.create(rec.url).getHost();
             return host != null ? host : rec.url;
-        } catch (RuntimeException e) {
+        } catch (RuntimeException _) {
             return rec.url;
         }
     }
@@ -987,7 +954,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                     probeSafely(rec, null);
                 }
             }
-        } catch (InterruptedException e) {
+        } catch (InterruptedException _) {
             // exiting
         }
     }
@@ -1301,7 +1268,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         reply.progress("joining " + host + " as " + state.machineKeyText());
 
         HubLink.Credentials creds = new HubLink.Credentials(invite, req.optString("code", null),
-            req.optString("authKey", null), req.optString("user", null));
+            req.optString("user", null));
         link.start(creds);
         if (state.registered) {
             waitConnected();
@@ -1379,12 +1346,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     /** The relay connections that are up right now, by address (tests). */
     public List<String> connectedRelays() {
-        List<String> out = new ArrayList<>();
-        for (java.util.Map.Entry<String, HubLink> e : relays.entrySet()) {
-            if (e.getValue().isConnected()) {
-                out.add(e.getKey());
-            }
-        }
-        return out;
+        return relays.entrySet().stream().filter(e -> e.getValue().isConnected())
+            .map(java.util.Map.Entry::getKey).toList();
     }
 }

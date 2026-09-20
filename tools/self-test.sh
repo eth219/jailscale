@@ -23,14 +23,12 @@ UNTESTED='
 hold-visitors.py    a load generator; measure.sh is what says whether its numbers are believed
 kms-key.sh          creates the signing key in Cloud KMS, once, by hand
 openssl-ed25519.sh  prints an openssl invocation; its output is checked by the eye that runs it
-refresh-index.sh    signs a new release-index pointer with the KMS key
-release-index.sh    builds the index document that refresh-index.sh signs
 release-key.sh      prints the public half of the signing key
 release-keys.sh     lists the keys a release may be signed under
 sign-release.sh     signs RELEASE.txt with the KMS key
 slow-readers.py     a load generator, as above
 throughput.py       a load generator, as above
-verify-release.sh   checks a published release; the nightly index job runs it against the real one
+verify-release.sh   checks a published release; published.yml runs it against the real one
 '
 
 fail=0

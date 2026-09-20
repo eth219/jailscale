@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: >
-        Not a defect - a defect nobody would notice. Examples already filed: #80 (the clipboard is
-        asserted only in the direction that passes when the feature is dead) and #82 (two upgrade
-        directions have never been tried).
+        Not a defect - a defect nobody would notice. Examples already filed: #80 (the clipboard copy was
+        asserted only in the direction that passes when the feature is dead; the feature is gone)
+        and #82 (two upgrade directions have never been tried).
   - type: textarea
     id: path
     attributes:

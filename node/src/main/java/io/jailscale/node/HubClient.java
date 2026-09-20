@@ -105,7 +105,7 @@ final class HubClient {
             } catch (NoiseException e) {
                 lastNoise = e; // wrong hub key for this candidate; try the next one
                 s.close();
-            } catch (java.io.EOFException e) {
+            } catch (java.io.EOFException _) {
                 // The hub cannot answer a handshake it failed to decrypt; it just closes. Treat
                 // that like a wrong key and try the next candidate (rotation, ARCHITECTURE.md §5.2).
                 lastNoise = new NoiseException("hub closed the connection during the handshake (wrong hub key?)");
