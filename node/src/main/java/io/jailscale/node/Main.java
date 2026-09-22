@@ -23,7 +23,6 @@ public final class Main {
         jailscale up --hub HOST [--code XXXX-XXXX] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate] [--proxy-protocol]
-        jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (ARCHITECTURE.md §8.4)
         jailscale open PORT --domain app.example.com [--acme-email E] [--acme-staging | --acme-directory URL]
                                                               your own domain, CNAME'd to the hub (ARCHITECTURE.md §8.3)
         jailscale gate NAME [--ttl 24h | --off]              each run issues a fresh visit link
@@ -43,7 +42,7 @@ public final class Main {
      * documented on {@code gate}, declared here, read nowhere, because {@code gate NAME} issues a
      * fresh link every run with or without it.
      */
-    static final String[] FLAGS = {"debug", "self", "tls-insecure", "help", "gate", "off", "tcp", "udp",
+    static final String[] FLAGS = {"debug", "self", "tls-insecure", "help", "gate", "off",
         "acme-staging", "proxy-protocol", "download"};
 
     private Main() {}
@@ -241,15 +240,8 @@ public final class Main {
         if (port == null) {
             throw new IllegalArgumentException("open needs a local port");
         }
-        if (a.flag("tcp") && a.flag("udp")) {
-            throw new IllegalArgumentException("--tcp and --udp are exclusive");
-        }
-        String kind = a.flag("tcp") ? "tcp" : a.flag("udp") ? "udp" : "https";
         JsonObject.Builder b = JsonObject.builder().put("cmd", "open").put("port", Integer.parseInt(port))
-            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", kind).put("gate", a.flag("gate"));
-        if (a.has("port")) {
-            b.put("hubPort", a.integer("port", 0));
-        }
+            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("gate", a.flag("gate"));
         if (a.has("proxy-protocol")) {
             b.put("proxyProtocol", a.flag("proxy-protocol"));
         }
@@ -267,12 +259,6 @@ public final class Main {
         }
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
-        if (!kind.equals("https")) {
-            System.out.println(url + "  ->  " + r.string("local"));
-            System.out.println("(hub port " + r.integer("hubPort") + ". the hub can see any plaintext protocol the app does not encrypt itself; "
-                + "with SSH, WireGuard or a DB with TLS on, the hub sees only ciphertext)");
-            return;
-        }
         String visit = r.optString("visitUrl", null);
         System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (gate on)" : ""));
         if (visit != null) {

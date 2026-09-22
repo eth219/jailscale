@@ -101,11 +101,11 @@ class UserDomainTest {
             .put("port", port).put("user", "alice").put("caFile", CERT.toString()).build()).optBool("ok", false));
 
         // The hub insists on proof: no chain, a chain for another name, a name under the hub itself.
-        Message r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", null, null), "LinkOpened");
+        Message r = node.debugRequest(new Message.LinkOpen(null, DOMAIN, "127.0.0.1:1", null, null), "LinkOpened");
         assertEquals("domain-unverified", ((Message.LinkOpened) r).reason());
-        r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", List.of(Files.readString(CERT)), null), "LinkOpened");
+        r = node.debugRequest(new Message.LinkOpen(null, DOMAIN, "127.0.0.1:1", List.of(Files.readString(CERT)), null), "LinkOpened");
         assertEquals("domain-cert-name-mismatch", ((Message.LinkOpened) r).reason());
-        r = node.debugRequest(new Message.LinkOpen("https", null, "x.hub.test", null, "127.0.0.1:1", null, null), "LinkOpened");
+        r = node.debugRequest(new Message.LinkOpen(null, "x.hub.test", "127.0.0.1:1", null, null), "LinkOpened");
         assertEquals("bad-domain", ((Message.LinkOpened) r).reason());
 
         // The port-80 front answers only registered tokens and redirects the rest.
@@ -138,9 +138,9 @@ class UserDomainTest {
         // claim. Without a signature from its private key the hub does not move the domain, and a
         // signature that is not over this connection's handshake hash is no better.
         List<String> real = List.of(Files.readString(root.resolve("node/domains/" + DOMAIN + ".pem")));
-        r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", real, null), "LinkOpened");
+        r = node.debugRequest(new Message.LinkOpen(null, DOMAIN, "127.0.0.1:1", real, null), "LinkOpened");
         assertEquals("domain-proof-missing", ((Message.LinkOpened) r).reason());
-        r = node.debugRequest(new Message.LinkOpen("https", null, DOMAIN, null, "127.0.0.1:1", real, new byte[64]), "LinkOpened");
+        r = node.debugRequest(new Message.LinkOpen(null, DOMAIN, "127.0.0.1:1", real, new byte[64]), "LinkOpened");
         assertEquals("domain-proof-invalid", ((Message.LinkOpened) r).reason());
         assertEquals("alice", hub.store().domain(DOMAIN).user());
 

@@ -71,7 +71,7 @@ class StartupExpiryWarningTest {
     /** A node.json holding one domain link, as a node that had published {@link #DOMAIN} would have. */
     private static void storeLink(Path dir) throws Exception {
         NodeState state = NodeState.load(NodeConfig.in(dir).stateFile());
-        NodeState.LinkRec rec = new NodeState.LinkRec("http", "127.0.0.1", 3000, "abcde");
+        NodeState.LinkRec rec = new NodeState.LinkRec("127.0.0.1", 3000, "abcde");
         rec.domain = DOMAIN;
         state.links.add(rec);
         state.save();

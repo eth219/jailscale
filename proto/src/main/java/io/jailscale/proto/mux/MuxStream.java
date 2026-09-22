@@ -8,7 +8,7 @@ import java.io.OutputStream;
 import java.util.ArrayDeque;
 
 /**
- * One byte stream (or datagram stream) inside a {@link MuxSession} (ARCHITECTURE.md §5.3). The session's
+ * One byte stream inside a {@link MuxSession} (ARCHITECTURE.md §5.3). The session's
  * reader thread feeds {@link #onData} etc.; application threads use {@link #in()}/{@link #out()}.
  * Flow control: the receiver advertises {@link #WINDOW} bytes and refills it with WINDOW frames
  * once half is consumed; the sender blocks when out of credits. That bounds one stream; what bounds
@@ -23,7 +23,6 @@ public final class MuxStream {
     private final FlowBudget budget;
     private final long id;
     private final JsonObject meta;
-    private final boolean dgram;
     private final Object lock = new Object();
 
     private final ArrayDeque<byte[]> inbound = new ArrayDeque<>();
@@ -240,7 +239,7 @@ public final class MuxStream {
                 }
                 byte[] chunk = new byte[n];
                 System.arraycopy(b, off, chunk, 0, n);
-                session.sendData(id, chunk, dgram);
+                session.sendData(id, chunk);
                 off += n;
                 len -= n;
             }
@@ -252,12 +251,11 @@ public final class MuxStream {
         }
     };
 
-    MuxStream(MuxSession session, FlowBudget budget, long id, JsonObject meta, boolean dgram) {
+    MuxStream(MuxSession session, FlowBudget budget, long id, JsonObject meta) {
         this.session = session;
         this.budget = budget;
         this.id = id;
         this.meta = meta;
-        this.dgram = dgram;
     }
 
     /**
@@ -280,10 +278,6 @@ public final class MuxStream {
 
     public JsonObject meta() {
         return meta;
-    }
-
-    public boolean isDatagram() {
-        return dgram;
     }
 
     public InputStream in() {
@@ -373,67 +367,6 @@ public final class MuxStream {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted");
         }
-    }
-
-    /** Datagram streams: the next whole datagram, or null when the peer closed. */
-    public byte[] receive() throws IOException {
-        byte[] d;
-        int refill = 0;
-        synchronized (lock) {
-            while (inbound.isEmpty() && !remoteClosed && error == null) {
-                awaitInbound();
-            }
-            if (inbound.isEmpty()) {
-                if (error != null) {
-                    throw error;
-                }
-                return null;
-            }
-            d = inbound.poll();
-            inboundBytes -= d.length;
-            queued = accounted ? inboundBytes : 0;
-            if (accounted) {
-                budget.release(d.length);
-            }
-            lastConsumedAt = System.currentTimeMillis();
-            consumedSinceWindow += d.length;
-            if (consumedSinceWindow >= WINDOW / 2) {
-                refill = consumedSinceWindow;
-                consumedSinceWindow = 0;
-            }
-        }
-        sendRefill(refill);
-        return d;
-    }
-
-    /** Datagram streams: sends one datagram (at most {@link Frame#MAX_DATA} bytes). */
-    public void send(byte[] datagram) throws IOException {
-        if (datagram.length > Frame.MAX_DATA) {
-            throw new IOException("datagram exceeds " + Frame.MAX_DATA);
-        }
-        synchronized (lock) {
-            while (credits < datagram.length && !localClosed && error == null) {
-                try {
-                    lock.wait();
-                } catch (InterruptedException _) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("interrupted");
-                }
-            }
-            if (error != null) {
-                throw error;
-            }
-            // The wait above also ends when this side closes, and that is not permission to send.
-            // Without this the close raced past the credit check: the datagram went out on a
-            // half-closed stream and took `credits` negative on the way, so every later send on
-            // it blocked against a debt no WINDOW frame was ever going to repay. `write` has
-            // always refused here; this is the same refusal for the datagram path.
-            if (localClosed) {
-                throw new IOException("stream closed");
-            }
-            credits -= datagram.length;
-        }
-        session.sendData(id, datagram, true);
     }
 
     /** Half-close: no more data from this side. The peer may still send. */

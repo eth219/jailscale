@@ -167,7 +167,7 @@ class FuzzTest {
             Frame.window(3, 65536).encode(),
             Frame.rst(9, 2).encode(),
             Frame.keepalive().encode(),
-            new Frame(4, Frame.OPEN, Frame.FLAG_DGRAM, ascii("{\"linkId\":\"l_1\"}")).encode());
+            new Frame(4, Frame.OPEN, 0x01, ascii("{\"linkId\":\"l_1\"}")).encode());
         fuzz("mux-frame", frames, in -> unchecked(b -> Frame.decode(b), in), MuxException.class);
     }
 

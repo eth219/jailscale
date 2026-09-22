@@ -12,7 +12,9 @@ class FrameTest {
 
     @Test
     void encodesHeaderBigEndian() {
-        Frame f = new Frame(0x01020304L, Frame.DATA, Frame.FLAG_DGRAM, new byte[] {9, 8});
+        // A flags byte of 0x01: no flag is defined any more (FLAG_DGRAM went with raw UDP, §8.4),
+        // and what this asserts is the header's layout, which has to keep a place for one.
+        Frame f = new Frame(0x01020304L, Frame.DATA, 0x01, new byte[] {9, 8});
         assertEquals("01020304" + "02" + "01" + "0002" + "0908", HexFormat.of().formatHex(f.encode()));
     }
 

@@ -271,7 +271,7 @@ final class SniRouter {
         MuxStream stream;
         try {
             stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
-                link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
+                link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId());
         } catch (IOException e) {
             refused(visitorIp, peek.serverName(), e.getMessage());
             throw e;

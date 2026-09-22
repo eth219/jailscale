@@ -48,9 +48,6 @@ final class Store implements AutoCloseable {
     /** A user domain proven by a node's own certificate (ARCHITECTURE.md §8.3). */
     record DomainRec(String domain, String user, String mkey, long at) {}
 
-    /** A raw port assigned to a node's local target (ARCHITECTURE.md §8.4); stable across restarts. */
-    record PortRec(int port, String kind, String user, String mkey, String local, long at) {}
-
     /** An address or CIDR block barred from the control plane (ARCHITECTURE.md §11.5). */
     record BanRec(String cidr, String reason, long at) {}
 
@@ -83,7 +80,6 @@ final class Store implements AutoCloseable {
     private final Map<String, PendingRec> pending = new LinkedHashMap<>();
     private final Map<String, NameRec> names = new LinkedHashMap<>();
     private final Map<String, String> settings = new LinkedHashMap<>();
-    private final Map<Integer, PortRec> ports = new LinkedHashMap<>();
     private final Map<String, DomainRec> domains = new LinkedHashMap<>();
     /** mkey -> notices waiting for that node to reconnect. */
     private final Map<String, List<NoticeRec>> notices = new LinkedHashMap<>();
@@ -251,35 +247,6 @@ final class Store implements AutoCloseable {
     synchronized void releaseDomain(String domain) throws IOException {
         if (domains.containsKey(domain)) {
             append(JsonObject.builder().put("e", "domain-released").put("domain", domain));
-        }
-    }
-
-    synchronized PortRec port(int port) {
-        return ports.get(port);
-    }
-
-    synchronized List<PortRec> ports() {
-        return new ArrayList<>(ports.values());
-    }
-
-    /** The port previously assigned to this node for this kind and local target, or 0. */
-    synchronized int portFor(String mkey, String kind, String local) {
-        for (PortRec r : ports.values()) {
-            if (r.mkey().equals(mkey) && r.kind().equals(kind) && r.local().equals(local)) {
-                return r.port();
-            }
-        }
-        return 0;
-    }
-
-    synchronized void assignPort(int port, String kind, String user, String mkey, String local) throws IOException {
-        append(JsonObject.builder().put("e", "port-assigned").put("port", port).put("kind", kind).put("user", user)
-            .put("mkey", mkey).put("local", local).put("at", System.currentTimeMillis()));
-    }
-
-    synchronized void releasePort(int port) throws IOException {
-        if (ports.containsKey(port)) {
-            append(JsonObject.builder().put("e", "port-released").put("port", port));
         }
     }
 
@@ -539,13 +506,13 @@ final class Store implements AutoCloseable {
      * What this store held that the primary's state does not, and is about to lose
      * (ARCHITECTURE.md §13.5). Counts for everything, names for the things a person holds.
      */
-    record Superseded(List<String> nodes, List<String> names, List<String> domains, List<Integer> ports,
+    record Superseded(List<String> nodes, List<String> names, List<String> domains,
         int credentials, Path kept) {
         // `kept`: where the copy of what went is, or null when there is no copy -- nothing was lost,
         // or the write failed. Nothing may send an operator to a path that was not written.
 
         boolean any() {
-            return !nodes.isEmpty() || !names.isEmpty() || !domains.isEmpty() || !ports.isEmpty() || credentials > 0;
+            return !nodes.isEmpty() || !names.isEmpty() || !domains.isEmpty() || credentials > 0;
         }
 
         /** How many of each are named before the line gives up and quotes a count instead. */
@@ -564,7 +531,6 @@ final class Store implements AutoCloseable {
             append(b, "nodes", nodes);
             append(b, "names", names);
             append(b, "domains", domains);
-            append(b, "ports", ports);
             if (credentials > 0) {
                 b.append(b.length() == 0 ? "" : ", ").append(credentials).append(" unused invites");
             }
@@ -612,7 +578,6 @@ final class Store implements AutoCloseable {
         pending.clear();
         names.clear();
         settings.clear();
-        ports.clear();
         domains.clear();
         notices.clear();
         bans.clear();
@@ -663,13 +628,6 @@ final class Store implements AutoCloseable {
                 lostDomains.add(r.domain());
             }
         }
-        List<Integer> lostPorts = new ArrayList<>();
-        for (PortRec r : ports.values()) {
-            PortRec t = theirs.ports.get(r.port());
-            if (t == null || !t.user().equals(r.user())) {
-                lostPorts.add(r.port());
-            }
-        }
         int credentials = 0;
         for (String id : invites.keySet()) {
             credentials += theirs.invites.containsKey(id) ? 0 : 1;
@@ -696,7 +654,7 @@ final class Store implements AutoCloseable {
             lostNames.add("hub-key rotation");
         }
         Path keptAt = dir.resolve("state.superseded.snapshot");
-        Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, null);
+        Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, credentials, null);
         if (!lost.any()) {
             // Nothing to keep, so nothing may be left lying at that path: a copy from an earlier
             // hand-off beside a fresh state.snapshot reads as "what this host just lost".
@@ -727,7 +685,7 @@ final class Store implements AutoCloseable {
             LOG.warn("could not keep the superseded state at {}: {}", keptAt, e.toString());
             return lost;
         }
-        return new Superseded(lostNodes, lostNames, lostDomains, lostPorts, credentials, keptAt);
+        return new Superseded(lostNodes, lostNames, lostDomains, credentials, keptAt);
     }
 
     /** An empty store with no directory behind it: somewhere to replay another's snapshot and compare. */
@@ -802,9 +760,10 @@ final class Store implements AutoCloseable {
                 ev.optString("mkey", null), ev.optString("local", null), ev.lng("at")));
             case "name-released" -> names.remove(ev.string("name"));
             case "setting" -> settings.put(ev.string("key"), ev.string("value"));
-            case "port-assigned" -> ports.put(ev.integer("port"), new PortRec(ev.integer("port"), ev.string("kind"),
-                ev.string("user"), ev.string("mkey"), ev.string("local"), ev.lng("at")));
-            case "port-released" -> ports.remove(ev.integer("port"));
+            // Raw TCP and UDP ports were removed (§8.4). A log written by an older hub still has
+            // these in it, and dropping them on read is what lets that hub's state load at all --
+            // an unknown event is a refusal below, which would make the upgrade a manual edit.
+            case "port-assigned", "port-released" -> { }
             case "domain-claimed" -> domains.put(ev.string("domain"), new DomainRec(ev.string("domain"), ev.string("user"),
                 ev.string("mkey"), ev.lng("at")));
             case "domain-released" -> domains.remove(ev.string("domain"));
@@ -976,10 +935,6 @@ final class Store implements AutoCloseable {
         for (DomainRec r : domains.values()) {
             events.add(JsonObject.builder().put("e", "domain-claimed").put("domain", r.domain()).put("user", r.user())
                 .put("mkey", r.mkey()).put("at", r.at()).build().asMap());
-        }
-        for (PortRec r : ports.values()) {
-            events.add(JsonObject.builder().put("e", "port-assigned").put("port", r.port()).put("kind", r.kind()).put("user", r.user())
-                .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
         }
         for (List<NoticeRec> l : notices.values()) {
             for (NoticeRec r : l) {

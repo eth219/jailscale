@@ -25,7 +25,6 @@ public final class Main {
                         [--no-selfcheck]  do not hold issuance on the dns-01 check
                         [--no-address-check]  do not report whether the name points here (ARCHITECTURE.md §7.2)
                       or your own files: --tls-cert FILE --tls-key FILE
-                      [--port-range 10000-10999 | none]  ports for raw tcp/udp links (ARCHITECTURE.md §8.4)
                       [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (ARCHITECTURE.md §8.3)
                       [--takeover]  replace a running jailhub without dropping nodes (ARCHITECTURE.md §13)
                       [--peer https://primary.example.com [--peer-ca FILE] [--peer-addr IP]]  run as that hub's standby (ARCHITECTURE.md §13.1)

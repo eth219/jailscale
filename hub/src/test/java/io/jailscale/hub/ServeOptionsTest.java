@@ -88,9 +88,6 @@ class ServeOptionsTest {
         assertTrue(c.selfCheck());
         assertTrue(c.addressCheck());
 
-        assertTrue(c.hasPortRange());
-        assertEquals(HubConfig.DEFAULT_PORT_LO, c.portRangeLo());
-        assertEquals(HubConfig.DEFAULT_PORT_HI, c.portRangeHi());
         assertTrue(c.hasHttp(), "port 80 is the precondition for user domains");
         assertEquals("0.0.0.0", c.httpListenHost());
         assertEquals(80, c.httpListenPort());
@@ -173,16 +170,9 @@ class ServeOptionsTest {
     // --- the listeners that can be switched off --------------------------------------------------
 
     @Test
-    void rawPortsAndPortEightyCanBeTurnedOffButNotTheDnsListener() {
-        HubConfig noRaw = serve("--port-range", "none");
-        assertFalse(noRaw.hasPortRange());
+    void portEightyCanBeTurnedOffButNotTheDnsListener() {
         HubConfig noHttp = serve("--http-listen", "none");
         assertFalse(noHttp.hasHttp());
-
-        HubConfig range = serve("--port-range", "20000-20100");
-        assertTrue(range.hasPortRange());
-        assertEquals(20000, range.portRangeLo());
-        assertEquals(20100, range.portRangeHi());
         assertEquals(8080, serve("--http-listen", "127.0.0.1:8080").httpListenPort());
 
         // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here.
@@ -191,10 +181,6 @@ class ServeOptionsTest {
 
     @Test
     void aPortRangeOutsideWhatAnUnprivilegedProcessCanBindIsRefused() {
-        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "80-1000"));
-        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "10000-70000"));
-        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "20000-10000"));
-        assertEquals("--port-range must be lo-hi or none", refused("--port-range", "20000"));
     }
 
     // --- the base url and the enums ---------------------------------------------------------------

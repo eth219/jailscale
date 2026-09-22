@@ -42,10 +42,13 @@ class WireFormatTest {
         "{\"t\":\"InviteCreated\",\"url\":\"https://hub.example.com/join/x\",\"code\":\"7F3K-92QX\",\"expiresAt\":1789000000}",
         "{\"t\":\"Error\",\"inReplyTo\":\"InviteCreate\",\"reason\":\"policy\"}",
         "{\"t\":\"CertUpdate\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],\"keyId\":\"sha256:ab\"}",
-        "{\"t\":\"LinkOpen\",\"kind\":\"https\",\"name\":\"myapp\",\"domain\":\"app.example.com\",\"port\":10022,"
+        // LinkOpen lost `kind` and `port`, and LinkOpened lost `hubPort`, when raw tcp and udp
+        // links went (§8.4). That is a removal, not an addition, so it is a protocol break and the
+        // PROTO bump in §5.4 is what makes it one: these are the proto 2 lines.
+        "{\"t\":\"LinkOpen\",\"name\":\"myapp\",\"domain\":\"app.example.com\","
             + "\"local\":\"127.0.0.1:3000\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],"
             + "\"domainProof\":\"AQID\"}",
-        "{\"t\":\"LinkOpened\",\"linkId\":\"l1\",\"name\":\"myapp\",\"url\":\"https://myapp.hub.example.com\",\"hubPort\":10022,\"reason\":\"taken\"}",
+        "{\"t\":\"LinkOpened\",\"linkId\":\"l1\",\"name\":\"myapp\",\"url\":\"https://myapp.hub.example.com\",\"reason\":\"taken\"}",
         "{\"t\":\"LinkClose\",\"linkId\":\"l1\"}",
         "{\"t\":\"LinkRevoked\",\"linkId\":\"l1\",\"name\":\"myapp\",\"reason\":\"released\",\"at\":1789000000}",
         "{\"t\":\"SignRequest\",\"streamId\":33554472,\"keyId\":\"sha256:ab\",\"alg\":\"ECDSA-P256-SHA256\",\"content\":\"AQID\","

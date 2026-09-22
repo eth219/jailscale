@@ -28,8 +28,8 @@ what ngrok, Cloudflare Tunnel and Tailscale Funnel do, with no third party in th
 2. **Usability.** Publishing is one line, inviting is one line, and the operator sets three DNS
    records and opens two ports. Lengthening that setup list counts as a regression.
 3. **Portability.** No root, no TUN device, no kernel module, no inbound port, and one outbound TCP
-   connection is all the node needs on the wire; a published UDP port (§8.4) rides that same
-   connection. A pure-JVM fallback JAR ships beside the native binaries.
+   connection is all the node needs on the wire. A pure-JVM fallback JAR ships beside the native
+   binaries.
 
 The three points above say what is aimed at. The three tables below say what is answered yes to,
 and they are the boundary: a capability is here, or it is deliberately not. They were settled in
@@ -48,8 +48,6 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Visitor TLS | TLS 1.3 with X25519, terminated on the node, signed by the hub (§9.2) | that pair only, because the signature binding reconstructs what JSSE wrote (§11.1) |
 | Names | `<name>.<hub-domain>` (§8.2), up to `MAX_LINKS_PER_NODE` = 20 links on one node | exactly one node behind a name, and that node's 450 visitor slots are first come, first served across all of them (§15) |
 | Your own domains | brought by the operator, verified by the hub (§8.3) | the hub holds port 80 as well as 443, since http-01 is the only verification path built |
-| Raw TCP ports | one assigned port per link, no SNI and no TLS (§8.4) | end to end only if the app encrypts itself; otherwise plaintext exists inside the hub process |
-| Raw UDP ports | request–reply protocols — DNS, and anything that tolerates reliable delivery (§8.4) | the carrier is the node's one TCP connection, so delivery is stronger and timing weaker than UDP promises |
 | IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
 | Behind a TCP proxy | nginx or HAProxy in front, PROXY protocol v1 and v2 (§8.5) | the proxy forwards bytes without opening TLS, and `--proxy-protocol` needs loopback or `--trusted-proxy` |
 | Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2); nothing here installs a service, so keeping the daemon up is a unit of the operator's own (`deploy/`) |
@@ -83,7 +81,7 @@ given up for.
 | Routing on paths or headers, rewriting, per-request logs | the hub has only ciphertext to route on, and parsing on the node would put the request where the design keeps it out of |
 | More than one node behind a name | a name resolves to the node that owns it; sharing one needs a load balancer the hub is not |
 | Active-active hubs, and merging writes made on the losing side of a partition | a merge needs a lineage the two stores do not share; the loser's writes are dropped and named (§13.5) |
-| Latency-sensitive raw UDP — game netcode, WireGuard roaming | it needs a carrier that is not TCP, and one dialled-out TCP connection is the design (§5), not a detail of it |
+| Raw TCP and UDP ports, and so anything that cannot speak TLS | a port instead of a name is a second kind of link with its own allocator, bounds and datagram carrier, and the plaintext of an app that does not encrypt itself would be inside the hub (§8.4) |
 | Probing a name from another node's vantage point | the hub chooses which nodes exist, so it would choose the prober; the control would be probabilistic, and this project says what it cannot do instead (§11.3) |
 | Any notification channel — email, webhooks | an address per node is personal data the hub does not hold, and a webhook is one more thing that fails quietly; the status page and `jailhub status` are where an expiry shows |
 | Installing an upgrade by default | replacing a running binary is the operator's act; a process that can overwrite its own executable is one whose compromise is permanent |
@@ -124,7 +122,7 @@ on it, and this section edited in the same change ([docs/issue-workflow.md](issu
   small one for the control channel and the first-request-head read the visitor gate needs.
 
 TCP 443 carries everything and UDP/TCP 53 carries the ACME DNS-01 answers. TCP 80 is optional (HTTPS
-redirect and the http-01 relay user domains need), and raw TCP/UDP publishing adds one port range.
+redirect and the http-01 relay user domains need).
 The node needs outbound 443 and nothing else. A local port exposed to the internet is a **link**;
 invite links (§10) and visit links (§9.3) are different things.
 
@@ -701,7 +699,7 @@ handler asked for would silently not apply.
 
 **There is no HSTS**, and that is a decision rather than an omission. It would be the obvious fourth
 header -- everything here is HTTPS and the hub holds the key -- but HSTS is scoped to a **host**,
-not to a host and port (RFC 6797 §8.3), and a raw TCP port (§8.4) is published on the hub's own
+not to a host and port (RFC 6797 §8.3), and any other port on the hub's own
 name. A browser that has loaded this page once would rewrite `http://<hub>:10042/` to `https://`
 before sending anything, and a raw port relays bytes with no TLS at all: the link is unreachable
 from that browser, there is no click-through, it lasts as long as the max-age, and the operator
@@ -954,7 +952,7 @@ After that the hub copies bytes both ways and looks at neither TLS records nor H
 close becomes `CLOSE` and an error becomes `RST`. What the hub can see is the SNI, the visitor IP,
 byte counts and timing, not the content. Because neither end parses HTTP, any TLS client that sends
 SNI reaches a name, so `psql "sslmode=require host=db.hub.example.com"`, MQTT over TLS and gRPC work
-as they are; only clients that cannot speak TLS need the raw ports of §8.4.
+as they are; a client that cannot speak TLS has nothing here to use (§8.4).
 
 **Limits.** 64 concurrent connections per visitor IP, 1,024 per name (`SniRouter.MAX_PER_NAME`),
 5 seconds to produce a ClientHello, listen backlog 1,024 capped by `somaxconn`; SYN flood defence is
@@ -1019,36 +1017,32 @@ only on the node, the hub forwards ciphertext, and there is no `SignRequest`. Th
 same third-of-lifetime rule, checked hourly, and an offline node does not renew. **Port 80 on the hub
 is a precondition**; `--http-listen none` means user domains are refused.
 
-### 8.4 Raw TCP and UDP ports
+### 8.4 No raw TCP or UDP ports
 
-Clients that do not speak TLS (SSH, plaintext databases, DNS) send no SNI and cannot be told apart
-by name, so the hub assigns **a port instead of a name**, the same shape as ngrok's tcp mode or frp's
-tcp and udp types. The UDP side is for request-reply protocols; the carrier is the node's one TCP
-connection, so WireGuard and game netcode get delivery they can rely on and timing they cannot, and
-are out of scope (§1.3).
+Every link is HTTPS on a name. A client that does not speak TLS -- SSH, a plaintext database, DNS --
+sends no SNI and cannot be told apart by name, so the hub used to assign **a port instead of a
+name**: `jailscale open 22 --tcp` and `open 5353 --udp`, out of a `--port-range`, the same shape as
+ngrok's tcp mode or frp's tcp and udp types. That went in the maintenance cut, and with it the port
+allocator and its ledger in the store, a second listener kind, a second set of admission bounds,
+and the datagram half of the multiplexer -- `FLAG_DGRAM`, one stream per visitor address, one local
+UDP socket per stream.
 
-```
-$ jailscale open 22 --tcp      ->  tcp://hub.example.com:10042  ->  127.0.0.1:22
-$ jailscale open 5353 --udp    ->  udp://hub.example.com:10043  ->  127.0.0.1:5353    # request-reply UDP, DNS here
-$ jailscale open 22 --tcp --port 10022      # request a specific port in the range
-```
+Two things are worth keeping written down, because they were the substance of it.
 
-The range is `--port-range 10000-10999` by default, or `none` to disable; it must be open for both
-TCP and UDP, its size is the ceiling on concurrent raw links, and an assignment is remembered per
-node, kind and local target. Ports outside the range are not offered, because the hub's low ports are
-the hub's. TCP opens a `ServerSocket` and one stream per visitor connection, with no SNI parsing and
-no TLS. UDP opens a `DatagramChannel`, gives each new visitor address a `DGRAM` stream, turns every
-later datagram from that address into one DATA frame, and drops an address idle for 60 seconds, with
-the node making one local UDP socket per stream; the size ceiling is the 16 KB frame cap, and
-ordering and delivery are stronger than UDP semantics promise, never weaker, because the carrier is
-TCP.
+**Where the plaintext was.** Visitor to hub was exactly what the client sent and hub to node was
+still Noise-encrypted, so plaintext existed **only inside the hub process**, and only for apps that
+do not encrypt themselves. That is unfixable without the visitor's client cooperating and it is the
+same for ngrok and frp; it is also the reason the feature was never the thing this project was
+about, which is a tunnel whose hub cannot read what it carries.
 
-**Where the plaintext is.** Visitor to hub is exactly what the client sent and hub to node is still
-Noise-encrypted, so plaintext exists **only inside the hub process**, and only for apps that do not
-encrypt themselves. SSH, WireGuard and a TLS-enabled database are effectively end to end because the
-hub sees only the app's ciphertext; plaintext protocols are visible to the hub. This cannot be fixed
-without the visitor's client cooperating, and it is the same for ngrok and frp, so `open --tcp/--udp`
-says so in its output. A client that can speak TLS should use the 443 path.
+**Raw UDP was UDP over TCP.** Both ends really were datagrams, but the carrier was the node's one
+TCP connection, so a lost packet held up every stream sharing it and a sender out of window credits
+waited instead of dropping. Request-reply protocols were fine; latency-sensitive ones were out of
+scope (§1.3) for a reason that has not changed: a second carrier that is not TCP is a second
+transport to get through every NAT the one connection was chosen for.
+
+What replaces it for an SSH port or a database is somebody else's tool, or a TLS-speaking client on
+the 443 path.
 
 ### 8.5 Not behind a TCP proxy
 
@@ -1078,12 +1072,11 @@ $ jailscale open 3000                      # https://q7x2k.hub.example.com -> 12
 $ jailscale open 3000 --name myapp         # chosen name
 $ jailscale open 3000 --gate               # visitor gate; prints a visit link too (§9.3)
 $ jailscale open 3000 --domain myapp.com   # user domain (§8.3)
-$ jailscale open 22 --tcp                  # raw TCP, hub assigns a port (§8.4)
 $ jailscale open 8080 --host 192.168.1.20  # another machine on the same LAN
 $ jailscale ls ; jailscale close q7x2k
 ```
 
-The daemon remembers open links and reopens them with the same name or port after a reboot.
+The daemon remembers open links and reopens them under the same name after a reboot.
 
 ### 9.2 TLS termination with hub-side signing
 
@@ -1187,11 +1180,10 @@ Once TLS is off the node **copies bytes**: visitor plaintext to `127.0.0.1:<port
 responses back, so HTTP/1.1 keep-alive, chunked bodies, WebSocket upgrades and SSE all pass through
 because the local app handles them. `open --proxy-protocol` prepends a PROXY v1 line so the local app
 learns the visitor address, using the `visitorAddr` and `visitorPort` the hub put in the stream
-metadata, and raw TCP links behave the same way. A refused or reset local connection is retried five
+metadata. A refused or reset local connection is retried five
 times with 50 ms doubling (about 1.5 s) before the visitor gets a 502 page, because a burst of
 visitors really does overflow a small listen backlog (macOS defaults to 128) and it surfaces as an
-immediate refusal. That page and the gate are the only two places where the node *writes* HTTP, and
-only on https links.
+immediate refusal. That page and the gate are the only two places where the node *writes* HTTP.
 
 **The node serves at most `Visitors.MAX_IN_FLIGHT` visitor streams at once, and resets the rest.**
 What a visitor costs the node is its TLS state — about 99 KB live (§15) — and that is the same
@@ -1248,7 +1240,7 @@ are each finished by some moment or not at all. It bounds a *wait* and never dat
 queued are read out even past the deadline, so a visitor whose first byte lands in the last
 millisecond is served rather than cut. It comes off at that first byte and never goes back on,
 because everything after it is the established connection the paragraph above is about — an SSE
-stream or a websocket may say nothing for hours, and a raw tcp or udp link (§8.4) never carries one
+stream or a websocket may say nothing for hours, and a link that carries neither never carries one
 at all, since there the server may legitimately speak first. A gated link keeps it a moment longer,
 through the request head the gate has to read.
 
@@ -1309,18 +1301,16 @@ token, then closes; neither one gets a 403 page and a close. Tokens are 128-bit 
 only a SHA-256 hash. The hub knows nothing about gates, because it only sees ciphertext, and keeping
 the gate on the node is the position consistent with end-to-end encryption.
 
-**The gate is for https links, and both commands say so.** A raw tcp or udp link has no HTTP in which
-to carry a token, so `open --gate` refuses it — and so does `jailscale gate <name>`, which used to
-take it: the raw link is named `tcp/<port>` in node state, so the command matched, armed the gate,
-saved it, printed a visit link and reported the link as gated, while the raw serving path never looks
-at `gateHash`. A control that is on in the status output and absent on the wire is worse than one
-that was never offered. The serving path refuses a raw link carrying a gate as well, so state written
-by an older build cannot serve a phantom one.
+The gate needs HTTP to carry its token, which every link now has: when raw tcp and udp links
+existed (§8.4), `open --gate` and `jailscale gate <name>` both had to refuse them, and the second one
+did not at first -- it armed a gate on a link whose serving path never looked at `gateHash`, and
+reported it as gated. A control that is on in the status output and absent on the wire is worse than
+one that was never offered, and with one kind of link left there is nothing here to get wrong.
 
 ### 9.4 Daemon and CLI
 
 `jailscale` is one binary with two roles. `jailscale daemon`, or a registered service, stays
-resident; every other subcommand except `version`, `update` and `service` talks to it over **local
+resident; every other subcommand except `version` and `update` talks to it over **local
 IPC**, an AF_UNIX socket at `$XDG_RUNTIME_DIR/jailscale.sock` or next to the config file (0600),
 Windows included, carrying line-delimited JSON with streaming replies for progress output. **Whoever
 starts the daemon passes both paths**, `--home` and `--socket`, because those two rules do not give
@@ -1850,7 +1840,7 @@ and the operator can really see.
 TCP 53 is **not** rate-metered, and deliberately: the whole of `ResponseRate` rests on a datagram's
 source being a claim, and a completed handshake makes it a fact, so there is no reflection here to
 meter. What it does have is a bound on **256 connections at once**, and three counters
-(`jailhub_dns_tcp_connections_total`, `_refused_total`, `_in_flight`) where there were none. What
+(accepted, refused, in flight) where there were none. What
 that bounds is the descriptor, not the traffic: descriptors are process-wide, so an unbounded
 listener on :53 spends the hub's TLS, its node sessions and its relay as readily as its own zone --
 one laptop held 16,126 connections open against it and stopped because *it* ran out of ephemeral
@@ -2297,7 +2287,7 @@ takes. `LinkOpen` on such a connection is a **reopen**: the name or domain has t
 replicated store already gives this node, the primary having assigned it and the assignment having
 arrived over the hub-to-hub channel, and nothing is claimed, reassigned, notified or allocated. A
 name the node does not hold yet, a random name it has not been given, and every raw port are
-`primary-only`, and the node asks the primary. Raw TCP and UDP therefore stay with the primary.
+`primary-only`, and the node asks the primary.
 
 **Who names the relays.** The hub's hello carries `relays`: every host serving right now as
 `address` or `address:port`, itself included; the node leaves out the one its control connection
@@ -2506,7 +2496,7 @@ one place now.
 | In what unit | bytes | a count |
 | Where it comes from | a quarter of the 96 MiB heap ceiling | measured against the 64 MiB heap ceiling |
 | Over it | resets the stalled stream holding the most | refuses the new visitor before its handshake |
-| Reported as | `jailhub_receive_budget_bytes`, `_queued_bytes`, `_queued_peak_bytes`, `jailhub_streams_reclaimed_total` | `jailhub_node_visitor_capacity` on the hub, `visitorCeiling` / `visitorsInFlight` / `visitorsRefused` in `jailscale status` |
+| Reported as | `receiveBudget` (limit, queued, peak, reclaimed) in `jailhub status` | `visitorCeiling` / `visitorsInFlight` / `visitorsRefused` in `jailscale status`, and the node's advertised bound in `jailhub node list` |
 | Moved by | `-XX:MaxHeapSize=` on the hub | `-XX:MaxHeapSize=` in `JAILSCALE_DAEMON_OPTS` |
 
 **Which one binds first is a question about the visitors, not about the deployment.** The two bounds
@@ -2519,11 +2509,9 @@ node the same 99 KB each but can fill the hub's 24 MB, which is what a developer
 measurement; neither is the one that always goes first.
 
 **The hub admits on three caps now, and only the third is about capacity.** Per address
-(`MAX_PER_IP` = 64, not applied to a connection that arrives on loopback with no PROXY header to say
-whose it is -- a forwarder on this host folds every visitor in the world onto one address, and
-capping that caps the world; 443 and the raw **TCP** ports of §8.4 take that slot through the same
-code and so make the same exception, and a raw UDP port takes none at all, having no connection to
-count) and per name (`MAX_PER_NAME` = 1,024) are abuse limits and were never
+(`MAX_PER_IP` = 64, not applied to a connection that arrives on loopback, because that is what a
+forwarder on the hub's own host looks like: it folds every visitor in the world onto one address,
+and capping that address caps the world) and per name (`MAX_PER_NAME` = 1,024) are abuse limits and were never
 capacities — the per-name number sat on the hub's own page as though it were one, against a node
 holding a few hundred. The third is what the node said it will hold, sent on `Hello` (§5.4's
 additive case, and the first field added to an existing message since the protocol shipped). A node
@@ -2531,10 +2519,10 @@ that does not send it — every build older than the field — is admitted exact
 own bound resets what the hub oversends.
 
 **What the operator can do about it.** A node at its bound shows up as
-`jailhub_visitors_refused_capacity_total` rising and as "N of 450" in the admin node table; the
+`visitors.refusedCapacity` rising in `jailhub status` and as "N of 450" in the admin node table; the
 answers are to give that node more heap, which raises its bound proportionally, or to move a name to
-another node. A hub at its receive budget shows up as `jailhub_streams_reclaimed_total` rising with
-`jailhub_receive_queued_peak_bytes` at the limit, and the answer is more heap on the hub. The two are
+another node. A hub at its receive budget shows up as `receiveBudget.reclaimed` rising with
+`receiveBudget.peak` at the limit in `jailhub status`, and the answer is more heap on the hub. The two are
 told apart by which counter moves, which is why they are separate counters.
 
 **`measure.sh SLOW=` measures a third axis, and the node does not meet its budget on it.** `LOAD=`
@@ -2917,13 +2905,6 @@ say so and name the issue. An entry that does neither has not been through that 
   until the reconstruction is updated; it cannot weaken the binding, because the hub recomputes
   the hash itself, but it can take the service down. `TranscriptTest` exists to catch that at
   build time. Visitors are also confined to TLS 1.3 with X25519 for the same reason.
-- **Raw TCP and UDP links are not end to end unless the app encrypts itself** (§8.4).
-- **Raw UDP is UDP over TCP** (§8.4). Both ends really are datagrams, but the carrier is the node's
-  one TCP connection, so a lost packet holds up every stream sharing it until the retransmit lands,
-  and a sender out of window credits waits instead of dropping. Request-reply protocols over UDP are
-  fine; latency-sensitive ones -- game netcode, WireGuard roaming -- get delivery they can rely on
-  and a delay distribution they cannot, and are out of scope (§1.3): a second carrier that is not
-  TCP is a second transport to get through every NAT the one connection was chosen for.
 - **User domains require port 80 on the hub.** The http-01 relay is the only verification path
   implemented; tls-alpn-01 would remove that requirement, and is decided work
   (§1.2, [#70](https://github.com/eth219/jailscale/issues/70)).
@@ -3049,7 +3030,7 @@ say so and name the issue. An entry that does neither has not been through that 
 
 - **What the node holds per visitor has a number now.** `jailscale status` reports
   `visitorsInFlight`, the visitor streams the node is serving at this instant, TLS and raw alike.
-  It is the node's half of the hub's `jailhub_visitors_in_flight` (§6.3) and it exists because the
+  It is the node's half of the hub's `visitors.now` (§6.3) and it exists because the
   node's cost is per visitor -- tens of kilobytes of TLS state each, below -- while the only number
   available was RSS, which cannot tell visitors from a leak or from the heap expanding into its
   ceiling. The count is taken around the whole of `Visitors.serve`, not around the `TlsEndpoint`:
@@ -3207,7 +3188,7 @@ say so and name the issue. An entry that does neither has not been through that 
   stays fuller, which pushes the number the other way. `LOAD=` cannot see it at all, and that is
   worth knowing about the harness: those visitors send `Connection: close`, so the app answers, the
   node closes, and **the relay is over before the sample** -- the hub is holding sockets in the
-  linger wait (§8.1), not copy buffers. `jailhub_visitors_in_flight` reads 0 through the whole of
+  linger wait (§8.1), not copy buffers. The hub's in-flight count reads 0 through the whole of
   `LOAD=1000` and 301 through `SLOW=300`, which is the two axes saying what each of them measures.
 
   The window caps what may sit queued (§5.3), not what is allocated, so a visitor whose reader keeps

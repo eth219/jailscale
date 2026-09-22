@@ -61,7 +61,6 @@ public final class Hub implements AutoCloseable {
     private final HttpFront front;
     private final HubTls tls;
     private final Links links;
-    private final RawPorts rawPorts;
     private final Challenges challenges;
     private volatile HttpChallengeFront http;
     private final SniRouter router;
@@ -147,10 +146,9 @@ public final class Hub implements AutoCloseable {
         this.invites = new Invites(config, store);
         this.front = new HttpFront(this);
         this.tls = new HubTls(config.hostname());
-        this.rawPorts = new RawPorts(this);
         this.challenges = new Challenges();
         try {
-            this.links = new Links(config, store, rawPorts, new DomainVerifier(config.userDomainCa()), registry);
+            this.links = new Links(config, store, new DomainVerifier(config.userDomainCa()), registry);
         } catch (GeneralSecurityException e) {
             throw new IOException("trust store: " + e.getMessage(), e);
         }
@@ -288,8 +286,8 @@ public final class Hub implements AutoCloseable {
      * <p>A test needs a port nothing else will take. It asked {@code TestPorts} for a number, which
      * binds a socket to find a free one and closes it again — and between that close and this hub's
      * bind the number is held by nothing. Anything in the same JVM asking the kernel for port 0 can
-     * be handed it, and a running hub asks three times: the DNS pair, the plain-HTTP front, and a
-     * raw port. Four times in two days a hub lost that race, three of them here in {@code start}.
+     * be handed it, and a running hub asks twice: the DNS pair and the plain-HTTP front. Four
+     * times in two days a hub lost that race, three of them here in {@code start}.
      *
      * <p>Given a socket that is already bound, the number is never unheld and the race has nowhere
      * to happen. This hub owns the socket from here: {@link #close} closes it whether or not
@@ -944,7 +942,6 @@ public final class Hub implements AutoCloseable {
         if (listener != null) {
             listener.close();
         }
-        rawPorts.close();
         if (http != null) {
             http.close();
         }
@@ -1028,7 +1025,6 @@ public final class Hub implements AutoCloseable {
             dns.close();
         }
         registry.closeAll(Message.Goodbye.SHUTDOWN);
-        rawPorts.close();
         if (http != null) {
             http.close();
         }

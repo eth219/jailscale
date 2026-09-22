@@ -49,10 +49,10 @@ public final class Codec {
             case Message.InviteCreated x -> b.put("url", x.url()).put("code", x.code()).put("expiresAt", x.expiresAt());
             case Message.Error x -> b.put("inReplyTo", x.inReplyTo()).put("reason", x.reason());
             case Message.CertUpdate x -> b.put("chainPem", x.chainPem()).put("keyId", x.keyId());
-            case Message.LinkOpen x -> b.put("kind", x.kind()).put("name", x.name()).put("domain", x.domain()).put("port", x.port())
+            case Message.LinkOpen x -> b.put("name", x.name()).put("domain", x.domain())
                 .put("local", x.local()).put("chainPem", x.chainPem()).putBytes("domainProof", x.domainProof());
             case Message.LinkOpened x -> b.put("linkId", x.linkId()).put("name", x.name()).put("url", x.url())
-                .put("hubPort", x.hubPort()).put("reason", x.reason());
+                .put("reason", x.reason());
             case Message.LinkClose x -> b.put("linkId", x.linkId());
             case Message.LinkRevoked x -> b.put("linkId", x.linkId()).put("name", x.name())
                 .put("reason", x.reason()).put("at", x.at());
@@ -109,11 +109,11 @@ public final class Codec {
                 case "InviteCreated" -> new Message.InviteCreated(o.string("url"), o.optString("code", null), o.lng("expiresAt"));
                 case "Error" -> new Message.Error(o.optString("inReplyTo", null), o.string("reason"));
                 case "CertUpdate" -> new Message.CertUpdate(o.stringArray("chainPem"), o.string("keyId"));
-                case "LinkOpen" -> new Message.LinkOpen(o.string("kind"), o.optString("name", null), o.optString("domain", null),
-                    o.has("port") ? o.integer("port") : null, o.optString("local", null), o.has("chainPem") ? o.stringArray("chainPem") : null,
+                case "LinkOpen" -> new Message.LinkOpen(o.optString("name", null), o.optString("domain", null),
+                    o.optString("local", null), o.has("chainPem") ? o.stringArray("chainPem") : null,
                     o.optBytes("domainProof"));
                 case "LinkOpened" -> new Message.LinkOpened(o.optString("linkId", null), o.optString("name", null),
-                    o.optString("url", null), o.has("hubPort") ? o.integer("hubPort") : null, o.optString("reason", null));
+                    o.optString("url", null), o.optString("reason", null));
                 case "LinkClose" -> new Message.LinkClose(o.string("linkId"));
                 case "LinkRevoked" -> new Message.LinkRevoked(o.optString("linkId", null), o.string("name"),
                     o.string("reason"), o.lng("at"));

@@ -116,7 +116,7 @@ class SignatureCapTest {
         int racers = 16;
         for (int round = 0; round < rounds; round++) {
             MuxStream stream = group.openVisitor(link, "capped.hub.test", "203.0.113.9", 40000 + round,
-                hub.tls().keyId(), false);
+                hub.tls().keyId());
             long id = group.visitorIds().stream().max(Long::compare).orElseThrow();
             java.util.concurrent.atomic.AtomicBoolean go = new java.util.concurrent.atomic.AtomicBoolean();
             CountDownLatch ready = new CountDownLatch(racers);
@@ -168,7 +168,7 @@ class SignatureCapTest {
     void theCapIsSpentOnceAndThenRefuses() throws Exception {
         NodeGroup group = connectedGroup();
         Links.Link link = hub.links().byName("capped");
-        MuxStream stream = group.openVisitor(link, "capped.hub.test", "203.0.113.9", 40001, hub.tls().keyId(), false);
+        MuxStream stream = group.openVisitor(link, "capped.hub.test", "203.0.113.9", 40001, hub.tls().keyId());
         long id = group.visitorIds().iterator().next();
         for (int i = 0; i < NodeGroup.MAX_SIGNATURES_PER_STREAM; i++) {
             assertTrue(group.reserveSignature(id), "signature " + (i + 1) + " should be granted");

@@ -38,8 +38,8 @@ machines, of which Funnel is this one job.
    arrives on its own, because the hub is the authoritative DNS server for its
    own `_acme-challenge` name. No DNS provider API token anywhere.
 3. **Portability.** No root, no TUN device, no kernel module, no inbound port.
-   One outbound TCP connection is all the node needs; a published UDP port
-   rides it too. Four native platforms plus a pure-JVM fallback JAR.
+   One outbound TCP connection is all the node needs. Four native platforms
+   plus a pure-JVM fallback JAR.
 4. **Least privilege at the edge.** The hub reads the TLS SNI and nothing else,
    so it never parses visitor HTTP and never holds plaintext. Its wildcard key
    signs one handshake digest per visitor, and only for a stream the hub itself
@@ -51,9 +51,10 @@ machines, of which Funnel is this one job.
 Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or
 frp, reading the visitor's HTTP — neither end parses it, so no routing on paths
 or headers, no rewriting, no per-request log — HTTP/2 and HTTP/3 on the visitor
-side, more than one node behind a name, active-active hubs, latency-sensitive
-raw UDP such as game netcode, notification channels of any kind, mobile clients,
-and an external identity provider ([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)).
+side, more than one node behind a name, active-active hubs, raw TCP and UDP
+ports for clients that cannot speak TLS, notification channels of any kind,
+mobile clients, and an external identity provider
+([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)).
 There is no hosted service either: you run the hub, and there is nothing to sign
 up for.
 
@@ -147,8 +148,6 @@ Other things a node can do:
 
 ```sh
 jailscale open 3000 --gate                    # visitors need a one-time link
-jailscale open 22 --tcp                       # a raw TCP port, no TLS
-jailscale open 5353 --udp                     # a raw UDP port for request-reply traffic (DNS, here), carried over TCP
 jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
 jailscale verify                              # check that this node, not the hub, terminated the TLS
 jailscale update                              # say whether a newer release is out; never installs it

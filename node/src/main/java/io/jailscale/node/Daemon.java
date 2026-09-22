@@ -311,8 +311,8 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * one already assigned, and the id that host gives is kept by address, so a close can name it.
      */
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec, HubLink on) throws IOException, TimeoutException {
-        if (on.isRelay() && (rec.name == null || !Message.LinkOpen.HTTPS.equals(rec.kind))) {
-            throw new IOException(rec.name == null ? "not yet named by the primary" : "raw ports are the primary's alone");
+        if (on.isRelay() && rec.name == null) {
+            throw new IOException("not yet named by the primary");
         }
         DomainCerts.Material material = rec.domain == null ? null : domainMaterial(rec, false);
         List<String> chain = material == null ? null : material.chainPem();
@@ -328,16 +328,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                     throw new IOException("cannot prove " + rec.domain + " with its certificate key: " + e.getMessage(), e);
                 }
             }
-            return new Message.LinkOpen(rec.kind, rec.name, rec.domain, rec.hubPort > 0 ? rec.hubPort : null, rec.local(), chain, proof);
+            return new Message.LinkOpen(rec.name, rec.domain, rec.local(), chain, proof);
         }, "LinkOpened", REPLY_TIMEOUT_MS);
         if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
             if (on.isRelay()) {
                 rec.relayLinkIds.put(on.relayAddress(), lo.linkId());
                 LOG.info("link {} -> {} also served from {}", lo.name(), rec.local(), on.relayAddress());
                 return lo;
-            }
-            if (lo.hubPort() != null) {
-                rec.hubPort = lo.hubPort();
             }
             rec.linkId = lo.linkId();
             rec.name = lo.name();
@@ -377,14 +374,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 NodeState.LinkRec rec = state.linkByName(req.string("name"));
                 if (rec == null) {
                     reply.error("no link named " + req.string("name"));
-                    return;
-                }
-                // The same rule `open --gate` applies (§9.3). Without it this arms a gate on a raw
-                // link, saves it, prints a visit link and reports the link as gated, while the raw
-                // path serves every visitor without looking at it: a control that is on in the
-                // status output and absent on the wire is worse than one that was never offered.
-                if (!Message.LinkOpen.HTTPS.equals(rec.kind) && !req.optBool("off", false)) {
-                    reply.error("the gate is for https links; raw tcp/udp links have no HTTP to gate");
                     return;
                 }
                 if (req.optBool("off", false)) {
@@ -499,7 +488,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
 
     private List<Object> linkRows() {
         return state.links.stream().<Object>map(l -> JsonObject.builder()
-            .put("name", l.name).put("kind", l.kind).put("local", l.local())
+            .put("name", l.name).put("local", l.local())
             .put("url", l.url).put("gate", l.gateHash != null).put("open", isOpen(l))
             .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
             .put("probe", l.lastProbe == null ? null : l.lastProbe.json()).build().asMap()).toList();
@@ -731,20 +720,14 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         int port = req.integer("port");
         String host = req.optString("host", "127.0.0.1");
-        String kind = req.optString("kind", Message.LinkOpen.HTTPS);
-        boolean raw = !kind.equals(Message.LinkOpen.HTTPS);
-        String domain = raw ? null : req.optString("domain", null);
+        String domain = req.optString("domain", null);
         if (domain != null) {
             domain = domain.toLowerCase(java.util.Locale.ROOT);
         }
-        String name = raw || domain != null ? null : req.optString("name", null);
-        if (raw && req.optBool("gate", false)) {
-            reply.error("--gate is for https links; raw tcp/udp links have no HTTP to gate");
-            return;
-        }
+        String name = domain != null ? null : req.optString("name", null);
         NodeState.LinkRec rec = null;
         for (NodeState.LinkRec l : state.links) {
-            if (l.host.equals(host) && l.port == port && l.kind.equals(kind) && (name == null || name.equals(l.name))
+            if (l.host.equals(host) && l.port == port && (name == null || name.equals(l.name))
                 && java.util.Objects.equals(domain, l.domain)) {
                 rec = l;
             }
@@ -756,7 +739,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         boolean fresh = rec == null;
         if (fresh) {
-            rec = new NodeState.LinkRec(kind, host, port, name);
+            rec = new NodeState.LinkRec(host, port, name);
             rec.domain = domain;
         } else if (name != null) {
             rec.name = name;
@@ -771,9 +754,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             if (req.has("acmeEmail")) {
                 rec.acmeEmail = req.string("acmeEmail");
             }
-        }
-        if (raw && req.has("hubPort")) {
-            rec.hubPort = req.integer("hubPort");
         }
         Message.LinkOpened lo;
         try {
@@ -795,7 +775,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         state.save();
         reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local())
-            .put("kind", kind).put("hubPort", lo.hubPort()).put("visitUrl", visitUrl)
+            .put("visitUrl", visitUrl)
             .put("certExpiresAt", rec.certExpiresAt > 0 ? Long.valueOf(rec.certExpiresAt) : null));
     }
 
@@ -880,7 +860,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * a compromised hub is the worst thing this feature can do.
      */
     private ProbeResult probe(NodeState.LinkRec rec, SSLContext shared) {
-        if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
+        if (rec.url == null) {
             return null;
         }
         if (!state.links.contains(rec) || !servedHere(rec)) {
@@ -1181,9 +1161,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private static List<NodeState.LinkRec> remaining(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) {
         List<NodeState.LinkRec> due = new ArrayList<>();
         for (NodeState.LinkRec rec : links) {
-            // Raw ports carry no TLS of ours to compare, and an https link the hub has not answered
-            // for yet has no URL to connect to. Neither is a name this can say anything about.
-            if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null || rec.name == null) {
+            // A link the hub has not answered for yet has no URL to connect to, so it is not a
+            // name this can say anything about.
+            if (rec.url == null || rec.name == null) {
                 continue;
             }
             if (!pass.contains(rec)) {

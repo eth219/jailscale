@@ -26,8 +26,6 @@ public record HubConfig(
     int dnsListenPort,
     boolean selfCheck,     // dns-01 self-check: holds issuance until it passes (§7.2)
     boolean addressCheck,  // address check: holds nothing, only reports (§7.2)
-    int portRangeLo,
-    int portRangeHi,
     String httpListenHost,
     int httpListenPort,
     Path userDomainCa,
@@ -41,7 +39,7 @@ public record HubConfig(
      * Not null. The scheduled task that reads these has no top-level catch and
      * {@code ScheduledExecutorService} cancels a repeating task on the first uncaught throw with
      * nothing logged, so a null here is a hub that starts, serves, and silently never promotes.
-     * The canonical constructor is public and takes 25 positional arguments, four of them trailing
+     * The canonical constructor is public and takes 23 positional arguments, four of them trailing
      * nulls, which is exactly the shape that gets one more by accident.
      */
     public HubConfig {
@@ -100,35 +98,35 @@ public record HubConfig(
 
     public HubConfig withHttp(String host, int port) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, host, port, userDomainCa,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, host, port, userDomainCa,
             peer, peerCa, peerAddr, advertise, tuning);
     }
 
     /** Tests and private CAs: trust this PEM instead of the platform roots when verifying user-domain certificates. */
     public HubConfig withUserDomainCa(Path caPem) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, httpListenHost,
             httpListenPort, caPem, peer, peerCa, peerAddr, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §13.1: follow {@code primary} as a standby, trusting {@code ca} for its TLS (null: platform roots). */
     public HubConfig withPeer(URI primary, Path ca, String addr) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, httpListenHost,
             httpListenPort, userDomainCa, primary, ca, addr, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §7.2: whether the address check runs at all. Off in the test constructor below. */
     public HubConfig withAddressCheck(boolean on) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, on, portRangeLo, portRangeHi, httpListenHost,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, on, httpListenHost,
             httpListenPort, userDomainCa, peer, peerCa, peerAddr, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §13.3: answer this address for the hub's own name instead of finding it from the glue. */
     public HubConfig withAdvertise(String address) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, httpListenHost,
             httpListenPort, userDomainCa, peer, peerCa, peerAddr, address, tuning);
     }
 
@@ -137,17 +135,9 @@ public record HubConfig(
         return peer != null;
     }
 
-    public static final int DEFAULT_PORT_LO = 10000;
-    public static final int DEFAULT_PORT_HI = 10999;
-
-    /** True when raw TCP/UDP publishing is enabled (ARCHITECTURE.md §8.4). */
-    public boolean hasPortRange() {
-        return portRangeLo > 0 && portRangeHi >= portRangeLo;
-    }
-
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, httpListenHost, httpListenPort, userDomainCa,
             peer, peerCa, peerAddr, advertise, tuning);
     }
 
@@ -165,14 +155,14 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, null, null, null, null,
+            dnsSuffix, null, null, "127.0.0.1", 0, false, false, null, -1, null, null, null, null, null,
             Tuning.defaults());
     }
 
     /** The same configuration with different timings; how a test reaches {@link Tuning}. */
     public HubConfig withTuning(Tuning t) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, httpListenHost,
             httpListenPort, userDomainCa, peer, peerCa, peerAddr, advertise, t);
     }
 
@@ -242,20 +232,6 @@ public record HubConfig(
         }
         URI acme = a.has("acme-directory") ? URI.create(a.get("acme-directory"))
             : a.flag("acme-staging") ? LETS_ENCRYPT_STAGING : LETS_ENCRYPT;
-        String range = a.get("port-range", DEFAULT_PORT_LO + "-" + DEFAULT_PORT_HI);
-        int lo = 0;
-        int hi = 0;
-        if (!range.equals("none")) {
-            int dash = range.indexOf('-');
-            if (dash < 0) {
-                throw new IllegalArgumentException("--port-range must be lo-hi or none");
-            }
-            lo = Integer.parseInt(range.substring(0, dash));
-            hi = Integer.parseInt(range.substring(dash + 1));
-            if (lo < 1024 || hi > 65535 || hi < lo) {
-                throw new IllegalArgumentException("--port-range must be within 1024-65535 and lo <= hi");
-            }
-        }
         String httpListen = a.get("http-listen", "0.0.0.0:80");
         String httpHost = null;
         int httpPort = -1;
@@ -299,8 +275,6 @@ public record HubConfig(
             Integer.parseInt(dnsListen.substring(dc + 1)),
             !a.flag("no-selfcheck"),
             !a.flag("no-address-check"),
-            lo,
-            hi,
             httpHost,
             httpPort,
             null,

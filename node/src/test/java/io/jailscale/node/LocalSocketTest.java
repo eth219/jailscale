@@ -43,7 +43,7 @@ class LocalSocketTest {
     @Test
     void localAppSocketBuffersArePinnedToTheStreamWindow() throws Exception {
         try (ServerSocket app = TestPorts.listen(8)) {
-            NodeState.LinkRec rec = new NodeState.LinkRec(Message.LinkOpen.HTTPS, "127.0.0.1", app.getLocalPort(), "demo");
+            NodeState.LinkRec rec = new NodeState.LinkRec("127.0.0.1", app.getLocalPort(), "demo");
             try (Socket untouched = new Socket()) {
                 untouched.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), app.getLocalPort()));
                 app.accept().close();

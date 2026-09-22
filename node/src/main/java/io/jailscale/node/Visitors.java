@@ -15,8 +15,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import io.jailscale.proto.mux.Frame;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -39,7 +37,6 @@ final class Visitors {
 
     private static final Log LOG = Log.get("visitor");
     private static final int LOCAL_CONNECT_TIMEOUT_MS = 5_000;
-    static final long UDP_IDLE_MS = 60_000;
     /**
      * The buffer the visitor gate reads its request head through, on gated links only. Not
      * {@link Gate#MAX_HEAD}: that is the limit on how long a head may be, enforced by a counter
@@ -347,9 +344,12 @@ final class Visitors {
     private void serveVisitor(HubLink link, HubLink.Session session, MuxStream stream) {
         int conn = session.conn;
         String linkId = stream.meta().optString("linkId", null);
-        String kind = stream.meta().optString("kind", Message.LinkOpen.HTTPS);
-        if (!Message.LinkOpen.HTTPS.equals(kind)) {
-            serveRaw(kind, stream, state.linkById(linkId));
+        // A hub that names a kind on the stream is an older one opening a raw tcp or udp link
+        // (§8.4). There is nothing here to serve it with, so it is refused rather than guessed at.
+        String kind = stream.meta().optString("kind", "https");
+        if (!"https".equals(kind)) {
+            LOG.warn("visitor refused: this node does not serve {} links", kind);
+            stream.reset(4);
             return;
         }
         byte[] proxyLine = proxyLine(stream, state.linkById(linkId));
@@ -494,94 +494,6 @@ final class Visitors {
         System.arraycopy(a, 0, out, 0, a.length);
         System.arraycopy(b, 0, out, a.length, b.length);
         return out;
-    }
-
-    /** ARCHITECTURE.md §8.4 / §9.3: raw TCP copies bytes; raw UDP maps one DGRAM stream to one local socket. */
-    private static void serveRaw(String kind, MuxStream stream, NodeState.LinkRec target) {
-        if (target == null || !target.kind.equals(kind)) {
-            LOG.warn("{} visitor refused: unknown link", kind);
-            stream.reset(4);
-            return;
-        }
-        if (Message.LinkOpen.UDP.equals(kind) && stream.isDatagram()) {
-            serveUdp(stream, target);
-            return;
-        }
-        Socket local;
-        try {
-            local = connectLocal(target);
-        } catch (IOException e) {
-            LOG.warn("tcp: local target {}:{} unreachable: {}", target.host(), target.port(), e.getMessage());
-            stream.reset(7);
-            return;
-        }
-        byte[] proxyLine = proxyLine(stream, target);
-        Thread toLocal = DuplexThread.start("raw-in", () -> {
-            try {
-                if (proxyLine != null) {
-                    local.getOutputStream().write(proxyLine);
-                }
-                copy(stream.in(), local.getOutputStream());
-                local.shutdownOutput();
-            } catch (IOException _) {
-                closeQuietly(local);
-            }
-        });
-        try {
-            copy(local.getInputStream(), stream.out());
-            stream.close();
-        } catch (IOException _) {
-            stream.reset(1);
-        } finally {
-            closeQuietly(local);
-        }
-        try {
-            toLocal.join();
-        } catch (InterruptedException _) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private static void serveUdp(MuxStream stream, NodeState.LinkRec target) {
-        DatagramSocket local;
-        try {
-            local = new DatagramSocket();
-            local.connect(InetAddress.getByName(target.host()), target.port());
-            local.setSoTimeout((int) UDP_IDLE_MS);
-        } catch (IOException e) {
-            LOG.warn("udp: local target {}:{} unusable: {}", target.host(), target.port(), e.getMessage());
-            stream.reset(7);
-            return;
-        }
-        Thread back = DuplexThread.start("raw-udp-back", () -> {
-            byte[] buf = new byte[Frame.MAX_DATA];
-            try {
-                while (true) {
-                    DatagramPacket p = new DatagramPacket(buf, buf.length);
-                    local.receive(p);
-                    stream.send(java.util.Arrays.copyOf(p.getData(), p.getLength()));
-                }
-            } catch (IOException _) {
-                // idle timeout, stream reset or socket closed: the flow is over
-                stream.reset(0);
-            }
-        });
-        try {
-            byte[] d;
-            while ((d = stream.receive()) != null) {
-                local.send(new DatagramPacket(d, d.length));
-            }
-        } catch (IOException e) {
-            LOG.debug("udp flow to {}:{} ended: {}", target.host(), target.port(), e.getMessage());
-            stream.reset(1);
-        } finally {
-            local.close();
-        }
-        try {
-            back.join();
-        } catch (InterruptedException _) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     /**

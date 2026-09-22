@@ -168,15 +168,12 @@ public sealed interface Message {
      * of the connection carrying it so it cannot be replayed onto another one. A chain on its own
      * proves nothing, being public in every TLS handshake and in CT logs.
      */
-    record LinkOpen(String kind, String name, String domain, Integer port, String local, List<String> chainPem,
+    record LinkOpen(String name, String domain, String local, List<String> chainPem,
         byte[] domainProof) implements Message {
-        public static final String HTTPS = "https";
-        public static final String TCP = "tcp";
-        public static final String UDP = "udp";
         @Override public String type() { return "LinkOpen"; }
     }
 
-    record LinkOpened(String linkId, String name, String url, Integer hubPort, String reason) implements Message {
+    record LinkOpened(String linkId, String name, String url, String reason) implements Message {
         @Override public String type() { return "LinkOpened"; }
     }
 
@@ -192,7 +189,7 @@ public sealed interface Message {
     record LinkRevoked(String linkId, String name, String reason, long at) implements Message {
         /** Another node opened the same name; the newest opener won (§8.2). */
         public static final String REASSIGNED = "reassigned";
-        /** An operator released the name, domain or port on the hub. */
+        /** An operator released the name or domain on the hub. */
         public static final String RELEASED = "released";
         @Override public String type() { return "LinkRevoked"; }
     }
