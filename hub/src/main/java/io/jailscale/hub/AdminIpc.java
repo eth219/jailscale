@@ -239,6 +239,12 @@ final class AdminIpc implements Ipc.Handler {
             .put("nodes", store.nodes().size())
             .put("links", hub.links().count())
             .put("certKeyId", hub.tls().isLoaded() ? hub.tls().keyId() : null)
+            // The one expiry left to watch (§15). The public page has carried it since it existed
+            // and the socket did not, so an operator watching from a terminal had to load the page
+            // or read the log. Unix seconds, as `/v1/status` reports it, and absent while no
+            // certificate is installed rather than 0 -- which would read as 1970.
+            .put("certificateNotAfter", hub.tls().isLoaded()
+                ? Long.valueOf(hub.tls().leaf().getNotAfter().getTime() / 1000) : null)
             .put("online", hub.registry().size())
             .put("visitors", JsonObject.builder()
                 .put("now", hub.router().visitorsInFlight())

@@ -101,7 +101,6 @@ public final class Hub implements AutoCloseable {
         this.links = new Links(config, store, registry);
         this.router = new SniRouter(this);
         // Flags seed the runtime settings once; afterwards `jailhub setting` owns them.
-        // Not on a standby: its settings are the primary's, and arrive with the snapshot.
         if (!store.hasSetting(Store.SETTING_INVITE_POLICY)) {
             store.setSetting(Store.SETTING_INVITE_POLICY, config.invitePolicy());
         }
@@ -412,18 +411,14 @@ public final class Hub implements AutoCloseable {
         }
     }
 
-    /**
-     * What only a primary serves besides 443: the address check. A standby's address records are
-     * not the ones being checked.
-     */
+    /** What this hub serves besides 443: the address check (§7.2). */
     private void startPrimaryFronts() {
         if (config.acme() && config.addressCheck() && addressCheckThread == null) {
             // After the listener is up, or the one connection that proves the records reach this
             // process would arrive with nothing to answer it. Off the startup path: the answer is a
             // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied
             // to --no-selfcheck: that flag exists because the dns-01 check holds issuance until it
-            // passes, and nothing here can hold anything. The null check is what keeps a second
-            // call from starting a second loop.
+            // passes, and nothing here can hold anything.
             addressCheckThread = Thread.ofVirtual().name("address-check").start(this::addressCheckLoop);
         }
     }

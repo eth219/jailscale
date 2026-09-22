@@ -44,7 +44,7 @@ final class HubKeys {
         }
     }
 
-    /** Whether a hub key exists in {@code stateDir}: a standby must be given one, not make one. */
+    /** Whether a hub key exists in {@code stateDir}, so that a hub makes one only on a first run. */
     static boolean exists(Path stateDir) {
         return Files.exists(stateDir.resolve("hub.key"));
     }

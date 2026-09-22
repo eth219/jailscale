@@ -83,8 +83,7 @@ final class Store implements AutoCloseable {
     /**
      * Who runs this hub, where to write to them, and what they allow (#99). Settings and not flags:
      * they are the kind that change while a hub is running -- a contact address outlives the
-     * process that first printed it -- which is the line §6.3 already draws, and being in the store
-     * means a standby serves the same answer without being configured twice. Empty is the default
+     * process that first printed it -- which is the line §6.3 already draws. Empty is the default
      * and means the page says nothing at all, so a hub somebody runs for themselves is unchanged.
      */
     static final String SETTING_OPERATOR = "operator";
@@ -102,9 +101,8 @@ final class Store implements AutoCloseable {
      * {@code notice-added}) are not, and this is what makes them so
      * ({@code StoreCrashTest}).
      *
-     * <p>Local and monotonic. A standby stamps its own rather than the primary's, because the number
-     * means a place in a particular file; adopting a lower one from elsewhere would let a later
-     * append land under a line already written.
+     * <p>Local and monotonic: the number means a place in this particular file, so a snapshot's
+     * count says nothing about any other log.
      */
     private long lastSeq;
 

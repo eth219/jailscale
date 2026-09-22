@@ -768,9 +768,10 @@ the hub was carrying, and per-stage and per-frame timings; it was removed with t
 beside the core tunnel, because it was a third listener, a third surface to keep honest, and a
 second place every number had to be wired into. The numbers an operator acts on are on the admin
 socket instead: `jailhub status` carries the visitor counters -- routed, refused, and the subset
-refused because a node was at the bound it advertised -- and the receive budget's limit, current
-and peak bytes with the streams reclaimed (§5.3), which is what `measure.sh` gates the §14 SLOW
-axis on. `jailhub node list` has the per-node detail.
+refused because a node was at the bound it advertised -- the receive budget's limit, current and
+peak bytes with the streams reclaimed (§5.3), which is what `measure.sh` gates the §14 SLOW axis
+on, and when the wildcard expires, which until the cut was on the page and in `/v1/status` and
+nowhere a terminal could reach. `jailhub node list` has the per-node detail.
 
 Where that listener listened was its authorisation, exactly as the file mode is for the admin
 socket next door, and the socket is the same answer without a port: this hub has no inside to be on

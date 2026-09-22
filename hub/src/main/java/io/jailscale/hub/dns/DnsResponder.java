@@ -94,14 +94,15 @@ public final class DnsResponder implements AutoCloseable {
         /**
          * The apex, and one label under it. Both default to the serving set and the hub leaves
          * them there: with one hub every name in the zone resolves to the same host. They were the
-         * standby's hooks -- the apex was the primary alone, a name was the hosts that node was on
-         * (§13) -- and they stay as the seam a test overrides, which is how the per-label path is
-         * exercised at all.
+         * two-hub hooks -- the apex was the primary alone, a name was the hosts that node was on
+         * (§13). {@code control()} still has its caller below; {@code forName} is the seam a test
+         * overrides, which is the only thing that exercises the per-label path at all.
          */
         default List<String> control() {
             return serving();
         }
 
+        /** See above: overridden by {@code DnsResponderTest}, defaulted everywhere else. */
         default List<String> forName(String label) {
             return serving();
         }
@@ -290,7 +291,7 @@ public final class DnsResponder implements AutoCloseable {
         this.view = z == null ? NOTHING : z;
     }
 
-    /** Told whenever the challenge values change, so a standby can be sent the same ones (§13). */
+    /** Told whenever the challenge values change. The hub registers nothing here; a test does. */
     public void onTxtChanged(Consumer<List<String>> l) {
         this.onTxtChanged = l;
     }

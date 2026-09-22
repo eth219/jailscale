@@ -563,10 +563,9 @@ final class HttpFront {
         // somebody runs for themselves has nobody to name and no terms to point at, and a section
         // that appeared on every hub to say "not configured" would be a worse page for the case
         // that needs it least (#99).
-        // Stripped where it is read and not only where it is written (AdminIpc): a value arrives
-        // here from the replication stream as well, so a primary running a build without that rule
-        // would otherwise have this page draw the section around a blank name -- and, worse, drop
-        // the closing warning below on the strength of it.
+        // Stripped where it is read and not only where it is written (AdminIpc): a value written
+        // by an older build, or by hand into the store, would otherwise have this page draw the
+        // section around a blank name -- and, worse, drop the closing warning below on it.
         String operator = hub.store().setting(Store.SETTING_OPERATOR, "").strip();
         // And checked again here, not only where they are set: these two go into an href, and the
         // store is written by replication as well as by an admin on this host.

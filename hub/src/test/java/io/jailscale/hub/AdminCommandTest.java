@@ -244,6 +244,26 @@ class AdminCommandTest {
         assertEquals("Example Ltd", req("setting", "operator", "Example Ltd").string("value"));
     }
 
+    /**
+     * The one expiry an operator has left to watch is the hub's own wildcard (§15), and until the
+     * maintenance cut the only places it was published were the public page and {@code /v1/status}
+     * -- so an operator watching from a terminal had to load a web page. {@code jailhub status}
+     * carries it now, in unix seconds as the JSON endpoint reports it.
+     *
+     * <p>Against the certificate's own notAfter and not merely "present": a field that carried 0,
+     * or the wrong unit, would pass a null check and read as 1970 on the operator's screen.
+     */
+    @Test
+    void statusCarriesWhenTheWildcardExpires() throws Exception {
+        try (Hub hub = startedHub()) {
+            JsonObject[] last = new JsonObject[1];
+            new AdminIpc(hub).handle(JsonObject.builder().put("cmd", "status").build(), o -> last[0] = o);
+            long expected = hub.tls().leaf().getNotAfter().getTime() / 1000;
+            assertEquals(expected, last[0].lng("certificateNotAfter"),
+                "jailhub status should say when the wildcard runs out, in unix seconds");
+        }
+    }
+
     /** A throwaway hub on a free port, with the test certificate. */
     private static Hub startedHub() throws Exception {
         Path root = TestDirs.newRoot("ja");
