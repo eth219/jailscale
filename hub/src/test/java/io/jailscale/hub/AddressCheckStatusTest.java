@@ -105,15 +105,11 @@ class AddressCheckStatusTest {
             assertTrue(check.bool("fault"));
             assertEquals("another hub answers there", check.string("problem"));
 
-            // A monitor alerts on the fault gauge and not on the verdict, so that inconclusive --
-            // the ordinary answer from behind a translated address -- never pages anybody.
-            String metrics = Metrics.prometheus(hub);
-            assertTrue(metrics.contains("jailhub_address_check_fault 1"), metrics);
-            assertTrue(metrics.contains("jailhub_address_check{verdict=\"elsewhere\"} 0"), metrics);
-
+            // A monitor reads the fault flag and not the verdict, so that inconclusive -- the
+            // ordinary answer from behind a translated address -- never pages anybody.
             hub.addressProbe = () -> result(Reachability.INCONCLUSIVE, "could not reach it from this host.");
             hub.checkAddress();
-            assertTrue(Metrics.prometheus(hub).contains("jailhub_address_check_fault 0"),
+            assertFalse(admin(hub, "status").object("addressCheck").bool("fault"),
                 "inconclusive is not a fault");
         }
     }
@@ -131,7 +127,6 @@ class AddressCheckStatusTest {
             assertTrue(status.optBool("ok", false), status.toString());
             assertFalse(status.has("addressCheck"), status.toString());
             assertNull(hub.addressStatus());
-            assertFalse(Metrics.prometheus(hub).contains("jailhub_address_check"));
         }
     }
 
@@ -151,7 +146,7 @@ class AddressCheckStatusTest {
             assertNull(hub.addressStatus(), "a standby carries no verdict about the primary's records");
             hub.reachedBy("hub.test", "203.0.113.5");
             assertNull(hub.addressStatus(), "and an arrival does not bring one back");
-            assertFalse(Metrics.prometheus(hub).contains("jailhub_address_check"));
+            assertFalse(admin(hub, "status").has("addressCheck"), "and the status carries no verdict");
 
             // The refusal says what is wrong, rather than dereferencing a peer this hub never had.
             assertNull(hub.config().peer());
@@ -178,7 +173,6 @@ class AddressCheckStatusTest {
             };
             assertEquals(Reachability.ELSEWHERE, hub.checkAddress().verdict(), "the caller still gets its answer");
             assertNull(hub.addressStatus(), "but a standby keeps no verdict");
-            assertFalse(Metrics.prometheus(hub).contains("jailhub_address_check"));
         }
     }
 

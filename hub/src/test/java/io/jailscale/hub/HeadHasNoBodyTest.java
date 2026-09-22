@@ -22,7 +22,7 @@ import io.jailscale.proto.net.TestPorts;
 
 /**
  * A HEAD is answered with the header fields a GET would have and no body (RFC 9110 §9.3.2). All
- * four cases here go through one writer, {@code HttpResponse.writeTo}, which is where the defect
+ * three cases here go through one writer, {@code HttpResponse.writeTo}, which is where the defect
  * was; they are separate because each front decides for itself whether to tell the writer what the
  * method was, and a front that forgets looks exactly like a front that was never wired up.
  *
@@ -30,9 +30,9 @@ import io.jailscale.proto.net.TestPorts;
  * the whole finding: {@code Connection: close} makes the extra bytes invisible to a client that
  * reads to EOF, and visible to anything that frames the next response by Content-Length.
  *
- * <p>Two of the four compare the Content-Length against the bytes a GET returns; the hub's page and
- * the metrics text carry live counters, so those two assert only that the length is not zero --
- * which is still the direction a response whose body was dropped rather than suppressed would fail.
+ * <p>Two of the three compare the Content-Length against the bytes a GET returns; the hub's page
+ * carries live state, so that one asserts only that the length is not zero -- which is still the
+ * direction a response whose body was dropped rather than suppressed would fail.
  */
 @Timeout(120)
 class HeadHasNoBodyTest {
@@ -49,11 +49,11 @@ class HeadHasNoBodyTest {
         Path root = TestDirs.newRoot("head");
         java.net.ServerSocket portSocket = TestPorts.listen(1024);
         port = portSocket.getLocalPort();
-        // Port 0 on both extra listeners: the defaults (9090, 80) would collide with a second test
-        // JVM, and 80 needs root besides.
+        // Port 0 on the plain-HTTP front: the default (80) would collide with a second test JVM,
+        // and needs root besides.
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
             CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
-            .withMetrics("127.0.0.1", 0).withHttp("127.0.0.1", 0));
+            .withHttp("127.0.0.1", 0));
         hub.listenOn(portSocket);
         hub.start();
     }
@@ -108,17 +108,6 @@ class HeadHasNoBodyTest {
     }
 
     @Test
-    void metricsListener() throws Exception {
-        try (Socket s = new Socket("127.0.0.1", hub.metricsPort())) {
-            s.setSoTimeout(10_000);
-            Head h = head(s, "127.0.0.1", "/metrics");
-            assertEquals(200, h.resp().status());
-            assertTrue(contentLength(h.resp()) > 0, "HEAD still describes the metrics a GET would send");
-            assertEquals(-1, h.next(), "the metrics text followed the headers of a HEAD");
-        }
-    }
-
-    @Test
     void portEightyChallengeFront() throws Exception {
         int expected;
         try (Socket s = new Socket("127.0.0.1", hub.httpPort())) {
@@ -169,17 +158,11 @@ class HeadHasNoBodyTest {
                 assertTrue(r.body().length > 0);
             }
         }
-        // The other two listeners each read the method off the exception themselves, and one that
-        // got that wrong still passes every case above. badHeader and not badTarget, because these
-        // two are plaintext: badTarget is rejected with its headers still unread, and closing a
-        // socket that has bytes left in its receive queue sends an RST, which would lose the
-        // answer this is about to read rather than test it.
-        try (Socket s = new Socket("127.0.0.1", hub.metricsPort())) {
-            s.setSoTimeout(10_000);
-            Head h = raw(s, String.format(badHeader, "HEAD"));
-            assertEquals(400, h.resp().status());
-            assertEquals(-1, h.next(), "the metrics listener answered a rejected HEAD with the error text");
-        }
+        // The plain-HTTP front reads the method off the exception itself, and one that got that
+        // wrong still passes every case above. badHeader and not badTarget, because it is
+        // plaintext: badTarget is rejected with its headers still unread, and closing a socket that
+        // has bytes left in its receive queue sends an RST, which would lose the answer this is
+        // about to read rather than test it.
         try (Socket s = new Socket("127.0.0.1", hub.httpPort())) {
             s.setSoTimeout(10_000);
             Head h = raw(s, String.format(badHeader, "HEAD"));

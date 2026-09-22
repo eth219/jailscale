@@ -66,7 +66,6 @@ public final class Hub implements AutoCloseable {
     private final RawPorts rawPorts;
     private final Challenges challenges;
     private volatile HttpChallengeFront http;
-    private MetricsFront metrics;
     private final SniRouter router;
     private io.jailscale.hub.dns.DnsResponder dns;
     private AcmeManager acme;
@@ -229,16 +228,6 @@ public final class Hub implements AutoCloseable {
         if (!ha.isStandby()) {
             startPrimaryFronts();
         }
-        if (config.hasMetrics()) {
-            // Warn and serve on, as port 80 does: a hub that cannot be scraped is still a hub that
-            // routes, and refusing to start would make the monitoring an outage of its own.
-            try {
-                metrics = new MetricsFront(this, config.metricsListenHost(), config.metricsListenPort());
-            } catch (IOException e) {
-                LOG.warn("metrics port {} unavailable ({}); /metrics is not served", config.metricsListenPort(), e.getMessage());
-            }
-        }
-
         ipc = Ipc.serve(config.socketPath(), new AdminIpc(this));
         timer = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "timer");
@@ -301,9 +290,8 @@ public final class Hub implements AutoCloseable {
      * <p>A test needs a port nothing else will take. It asked {@code TestPorts} for a number, which
      * binds a socket to find a free one and closes it again — and between that close and this hub's
      * bind the number is held by nothing. Anything in the same JVM asking the kernel for port 0 can
-     * be handed it, and a running hub asks four times: the DNS pair, {@code /metrics}, the
-     * plain-HTTP front, and a raw port. Four times in two days a hub lost that race, three of them
-     * here in {@code start}.
+     * be handed it, and a running hub asks three times: the DNS pair, the plain-HTTP front, and a
+     * raw port. Four times in two days a hub lost that race, three of them here in {@code start}.
      *
      * <p>Given a socket that is already bound, the number is never unheld and the race has nowhere
      * to happen. This hub owns the socket from here: {@link #close} closes it whether or not
@@ -510,7 +498,7 @@ public final class Hub implements AutoCloseable {
     /**
      * Runs the check now and records what it found. The hourly pass and {@code jailhub address
      * check} both come here, so an operator who has just edited a record gets the same verdict the
-     * page and the metrics will carry rather than a second opinion printed on a terminal.
+     * page will carry rather than a second opinion printed on a terminal.
      */
     Reachability.Status checkAddress() {
         java.util.function.Supplier<Reachability.Result> probe = addressProbe;
@@ -988,9 +976,6 @@ public final class Hub implements AutoCloseable {
         if (http != null) {
             http.close();
         }
-        if (metrics != null) {
-            metrics.close();
-        }
         if (acme != null) {
             acme.close();
         }
@@ -1046,11 +1031,6 @@ public final class Hub implements AutoCloseable {
         return dns;
     }
 
-    /** The port {@code /metrics} is on, or 0 when it is not served. */
-    public int metricsPort() {
-        return metrics == null ? 0 : metrics.port();
-    }
-
     @Override
     public void close() throws IOException {
         running = false;
@@ -1079,9 +1059,6 @@ public final class Hub implements AutoCloseable {
         rawPorts.close();
         if (http != null) {
             http.close();
-        }
-        if (metrics != null) {
-            metrics.close();
         }
         if (listener != null) {
             listener.close();

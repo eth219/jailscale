@@ -17,6 +17,7 @@ import java.net.Socket;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
@@ -44,6 +45,17 @@ final class SniRouter {
      * a number the relay can keep exactly as it enters and leaves.
      */
     private final AtomicInteger current = new AtomicInteger();
+    /**
+     * Since this hub started: visitors handed to a node, visitors turned away before that, and the
+     * subset of those turned away because the node was already holding what it said it would
+     * (ARCHITECTURE.md §9.3). The last is the one an operator can act on -- it says to give that
+     * node more heap, or to move a name -- where the others say a visitor was malformed, early, or
+     * abusive. Read by {@code jailhub status}; nothing here is per name or per address, so a total
+     * says how much the hub is doing and never who is doing it.
+     */
+    private final LongAdder routed = new LongAdder();
+    private final LongAdder refused = new LongAdder();
+    private final LongAdder refusedCapacity = new LongAdder();
 
     SniRouter(Hub hub) {
         this.hub = hub;
@@ -135,9 +147,21 @@ final class SniRouter {
         return current.get();
     }
 
+    long visitorsRouted() {
+        return routed.sum();
+    }
+
+    long visitorsRefused() {
+        return refused.sum();
+    }
+
+    /** The subset of {@link #visitorsRefused} that hit a node's own bound (ARCHITECTURE.md §9.3). */
+    long visitorsRefusedCapacity() {
+        return refusedCapacity.sum();
+    }
+
     /** Serves one accepted raw connection to completion. */
     void serve(Socket socket) {
-        long acceptedAt = System.nanoTime();
         String ip = socket.getInetAddress().getHostAddress();
         int visitorPort = socket.getPort();
         boolean attributed = false;
@@ -156,7 +180,7 @@ final class SniRouter {
         }
         String ipKey = takeSlot(ip, socket.getInetAddress(), attributed);
         if (ipKey == null) {
-            Metrics.VISITORS_REFUSED.increment();
+            refused.increment();
             Relay.closeQuietly(socket);
             return;
         }
@@ -166,12 +190,10 @@ final class SniRouter {
             socket.setTcpNoDelay(true);
             socket.setSoTimeout(HELLO_TIMEOUT_MS);
             Sni.Peek peek = Sni.peek(socket.getInputStream());
-            long peekedAt = System.nanoTime();
-            RelayStages.PEEK.record(peekedAt - acceptedAt);
             String sni = peek.serverName();
             if (sni == null) {
                 LOG.debug("{}: no SNI, closing", ip);
-                Metrics.VISITORS_REFUSED.increment();
+                refused.increment();
                 Relay.closeQuietly(socket);
                 return;
             }
@@ -195,7 +217,7 @@ final class SniRouter {
                     link = hub.links().awaitOnline(name, false, HOLD_MS); // node reconnecting (hand-off, restart)
                 }
                 if (link == null) {
-                    Metrics.VISITORS_REFUSED.increment();
+                    refused.increment();
                     fallback(socket, peek.consumed(), name);
                     return;
                 }
@@ -208,15 +230,14 @@ final class SniRouter {
                 }
                 if (link == null) {
                     LOG.debug("{}: unknown SNI {}, closing", ip, sni);
-                    Metrics.VISITORS_REFUSED.increment();
+                    refused.increment();
                     Relay.closeQuietly(socket);
                     return;
                 }
             }
-            RelayStages.RESOLVE.record(System.nanoTime() - peekedAt);
             if (acquire(perName, name) > MAX_PER_NAME) {
                 release(perName, name);
-                Metrics.VISITORS_REFUSED.increment();
+                refused.increment();
                 refused(ip, name, "the per-name cap of " + MAX_PER_NAME);
                 Relay.closeQuietly(socket);
                 return;
@@ -230,21 +251,21 @@ final class SniRouter {
             int ceiling = link.group().visitorCeiling();
             if (ceiling > 0 && link.group().visitorsInFlight() >= ceiling) {
                 release(perName, name);
-                Metrics.VISITORS_REFUSED.increment();
-                Metrics.VISITORS_REFUSED_CAPACITY.increment();
+                refused.increment();
+                refusedCapacity.increment();
                 refused(ip, name, "the node's ceiling of " + ceiling);
                 // Closed rather than answered. The hub has the key and could serve a page the way
                 // fallback() does for an offline node, but that is a full TLS handshake per refused
                 // visitor -- about 2.8 ms of hub CPU on the gate's runner -- and a node at its bound
-                // is exactly when the hub has least to spare. The operator sees this in
-                // jailhub_visitors_refused_capacity_total and on the admin page instead.
+                // is exactly when the hub has least to spare. The refusal is logged and counted,
+                // and the admin page says what each node is holding, instead.
                 Relay.closeQuietly(socket);
                 return;
             }
             try {
-                Metrics.VISITORS.increment();
+                routed.increment();
                 current.incrementAndGet();
-                relay(socket, peek, link, ip, visitorPort, acceptedAt);
+                relay(socket, peek, link, ip, visitorPort);
             } finally {
                 current.decrementAndGet();
                 release(perName, name);
@@ -259,11 +280,10 @@ final class SniRouter {
         }
     }
 
-    private void relay(Socket socket, Sni.Peek peek, Links.Link link, String visitorIp, int visitorPort,
-        long acceptedAt) throws IOException {
+    private void relay(Socket socket, Sni.Peek peek, Links.Link link, String visitorIp, int visitorPort)
+        throws IOException {
         NodeGroup group = link.group();
         socket.setSoTimeout(0);
-        long beforeOpen = System.nanoTime();
         MuxStream stream;
         try {
             stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
@@ -272,10 +292,8 @@ final class SniRouter {
             refused(visitorIp, peek.serverName(), e.getMessage());
             throw e;
         }
-        long openedAt = System.nanoTime();
-        RelayStages.OPEN.record(openedAt - beforeOpen);
         try {
-            Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream), acceptedAt, openedAt);
+            Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream));
         } finally {
             group.visitorDone(stream);
         }

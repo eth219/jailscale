@@ -227,7 +227,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 hub.peers().new Session(remoteIp, peerHost[0], peerAddress[0], peerEndpoint[0]).run(ch);
                 return;
             }
-            Metrics.NODE_SESSIONS.increment();
             handshakeHash = ch.handshakeHash();
             if (hub.isHandingOff()) {
                 LOG.info("node {} arrived during hand-off; asking it to retry", mkey);

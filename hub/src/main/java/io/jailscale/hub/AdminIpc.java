@@ -269,6 +269,22 @@ final class AdminIpc implements Ipc.Handler {
             .put("links", hub.links().count())
             .put("certKeyId", hub.tls().isLoaded() ? hub.tls().keyId() : null)
             .put("online", hub.registry().size())
+            .put("visitors", JsonObject.builder()
+                .put("now", hub.router().visitorsInFlight())
+                .put("routed", hub.router().visitorsRouted())
+                .put("refused", hub.router().visitorsRefused())
+                .put("refusedCapacity", hub.router().visitorsRefusedCapacity())
+                .build())
+            // The receive budget (ARCHITECTURE.md §5.3). Peak against limit is what says whether the
+            // bound is the thing holding the queues down, and reclaimed says how many visitor
+            // streams it cost -- the pair measure.sh gates the SLOW axis on (§14), and the one
+            // number here that an operator watches rather than reads once.
+            .put("receiveBudget", JsonObject.builder()
+                .put("limit", hub.flowBudget().limitBytes())
+                .put("queued", hub.flowBudget().usedBytes())
+                .put("peak", hub.flowBudget().peakBytes())
+                .put("reclaimed", hub.flowBudget().reclaimedStreams())
+                .build())
             .put("pending", store.pending().size())
             .put("invites", store.invites().size())
             .put("admins", new ArrayList<>(store.admins()))

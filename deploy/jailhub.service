@@ -40,9 +40,8 @@ User=jailhub
 Group=jailhub
 Environment=JAILHUB_STATE=/var/lib/jailhub
 # Edit: your public name, and an e-mail for Let's Encrypt expiry notices.
-# /metrics is on 127.0.0.1:9090 by default and never on the public name (ARCHITECTURE.md 6.3), so a
-# Prometheus on this host scrapes it as-is and one elsewhere comes in over a tunnel. Widen it with
-# --metrics-listen <addr>:9090 only behind a firewall: that port asks nobody who they are.
+# There is no metrics port (ARCHITECTURE.md 6.3). What an operator watches -- visitors routed and
+# refused, the receive budget -- is on the admin socket: `jailhub status`, as this unit's user.
 ExecStart=/usr/local/bin/jailhub serve --base-url https://hub.example.com --acme-email ops@example.com
 Restart=on-failure
 RestartSec=2s

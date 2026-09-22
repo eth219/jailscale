@@ -189,8 +189,6 @@ final class NodeGroup {
         // it had before the field existed, which is the hub sending and the node resetting.
         int ceiling = visitorCeiling();
         if (ceiling > 0 && visitors.size() >= ceiling) {
-            Metrics.VISITORS_REFUSED.increment();
-            Metrics.VISITORS_REFUSED_CAPACITY.increment();
             throw new AtCapacity(mkey, ceiling);
         }
         JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("kind", link.kind()).put("sni", sni)
@@ -322,13 +320,7 @@ final class NodeGroup {
         peakSignsInFlight.accumulateAndGet(inFlight, Math::max);
         try {
             onSignInFlight.accept(inFlight);
-            Message m = signChecked(sr);
-            // One place, so a refusal added later cannot forget to be counted: what went back to
-            // the node is what says whether it was signed.
-            if (m instanceof Message.SignResponse r) {
-                (r.sig() == null ? Metrics.SIGNATURES_REFUSED : Metrics.SIGNATURES).increment();
-            }
-            return m;
+            return signChecked(sr);
         } finally {
             signsInFlight.decrementAndGet();
         }

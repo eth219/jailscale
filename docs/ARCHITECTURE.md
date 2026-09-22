@@ -85,7 +85,7 @@ given up for.
 | Active-active hubs, and merging writes made on the losing side of a partition | a merge needs a lineage the two stores do not share; the loser's writes are dropped and named (§13.5) |
 | Latency-sensitive raw UDP — game netcode, WireGuard roaming | it needs a carrier that is not TCP, and one dialled-out TCP connection is the design (§5), not a detail of it |
 | Probing a name from another node's vantage point | the hub chooses which nodes exist, so it would choose the prober; the control would be probabilistic, and this project says what it cannot do instead (§11.3) |
-| Any notification channel — email, webhooks | an address per node is personal data the hub does not hold, and a webhook is one more thing that fails quietly; the status page and the metrics are where an expiry shows |
+| Any notification channel — email, webhooks | an address per node is personal data the hub does not hold, and a webhook is one more thing that fails quietly; the status page and `jailhub status` are where an expiry shows |
 | Installing an upgrade by default | replacing a running binary is the operator's act; a process that can overwrite its own executable is one whose compromise is permanent |
 | Mobile clients, and an external identity provider | joining is a machine key and an invite (§10) |
 | A hosted service | you run the hub; there is nothing to sign up for |
@@ -158,8 +158,8 @@ it run at once.
 
 A hub's listen port is **held** rather than reserved: `TestPorts.listen` returns a bound socket and
 `Hub.listenOn` takes it, so the number is never unheld and nothing can be handed it. That is not
-tidiness — a hub binds its DNS TCP/UDP pair, `/metrics` and the plain-HTTP front on port 0, those
-draws know nothing of the register, and four times in two days one of them took a number a test had
+tidiness — a hub binds its DNS TCP/UDP pair and the plain-HTTP front on port 0, those draws know
+nothing of the register, and four times in two days one of them took a number a test had
 reserved (#196). The advice that used to be here, *reserve immediately before the bind*, does not
 work when the thing between the two is `Hub.start()` itself, which draws port 0 up to eight times
 before it is done.
@@ -727,7 +727,7 @@ A directory at `/links` existed until 2026-09-18 -- one row per link with its ad
 long it had been open, paginated, `noindex,nofollow`, deliberately left crawlable so the meta could
 be read -- and was removed (#252): a page that enumerates every name on the hub is a scanner's
 index, no tunnel this stands beside publishes one, and everything it told the operator, the count
-and `/metrics` already say. What that page had worked out about indexing survives it. `/` is the
+and `jailhub node list` already say. What that page had worked out about indexing survives it. `/` is the
 one page here that asks to be indexed, so an address on it is text an indexer keeps whatever the
 markup around it says; that is why `/` carries a count and no name, and why the pages served to
 whoever holds their URL -- an invitation, the wildcard's "not open" page -- say `noindex,nofollow`
@@ -770,36 +770,34 @@ standby's as well as a primary's, and it rises by one on each promotion: `role` 
 serving as primary now, the epoch says how many promotions that is, and two primaries that meet
 settle by it -- the higher staying, the lower standing down and losing its state entire (§15).
 
-**`GET /metrics`** is the Prometheus text format, which needs no library to produce, and it is **not
-on 443 at all**. It has a listener of its own -- plain HTTP, `--metrics-listen 127.0.0.1:9090` by
-default, `none` to turn it off -- and nothing else is served there: counters for visitors routed and
-refused, signatures issued and refused, control sessions and relayed bytes, gauges for what the hub
-is carrying, and the stage and mux timings below. **Where it listens is the authorisation**, exactly
-as the file mode is for the admin socket next door. This hub has no inside to be on -- its name is
-the public internet by construction -- so a credential checked on 443 would be one more secret to
-issue, rotate and get wrong, and not listening there is the shorter answer. etcd's
-`--listen-metrics-urls`, Spring Boot's management port and headscale's `metrics_listen_addr` are the
-same move. A scraper somewhere else reaches this through a tunnel or a proxy that can say who is
-asking, which a bare port cannot. The old path on the hub's name answers 404 and names the flag,
-because an operator who upgrades and loses their dashboard should not have to read the source to
-find out where it went.
+There is no `/metrics`. A Prometheus listener on a port of its own, `--metrics-listen`, exported
+counters for visitors routed and refused, signatures, sessions and relayed bytes, gauges for what
+the hub was carrying, and per-stage and per-frame timings; it was removed with the rest of what sat
+beside the core tunnel, because it was a third listener, a third surface to keep honest, and a
+second place every number had to be wired into. The numbers an operator acts on are on the admin
+socket instead: `jailhub status` carries the visitor counters -- routed, refused, and the subset
+refused because a node was at the bound it advertised -- and the receive budget's limit, current
+and peak bytes with the streams reclaimed (§5.3), which is what `measure.sh` gates the §14 SLOW
+axis on. `jailhub node list` has the per-node detail.
+
+Where that listener listened was its authorisation, exactly as the file mode is for the admin
+socket next door, and the socket is the same answer without a port: this hub has no inside to be on
+-- its name is the public internet by construction -- so a credential checked on 443 would have
+been one more secret to issue, rotate and get wrong.
 
 It was public on 443 until it was not, and `/v1/status` carried the same counters in JSON beside it
 -- build digest, hub key, nodes registered and online, links open, relayed bytes, the receive budget,
-resident size. Two things were wrong with that. Every one of those is a fact about what the hub is
-*carrying*, which is a different question from whether it is *up*, so the health check a load
-balancer polls had quietly become a second copy of the scrape. And a stranger had the throughput of
-everything behind the hub for the asking: no name and no address appear, but on a hub serving one
-node the byte counters *are* that node's traffic, and anonymity that holds only while the hub is
-busy is not a property, it is a coincidence.
+resident size. Two things were wrong with that, and both are why nothing like it came back on 443.
+Every one of those is a fact about what the hub is *carrying*, which is a different question from
+whether it is *up*, so the health check a load balancer polls had quietly become a second copy of
+the scrape. And a stranger had the throughput of everything behind the hub for the asking: no name
+and no address appears, but on a hub serving one node the byte counters *are* that node's traffic,
+and anonymity that holds only while the hub is busy is not a property, it is a coincidence.
 
-**No metric names anything.** Not a link, not a node, not an address -- a scrape says how much the
-hub is doing and never who is doing it, and the test asserts that no line carries a label except
-`jailhub_build_info`, which is about the binary. That is the line that would be easy to cross: one
-label per name and the metrics become the directory the status page deliberately is not. Counting
-lives in `Metrics`, six `LongAdder`s written from every visitor thread and read once a scrape, and
-the signature counter sits at the one point that decides, so a refusal added later cannot forget to
-be counted.
+**Nothing counted names anything**, and nothing that replaced it does either. Not a link, not a
+node, not an address: a total says how much the hub is doing and never who is doing it. That is the
+line that would be easy to cross -- one label per name and the counters become the directory the
+status page deliberately is not.
 
 It says how many links are open as well -- the number and not one of the addresses -- because a hub
 that serves nothing and a hub that is busy look identical without it. It showed the first few of
@@ -910,9 +908,9 @@ it already knows rather than stored from the wire.
 
 **Where the answer goes.** The check runs once the hub knows what it answers for its own name, and
 again every hour, and the verdict it reaches is kept rather than written to the log and dropped:
-`jailhub status` carries it, `jailhub node list` shows it beside each node, and `/metrics` exports
-`jailhub_address_check_fault` — 1 only for a fault an operator has to fix, so inconclusive never
-pages anyone — beside `jailhub_address_check{verdict="..."}` and `jailhub_address_check_age_seconds`.
+`jailhub status` carries it, with a `fault` flag that is true only for something an operator has to
+fix — so inconclusive, the ordinary answer from behind a translated address, never pages anyone —
+and `jailhub node list` shows the verdict beside each node.
 The log line is written when the verdict **changes**, not on every pass — for a fault, a change of
 problem under the same verdict counts, since a missing wildcard replaced by one pointing elsewhere is
 a new fault — so a broken deployment files one error rather than one an hour, and the verdict that
@@ -1821,15 +1819,13 @@ exists for. Two networks that hash together share a budget, which limits more ra
 the key is deliberately not stored to tell them apart — a table that evicted the loser of a collision
 would let an attacker clear a victim's bucket by choosing addresses that land on it.
 
-**What the limit is doing is a number on `/metrics`.** `jailhub_dns_answers_total` is what :53
-actually answers, and `jailhub_dns_dropped_total`, `jailhub_dns_truncated_total` and
-`jailhub_dns_refused_global_total` are what the two budgets refused -- the last one split out
-because one network over its share and the table-wide budget binding mean opposite things: somebody
-noisy, against this zone outgrowing the number or a reflection aimed at a prefix. These exist
-because the rates below were chosen and shipped with nothing counting the traffic they bound, so
-neither an operator nor anyone picking the numbers could say what headroom a real zone has, and the
-limit biting would have surfaced only as a log line. An operator deciding whether 200 a second fits
-their zone reads the first counter over an interval; nothing else here can tell them.
+**What the limit is doing is counted in the process and no longer exported.** The responder keeps
+what :53 answered, dropped, truncated and refused by the table-wide budget, which is what the
+metrics endpoint published while it existed; the rates below were chosen and shipped with nothing
+counting the traffic they bound, and those counters are why that question is answerable at all. With
+the endpoint gone, reading them means the log at debug: an operator deciding whether 200 a second
+fits their zone has no interval counter to read, which is the cost of removing it and is written
+down here rather than discovered.
 
 **The per-network limit bounds a bucket; a victim owns a prefix.** An attacker forging sources
 across a victim's /48 walks 65,536 distinct /64 keys against a table of 2,048 buckets and collects
@@ -2602,7 +2598,8 @@ would otherwise exercise.
 paragraph has said that an ordinary visitor's 7 to 19 s wait while slow readers arrive was the
 node's per-visitor TLS state (an inference), then the hub's control frames queued behind data (true,
 fixed in §5.3, and not enough: the wait survived it), then that what remained was in no stage at all
--- retired by the stage metrics, which put all of it in one:
+-- retired by the hub's stage timers, which put all of it in one (they were part of the metrics
+endpoint, and went with it; this is what they said while they existed):
 
     admissions 416, mean/worst ms: peek=7/14 resolve=0/0 open=0/0 reply=224/13491
                                    first_byte=231/13491 unaccounted=-0

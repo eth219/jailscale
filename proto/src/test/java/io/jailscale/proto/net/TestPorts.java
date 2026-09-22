@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <b>What this does not cover</b>, and what a reserved port can still be lost to:
  * <ul>
  *   <li>a listener the code under test opens on port 0 -- every hub started in a test binds a DNS
- *       TCP/UDP pair that way, and {@code /metrics} and the plain-HTTP front too, so a number
+ *       TCP/UDP pair that way, and the plain-HTTP front too, so a number
  *       reserved and not yet bound can be handed to one of them. It happened four times in two days
  *       (#196). A hub's listen port is no longer exposed to it: {@link #listen} hands over a bound
  *       socket and {@code Hub.listenOn} takes it, so nothing is ever unheld. Reserving immediately

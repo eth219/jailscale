@@ -214,13 +214,13 @@ final class HttpFront {
 
     /**
      * Whether what asked for this path is a machine rather than somebody with a browser: the JSON
-     * under {@code /v1}, the metrics path a scraper may still be pointed at, and the file a crawler
-     * fetches. Those are answered in text, because a frame is bytes each of them has to skip. It is
+     * under {@code /v1}, and the file a crawler fetches. Those are answered in text, because a
+     * frame is bytes each of them has to skip. It is
      * a list here and not a property of the route because the method guard runs above the dispatch;
      * a path added to {@link #route} is a path this has to be told about.
      */
     private static boolean machinePath(String path) {
-        return path.startsWith("/v1/") || path.equals("/metrics") || path.equals("/robots.txt");
+        return path.startsWith("/v1/") || path.equals("/robots.txt");
     }
 
     /**
@@ -282,14 +282,6 @@ final class HttpFront {
         if (path.equals("/v1/status")) {
             return HttpResponse.json(200, status().toString()).header("Cache-Control", "no-store");
         }
-        if (path.equals("/metrics")) {
-            // Moved off the public name rather than deleted (§6.3). Saying where it went would be
-            // saying an address that is deliberately not this one, so it says which flag instead.
-            // In text, and not through the frame: what polls this path is a scraper still pointed
-            // at where metrics used to be, and four kilobytes of HTML per poll to say "not here" is
-            // exactly the machine answer this branch's own rule says not to frame.
-            return HttpResponse.text(404, "metrics are not served on this name; see --metrics-listen");
-        }
         if (path.equals("/robots.txt")) {
             return HttpResponse.text(200, ROBOTS);
         }
@@ -323,10 +315,9 @@ final class HttpFront {
      * build answered, what it will talk to, how long it has been up, and when the certificate runs
      * out -- the last being the one that takes every name down at once and the one worth alerting
      * on. That is the whole list. It used to carry the counters and the hub's state as well, which
-     * made the public name's health check a second copy of {@code /metrics}; the counters live on
-     * the metrics listener now and the per-node detail on the {@code jailhub} socket CLI, which
-     * since #253 is the one admin surface (ARCHITECTURE.md §6.3). Fields may be added; a monitor
-     * that reads the ones it knows keeps working (§5.4).
+     * made the public name's health check an export of everything the hub knew; the per-node detail
+     * is on the {@code jailhub} socket CLI, which is the one admin surface (ARCHITECTURE.md §6.3).
+     * Fields may be added; a monitor that reads the ones it knows keeps working (§5.4).
      */
     private JsonObject status() {
         JsonObject.Builder b = JsonObject.builder()

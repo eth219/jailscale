@@ -512,19 +512,14 @@ class HomePageTest {
         HttpResponse machine = http("POST", "/v1/noise", null, "");
         assertEquals(426, machine.status());
         assertTrue(machine.headers().get("Content-Type").startsWith("text/plain"), machine.bodyText());
-        // The paths a scraper or a crawler holds are answered the same way, on both the method
-        // they got wrong and the path that moved: a poll every fifteen seconds should not be
-        // downloading a page to discard.
-        for (String path : new String[] {"/metrics", "/robots.txt", "/v1/key"}) {
+        // The paths a crawler or a monitor holds are answered the same way when the method is
+        // wrong: a poll every fifteen seconds should not be downloading a page to discard.
+        for (String path : new String[] {"/robots.txt", "/v1/key"}) {
             HttpResponse wrongMethod = http("POST", path, null, "");
             assertEquals(405, wrongMethod.status(), path);
             assertEquals("GET, HEAD", wrongMethod.headers().get("Allow"), path);
             assertTrue(wrongMethod.headers().get("Content-Type").startsWith("text/plain"), path);
         }
-        HttpResponse moved = http("GET", "/metrics", null, null);
-        assertEquals(404, moved.status());
-        assertTrue(moved.headers().get("Content-Type").startsWith("text/plain"), moved.bodyText());
-        assertTrue(moved.bodyText().contains("--metrics-listen"), moved.bodyText());
     }
 
     /**
