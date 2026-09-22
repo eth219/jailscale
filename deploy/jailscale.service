@@ -1,0 +1,39 @@
+# A systemd user unit for the node daemon (ARCHITECTURE.md 9.4). Copy to
+# ~/.config/systemd/user/jailscale.service, then:
+#
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now jailscale
+#   loginctl enable-linger $USER     # so it survives logout, and starts at boot
+#
+# `jailscale service install` used to write this file and register it. It wrote three of these --
+# this, a launchd plist and a Windows logon task -- and was verified on one platform, so it was
+# removed rather than kept as three templates nobody could test. The daemon itself is unchanged:
+# this is the command the CLI spawns, with nothing added.
+#
+# A user unit and not a system one, deliberately. The daemon holds this user's machine key and
+# reaches this user's local ports; running it as root would widen both for nothing the node needs.
+#
+# On macOS the equivalent is a launchd agent in ~/Library/LaunchAgents running the same command,
+# with RunAtLoad and KeepAlive; on Windows, a logon scheduled task.
+
+[Unit]
+Description=jailscale node daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h is the user's home. --home and --socket are passed rather than left to the environment because
+# the CLI resolves the socket from XDG_RUNTIME_DIR, which a unit does not always inherit: without
+# them a daemon can bind one path while every `jailscale` command looks at another.
+ExecStart=/usr/local/bin/jailscale daemon --home %h/.config/jailscale --socket %t/jailscale.sock
+Restart=on-failure
+RestartSec=2s
+# A clean SIGTERM shutdown exits 143, which systemd records as a failure unless it is named here
+# (#235). Without it every `systemctl --user stop` leaves the unit in `--failed`.
+SuccessExitStatus=143
+# The lift for the heap ceiling the build sets, if a node ever needs one (14). Not set by default.
+#Environment=JAILSCALE_DAEMON_OPTS=-XX:MaxHeapSize=128m
+
+[Install]
+WantedBy=default.target

@@ -153,8 +153,12 @@ jailscale open 3000 --domain app.example.com  # your own domain, key never leave
 jailscale verify                              # check that this node, not the hub, terminated the TLS
 jailscale update                              # say whether a newer release is out; never installs it
 jailscale ls | close NAME | status | down
-jailscale service install                     # keep the daemon running across logins
 ```
+
+To keep the daemon running across logins, run `jailscale daemon` from a unit of
+your own: [deploy/jailscale.service](deploy/jailscale.service) is a systemd user
+unit to copy, and the same command goes in a launchd agent or a Windows logon
+task.
 
 ### Running your own hub
 
@@ -289,15 +293,14 @@ What a compromised hub can and cannot do is written out in
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).
-- `service install` is verified on macOS, and on `linux-arm64`, where both
-  the `systemctl --user` unit and the root one were run across a reboot
-  ([#81](https://github.com/eth219/jailscale/issues/81) has the run).
-  `linux-amd64` is not measured, and Windows is untested: nothing in CI
-  installs a service, on any platform. That run also found a defect rather
-  than a limit — stopping the unit is recorded as a failure, so after an
-  uninstall it is still listed by `systemctl --failed`, or `systemctl
-  --user --failed` for the user unit, until it is reset by hand
-  ([#235](https://github.com/eth219/jailscale/issues/235)).
+- Nothing installs a service for you. `jailscale service install` wrote a
+  launchd agent, a systemd unit and a Windows logon task, and was verified on
+  one of the three, so it went with the rest of the maintenance cut; the unit
+  in [deploy/](deploy/jailscale.service) is what replaced it. A clean SIGTERM
+  exits 143, so a unit that does not name that as success is listed by
+  `systemctl --failed` after every stop
+  ([#235](https://github.com/eth219/jailscale/issues/235)) — the one in
+  `deploy/` names it.
 - Idle memory is 25 MB against the 20 MB originally aimed at. Almost all of the
   gap is the binary's own code becoming resident, clean and evictable
   ([docs/jsse-idle-cost](docs/jsse-idle-cost)).

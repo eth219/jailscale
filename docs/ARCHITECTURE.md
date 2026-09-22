@@ -52,7 +52,7 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Raw UDP ports | request–reply protocols — DNS, and anything that tolerates reliable delivery (§8.4) | the carrier is the node's one TCP connection, so delivery is stronger and timing weaker than UDP promises |
 | IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
 | Behind a TCP proxy | nginx or HAProxy in front, PROXY protocol v1 and v2 (§8.5) | the proxy forwards bytes without opening TLS, and `--proxy-protocol` needs loopback or `--trusted-proxy` |
-| Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2), and `service install` is verified on macOS and `linux-arm64`, not on `linux-amd64` and not on Windows ([#81](https://github.com/eth219/jailscale/issues/81)) |
+| Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2); nothing here installs a service, so keeping the daemon up is a unit of the operator's own (`deploy/`) |
 | Availability | two hubs, a delegated subdomain, the standby serving throughout, promotion without a person (§13) | promotion is automatic only with a witness node attached to the standby (§13.5) |
 | Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
 | Upgrading | a check against GitHub's newest release, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | which release is current is GitHub's unsigned word and only what is in it is signed (§15), the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
@@ -1346,9 +1346,11 @@ down. So `jailscale status` from cron, with no `XDG_RUNTIME_DIR`, still finds th
 session started in `/run/user/<uid>`. The path is used only if something answers there, so a file
 left behind by a daemon that has died sends nobody anywhere. Commands
 are `up`, `down`, `status`, `open`, `close`, `ls`, `gate`, `invite`, `admin`, `netcheck`, `verify`
-(§11.3), `leave`, `update` and `service install|uninstall|status`; service registration uses only
-what the OS already has (a launchd agent; a systemd unit, `systemctl --user` or a system unit when
-the installer is root; or a logon scheduled task) with no service wrapper.
+(§11.3), `leave` and `update`. Keeping the daemon up across logins is the operator's own unit --
+`deploy/jailscale.service` is a systemd user unit to copy, and a launchd agent or a logon scheduled
+task runs the same command. `service install|uninstall|status` wrote all three and was verified on
+one of them, so it was removed; what it built the command from, `DaemonCommand`, is what the CLI
+still spawns and what the unit runs.
 
 **`update` reports; `update --download` fetches; neither installs.** The plain form asks GitHub
 which release is newest, prints the version it names and where to get it, and the daemon does the
@@ -2704,9 +2706,8 @@ peak RSS for the hub against 91.7 MB uncapped, and 61.5 MB for the node against 
 1,000 still served, idle RSS and CLI start unchanged, and the ramp 2.7s against 2.5s. Both binaries take
 `-XX:MaxHeapSize=` at run time, the native runtime consuming it before `main` sees it, so a hub that
 needs more gets it on the unit's `ExecStart`. The node takes it through
-`JAILSCALE_DAEMON_OPTS`, which `Service.daemonCommand` puts straight after the executable when the
-CLI spawns the daemon and when `service install` writes a unit -- so whatever is set at install time
-is what the unit carries. It exists for measurement and diagnosis rather than as a product surface:
+`JAILSCALE_DAEMON_OPTS`, which `DaemonCommand` puts straight after the executable when the CLI
+spawns the daemon -- and a unit that wants it sets it in its own environment. It exists for measurement and diagnosis rather than as a product surface:
 nothing measured so far asks for a different ceiling.
 
 **Serial is the collector, and G1 was measured rather than argued about.** GraalVM CE offers

@@ -30,7 +30,6 @@ public final class Main {
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | daemon
         jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
-        jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
         jailscale update                                     say whether a newer release is out
         jailscale update --download [--dir DIR]               fetch that release and check its signature; installing it stays yours
@@ -83,7 +82,6 @@ public final class Main {
                 // makes them the same, and a clean build is what CI and every release do.
                 case "version" -> System.out.println("jailscale " + Version.string() + " (protocol " + Message.PROTO + ")");
                 case "update" -> update(a);
-                case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
                 case "status" -> print(call(cfg, JsonObject.builder().put("cmd", "status").build(), false));
@@ -401,15 +399,15 @@ public final class Main {
 
     /**
      * Starts {@code <this binary> daemon} detached, logging to the config directory. The command
-     * comes from {@link Service#daemonCommand}, which is also what {@code service install} writes
-     * into a unit: they used to be built separately here and had drifted apart.
+     * comes from {@link DaemonCommand}, which is also what an operator's unit runs: the two used to
+     * be built separately and had drifted apart.
      */
     private static void spawnDaemon(NodeConfig cfg) throws IOException, InterruptedException {
         Files.createDirectories(cfg.configDir());
         if (ProcessHandle.current().info().command().isEmpty()) {
             throw new IOException("cannot determine own executable to start the daemon");
         }
-        List<String> cmd = Service.daemonCommand(cfg);
+        List<String> cmd = DaemonCommand.of(cfg);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(cfg.daemonLog().toFile()));

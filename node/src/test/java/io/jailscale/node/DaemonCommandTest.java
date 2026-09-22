@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The one command that starts the daemon, whether the CLI spawns it or a unit does
- * ({@code Service.daemonCommand}). Both used to be built separately, and had drifted: one passed
+ * ({@link DaemonCommand}). Both used to be built separately, and had drifted: one passed
  * {@code -cp} and a main class where the other passed {@code -jar}, and one passed the home
  * directory as given where the other made it absolute.
  */
@@ -22,7 +22,7 @@ class DaemonCommandTest {
 
     @Test
     void withoutOptionsItIsTheExecutableAndTheSubcommand() {
-        List<String> cmd = Service.daemonCommand(cfgIn(Path.of("nodehome")), null);
+        List<String> cmd = DaemonCommand.of(cfgIn(Path.of("nodehome")), null);
         assertEquals("daemon", cmd.get(cmd.size() - 5));
         assertEquals("--home", cmd.get(cmd.size() - 4));
         assertEquals("--socket", cmd.get(cmd.size() - 2));
@@ -39,7 +39,7 @@ class DaemonCommandTest {
      */
     @Test
     void optionsComeStraightAfterTheExecutable() {
-        List<String> cmd = Service.daemonCommand(cfgIn(Path.of("nodehome")),
+        List<String> cmd = DaemonCommand.of(cfgIn(Path.of("nodehome")),
             "-XX:MaxHeapSize=128m -XX:PrintFlags=/tmp/node.flags");
         assertEquals("-XX:MaxHeapSize=128m", cmd.get(1));
         assertEquals("-XX:PrintFlags=/tmp/node.flags", cmd.get(2));
@@ -58,7 +58,7 @@ class DaemonCommandTest {
     @Test
     void theDaemonIsToldTheSocketTheCliWillWaitOn() {
         NodeConfig cfg = new NodeConfig(Path.of("nodehome"), Path.of("/run/user/501/jailscale.sock"), NodeConfig.Tuning.defaults());
-        List<String> cmd = Service.daemonCommand(cfg, null);
+        List<String> cmd = DaemonCommand.of(cfg, null);
         String[] tail = cmd.subList(cmd.indexOf("daemon"), cmd.size()).toArray(new String[0]);
 
         NodeConfig asTheDaemonReadsIt = Main.configOf(Args.parse(tail));
@@ -78,15 +78,15 @@ class DaemonCommandTest {
 
     @Test
     void blankOptionsAreNotAnArgument() {
-        List<String> plain = Service.daemonCommand(cfgIn(Path.of("nodehome")), null);
-        assertEquals(plain, Service.daemonCommand(cfgIn(Path.of("nodehome")), "   "));
-        assertEquals(plain, Service.daemonCommand(cfgIn(Path.of("nodehome")), ""));
+        List<String> plain = DaemonCommand.of(cfgIn(Path.of("nodehome")), null);
+        assertEquals(plain, DaemonCommand.of(cfgIn(Path.of("nodehome")), "   "));
+        assertEquals(plain, DaemonCommand.of(cfgIn(Path.of("nodehome")), ""));
     }
 
     /** Under a JVM the classpath is handed over whole, and absolute, or a unit cannot find it. */
     @Test
     void underAJvmTheClasspathIsAbsolute() {
-        List<String> cmd = Service.daemonCommand(cfgIn(Path.of("nodehome")), null);
+        List<String> cmd = DaemonCommand.of(cfgIn(Path.of("nodehome")), null);
         int cp = cmd.indexOf("-cp");
         if (cp < 0) {
             return; // a native image: no classpath to pass
