@@ -61,10 +61,7 @@ class AdminCommandTest {
             new Route("admin-remove", "admin", "remove", "alice"),
             new Route("key-rotate", "key", "rotate"),
             new Route("setting", "setting", "knock", "off"),
-            new Route("promote", "promote"),
-            new Route("address-check", "address", "check"),
-            new Route("availability-reset", "availability", "reset"),
-            new Route("handoff", "handoff"));
+            new Route("address-check", "address", "check"));
     }
 
     private static JsonObject req(String... argv) {
@@ -84,16 +81,10 @@ class AdminCommandTest {
      * written up in ARCHITECTURE.md 11.4, and absent from the usage text -- so the way to take
      * back a claimed name was discoverable only by reading the source.
      *
-     * <p>{@code handoff} is the exception and stays one: it is not an operator's command but the
-     * message a second process sends with {@code --takeover}, and listing it would invite someone
-     * to dismantle a running hub by hand.
      */
     @Test
     void everyRoutedVerbIsInTheUsageText() {
         for (Route r : routes()) {
-            if (r.verb().equals("handoff")) {
-                continue;
-            }
             String line = Main.USAGE.lines()
                 .filter(l -> l.strip().startsWith("jailhub " + r.argv()[0]))
                 .findFirst()
@@ -109,9 +100,6 @@ class AdminCommandTest {
      * on a running hub. Only the fall-through reply proves a missing handler -- a verb that lands
      * and then refuses ("no node matches 3") has been routed, which is all this asserts.
      *
-     * <p>{@code handoff} is left out on purpose: it is the one verb that dismantles the hub it is
-     * sent to, and {@link HandoffTest} exercises it the way it is really sent, by a second process
-     * started with {@code --takeover}.
      */
     @Test
     void everyRoutedVerbLandsOnTheServer() throws Exception {
@@ -119,9 +107,6 @@ class AdminCommandTest {
         try {
             AdminIpc ipc = new AdminIpc(hub);
             for (Route r : routes()) {
-                if (r.verb().equals("handoff")) {
-                    continue;
-                }
                 // Every field any case reads, so a verb that lands gets as far as its own objection.
                 JsonObject req = JsonObject.builder().put("cmd", r.verb()).put("mkey", "3").put("user", "alice")
                     .put("cidr", "203.0.113.7").put("name", "web")
@@ -298,7 +283,7 @@ class AdminCommandTest {
             assertEquals("knock is on or off, not OFF", set(ipc, "knock", "OFF"));
             assertEquals("registration is invite or open, not opne", set(ipc, "registration", "opne"));
             assertEquals("invitePolicy is members or admins, not admin", set(ipc, "invitePolicy", "admin"));
-            assertEquals("no such setting knok (autoPromote, contact, invitePolicy, knock, operator, registration, terms)",
+            assertEquals("no such setting knok (contact, invitePolicy, knock, operator, registration, terms)",
                 set(ipc, "knok", "off"), "the list an operator is offered has to be all of them");
             assertEquals("on", hub.store().setting(Store.SETTING_KNOCK, "on"), "a refused setting must not have been written");
 

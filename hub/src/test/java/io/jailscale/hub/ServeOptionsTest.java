@@ -55,7 +55,7 @@ class ServeOptionsTest {
     @Test
     void everyBooleanServeOptionIsInTheFlagsList() {
         for (String flag : new String[] {"debug", "admin", "help", "acme-staging", "no-selfcheck",
-            "no-address-check", "takeover"}) {
+            "no-address-check"}) {
             Args a = Args.parse(new String[] {"serve", "--" + flag}, Main.FLAGS);
             assertTrue(a.flag(flag), "--" + flag + " is not in Main.FLAGS");
             assertEquals("serve", a.positional(0), "--" + flag + " swallowed the subcommand");
@@ -106,21 +106,9 @@ class ServeOptionsTest {
     }
 
     @Test
-    void aStandbyNamesItsPrimaryAndNotItself() {
-        assertFalse(serve().standby(), "no --peer means this hub is the primary");
-        HubConfig c = serve("--peer", "https://hub-b.example.com", "--peer-ca", "/tmp/ca.pem");
-        assertTrue(c.standby());
-        assertEquals("hub-b.example.com", c.peer().getHost());
-        assertEquals(Path.of("/tmp/ca.pem"), c.peerCa());
-        assertNull(serve("--peer", "https://hub-b.example.com").peerCa());
-        assertNull(serve("--peer", "https://hub-b.example.com").peerAddr(), "no --peer-addr means resolve the name");
+    void theAdvertisedAddressIsOptionalAndFoundFromTheGlueOtherwise() {
         assertNull(serve().advertise(), "no --advertise means the address is found from the glue");
         assertEquals("203.0.113.1", serve("--advertise", "203.0.113.1").advertise());
-        assertEquals("10.0.0.2", serve("--peer", "https://hub-b.example.com", "--peer-addr", "10.0.0.2").peerAddr());
-        assertTrue(refused("--peer", "http://hub-b.example.com").contains("https"));
-        // The primary's own name is what a standby is given: it will serve that name once promoted,
-        // and until then the name resolves to the primary. The first real standby was refused here.
-        assertEquals("hub.example.com", serve("--peer", "https://hub.example.com").peer().getHost());
     }
 
     @Test

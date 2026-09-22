@@ -106,15 +106,6 @@ final class HubTls {
         return new Message.CertUpdate(pem, current.keyId());
     }
 
-    /**
-     * The message that gives a standby hub both halves (§13.1). The only place the private key is
-     * ever read back out of this class, and it goes to a party that proved it holds the hub key.
-     */
-    Message.PeerCert peerCert() throws GeneralSecurityException {
-        Message.CertUpdate pub = certUpdate();
-        return new Message.PeerCert(pub.chainPem(), Pem.encodeBlock("PRIVATE KEY", current.key().getEncoded()), pub.keyId());
-    }
-
     /** The 98 bytes every TLS 1.3 server CertificateVerify signature begins with (RFC 8446 §4.4.3). */
     static final byte[] CERT_VERIFY_CONTEXT = Tls13.CERT_VERIFY_CONTEXT;
 

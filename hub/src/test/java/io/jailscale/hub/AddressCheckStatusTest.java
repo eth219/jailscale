@@ -130,52 +130,6 @@ class AddressCheckStatusTest {
         }
     }
 
-    @Test
-    void standingDownDropsTheVerdictAndTheRefusalNamesNoPeerItDoesNotHave() throws Exception {
-        // A hub that stood down by epoch (§13.5) rather than by --peer: the records are the new
-        // primary's now, so the verdict it reached as a primary stops being about anything, and
-        // nothing may revive it -- a standby that kept checking would find the other hub's key at
-        // the shared address and file that as a fault every hour.
-        try (Hub hub = hub(true)) {
-            hub.addressProbe = () -> result(Reachability.PROVEN, null);
-            hub.checkAddress();
-            assertNotNull(hub.addressStatus());
-
-            hub.demote(9, "other.hub.test");
-            assertTrue(hub.isStandby());
-            assertNull(hub.addressStatus(), "a standby carries no verdict about the primary's records");
-            hub.reachedBy("hub.test", "203.0.113.5");
-            assertNull(hub.addressStatus(), "and an arrival does not bring one back");
-            assertFalse(admin(hub, "status").has("addressCheck"), "and the status carries no verdict");
-
-            // The refusal says what is wrong, rather than dereferencing a peer this hub never had.
-            assertNull(hub.config().peer());
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> admin(hub, "address-check"));
-            assertEquals("this hub is a standby; the records to check are the primary's", e.getMessage());
-        }
-    }
-
-    @Test
-    void aRunOvertakenByStandingDownIsKeptNowhere() throws Exception {
-        // The loop tests standby before the run, and the run is slow enough to be overtaken -- an
-        // unanswered resolver costs five seconds and the dial another. Demotion inside the probe
-        // is that interleaving exactly: what comes back was computed as a primary, about records
-        // that are the new primary's now, and recording it would leave a fault standing on a
-        // standby that no later pass ever clears.
-        try (Hub hub = hub(true)) {
-            hub.addressProbe = () -> {
-                try {
-                    hub.demote(9, "other.hub.test");
-                } catch (java.io.IOException e) {
-                    throw new IllegalStateException(e);
-                }
-                return result(Reachability.ELSEWHERE, "another hub answers there");
-            };
-            assertEquals(Reachability.ELSEWHERE, hub.checkAddress().verdict(), "the caller still gets its answer");
-            assertNull(hub.addressStatus(), "but a standby keeps no verdict");
-        }
-    }
-
     /** One admin command, handed to the handler the socket would hand it to. */
     private static JsonObject admin(Hub hub, String cmd) throws Exception {
         JsonObject[] last = new JsonObject[1];

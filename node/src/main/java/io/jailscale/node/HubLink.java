@@ -37,27 +37,12 @@ final class HubLink implements AutoCloseable {
     /** Credentials for the next RegisterRequest; cleared once registered. */
     record Credentials(String invite, String code, String user) {}
 
-    /** The connection index a relay connection uses (§13.4): the last one, so extras keep 1 and 2. */
-    static final int RELAY_CONN = 3;
-
     /** What the daemon wants to know. */
     interface Events {
         void onConnected(HubLink link);
 
         /** The session that {@link #onConnected} reopened everything on is gone; its link ids with it. */
         default void onDisconnected(HubLink link) {
-        }
-
-        /** The control connection was told which hosts serve this hub's names right now (§13.4). */
-        default void onRelays(HubLink control, List<String> relays) {
-        }
-
-        /** A standby asked, on a relay connection, whether the primary can be reached (§13.5). */
-        default void onProbe(HubLink relay, Message.PeerProbe probe) {
-        }
-
-        /** The primary answered a probe on the control connection; it goes back to whoever asked (§13.5). */
-        default void onProbeAnswer(Message.PeerProbeAnswer answer) {
         }
 
         void onCert(Message.CertUpdate cert);
@@ -131,12 +116,6 @@ final class HubLink implements AutoCloseable {
     private final NodeState state;
     private final String version;
     private final Events events;
-    /**
-     * Null for the control connection. For a relay connection (§13.4), the {@code address} or
-     * {@code address:port} of the host it goes to: the same hub name, the same pinned key, the
-     * same certificate, another machine.
-     */
-    private final String relayAddress;
     private volatile Credentials credentials;
     private volatile boolean running;
     private volatile boolean stopReconnecting;
@@ -145,8 +124,6 @@ final class HubLink implements AutoCloseable {
     private final List<Session> draining = new CopyOnWriteArrayList<>();
     private volatile String lastError;
     private volatile Message.RegisterResponse lastRegister;
-    /** The relay list the hub gave on the last hello (§13.4); announced once this node is registered. */
-    private volatile List<String> lastRelays = List.of();
     private final Map<String, CompletableFuture<Message>> waiting = new ConcurrentHashMap<>();
     private Thread thread;
     /**
@@ -158,24 +135,10 @@ final class HubLink implements AutoCloseable {
     private final int visitorCeiling;
 
     HubLink(NodeState state, String version, Events events, int visitorCeiling) {
-        this(state, version, events, visitorCeiling, null);
-    }
-
-    HubLink(NodeState state, String version, Events events, int visitorCeiling, String relayAddress) {
         this.state = state;
         this.version = version;
         this.events = events;
         this.visitorCeiling = visitorCeiling;
-        this.relayAddress = relayAddress;
-    }
-
-    /** Whether this is a relay connection (§13.4), and to where. */
-    boolean isRelay() {
-        return relayAddress != null;
-    }
-
-    String relayAddress() {
-        return relayAddress;
     }
 
     /**
@@ -211,7 +174,7 @@ final class HubLink implements AutoCloseable {
             return;
         }
         running = true;
-        thread = Thread.ofVirtual().name(isRelay() ? "relay-link-" + relayAddress : "hub-link").start(this::loop);
+        thread = Thread.ofVirtual().name("hub-link").start(this::loop);
     }
 
     boolean isConnected() {
@@ -263,7 +226,7 @@ final class HubLink implements AutoCloseable {
         while (running && !stopReconnecting) {
             Session p = null;
             try {
-                p = connectOnce(isRelay() ? RELAY_CONN : 0);
+                p = connectOnce(0);
                 primary = p;
                 attempt = 0;
                 p.mux.start();
@@ -337,32 +300,20 @@ final class HubLink implements AutoCloseable {
         }
         // Only when DNS was actually asked: with --hub-addr the name never resolved, and a hub
         // reading this as proof that its A record works would be reading our configuration file.
-        String resolved = state.hubAddr == null && !isRelay() ? state.hubHost : null;
-        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn, resolved, visitorCeiling, isRelay());
+        String resolved = state.hubAddr == null ? state.hubHost : null;
+        Message.Hello hello = new Message.Hello(Message.PROTO, version, osName(), conn, resolved, visitorCeiling);
         String addr = state.hubAddr;
         int port = state.hubPort;
-        if (isRelay()) {
-            int colon = relayAddress.lastIndexOf(':');
-            if (colon > 0 && relayAddress.indexOf(':') == colon) {
-                addr = relayAddress.substring(0, colon);
-                port = Integer.parseInt(relayAddress.substring(colon + 1));
-            } else {
-                addr = relayAddress;
-            }
-        }
         HubClient.Connected c = HubClient.connect(state.hubHost, addr, port, ctx, verify, state.machineKey, keys, hello);
         if (c.hello().proto() < MIN_HUB_PROTO) {
-            // There is no older encoding to fall back to: the first SignRequest, domain claim or
-            // http-01 upload would be a message the hub cannot decode, and it would just close.
+            // There is no older encoding to fall back to: the first SignRequest would be a message
+            // the hub cannot decode, and it would just close.
             c.channel().close();
             throw new HubClient.Rejected(Message.Goodbye.UPGRADE_REQUIRED, "the hub speaks protocol " + c.hello().proto()
                 + " and this jailscale needs " + MIN_HUB_PROTO + ". The hub runs jailhub " + c.hello().version()
                 + "; update jailhub there (or run a jailscale from the same release as the hub).");
         }
-        if (isRelay()) {
-            lastError = null;
-            LOG.info("relay connection to {} up (hub v{})", relayAddress, c.hello().version());
-        } else if (conn == 0) {
+        if (conn == 0) {
             if (!c.usedHubKey().equals(state.hubKey)) {
                 LOG.info("hub key rotation complete; pinning the new key");
                 state.hubKey = c.usedHubKey();
@@ -376,19 +327,11 @@ final class HubLink implements AutoCloseable {
             }
             lastError = null;
             LOG.info("connected to {} (hub v{})", state.hubHost, c.hello().version());
-            List<String> relays = c.hello().relays();
-            lastRelays = relays == null ? List.of() : relays;
         }
         return new Session(conn, c);
     }
 
     private void afterPrimaryConnected(Session p) throws IOException {
-        if (isRelay()) {
-            // Nothing to register: the host on the other end holds this node's registration in the
-            // copy it keeps, and a relay connection asks it only to serve what the node already has.
-            onRegistered();
-            return;
-        }
         if (!state.registered) {
             Credentials cr = credentials;
             send(new Message.RegisterRequest(hostname(), osName(), cr == null ? null : cr.user(),
@@ -415,22 +358,13 @@ final class HubLink implements AutoCloseable {
     /** Registered (now or earlier): reopen links and bring up the extra connections. */
     private void onRegistered() {
         Thread.ofVirtual().name("link-connected").start(() -> {
-            if (!isRelay()) {
-                // After registration and after `primary` is set: a relay connection is refused
-                // for a node the host does not know, and the one endpoint to leave out of the
-                // list is the one this connection reached, which the socket only says now.
-                events.onRelays(this, lastRelays);
-            }
             events.onConnected(this);
             openExtras();
         });
     }
 
     private void openExtras() {
-        if (isRelay()) {
-            return;
-        }
-        int want = Math.max(1, Math.min(state.connections, RELAY_CONN)); // 3 leaves the index a relay connection uses
+        int want = Math.max(1, Math.min(state.connections, 4)); // the hub takes four (NodeSession.MAX_CONNECTIONS)
         for (int i = 1; i < want; i++) {
             if (extras.containsKey(i) || primary == null) {
                 continue;
@@ -574,22 +508,6 @@ final class HubLink implements AutoCloseable {
             }
             case Message.CertUpdate c -> events.onCert(c);
             case Message.LinkRevoked r -> events.onRevoked(r);
-            case Message.PeerProbe pp -> {
-                if (isRelay()) {
-                    events.onProbe(this, pp);
-                }
-            }
-            case Message.PeerProbeAnswer pa -> {
-                if (!isRelay()) {
-                    events.onProbeAnswer(pa);
-                }
-            }
-            case Message.RelaysChanged rc -> {
-                lastRelays = rc.relays() == null ? List.of() : rc.relays();
-                if (!isRelay() && state.registered) {
-                    events.onRelays(this, lastRelays);
-                }
-            }
             case Message.Pong _ -> complete("Pong", m);
             case Message.InviteCreated _ -> complete("InviteCreated", m);
             case Message.LinkOpened _ -> complete("LinkOpened", m);

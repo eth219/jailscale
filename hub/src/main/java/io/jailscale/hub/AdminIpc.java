@@ -15,8 +15,7 @@ final class AdminIpc implements Ipc.Handler {
     static final Map<String, List<String>> SETTING_VALUES = Map.of(
         Store.SETTING_INVITE_POLICY, List.of(HubConfig.POLICY_MEMBERS, HubConfig.POLICY_ADMINS),
         Store.SETTING_REGISTRATION, List.of("invite", "open"),
-        Store.SETTING_KNOCK, List.of("on", "off"),
-        Store.SETTING_AUTO_PROMOTE, List.of("on", "off"));
+        Store.SETTING_KNOCK, List.of("on", "off"));
 
     /**
      * The settings whose value is text rather than one of a fixed few (#99), and what each will
@@ -54,8 +53,8 @@ final class AdminIpc implements Ipc.Handler {
             case "address-check" -> {
                 // Asked for, so it runs now rather than at the next hourly pass (§7.2): the reason
                 // to type this is having just edited a record. Refused on the terms the loop waits
-                // on -- off, a standby, a delegated hub still finding its own address -- and no
-                // others: whether the certificate came from ACME is the loop's business and not this
+                // on -- off, or a delegated hub still finding its own address -- and no others:
+                // whether the certificate came from ACME is the loop's business and not this
                 // command's, because an operator who asks has said which deployment this is.
                 String blocker = hub.addressCheckBlocker();
                 if (blocker != null) {
@@ -63,19 +62,6 @@ final class AdminIpc implements Ipc.Handler {
                 }
                 reply.done(JsonObject.builder().put("ok", true).put("addressCheck", hub.checkAddress().json()));
             }
-            case "availability-reset" -> {
-                // The record restarts now: an operator who has finished a day of deliberate restarts
-                // does not want them counted against the service from here on (§13.2).
-                hub.availability().reset(System.currentTimeMillis());
-                reply.done(JsonObject.builder().put("ok", true).put("since", System.currentTimeMillis() / 1000));
-            }
-            case "promote" -> {
-                hub.promote();
-                reply.done(JsonObject.builder().put("ok", true).put("role", hub.role())
-                    .put("next", "point " + hub.config().hostname() + " at this host; restart the old primary with --peer https://"
-                        + hub.config().hostname()));
-            }
-
             case "node-list" -> {
                 List<Object> rows = store.nodes().stream().<Object>map(n -> {
                     NodeGroup g = hub.registry().get(n.mkey());
@@ -88,10 +74,6 @@ final class AdminIpc implements Ipc.Handler {
                     .put("mkey", p.mkey()).put("hostname", p.hostname()).put("os", p.os())
                     .put("ip", p.ip()).put("user", p.user()).put("at", p.at()).build().asMap()).toList();
                 reply.done(JsonObject.builder().put("ok", true).put("nodes", rows).put("pending", pend));
-            }
-            case "handoff" -> {
-                hub.handoff();
-                reply.ok();
             }
             case "node-approve" -> {
                 String mkey = resolveMkey(req.string("mkey"));
@@ -280,10 +262,7 @@ final class AdminIpc implements Ipc.Handler {
             .put("registration", store.setting(Store.SETTING_REGISTRATION, "invite"))
             .put("invitePolicy", store.setting(Store.SETTING_INVITE_POLICY, "members"))
             .put("knock", store.setting(Store.SETTING_KNOCK, "on"))
-            .put("role", hub.role())
-            .put("epoch", hub.epoch())
-            .put("autoPromote", hub.autoPromote() ? "on" : "off")
-            .put("standbys", standbys());
+            .put("knockQueue", store.pending().size());
         // §7.2: the verdict that stands, so the operator who missed the line at boot has somewhere
         // to look it up. Absent, rather than "unknown", where the check is off or has not run yet:
         // a field that says nothing is worse than a field that is not there.
@@ -291,20 +270,7 @@ final class AdminIpc implements Ipc.Handler {
         if (address != null) {
             b.put("addressCheck", address.json());
         }
-        PeerClient pc = hub.peerClient();
-        if (hub.isStandby() && pc != null) {
-            b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());
-        }
         return b;
-    }
-
-    private List<Object> standbys() {
-        List<Object> rows = new ArrayList<>();
-        for (Peers.Session s : hub.peers().all()) {
-            rows.add(JsonObject.builder().put("host", s.name()).put("ip", s.remoteIp()).put("connectedAt", s.connectedAt())
-                .put("eventsSent", s.eventsSent()).build().asMap());
-        }
-        return rows;
     }
 
     /** Accepts a full mkey: text, a unique prefix of one, or a node id. */

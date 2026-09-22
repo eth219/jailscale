@@ -85,8 +85,6 @@ final class Store implements AutoCloseable {
     static final String SETTING_INVITE_POLICY = "invitePolicy";
     static final String SETTING_REGISTRATION = "registration";
     static final String SETTING_KNOCK = "knock";
-    /** §13.5: whether a standby may promote itself when no node can reach the primary. */
-    static final String SETTING_AUTO_PROMOTE = "autoPromote";
     /**
      * Who runs this hub, where to write to them, and what they allow (#99). Settings and not flags:
      * they are the kind that change while a hub is running -- a contact address outlives the

@@ -111,12 +111,6 @@ class HomePageTest {
         String html = r.bodyText();
         assertTrue(html.contains("Status"), html);
         assertTrue(html.contains("Uptime"), html);
-        // §13.2: the columns are on the page, each with its tooltip, and the numbers behind them
-        // are in the status JSON as well, so nothing is read from color or height alone.
-        assertTrue(html.contains("<svg class=\"avail\""), html);
-        assertTrue(html.contains("<title>") && html.contains("up throughout</title>"), html);
-        assertTrue(html.contains("30 days ago") && html.contains("uptime</span><span>Today"), html);
-        assertTrue(html.contains("Shorter bars are worse"), "colour is never the only channel: " + html);
         assertTrue(html.contains("Nodes"), html);
         assertTrue(html.contains("Memory"), html);
         assertFalse(html.contains("mkey:"), "a node's key must not be on the public page");
@@ -195,13 +189,13 @@ class HomePageTest {
         assertTrue(html.contains("None open right now"), html);
     }
 
-    /** One page, no script, and the availability record on it: what tells a first visitor this hub is real. */
+    /** One page and no script: what tells a first visitor this hub is real. */
     @Test
     void theHubPageIsOneUrlWithNoScript() throws Exception {
         String home = http("GET", "/", null, null).bodyText();
         assertFalse(home.contains("<script"), "no script on the page: " + home);
         assertFalse(home.contains("<nav>"), "one page, nothing to navigate to: " + home);
-        assertTrue(home.contains("<svg class=\"avail\""), home);
+        assertTrue(home.contains("<h2>Status</h2>"), home);
     }
 
     /**
@@ -522,82 +516,6 @@ class HomePageTest {
         }
     }
 
-    /**
-     * The numbers the strip draws, in text. A hub that was down for 42 minutes three days ago has to
-     * say so somewhere a phone, a keyboard and a screen reader can reach -- the tooltip is none of
-     * those -- and the number has to be the one {@code /v1/status} reports, or the picture and the
-     * table behind it have quietly come apart.
-     *
-     * <p>The record is written to disk before the hub starts, because that is how a real gap is
-     * made: {@link Availability} books the interval between the last stamp and the start as down,
-     * and a gap in the file is a period a previous process recorded and this one inherits.
-     */
-    @Test
-    void theDaysThatWereNotGreenAreNamedInTextAndMatchTheJson() throws Exception {
-        Path root2 = TestDirs.newRoot("avail");
-        Path state = root2.resolve("hub");
-        Files.createDirectories(state);
-        long now = System.currentTimeMillis();
-        long day = 86_400_000L;
-        long downFrom = now - 3 * day - 12 * 3_600_000L;
-        Files.writeString(state.resolve("availability.json"), JsonObject.builder()
-            .put("since", now - 30 * day)
-            .put("lastStamp", now)
-            .put("gaps", java.util.List.of(java.util.List.of(downFrom, downFrom + 42 * 60_000L)))
-            .put("peers", JsonObject.builder().build())
-            .toJson());
-
-        java.net.ServerSocket port2Socket = TestPorts.listen(1024);
-        int port2 = port2Socket.getLocalPort();
-        Hub down = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port2), state, "127.0.0.1", port2,
-            CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
-        down.listenOn(port2Socket);
-        try {
-            down.start();
-        } catch (Exception e) {
-            down.close();   // as in AdminCommandTest: a throw here would otherwise leak the socket
-            throw e;
-        }
-        try {
-            String page = get(port2, "/").bodyText();
-            assertTrue(page.contains("<details>"), "the numbers have to be reachable without a hover: " + page);
-            // The row, not the count: Availability books the interval between the written lastStamp
-            // and this process starting as down too, and on a slow enough machine that rounds to a
-            // minute and becomes a second row. What has to be there is the outage that was written.
-            assertTrue(page.contains("42 min down"), page);
-            assertTrue(page.contains("with downtime, of the last 30"), "the summary says what, not what colour: " + page);
-
-            // The same number, from the same array, in the answer a monitor reads. The tooltip and
-            // this list and the JSON are three renderings of one thing, and this is what says so.
-            JsonObject status = Json.parseObject(get(port2, "/v1/status").bodyText());
-            assertTrue(status.object("availability").object("process").array("downMinutesPerDay").toString().contains("42"),
-                status.toString());
-        } finally {
-            down.close();
-        }
-
-        // And the other direction: the hub this class starts has nothing to report, so it says
-        // nothing. Without this, a page that printed an empty details element on every hub -- or
-        // thirty rows of "no record" -- would pass everything above.
-        assertFalse(http("GET", "/", null, null).bodyText().contains("<details>"), "nothing was down here");
-    }
-
-    /** A page or a JSON answer from a hub other than the one this class starts. */
-    private HttpResponse get(int p, String path) throws Exception {
-        try (SSLSocket s = Tls.connect(Tls.clientContext(CERT, false), "hub.test", "127.0.0.1", p, true, 10_000)) {
-            Http.writeRequest(s.getOutputStream(), "GET", "hub.test", path, new Headers(), null);
-            return Http.readResponse(s.getInputStream(), 1 << 20);
-        }
-    }
-
-    /**
-     * That the page carries these two facts at all, and that it takes them from the constants the
-     * handshake enforces rather than from a number somebody typed. It cannot fail on a protocol
-     * bump -- page and assertion read the same constant, which is the point of the page reading it
-     * -- so what it catches is the paragraph going away, a number written by hand drifting from
-     * {@code MIN_PROTO}, and the wrong one of the two branches below being taken. That the floor is
-     * enforced at all is {@link ProtoSkewTest}'s.
-     */
     @Test
     void thePageSaysWhichClientsThisHubTakesAndHowToCheckTheOneYouGet() throws Exception {
         String page = http("GET", "/", null, null).bodyText();
@@ -656,7 +574,6 @@ class HomePageTest {
         assertTrue(named.contains("<a href=\"https://example.com/aup\">What is allowed here</a>"), named);
         // The retention sentence is the part an operator cannot write for themselves, so it is not
         // theirs to configure: it says what the process does, and where that stops.
-        assertTrue(named.contains("thirty days of uptime record"), named);
         assertTrue(named.contains("keeps no list"), named);
         assertTrue(named.contains("is the operator's and not something this page can answer for"), named);
         // Three attempts at an inventory were each found short, so the sentence says the shape of

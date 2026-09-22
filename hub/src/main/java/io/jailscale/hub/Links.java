@@ -97,21 +97,11 @@ final class Links {
         return name.contains(".") ? null : name;
     }
 
-    private volatile java.util.function.BooleanSupplier standby = () -> false;
-
-    /** Whether this hub is a standby (§13.4), which decides what {@link #open} may write: nothing. */
-    void standby(java.util.function.BooleanSupplier standby) {
-        this.standby = standby;
-    }
-
     /** Handles LinkOpen from a registered node. */
     synchronized Message open(NodeSession s, Message.LinkOpen req) throws IOException {
         Store.NodeRec node = s.node();
         if (node == null) {
             return new Message.LinkOpened(null, null, null, "not-registered");
-        }
-        if (standby.getAsBoolean() || s.isRelay()) {
-            return reopen(s, node, req);
         }
         int mine = 0;
         for (Link l : all()) {
@@ -162,34 +152,6 @@ final class Links {
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
-        return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null);
-    }
-
-    /**
-     * A link opened on a host that must not write (ARCHITECTURE.md §13.4): a standby, or any host
-     * reached by a relay connection. The name has to be one the replicated store already
-     * gives this node -- the primary assigned it, and the assignment arrived over the hub-to-hub
-     * channel -- so nothing here claims, reassigns, notifies or allocates. A name this node does
-     * not hold and a random name it has not been given yet are the primary's to answer, and are
-     * refused with {@code primary-only} so the node asks there.
-     */
-    private Message reopen(NodeSession s, Store.NodeRec node, Message.LinkOpen req) {
-        if (req.name() == null) {
-            return new Message.LinkOpened(null, null, null, "primary-only");
-        }
-        String name = req.name().toLowerCase(Locale.ROOT);
-        Store.NameRec rec = store.name(name);
-        if (rec == null || !node.mkey().equals(rec.mkey())) {
-            return new Message.LinkOpened(null, null, null, "primary-only");
-        }
-        Link existing = byName.get(name);
-        if (existing != null && existing.group() != s.group()) {
-            byId.remove(existing.linkId());
-        }
-        Link link = new Link(Tokens.id("l_"), name, node.user(), node.mkey(), s.group(), req.local());
-        byName.put(name, link);
-        byId.put(link.linkId(), link);
-        LOG.info("link {} reopened here by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
         return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null);
     }
 

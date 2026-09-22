@@ -1,4 +1,4 @@
-# systemd unit for jailhub (ARCHITECTURE.md §7.2, §13).
+# systemd unit for jailhub (ARCHITECTURE.md 7.2, 13).
 #   install -m 0755 jailhub /usr/local/bin/jailhub
 #   useradd --system --home /var/lib/jailhub --create-home --shell /usr/sbin/nologin jailhub
 #   install -m 0644 jailhub.service /etc/systemd/system/
@@ -7,18 +7,11 @@
 # Updating: replace the binary and `systemctl restart jailhub`. Nodes reconnect on their own and
 # the hub is back inside a few seconds.
 #
-# A standby (ARCHITECTURE.md §13.1) is this same unit on a second host with the primary's hub.key
-# copied into /var/lib/jailhub and `--peer https://hub.example.com` added to ExecStart; the base URL
-# stays the primary's name, since that is the name the standby will serve once promoted. It has no
-# nodes to relay challenges for and issues no certificate, so its port 80 is unused until
-# `jailhub promote`; port 53 it serves from the start, as the second name server of the subdomain
-# (ARCHITECTURE.md §13.3), so open UDP/TCP 53 on both hosts and delegate the subdomain to both.
-#
-# Not `systemctl reload`, and there is deliberately no ExecReload here. `serve --takeover` works by
-# starting a second process that takes the listeners and lets the first exit. Under a unit that
-# first process is the one systemd tracks, so its exit stops the unit and takes the new process
-# down with the cgroup. Tried it: the hub went inactive. The hand-off is for operators who run
-# jailhub outside a unit.
+# Not `systemctl reload`, and there is deliberately no ExecReload here: a restart is the whole of
+# the upgrade path. `serve --takeover`, which handed the listeners to a second process so that an
+# upgrade dropped nobody, never worked under a unit -- systemd tracks the first process, so its
+# exit stopped the unit and took the new process down with the cgroup -- and was removed with the
+# standby it belonged to (ARCHITECTURE.md 13).
 #
 # Type=simple, so `systemctl start` returns when the process exists, not when it is serving; on a
 # first boot those are minutes of ACME apart, and the status page is what says which. A Type=notify

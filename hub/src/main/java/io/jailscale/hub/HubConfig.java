@@ -26,18 +26,15 @@ public record HubConfig(
     int dnsListenPort,
     boolean selfCheck,     // dns-01 self-check: holds issuance until it passes (§7.2)
     boolean addressCheck,  // address check: holds nothing, only reports (§7.2)
-    URI peer,       // the primary this hub follows as a standby, or null when it is the primary (§13.1)
-    Path peerCa,    // tests and private CAs: trust this PEM when dialling the primary
-    String peerAddr,    // dial this address instead of resolving the primary's name (tests, split horizon)
-    String advertise,  // the public address this hub answers for itself in DNS (§13.3); null = find it from the glue
+    String advertise,  // the public address this hub answers for itself in DNS (§7.1); null = find it from the glue
     Tuning tuning) {   // the timings a test moves; see Tuning below
 
     /**
      * Not null. The scheduled task that reads these has no top-level catch and
      * {@code ScheduledExecutorService} cancels a repeating task on the first uncaught throw with
-     * nothing logged, so a null here is a hub that starts, serves, and silently never promotes.
-     * The canonical constructor is public and takes 21 positional arguments, four of them trailing
-     * nulls, which is exactly the shape that gets one more by accident.
+     * nothing logged, so a null here is a hub whose rate-limiter never prunes.
+     * The canonical constructor is public and takes 18 positional arguments, which is exactly the
+     * shape that gets one more by accident.
      */
     public HubConfig {
         java.util.Objects.requireNonNull(tuning, "tuning");
@@ -62,58 +59,32 @@ public record HubConfig(
      * measured, and a knob with no use is a surface to support.
      */
     public record Tuning(
-        long promoteAfterMs,        // §13.5: how long the primary must be unreachable before a standby considers promoting
-        long witnessWindowMs,       // §13.5: how long to wait for a witness to answer
-        long autoPromoteIntervalMs, // §13.5: the floor between two automatic promotions
         long rateLimitPruneMs) {    // RateLimiter: the floor between two scans of the bucket map
 
         public static Tuning defaults() {
-            return new Tuning(30_000, 10_000, 10 * 60_000, RateLimiter.DEFAULT_PRUNE_MS);
-        }
-
-        public Tuning promoteAfterMs(long v) {
-            return new Tuning(v, witnessWindowMs, autoPromoteIntervalMs, rateLimitPruneMs);
-        }
-
-        public Tuning witnessWindowMs(long v) {
-            return new Tuning(promoteAfterMs, v, autoPromoteIntervalMs, rateLimitPruneMs);
-        }
-
-        public Tuning autoPromoteIntervalMs(long v) {
-            return new Tuning(promoteAfterMs, witnessWindowMs, v, rateLimitPruneMs);
+            return new Tuning(RateLimiter.DEFAULT_PRUNE_MS);
         }
 
         public Tuning rateLimitPruneMs(long v) {
-            return new Tuning(promoteAfterMs, witnessWindowMs, autoPromoteIntervalMs, v);
+            return new Tuning(v);
         }
-    }
-
-    /** ARCHITECTURE.md §13.1: follow {@code primary} as a standby, trusting {@code ca} for its TLS (null: platform roots). */
-    public HubConfig withPeer(URI primary, Path ca, String addr) {
-        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, primary, ca, addr, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §7.2: whether the address check runs at all. Off in the test constructor below. */
     public HubConfig withAddressCheck(boolean on) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, on, peer, peerCa, peerAddr, advertise, tuning);
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, on, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §13.3: answer this address for the hub's own name instead of finding it from the glue. */
     public HubConfig withAdvertise(String address) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, peer, peerCa, peerAddr, address, tuning);
-    }
-
-    /** True when this hub follows a primary rather than being one (ARCHITECTURE.md §13.1). */
-    public boolean standby() {
-        return peer != null;
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, address, tuning);
     }
 
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck,             peer, peerCa, peerAddr, advertise, tuning);
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck,             advertise, tuning);
     }
 
     public static final String POLICY_MEMBERS = "members";
@@ -130,13 +101,13 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, false, null, null, null, null, Tuning.defaults());
+            dnsSuffix, null, null, "127.0.0.1", 0, false, false, null, Tuning.defaults());
     }
 
     /** The same configuration with different timings; how a test reaches {@link Tuning}. */
     public HubConfig withTuning(Tuning t) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, peer, peerCa, peerAddr, advertise, t);
+            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, advertise, t);
     }
 
     public String hostname() {
@@ -210,16 +181,6 @@ public record HubConfig(
         if (dc < 0) {
             throw new IllegalArgumentException("--dns-listen must be host:port");
         }
-        URI peer = null;
-        if (a.has("peer")) {
-            peer = URI.create(a.get("peer"));
-            if (peer.getHost() == null || !"https".equals(peer.getScheme())) {
-                throw new IllegalArgumentException("--peer must be https://<host> (the primary's base URL)");
-            }
-            // The same name as --base-url is the normal case, not a mistake: a standby serves the
-            // primary's name once promoted, and until then that name resolves to the primary. The
-            // first standby deployed was refused here for exactly that configuration.
-        }
         return new HubConfig(
             base,
             stateDir(a.get("state")),
@@ -237,10 +198,6 @@ public record HubConfig(
             Integer.parseInt(dnsListen.substring(dc + 1)),
             !a.flag("no-selfcheck"),
             !a.flag("no-address-check"),
-
-            peer,
-            a.has("peer-ca") ? Path.of(a.get("peer-ca")) : null,
-            a.get("peer-addr"),
             a.get("advertise"),
             Tuning.defaults());
     }

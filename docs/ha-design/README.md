@@ -1,15 +1,18 @@
-# Appendix to §13: what a third hub would need
+# Redundancy: what was built, what it cost, and what a third hub would have needed
 
-Everything this file used to design is built, for two hosts, and
-[ARCHITECTURE.md §13.1–§13.5](../ARCHITECTURE.md) is where it is described: the hub-to-hub channel,
-the standby, promotion, the availability figures, the hubs answering their own DNS, the standby
-serving visitors over relay connections with per-name DNS, and promotion without a person using the
-nodes as witnesses. **§13 is the reference. This file is only the part that was not built.**
+**None of this is in the code any more.** The two-hub design described here was built, shipped in
+five stages, and removed in the maintenance cut of 2026-09-22 ([#274]): the hub-to-hub channel, the
+standby, promotion, the availability figures, the standby serving visitors over relay connections
+with per-name DNS, and promotion without a person using the nodes as witnesses. One hub is the
+design now, and [ARCHITECTURE.md §13](../ARCHITECTURE.md) says what that gives up.
 
-That part is a **third host in a store-less relay role**, and on 2026-09-18 the maintainer decided it
-is not coming: two hubs is the design, not a ceiling waiting to be raised ([#72], closed with #255).
-What follows is kept so the reasoning is not rediscovered from scratch by whoever asks again — it is
-a record of a decision, not a plan.
+This file is kept as the record: the questions redundancy asks here, and the answers this project
+reached, so that whoever brings it back does not start from nothing. The part that was never built —
+a **third host in a store-less relay role** — was decided against on 2026-09-18 ([#72], closed with
+#255) and is below as well.
+
+The two constraints in the next section held through all of it, and hold for anything that comes
+after.
 
 ## Two constraints that still hold
 

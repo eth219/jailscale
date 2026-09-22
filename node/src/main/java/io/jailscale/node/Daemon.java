@@ -32,12 +32,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private final NodeConfig config;
     private final NodeState state;
     private final HubLink link;
-    /**
-     * Relay connections (ARCHITECTURE.md §13.4), by the address the hub named: one to every host
-     * serving this hub's names other than the one the control connection reached. Each reopens
-     * this node's links there, so a visitor who reaches that host is served by this node.
-     */
-    private final java.util.Map<String, HubLink> relays = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int VERIFY_TIMEOUT_MS = 10_000;
 
     private final Visitors visitors;
@@ -104,16 +98,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             try {
                 reopen(rec, l);
             } catch (IOException | TimeoutException e) {
-                LOG.warn("could not reopen link {}{}: {}", rec.name, l.isRelay() ? " on " + l.relayAddress() : "", e.getMessage());
+                LOG.warn("could not reopen link {}: {}", rec.name, e.getMessage());
             }
         }
-        if (!l.isRelay()) {
-            // Only the control connection decides who owns a name. A relay coming up changes
-            // nothing the probe could see -- it connects through the hub's address either way --
-            // and its ask would spend the once-per-pass sweep on the wrong event, leaving none
-            // for the control connection's own return inside the same pass.
-            askProbeSweep();
-        }
+        askProbeSweep();
     }
 
     /**
@@ -128,9 +116,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      */
     @Override
     public void onDisconnected(HubLink l) {
-        if (l.isRelay()) {
-            return;
-        }
         for (NodeState.LinkRec rec : state.links) {
             rec.linkId = null;
         }
@@ -159,80 +144,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             namesChanged = true;
             probeWake.notifyAll();
         }
-    }
-
-    /**
-     * The hub named the hosts serving its names (§13.4). One relay connection to each that is not
-     * the host the control connection reached; one that is no longer named is closed. Compared by
-     * address, because the hub names hosts by address and the socket knows the one it reached.
-     */
-    @Override
-    public synchronized void onRelays(HubLink control, List<String> named) {
-        String reached = control.remoteEndpoint();
-        java.util.Set<String> want = new java.util.LinkedHashSet<>();
-        for (String r : named) {
-            if (reached == null || !r.equals(reached)) {
-                want.add(r);
-            }
-        }
-        for (String gone : new ArrayList<>(relays.keySet())) {
-            if (!want.contains(gone)) {
-                HubLink old = relays.remove(gone);
-                old.close();
-                LOG.info("relay {} is no longer named by the hub; connection closed", gone);
-            }
-        }
-        for (String r : want) {
-            if (!relays.containsKey(r) && !closed) {
-                HubLink rl = new HubLink(state, Version.string(), this, visitors.maxInFlight(), r);
-                relays.put(r, rl);
-                rl.start(null);
-                LOG.info("hub names {} as a relay; opening a connection there", r);
-            }
-        }
-    }
-
-    /** Probes in flight (§13.5): the standby's nonce to the relay connection it asked on. Bounded by pruning. */
-    private final java.util.Map<String, HubLink> probes = new java.util.concurrent.ConcurrentHashMap<>();
-
-    /**
-     * §13.5: a standby asks whether the primary is reachable. This node passes the question up
-     * its control connection and the answer back down the relay connection it came on. It cannot
-     * make the answer: the MAC is under a key only the hubs hold. What it can do is stay silent,
-     * and one honest node answering is enough to block a promotion.
-     */
-    @Override
-    public void onProbe(HubLink relay, Message.PeerProbe probe) {
-        String key = java.util.HexFormat.of().formatHex(probe.nonce());
-        if (probes.size() > 64) {
-            probes.clear();
-        }
-        probes.put(key, relay);
-        try {
-            link.send(probe);
-        } catch (IOException e) {
-            probes.remove(key);
-            LOG.debug("probe from {} not forwarded: {}", relay.relayAddress(), e.getMessage());
-        }
-    }
-
-    @Override
-    public void onProbeAnswer(Message.PeerProbeAnswer answer) {
-        HubLink relay = probes.remove(java.util.HexFormat.of().formatHex(answer.nonce()));
-        if (relay != null && relay.isConnected()) {
-            try {
-                relay.send(answer);
-            } catch (IOException e) {
-                LOG.debug("probe answer to {} not delivered: {}", relay.relayAddress(), e.getMessage());
-            }
-        }
-    }
-
-    /** The relay connections and whether each is up, for {@code status}. */
-    private List<Object> relayRows() {
-        return relays.entrySet().stream().<Object>map(e -> JsonObject.builder()
-            .put("address", e.getKey()).put("connected", e.getValue().isConnected())
-            .put("lastError", e.getValue().lastError()).build().asMap()).toList();
     }
 
     @Override
@@ -281,38 +192,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
-        Message.LinkOpened lo = reopen(rec, link);
-        // Then on every relay host that is up: best effort, since a relay that is down reopens
-        // everything when it comes back (onConnected), and the primary's answer is the one that
-        // names the link.
-        for (HubLink rl : relays.values()) {
-            if (rl.isConnected()) {
-                try {
-                    reopen(rec, rl);
-                } catch (IOException | TimeoutException e) {
-                    LOG.warn("could not open {} on relay {}: {}", rec.name, rl.relayAddress(), e.getMessage());
-                }
-            }
-        }
-        return lo;
+        return reopen(rec, link);
     }
 
-    /**
-     * Opens one link on one hub connection. On the control connection this is where a name is
-     * assigned and the link's identity comes from; on a relay connection (§13.4) the name is the
-     * one already assigned, and the id that host gives is kept by address, so a close can name it.
-     */
+    /** Opens one link on the hub connection: where a name is assigned and the link gets its id. */
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec, HubLink on) throws IOException, TimeoutException {
-        if (on.isRelay() && rec.name == null) {
-            throw new IOException("not yet named by the primary");
-        }
         Message r = on.request(new Message.LinkOpen(rec.name, rec.local()), "LinkOpened", REPLY_TIMEOUT_MS);
         if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
-            if (on.isRelay()) {
-                rec.relayLinkIds.put(on.relayAddress(), lo.linkId());
-                LOG.info("link {} -> {} also served from {}", lo.name(), rec.local(), on.relayAddress());
-                return lo;
-            }
             rec.linkId = lo.linkId();
             rec.name = lo.name();
             rec.url = lo.url();
@@ -333,7 +219,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             case "verify" -> verify(reply);
             case "down" -> {
                 link.close();
-                closeRelays();
                 reply.ok();
             }
             case "invite" -> {
@@ -378,16 +263,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 }
                 if (isOpen(rec)) {
                     link.send(new Message.LinkClose(rec.linkId));
-                }
-                for (HubLink rl : relays.values()) {
-                    String id = rec.relayLinkIds.get(rl.relayAddress());
-                    if (id != null && rl.isConnected()) {
-                        try {
-                            rl.send(new Message.LinkClose(id));
-                        } catch (IOException e) {
-                            LOG.debug("close on relay {}: {}", rl.relayAddress(), e.getMessage());
-                        }
-                    }
                 }
                 state.links.remove(rec);
                 state.save();
@@ -449,15 +324,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * silent over the window §11.4 says names change hands in, which is the window it exists for.
      */
     private boolean servedHere(NodeState.LinkRec rec) {
-        if (isOpen(rec)) {
-            return true;
-        }
-        for (java.util.Map.Entry<String, HubLink> e : relays.entrySet()) {
-            if (e.getValue().isConnected() && rec.relayLinkIds.containsKey(e.getKey())) {
-                return true;
-            }
-        }
-        return false;
+        return isOpen(rec);
     }
 
     private List<Object> linkRows() {
@@ -503,7 +370,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("muxSocketWriteMs", millis(MuxSession.SOCKET_WRITE))
             .put("muxOpenDispatchMs", millis(MuxSession.OPEN_DISPATCH))
             .put("draining", link.drainingCount())
-            .put("relays", relayRows())
             .put("drainingDetail", link.drainingDetail())
             .put("registered", state.registered)
             .put("nodeId", state.nodeId > 0 ? Long.valueOf(state.nodeId) : null)
@@ -1138,27 +1004,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             probeWake.notifyAll();
         }
         link.close();
-        closeRelays();
         if (ipc != null) {
             ipc.close();
         }
     }
 
-    private void closeRelays() {
-        for (HubLink rl : new ArrayList<>(relays.values())) {
-            rl.close();
-        }
-        relays.clear();
-    }
-
     /** Whether the hub this node joined is connected right now (tests; `status` reports it too). */
     public boolean isHubConnected() {
         return link.isConnected();
-    }
-
-    /** The relay connections that are up right now, by address (tests). */
-    public List<String> connectedRelays() {
-        return relays.entrySet().stream().filter(e -> e.getValue().isConnected())
-            .map(java.util.Map.Entry::getKey).toList();
     }
 }

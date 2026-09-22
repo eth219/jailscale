@@ -19,7 +19,7 @@ This describes the system as it stands, organised by subsystem. Section numbers 
 
 ## 1. Scope
 
-One server you own runs `jailhub`, or two that stand in for each other (§13). Every machine that
+One server you own runs `jailhub` (§13). Every machine that
 publishes something runs `jailscale`. It does
 what ngrok, Cloudflare Tunnel and Tailscale Funnel do, with no third party in the path.
 
@@ -50,9 +50,8 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
 | Behind a TCP proxy | nginx or HAProxy in front, PROXY protocol v1 and v2 (§8.5) | the proxy forwards bytes without opening TLS, and `--proxy-protocol` needs loopback or `--trusted-proxy` |
 | Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2); nothing here installs a service, so keeping the daemon up is a unit of the operator's own (`deploy/`) |
-| Availability | two hubs, a delegated subdomain, the standby serving throughout, promotion without a person (§13) | promotion is automatic only with a witness node attached to the standby (§13.5) |
 | Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
-| Upgrading | a check against GitHub's newest release, a verified download, and a hub replaced without dropping nodes by `serve --takeover` (§9.4, §13) | which release is current is GitHub's unsigned word and only what is in it is signed (§15), the install command is printed for the operator, and takeover does not apply under a systemd unit (§1.2) |
+| Upgrading | a check against GitHub's newest release and a verified download (§9.4) | which release is current is GitHub's unsigned word and only what is in it is signed (§15), the install command is printed for the operator, and replacing the hub's binary is a restart (§13) |
 | Joining | invite links, machine keys, no account anywhere (§10) | the hub is what decides name ownership, and a compromised one can impersonate every name under its domain (§11.2) |
 
 ### 1.2 Decided, and not built
@@ -78,7 +77,7 @@ given up for.
 | HTTP/2 and HTTP/3 on the visitor side | the node copies bytes to a local port, so speaking either would make it a protocol translator; h3 also wants UDP the hub does not route by name |
 | Routing on paths or headers, rewriting, per-request logs | the hub has only ciphertext to route on, and parsing on the node would put the request where the design keeps it out of |
 | More than one node behind a name | a name resolves to the node that owns it; sharing one needs a load balancer the hub is not |
-| Active-active hubs, and merging writes made on the losing side of a partition | a merge needs a lineage the two stores do not share; the loser's writes are dropped and named (§13.5) |
+| A second hub of any kind | a standby was built and removed (§13): about 4,500 lines for redundancy no deployment here ran, and one hub is the shape this is maintained in |
 | Raw TCP and UDP ports, and so anything that cannot speak TLS | a port instead of a name is a second kind of link with its own allocator, bounds and datagram carrier, and the plaintext of an app that does not encrypt itself would be inside the hub (§8.4) |
 | Probing a name from another node's vantage point | the hub chooses which nodes exist, so it would choose the prober; the control would be probabilistic, and this project says what it cannot do instead (§11.3) |
 | Any notification channel — email, webhooks | an address per node is personal data the hub does not hold, and a webhook is one more thing that fails quietly; the status page and `jailhub status` are where an expiry shows |
@@ -540,8 +539,7 @@ carries their events: the store skips them by name, counts the records, and warn
 they were dropped, since the next snapshot will not carry them.) So every appended event carries a
 sequence number `s`, each snapshot records the last it folded in as `seq`, and a line at or below
 that is skipped on load. The numbering is local
-to one log and carries on across a restart; a standby stamps its own rather than the primary's,
-since the number means a place in a particular file. Between the rename and the truncation the
+to one log and carries on across a restart, since the number means a place in a particular file. Between the rename and the truncation the
 directory entry is fsynced, which is what keeps the *other* order — a durably emptied log beside a
 snapshot that never landed — from losing the events in between; that one is best effort, because a
 directory cannot be opened as a file on Windows. `StoreCrashTest` holds both directions: the three
@@ -554,13 +552,8 @@ $JAILHUB_STATE/            (default /var/lib/jailhub, else ~/.local/share/jailhu
 ├── state.snapshot         periodic snapshot (log compaction)
 ├── jailhub.lock           process lock; a second `jailhub serve` fails immediately
 ├── jailhub.sock           admin IPC socket (§6.3)
-├── availability.json      the process's own uptime record and what it saw of its peers (§13.2)
-├── state.superseded.snapshot   only after a hand-off took something away: the state as it stood (§13.5)
 └── tls/                   account.key, wildcard.key, wildcard.pem, wildcard.key.prev (0600)
 ```
-
-On a standby (§13.1) the same directory is the primary's, kept current over the hub-to-hub channel:
-`hub.key` is the copy the operator made, and the rest arrives.
 
 The snapshot carries a format version `v`, and the hub **refuses to start** when it is higher than
 the version it understands. Adding fields or events within a version is compatible both ways and
@@ -608,10 +601,7 @@ native image's heap is a small part of what it occupies.
 read from `Message.PROTO` and `NodeSession.MIN_PROTO` so the page cannot drift from the handshake,
 since "latest" is a moving target and this hub is not. It says that for this end only, because a
 client has a floor of its own (`HubLink.MIN_HUB_PROTO`) and refuses a hub below it, which this page
-cannot promise anything about. A standby prints no join at all: it answers `Goodbye{standby}` to
-every control connection (§13.4), the apex the command would name resolves to the primary alone and
-to nothing while the primary is down, and a page that invites a join it will refuse is worse than
-one that says nothing. It says what it is instead, and where joining happens.
+cannot promise anything about.
 
 **The page also says how to check the copy being downloaded**, which is not the same question as
 the hub's own binary under the status table: releases are signed, `jailscale update --download`
@@ -625,12 +615,10 @@ checksum list.
 **A hub run for other people can say who runs it**, in three settings rather than three flags:
 `jailhub setting operator "..."`, `contact https://... | mailto:...`, `terms https://...`. Settings,
 because they are the kind that changes while a hub is running -- a contact address outlives the
-process that first printed it -- which is the line this section already draws, and because the store
-replicates, so a standby serves the same answer without being configured twice. The scheme of the
+process that first printed it -- which is the line this section already draws. The scheme of the
 two URLs is checked where they are set **and again where they are read**: they end up in an `href`
-on a page anyone can load, `javascript:` in an operator's typo is not a thing to learn about from a
-visitor, and the store is written by replication as well as by an admin on this host, so a check
-that guards only the front door is not a check. The page asks the same per-setting predicate the
+on a page anyone can load, and `javascript:` in an operator's typo is not a thing to learn about
+from a visitor. The page asks the same per-setting predicate the
 admin socket does, rather than a second reading of it: the two settings do not take the same values
 -- `terms` is a page and refuses `mailto:` -- and a rule written twice is a rule that parts.
 Case-insensitively, because `HTTPS://` is a URL and refusing it would be an error whose difference
@@ -656,26 +644,13 @@ configured" would be a worse page for the case that needs it least.
 
 **One line above the table says whether any of it is a problem.** The rows were all the same weight:
 a certificate with 85 days left and one with 5 read as the same sentence in the same grey, though
-the second takes every name under the hub down within the week. Three rows have a threshold and are
-graded with the strips' own three colours, the word beside the dot as always -- the certificate
-(warning under a fortnight, critical under three days or expired), the peer, and the nodes
-(registered but none online, on a primary). The two sides of the peer row do not grade the same
-thing, because they do not know the same thing: a standby knows whether it is in sync and says so,
-while a primary has no acknowledgement to read -- a standby replies to nothing -- so all it grades
-is whether the channel is open, and its row says "connected" rather than the "in sync" it used to
-claim. A standby that stops reading is dropped at `MAX_QUEUED` (§13.1) and becomes the absence the
-primary does grade -- though that cap is reached by events being appended, so on a hub where nothing
-is happening there is no bound on that wait at all. Between the two it reads as connected, which is
-the limit of what that side can say. The nodes row splits the same way and for the same reason: a
-standby takes no control connections, so what it counts online is the relay connections nodes have
-opened to it (§13.4), and a node that has not opened one yet is not a node that is down -- so the
-standby prints that row and does not grade it. The verdict is the worst of them and names it,
-because "Degraded" alone sends the reader back to the table the line exists to save them from. What
-is deliberately not graded: a primary with no peer configured, which is a single-host deployment by
-choice and not a hub missing a host; and the availability figure, because a deliberate restart
-counts as down and a status line that says "Degraded" for a day after every upgrade is one an
-operator learns to ignore, which costs more than the row it explains. Everything else on the page --
-a version, a key, a memory figure -- is a fact with no good or bad about it and stays ungraded.
+the second takes every name under the hub down within the week. Two rows have a threshold and are
+graded, the word beside the dot because colour is never the only channel: the certificate (warning
+under a fortnight, critical under three days or expired) and the nodes (registered but none
+online). The verdict is the worse of them and names it, because "Degraded" alone sends the reader
+back to the table the line exists to save them from. Everything else on the page -- a version, a
+key, a memory figure -- is a fact with no good or bad about it and stays ungraded. The role and
+availability rows, and the grading that went with them, left with the standby (§13).
 
 **Every answer on this name carries the same three headers**, added where the response is written
 and not in each handler, so a route nobody thought about gets them too. The front end's own shape is
@@ -754,13 +729,10 @@ uptime, and when the certificate expires -- the last being the one that takes ev
 once and the one worth alerting on. That is the whole list, and it is public because an uptime check
 has no credential to offer and a name that has stopped answering was never a secret. Fields may be
 added, so a monitor that reads the ones it knows keeps working (§5.4); the ones added since are
-`role` (`primary` or `standby`, with `primary` and `inSync` on a standby, §13.1), `availability`
-(§13.2), `epoch` (§13.5), and `proto` with `minProto` -- the pair the page prints beside the
-version, here because a monitor that can read a fleet's versions and not its protocols cannot see a
-flag day coming, and no release note maps one to the other. The epoch is on every answer, a
-standby's as well as a primary's, and it rises by one on each promotion: `role` says which host is
-serving as primary now, the epoch says how many promotions that is, and two primaries that meet
-settle by it -- the higher staying, the lower standing down and losing its state entire (§15).
+`proto` with `minProto` -- the pair the page prints beside the version, here because a monitor
+that can read a fleet's versions and not its protocols cannot see a flag day coming, and no release
+note maps one to the other. The fields that named a hub's role, its epoch and its availability went
+with the standby (§13).
 
 There is no `/metrics`. A Prometheus listener on a port of its own, `--metrics-listen`, exported
 counters for visitors routed and refused, signatures, sessions and relayed bytes, gauges for what
@@ -841,9 +813,8 @@ operator setup is complete. First run is `jailhub serve --base-url https://hub.e
 prints the first invite link (§10).
 
 The responder answers for the whole of `hub.example.com` as well, not only the challenge name, so
-an operator running two hubs can delegate the subdomain itself instead and let the hubs answer the
-address records (§13.3). With one hub the three records above are the simpler choice and nothing
-changes.
+an operator may delegate the subdomain itself instead and let the hub answer the address records
+(§13). The three records above are the simpler choice and nothing changes.
 
 ### 7.2 Issuance and renewal
 
@@ -909,13 +880,12 @@ a new fault — so a broken deployment files one error rather than one an hour, 
 stands is there to be asked for instead. `since` is when that finding was first reached **by this
 process**: nothing is written to disk, so a restart starts the clock over and a fault that predates
 it reads as beginning at boot. `jailhub address check` asks again now, which is what the operator
-who has just edited a record wants; it is refused on the terms the hourly pass waits on — off, a
-standby, a delegated hub that does not yet know its own address — so it never leaves a verdict the
+who has just edited a record wants; it is refused on the terms the hourly pass waits on — off, or
+a delegated hub that does not yet know its own address — so it never leaves a verdict the
 pass would not have reached. Runs do not overlap. A node's arrival is folded in as it happens rather
 than at the next pass, moving the verdict but not when the check last ran, and expires after a day:
-the handshake proves what the records said at that moment, and a record can be edited after it. A
-standby runs none of this — the records being checked are the primary's — and a hub promoted to
-primary starts the pass afresh. `--no-address-check` silences the repeat, the log and the command
+the handshake proves what the records said at that moment, and a record can be edited after it.
+`--no-address-check` silences the repeat, the log and the command
 alike, and the age series is exported only while the pass is running.
 
 Two operational traps. SNI passthrough needs raw TCP 443, so **no TLS-terminating HTTP proxy can sit
@@ -1688,10 +1658,8 @@ and `jailscale down` followed by `jailscale verify`, where nothing is open at al
 therefore sits in the probe itself rather than in the loop, so the command this section sends
 operators to is covered by it as well. A false report of a compromised hub is the worst thing this
 feature can do, and `link not open` is what all three of those are. **What that verdict asks is
-whether this node is serving the name at all** -- through the hub it joined, or through any relay
-host whose connection is up (§13.4). Not the narrower "is the hub I joined connected": a relay keeps
-serving these names while the primary is away, and that is the window §11.4 says names change hands
-in, so a name reached over a relay is exactly the kind worth probing. **The exit status leaves the
+whether this node is serving the name at all** -- through the hub it joined, which since §13 is
+the only hub there is. **The exit status leaves the
 verdict out**, because it is neither a pass nor a failure: nothing was probed, and `checked` counts
 the names that were. `jailscale verify`
 exits non-zero when a name it could check did not verify, so `jailscale down` followed by
@@ -1808,7 +1776,7 @@ is the table size times the per-bucket rate, which was 2,048 x 20 = about 41,000
 11.7 MB/s. A second budget for the whole table -- 500 at once, 200 a second -- is what makes the
 total a number rather than a function of how many source networks an attacker can be bothered to
 forge, and puts a victim at about 57 KB/s. No name is exempt from either, and one was:
-the hub's own `_jailhub-self` probe (§13.3) leaves from a public address and was metered like
+the hub's own `_jailhub-self` probe (§13) leaves from a public address and was metered like
 anyone's, which handed an attacker who can forge a source into the hub's own network a way to stop a
 hub identifying itself -- empty that bucket with about twenty packets a second and the probe is
 dropped, the lookup gives up, and a hub that never learns its address serves an empty zone. The
@@ -2031,342 +1999,60 @@ client up writes 139 KB.
 
 ---
 
-## 13. Availability and hand-off
+## 13. Availability: one hub
 
 A hub is one process on one host, and at scale one handles thousands of nodes and tens of thousands
-of streams, because all it does is copy bytes and sign. The main deployment is two such hosts: a
-primary and a standby that follows it (§13.1), answers the DNS with it (§13.3), serves visitors
-beside it (§13.4) and takes over on the nodes' word when it dies (§13.5). This section starts with
-what one host does on its own -- fast recovery -- and adds the second host from §13.1 on.
+of streams, because all it does is copy bytes and sign. **One host is now the whole design.** A
+standby that followed the primary, answered DNS beside it, served visitors from it and took over on
+the nodes' word was built and shipped, and was removed in the maintenance cut; the end of this
+section says what it was and what it cost.
 
 | Item | Target |
 |---|---|
 | Hub process restart | Under 5 s including state replay. Nodes reconnect with 1, 2, 4, 8, 16, 30 s backoff |
 | What a visitor sees | Connections refused during the restart; streams in flight are cut |
 | Backup unit | The `$JAILHUB_STATE` directory. `hub.key`, `tls/` and `state.*` are all of it |
-| Host replacement | Copy the directory and change DNS. Nodes notice nothing, since the hub key and wildcard key are unchanged. A standby (§13.1) keeps that copy current on its own |
+| Host replacement | Copy the directory and change DNS. Nodes notice nothing, since the hub key and wildcard key are unchanged |
+| Upgrading | Stop the unit, replace the binary, start it. Nodes reconnect on their own backoff |
 
-**Hand-off.** Updating the binary does not need a restart. `jailhub serve --takeover` starts a new
-process that asks the old one to hand off over the IPC socket. The old process closes the 443
-listener, the DNS responder and ACME, snapshots its state, releases the state
-lock, and sends `Goodbye{draining}` to every node; visitor streams already in flight keep flowing on
-those connections, and no new ones are opened on them. The new process takes the lock, replays the
-state and opens 443, and for the few hundred milliseconds in between new visitors are refused
-(`SO_REUSEADDR` means no bind wait). On `draining` a node immediately opens a fresh connection and
-reopens its links, keeping the old connection until its open streams finish, and a signing request
-goes to the connection that owns the stream, which is what makes a draining stream's signature
-findable. The old process exits when the draining connections are empty or after 60 seconds, and
-deletes the IPC socket file only if it is still its own (compared by inode) so it cannot remove the
-new process's socket.
+**A restart is the upgrade path, and it is a visible one.** `jailhub serve --takeover` used to start
+a second process that asked the first to hand off -- listener closed, state snapshotted, lock
+released, `Goodbye{draining}` to every node, streams in flight allowed to finish -- so that
+replacing the binary cost a few hundred milliseconds of refused visitors instead of a restart. It
+went with the standby, for a reason §1.2 had already recorded against it: it does not apply under a
+systemd unit, which is how a hub is actually run, because the unit owns the process and starting a
+second one beside it is not something the unit does. What is left is `systemctl restart`, and the
+nodes' backoff is what covers it.
 
-A visitor sees a few hundred milliseconds of refused connections; downloads and WebSockets in flight
-are not cut, nodes reconnect with no backoff, and deploy and rollback are the same one line. The
-router's 3-second wait for a claimed but momentarily offline name (§8.1) keeps the gap from becoming
-an error page.
+**The DNS delegation is still available to one hub** (§7.1). An operator may write three records at
+the parent -- the apex `A`, the wildcard `A` and the `_acme-challenge` `NS` -- or delegate the whole
+subdomain with `NS` and glue and let the hub answer it. The second form exists because it was how
+two hubs shared a name; it survives because it is one record fewer to keep in step, and because a
+hub that answers its own zone can be moved to another address by editing the glue alone. The hub
+finds its own address in that glue rather than asking the operator twice: it reads the parent's
+referral for `ns1.<hub>`, asks each glue address on port 53 for the `_jailhub-self` TXT token it
+alone knows, and takes the one that answers as its own. `--advertise` overrides that for a host
+whose public address no resolver can be asked about.
 
-**Hand-off does not compose with a systemd unit.** It works by leaving a second process holding the
-listeners while the first exits, and under `Type=simple` the first process is the one systemd
-tracks: its exit stops the unit and the cgroup takes the new process with it. Tested, and the hub
-went inactive. Under systemd the upgrade is `systemctl restart`, which costs a few seconds while
-nodes reconnect. `deploy/jailhub.service` therefore has no `ExecReload`. Making the two work
-together would need the listening sockets handed over rather than rebound, which is not implemented.
+**What the second hub was, and what it cost.** `--peer` made a hub a standby: it held a copy of
+`hub.key`, received the store as a snapshot and then as an event stream over a hub-to-hub channel,
+took the wildcard certificate and key from the primary, answered the delegated zone as the second
+name server, took relay connections from nodes so that a visitor reaching either host was served,
+and could be promoted -- by `jailhub promote`, or on its own once nodes acting as witnesses agreed
+the primary was unreachable, with an epoch deciding which of two primaries stood down. It worked;
+`docs/ha-design/` recorded the reasoning and the five stages it shipped in.
 
-**Readiness is not reported.** The hub spoke the readiness half of `sd_notify` until 2026-09-18,
-opt-in under `Type=notify`, and the reference unit never turned it on: a first boot spends minutes
-in ACME before it serves, so the unit would have needed `TimeoutStartSec=infinity` too or systemd
-would kill the hub mid-issuance and `Restart=on-failure` would do it again forever; the message
-had to go through `systemd-notify` because the JDK will not open a datagram socket, which needed
-`NotifyAccess=all` and systemd 246. Code the shipped unit ignored was removed (#250), and a unit
-of your own that said `Type=notify` has to say `Type=simple` from this release, or it never leaves
-`activating`. `systemctl start` returns when the process exists, and the status page says when it
-serves.
+It was about 4,500 lines across main and tests -- Standby, Peers, PeerClient, Availability, Role,
+Liveness, the replication half of Store, the relay half of HubLink and Daemon, eleven message types
+and the availability strips on the status page -- and it bought redundancy for a deployment nobody
+was running: the live standby, its delegation and its reserved address were removed on 2026-09-21,
+before this cut, because one hub is the shape actually operated. What is given up is stated rather
+than hidden: **a hub that dies takes its names down until somebody starts it again**, and the
+backup unit above is what makes that minutes rather than a rebuild.
 
-### 13.1 A standby hub
-
-The table's last row, done by the hub rather than by hand. `jailhub serve --peer https://hub.example.com`
-on a second host makes that process a **standby**: it dials the primary the way a node does -- TLS to
-the primary's name, the `/v1/noise` upgrade, Noise IK -- and from then on is fed rather than served.
-What it is fed is everything the primary would be replaced with: the hub key and, during a rotation,
-the next one (`PeerHubKey`); the wildcard chain **with its private key** (`PeerCert`), which is what
-`CertUpdate` deliberately leaves out for nodes; the store as one snapshot (`PeerSnapshot`); then every
-event as it is appended, in order (`PeerEvent`). The snapshot is taken and the subscription registered
-under one lock, so the standby sees exactly the sequence the primary's own log holds, and every
-reconnect starts again from a fresh snapshot rather than resuming a tail, because the state is small
-and a resumable position would have to survive the primary compacting its log underneath it.
-
-**What makes it a peer is the key, not the message.** The standby's Noise static is the primary's own
-`hub.key`, which the operator copies over once, and that copy is the whole provisioning act. Noise IK
-authenticates the initiator's static, so a caller whose static is the hub's own key holds the private
-half; a node's MachineKey can never be that key, and the primary decides which kind of caller it has
-from the handshake rather than from what the first message claims to be. A standby started without
-the file refuses to start and names it, since generating one would produce a hub that cannot
-authenticate and never says why.
-
-**What a standby does and does not do.** It writes nothing of its own: settings, names and
-registrations are the primary's and arrive with the snapshot, and its `serve` flags do not seed them.
-It opens 443 once the certificate has arrived -- blocking for it the way a first boot blocks for ACME
--- and serves its own page and `/v1/status`, which say what it is and whether it is in sync. A node
-that reaches it is told `Goodbye{standby}` with the primary's name, a reason the node does not stop
-retrying for, so it keeps trying until DNS moves or the standby is promoted. It runs no ACME, no
-DNS responder, no address check. It does hold the wildcard key, and the count of hosts
-that hold it is the count of control hosts, two, whatever else is added later
-([docs/ha-design](ha-design/README.md)).
-
-**Promotion** is `jailhub promote` on the standby, over the admin socket. It stops following, starts
-what a primary runs and a standby does not -- issuance and the DNS responder when the hub obtains its
-own certificate -- and takes nodes. The certificate it has is already in `tls/` where
-`AcmeManager` looks, so a restart afterwards finds it and renews from there. The operator points the
-apex at the new host; nothing here can change a DNS record. Promotion is one way and says so in the
-log: an old primary that returns is not told anything, because nothing is connected to it, and has
-to be restarted with `--peer` pointing at the new one. Promoting a hub that was not in sync at the
-time is allowed and logged as such, since a stale copy is still the best copy there is when the
-primary is gone.
-
-**Bounds.** A standby that stops reading is dropped once 10,000 events are queued for it
-(`Peers.MAX_QUEUED`), because the store appends under its own lock and must not wait on a socket;
-it reconnects and starts from a snapshot. The hub-to-hub channel rides 443 under the hub's own
-name, so a standby needs no port opened that a node does not already use.
-
-### 13.2 Availability as a number
-
-A process cannot measure the time it was not running, so the status page shows two figures and never
-adds them. The first is the process's own record: a timestamp rewritten to `availability.json` once
-a minute, and on start the gap between the last stamp and now counted as down. It counts a hub whose
-port is firewalled as up, and the page says so beside it. It is not in the event log, where 1,440
-events a day would ride the fsync path and trip the snapshot cadence (§6.2). The second is what this
-hub saw of a peer: the intervals the hub-to-hub channel was down *while this process was running*,
-which is reachability as a status page means the word, and which exists only once there is a peer. A
-peer interval that was open when this process last stamped is closed at that stamp and reopened at
-the restart, so the two records never overlap and the peer figure is divided by the time there was
-someone here to look.
-
-**Neither figure is the availability of a link.** Both are about this hub, and a name has exactly
-one node behind it (§8.2): when the node's host is asleep the name is down while both hubs go on
-stamping themselves up, and the strip stays green, correctly. Redundancy at the hub therefore pays
-exactly where the hub is the less available of the two, which is true of a host that exists to be
-up and not of the laptop a node is usually on. What a visitor needs is both uptimes at once, and
-this figure is the half the hub is in a position to measure ([docs/ha-design](ha-design/README.md)).
-
-Both are reported over 24 hours, 7 days and 30 days, on `/` and in `/v1/status` under
-`availability` (with `since`, because a window that reaches further back than the record is
-reported over less), and the process figure on `/metrics` as `jailhub_process_availability_<window>_ppm`.
-The page draws them the way a status page does: a bar per day for 30 days and per hour for 24,
-green when nothing was down, amber when less than an hour (or a quarter of one) was, red when
-more, and shorter the worse it was, so that colour is never the only channel -- the three colours
-are the status set validated for colour-vision separation, and each bar's tooltip says its minutes,
-which the JSON repeats (`downMinutesPerDay`, `downMinutesPerHour`) as the table behind the picture.
-**A tooltip is one kind of reader**, though: there is no hover on a phone, nothing in the strip can
-be reached by keyboard, and the `role="img"` and label that let an assistive reader announce the
-strip are a reason for it not to descend into the bars at all. So the buckets with downtime in them
-are listed in text under their own strip, in a `<details>` that needs no script -- the bucket and
-its minutes, the same numbers the JSON carries, and a summary line that says how many rather than
-what colour they were. A bucket is named by when it starts and how wide it is (`2026-09-12 08:05
-+24h`), because these are measured back from the moment the page was built and not from midnight:
-naming a day-wide one by its date alone puts an outage on the day before it, which a tooltip can
-get away with and a printed list cannot. Only those: a bucket from before the record began is
-not one the hub was down for but one it cannot speak about, and thirty rows of "no record" on a new
-hub would bury the two that matter. Usually the list is empty and nothing is drawn.
-Under each strip: how far back it reaches, the figure for that window, and where it ends. A bucket
-from before the record began draws a faint stub and says so. `jailhub availability reset` starts
-the record over, for an operator whose day of deliberate restarts should not count.
-Public for the reason `/v1/status` is public (§6.3). Anyone scraping `/metrics` already computes
-availability from `up`; this is for the operator with no scraper.
-
-### 13.3 The hubs answer their own DNS
-
-A standby keeps the copy current; what pointed visitors at the old host was two address records at
-the parent, and moving them was the operator's. With two `A` records instead, a browser moves to
-the second address within a few hundred milliseconds when the dead host answers RST, and only after
-a full connect timeout per new connection when it is black-holed. A health-checked DNS product or a
-load balancer fixes that for a provider's price and API, which is the dependency this design does
-not take. What keeps the principle is the responder of §7.1 being an authoritative server already:
-it now answers for the whole subdomain, and the operator with two hubs delegates the subdomain
-itself.
-
-```
-hub.example.com.      NS  ns1.hub.example.com.
-hub.example.com.      NS  ns2.hub.example.com.
-ns1.hub.example.com.  A   203.0.113.10     (glue: the first hub)
-ns2.hub.example.com.  A   203.0.113.11     (glue: the second)
-```
-
-Four records in place of three, and the delegation is the same act as the `_acme-challenge` one
-with the cut one label higher; the apex `A`, the wildcard `A` and the challenge `NS` go, since
-everything under the cut is now the hubs' to answer. The hub always answers the whole zone, so
-which cut to make is the operator's choice and no flag says it. Port 53 is already open on every
-hub host; a standby binds it too, and a hub with its own certificate files binds it and warns if it
-cannot rather than refusing to start, since only dns-01 issuance needs it.
-
-**What is answered.** `SOA` and `NS` at the apex with an hour's TTL, the `NS` set being the labels
-that have glue at the parent and the hub's own name when none has; `nsN` as that glue; the
-challenge name exactly as before; `_jailhub-self` as a TXT token this process alone knows; and,
-with a 30-second TTL, the apex and every name under it -- any label, at any depth -- as **the
-hosts serving right now**: a primary answers itself, a standby answers the primary while its
-channel to it is up, and nothing otherwise. Whether a name is open is the SNI router's question,
-not DNS's. A question is matched against those names label by label and byte for byte, folding
-only ASCII case as DNS does, rather than as one joined string: a label may hold a dot, and a byte
-over 0x7F is not a character, so the string form makes names that differ on the wire into one --
-which is how a single label reading `ns1.<hub>` was once answered with `ns1`'s glue. AAAA, MX and
-the rest are NODATA with the apex SOA; names outside the zone are REFUSED;
-a name longer than the 255 octets RFC 1035 allows one is FORMERR at the
-parser, before the zone is consulted at all;
-recursion is never offered; and what is answered is small enough to be a poor amplifier — 287 bytes
-at the largest, 5.3 times the query at the worst, measured and gated rather than asserted, and
-metered per network on UDP because poor is not the same as harmless (§11.5).
-
-**Liveness is the channel.** A host leaves the other's answer when the hub-to-hub channel drops,
-which the idle timeout bounds at a minute, and resolvers skip a dead name server on their own. In
-a partition where both hosts live and only the link between them is down, each answers with what
-it can vouch for -- the primary itself, the standby nothing -- so a resolver reaches a working host
-whichever server it asked. No consensus is involved in DNS and no split-brain is possible in it;
-which host *writes* is a separate question, and promotion answers it.
-
-**A hub finds its own address in the glue.** The operator wrote the addresses down once, at the
-parent, and is not asked again: the hub finds the parent zone's name servers through a public
-resolver, asks one of them -- without recursion -- for `ns1.<hub>`, and reads the glue out of the
-referral it answers with; then it asks each glue address directly on port 53 for `_jailhub-self`
-and takes as its own the one that answers with its token. A peer answers with a different token.
-Every one of those lookups asks over UDP and then, if the datagram does not come back or comes back
-truncated or carrying somebody else's id, over TCP -- which is what lets §11.5 meter this name like
-any other, and what keeps a flood on the path from deciding whether a hub knows its own address.
-**Not from a recursive resolver**, which was the first version: once the subdomain is delegated, a
-resolver asked for `ns2.<hub>` asks the hubs, and a hub that did not yet know the glue answered from
-the wildcard with itself, the resolver cached that, and the lookup meant to find the glue read it
-back -- both live hubs believed `ns2` was the primary for an hour. The responder now answers a glue
-label with the glue or with nothing, never the wildcard, and the referral is the parent's word
-rather than anyone's cache. The lookup runs off the startup path, again every hour, and under the
-same switch as the address check (`--no-address-check`), which itself waits until the hub knows its
-address, since with the hubs answering their own DNS it would otherwise be checking an answer not
-yet given. `--advertise` overrides it for a host whose public address no resolver can be asked
-about. A peer's advertised address travels in the hub-to-hub hello, so neither side guesses it from
-a socket that address translation may have rewritten.
-
-**The challenge travels too.** With both hubs authoritative for `_acme-challenge`, the CA may ask
-either, so the primary's dns-01 values are sent to every standby (`PeerChallenge`) whenever they
-change, and a standby answers them as its own.
-
-**What this makes of a failover.** When the primary dies, the standby stops answering its address
-within the channel's timeout; the moment the standby is promoted it answers itself, and visitors
-arrive within the TTL with nothing touched at the parent. `jailhub promote` is the whole of it --
-for the control plane. For visitors, §13.4 makes even that unnecessary.
-
-### 13.4 The standby serves
-
-A standby holds the store and the wildcard key, which is everything the SNI router and the signing
-oracle need. So it serves. A node opens a **relay connection** to every host the hub names besides
-the one its control connection reached, and reopens its links there; a visitor who reaches either
-host is relayed to the node by that host and signed by that host, under §9.2's conditions unchanged,
-because the host that delivered the stream is the host that signs. Losing the primary then stops
-nothing a visitor can see, before anyone has typed anything.
-
-**What a relay connection is.** The same TLS, Noise IK and hello as a control connection, with
-{@code relay} set and connection index 3 (extras keep 1 and 2). It registers nothing and may ask for
-nothing that writes: `LinkOpen` and `LinkClose` are answered, everything else with
-`Error{primary-only}`. A standby answers every connection that way, relay or not, and turns a
-control connection away with `Goodbye{standby}` as before; a relay connection is the one kind it
-takes. `LinkOpen` on such a connection is a **reopen**: the name or domain has to be one the
-replicated store already gives this node, the primary having assigned it and the assignment having
-arrived over the hub-to-hub channel, and nothing is claimed, reassigned, notified or allocated. A
-name the node does not hold yet, a random name it has not been given, and every raw port are
-`primary-only`, and the node asks the primary.
-
-**Who names the relays.** The hub's hello carries `relays`: every host serving right now as
-`address` or `address:port`, itself included; the node leaves out the one its control connection
-reached, compared as the socket says. `RelaysChanged` follows when a peer comes or goes, and a hub
-that is shutting down sends nothing -- its last word would have been to strike the host that is
-about to be the only one left. The node's relay set is the hub's word entirely: it opens what is
-named and closes what no longer is, each with the control connection's backoff.
-
-**DNS follows the nodes.** Each hub tells its peer which nodes are attached to it (`PeerNodes`, the
-whole set, whenever it changes), so a published name resolves to the hosts its node is on and the
-apex to the primary alone, where joining and administering are. A name nobody holds resolves to
-every host serving, which is where the "not open" page is. In the two-host deployment that is
-already the shape a third, stateless relay would have taken, with the replicated store standing in
-for the signed lease that relay would have carried. That third host is decided against rather than
-pending; [docs/ha-design](ha-design/README.md) records what it would have needed.
-
-**What survives the primary now.** Streams in flight on the dead host are gone with its sockets;
-new visitors to every open name are served by the other host within the DNS TTL; nodes keep their
-relay connections, since nobody tells them otherwise. Joining, opening a new name, administering,
-lease-free as this is, wait for `jailhub promote` -- a person's, or the standby's own (§13.5) --
-and the apex resolves to nothing until then. Raw ports go with the primary. `StandbyTest` runs the
-sequence in that order: the primary closes first, the name is still served through the standby,
-then the standby is promoted and a new node joins it.
-
-### 13.5 Promotion without a person: the nodes as witnesses
-
-Two hosts cannot elect. A majority of two is two, so Raft buys nothing below three, and the usual
-third party -- a witness host, a cloud object with conditional writes as a lease -- is a cost or a
-dependency this design does not take. jailscale has a third party of its own: after §13.4 every
-node is connected to both hubs. **The nodes are the witnesses.**
-
-**The rule.** A standby whose channel to the primary has been down for `promoteAfterMs` (30 s)
-asks every witness for proof that the primary is reachable, and waits `witnessWindowMs` (10 s). A
-witness is a node attached here by a relay connection, registered, one per user however many
-machines that user has. One valid proof means a partition: the standby stays what it is, and looks
-again after the same interval. None means the primary is dead, or cut off from everyone, which for
-serving purposes is the same: the standby promotes itself, exactly as `jailhub promote` would, and
-says so. No witness at all means no automatic decision; the log says the primary is unreachable and
-promotion stays with the operator. Automatic promotion happens at most once per ten minutes, and
-`jailhub setting autoPromote on|off` turns it off. **Off by default where registration is open**,
-because there anyone can be every witness at an hour when the honest ones are away, and on by
-default where it is by invitation, since those nodes are the operator's own people's machines.
-
-**Proof, not testimony.** The standby sends `PeerProbe{nonce}` down a witness's relay connection.
-The node passes it up its control connection to the primary, which answers `PeerProbeAnswer` with a
-MAC over the nonce and its epoch under a key derived from `hub.key`, which both hubs hold and no
-node does; the node carries the bytes back down the relay connection it was asked on. "I can see
-the primary" therefore cannot be forged. A lying node has one lie left, "I cannot", and one honest
-node with a valid proof outvotes any number of those: the vote is an existence proof, not a
-majority.
-
-**Epochs, and units that are the same on both hosts.** Each hub keeps a `role` file in its state
-directory: `primary` or `standby`, and an **epoch** that rises by one on every promotion. The file
-outranks the flag: `--peer` on a primary means "the other host is there", not "follow it", so both
-units can name each other and be identical but for their addresses. A hub with no file yet takes
-the old rule -- a peer named means standby, none means primary. The hub-to-hub hello carries role
-and epoch, and **two primaries that meet decide by them**: the higher epoch stays, the lower stands
-down and becomes the other's standby, following from the connection that found it; on a tie the
-lower address stays, so both sides decide the same way. A primary that names a peer dials it for
-that one purpose, and the standby of a newer primary that returns from the dead is settled by the
-old primary's next dial or the new one's next hello. Standing down closes the control connections
-with `Goodbye{standby}`, stops issuance, and keeps the relay connections, which serve
-on. `AutoPromoteTest` runs the three cases: a dead primary replaced with nobody typing, a partition
-with one node still reaching the primary and nothing promoted, and no witness at all leaving the
-decision where it was; and a returning primary standing down by epoch.
-
-**What this is and is not.** A lease with fencing and an epoch, not a replicated log with
-consensus. The writes it protects are rare -- names claimed, nodes joined -- and the worst outcome
-of a wrong promotion is two primaries until the link heals, at which point the epoch settles which
-one it was.
-
-**The loser's writes do not merge into the winner's. They are discarded, and this said otherwise
-until it was read against the code.** `Store.replaceWith` clears everything this host holds and
-replaces it with the primary's snapshot, which is the whole of the reconciliation: a node that
-joined the losing hub during the partition, a name claimed there, a domain, a raw port, an invite
-created there, all cease to exist when the link heals. A merge is not a small thing left undone
-either -- the two stores share no lineage a write can be placed in, so nothing can distinguish a
-name this host holds and has never told anyone about from one the winner deliberately released, and
-guessing wrong resurrects a name an operator took away. Whole-state replacement is what a lease with
-an epoch buys, and the whole of what it buys.
-
-So the loss is **reported and kept** rather than silent. On replacing its state a hub compares the
-two and logs, at warning, the nodes, names, domains, ports and unused credentials it held and the
-primary does not, saying that those nodes have to join again and those names are free to claim; and
-it writes its state as it stood to `state.superseded.snapshot` in the state directory, which is a
-snapshot a `jailhub` can read, so an operator can see exactly what was there. The file is written
-only when something is actually dropped and is overwritten by the next such event: it is a recovery
-for the incident just logged, not an archive. An ordinary standby resync takes nothing away -- its
-state came from this same primary -- and leaves no file and no warning. `StoreReplicationTest`
-holds both cases. Without a person reading that line, the first anyone knows is a node discovering
-it is an unknown machine key.
-
-Visitors notice nothing throughout. What a hostile node can do with this is force that replacement,
-on an open-registration hub, at an hour when it is the only node; the default above and the rate
-limit are what make that worthless. What a node can do outside this vote is what §11.1 already
-bounds.
-
----
+The redundancy questions it answered are still the right ones, and are written down in
+`docs/ha-design/` for whoever brings it back: relays never hold the key, a lease decides who writes,
+the apex is the control plane, and a promotion needs a witness that is not either hub.
 
 ## 14. Current characteristics
 
@@ -2386,8 +2072,8 @@ measures. Measured on v0.1.0's own assets and that column: binaries of 29.8 to 3
 and 34.4, and a 4.7 ms CLI cold start against 2.4. It also carries five native targets rather than
 four, since the 25.3 line is what dropped macos-amd64 (§3.2). README says the same where it tells
 people which file to download. The releases since, v0.1.3 to v0.1.10, changed the hub's control
-plane -- a standby, the availability record, the hub answering its own DNS, the standby serving,
-promotion by the nodes' word (§13) -- and no path a visitor's bytes or an idle process take, and
+plane -- a standby, the availability record, the hub answering its own DNS (§13; all but the DNS
+has since been removed) -- and no path a visitor's bytes or an idle process take, and
 the same gate held on each release commit.
 
 **The table is v0.1.2's, and the sentence above is not the reason it can stay that way.** That
@@ -2910,46 +2596,22 @@ say so and name the issue. An entry that does neither has not been through that 
   nobody hears from, and its domain goes dark when the certificate runs out. The hub can see that
   coming, so a gauge for the soonest expiry among absent nodes is decided work
   (§1.2, [#75](https://github.com/eth219/jailscale/issues/75)); a notification channel is not (§1.3).
-- **Promotion is automatic only with a witness** (§13.5). With the subdomain delegated to both hubs
-  and the standby serving (§13.4), losing the primary stops nothing a visitor sees; joining, opening
-  new names, administering and raw ports come back when the standby promotes itself, which it does
-  only when at least one node is attached to it and none can reach the primary. With no node on
-  it, or with registration open (the default there is off), it waits for `jailhub promote`. With
-  three records at the parent instead, the DNS change is the operator's too.
-- **Hand-off does not work under systemd** (§13). Upgrading a unit-managed hub is a restart, so it
-  is not zero-downtime; the listening sockets are rebound rather than handed over. Socket
-  activation is decided work (§1.2, [#71](https://github.com/eth219/jailscale/issues/71)).
-- **Two hubs, not more.** The standby holds the store, so it can serve and be promoted; a third
-  host would need a role without the store. That is **decided against** rather than pending: two
-  hubs is the design, and [docs/ha-design](ha-design/README.md) is the appendix recording what a
-  third would have needed and why it is not coming ([#72](https://github.com/eth219/jailscale/issues/72),
-  closed with [#255](https://github.com/eth219/jailscale/issues/255)). Streams in flight on a host that dies are cut with its
-  sockets, raw TCP and UDP ports live on the primary alone, and a promotion with no node attached
-  to the standby waits for a person (§13.5). Nor is the doubling end to end: a name still has
-  exactly one node behind it (§8.2), so when that node's host is down the name is down whatever the
-  hub count is, and §13.2's availability figure is a statement about the hubs and not about a link.
-  Active-active would need inter-hub forwarding, since the hub a visitor lands on and the hub a node
-  is attached to could differ.
+- **A hub that dies takes its names down until it is started again** (§13). There is no second hub:
+  the standby, its promotion and the relay connections that let it serve were removed, and what is
+  left is the backup unit -- the state directory -- and a restart. Upgrading is a restart too, which
+  is what it already was under a systemd unit; socket activation, which would narrow that window for
+  the single-hub operator, is decided work (§1.2,
+  [#71](https://github.com/eth219/jailscale/issues/71)).
 - **IPv6 works for visitors and not for the hub's own DNS.** A hub bound to `::` (`--listen
   [::]:443`) serves v6 visitors today — routed by SNI, relayed to the node, counted and limited per
   /64 (§11.5) like any other caller — and an operator running the three-record setup publishes the
   AAAA records for that at their own DNS provider, alongside the A records §7.1 asks for. What is
   **not** implemented is the hub answering AAAA itself: `DnsResponder` returns NODATA for it, the
   zone view carries v4 addresses only, and `ns1`/`ns2` glue is A. That is exactly the setup where
-  the operator cannot make up the difference — in the delegated mode of §13.3 the hub *is* the
+  the operator cannot make up the difference — in the delegated mode of §13 the hub *is* the
   authoritative server for the subdomain, so there is nowhere else to put an AAAA record. So: v6
-  ingress on the operator's own records, no v6 under delegation, and nothing in either direction for
-  the raw ports of §8.4, whose addresses come from the same zone view. **Answering AAAA is decided
+  ingress on the operator's own records, and no v6 under delegation. **Answering AAAA is decided
   work** (§1.2, [#63](https://github.com/eth219/jailscale/issues/63)).
-- **Writes made on the losing side of a partition are discarded when it heals, not merged** (§13.5).
-  Both hubs serve throughout, so a node that reaches only the hub that turns out to have the lower
-  epoch can join, claim a name, bring a domain or take a raw port, and every one of those is gone
-  when the epochs settle -- the winner's state replaces the loser's entire. The node finds out by
-  being an unknown machine key. What bounds it is that the window is a partition long enough to
-  promote (30 s plus the witness window) and that these writes are rare; what makes it survivable is
-  that the hub says what it dropped and keeps a readable copy of the state it dropped it from. A
-  real merge needs a lineage the two stores do not share, which is the piece of a replicated log
-  this design does not have, does not claim to, and is not going to grow (§1.3).
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
   loses events when one socket is parked for read and for write together (JDK-8334574), so one side
   of each of those sockets is kept off the poller there. Measured at about 60 KB per concurrent

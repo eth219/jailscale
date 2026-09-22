@@ -190,15 +190,11 @@ The first run prints an invite. Whoever joins with it becomes the administrator.
 files. The hub takes 443 itself: putting it behind nginx or HAProxy needed the
 PROXY protocol, and that went with the maintenance cut.
 
-A second host can stand by for the first. Copy the first host's `hub.key` into
-the second's state directory and run the same command there with
-`--peer https://jailscale.example.com`. It follows the first — certificate,
-keys, every change to the state — and if the subdomain is delegated to both
-hosts instead of the three records above, nodes connect to both, a visitor who
-reaches either is served, and the standby promotes itself once its nodes
-confirm the first is gone. The records, what promotion needs, and the
-availability figure each hub's page shows are in
-[ARCHITECTURE.md §13](docs/ARCHITECTURE.md).
+One hub is the whole design. A standby that followed the first, served beside
+it and promoted itself was built and removed in the maintenance cut: what is
+left is the state directory as the backup unit, and a restart as the upgrade
+([ARCHITECTURE.md §13](docs/ARCHITECTURE.md) says what it was and what it
+cost).
 
 ## Resource usage
 
@@ -269,18 +265,13 @@ What a compromised hub can and cannot do is written out in
 
 - No production track record. The hub above is the only instance with any
   uptime behind it, and it serves one person's names.
-- Two hubs is the most built, and streams in flight on a host that dies are
-  cut. Raw TCP and UDP ports live on the primary alone. Replacing the binary
-  without dropping nodes works with `serve --takeover`, but not under a systemd
-  unit, where an upgrade is a restart. A third, store-less hub and systemd
-  socket activation are both decided work, not accepted limits
-  ([§1.2](docs/ARCHITECTURE.md)).
-- Redundancy stops at the hub. A name still has exactly one node behind it, so
-  when that node's host is asleep the name is down whatever the hub count is,
-  and the availability figure on the hub's page stays green, because it is a
-  figure about the hub. The second hub pays only where the hub is the less
-  available of the two, and next to a node on a laptop it is not
-  ([ARCHITECTURE.md §13.2](docs/ARCHITECTURE.md)).
+- There is one hub, and a hub that dies takes its names down until somebody
+  starts it again. Upgrading is a restart, which is what it already was under a
+  systemd unit; socket activation would narrow that window and is decided work,
+  not an accepted limit ([§1.2](docs/ARCHITECTURE.md)).
+- Redundancy would stop at the hub anyway. A name has exactly one node behind
+  it, so when that node's host is asleep the name is down whatever the hub
+  count is.
 - Upgrading stops one step short of automatic: `update --download` verifies,
   you run the `install` it prints. Which release is *current* is GitHub's word
   and nothing signs it; what is *in* that release is the maintainer's signature,

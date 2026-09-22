@@ -25,13 +25,9 @@ public final class Main {
                         [--no-selfcheck]  do not hold issuance on the dns-01 check
                         [--no-address-check]  do not report whether the name points here (ARCHITECTURE.md §7.2)
                       or your own files: --tls-cert FILE --tls-key FILE
-                      [--takeover]  replace a running jailhub without dropping nodes (ARCHITECTURE.md §13)
-                      [--peer https://primary.example.com [--peer-ca FILE] [--peer-addr IP]]  run as that hub's standby (ARCHITECTURE.md §13.1)
-                      [--advertise IP]  answer this address for the hub's name; default: found from the ns1/ns2 glue (ARCHITECTURE.md §13.3)
+                      [--advertise IP]  answer this address for the hub's name; default: found from the ns1/ns2 glue (ARCHITECTURE.md §7.1)
         jailhub status
-        jailhub promote     make this standby the primary (ARCHITECTURE.md §13.1)
         jailhub address check     ask now whether this hub's name points here (ARCHITECTURE.md §7.2)
-        jailhub availability reset     start the uptime record over from now (ARCHITECTURE.md §13.2)
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
         jailhub name list | reassign <name> --user NAME | release <name>
@@ -39,7 +35,7 @@ public final class Main {
         jailhub invite create [--user NAME] [--uses N] [--ttl 24h] [--admin] | list | revoke <id>
         jailhub admin add <user> | remove <user>
         jailhub key rotate [--grace 30d]
-        jailhub setting invitePolicy members|admins | registration invite|open | knock on|off | autoPromote on|off
+        jailhub setting invitePolicy members|admins | registration invite|open | knock on|off
         jailhub setting operator "NAME" | contact https://...|mailto:... | terms https://...
                                             who runs this hub, shown on its page; empty clears (#99)
         Admin commands talk to the running server through <state>/jailhub.sock (--state or $JAILHUB_STATE).
@@ -55,8 +51,7 @@ public final class Main {
      * survived on the old parser's guess, which is why the list is written down rather than
      * inferred.
      */
-    static final String[] FLAGS = {"debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check",
-        "takeover"};
+    static final String[] FLAGS = {"debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check"};
 
     public static void main(String[] argv) {
         Args a;
@@ -98,7 +93,7 @@ public final class Main {
 
     private static void serve(Args a) throws Exception {
         HubConfig cfg = HubConfig.fromArgs(a);
-        Hub hub = new Hub(cfg, a.flag("takeover"));
+        Hub hub = new Hub(cfg);
         hub.start();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {

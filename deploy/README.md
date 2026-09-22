@@ -6,7 +6,7 @@ Reference files for operators. The reasoning behind them is in
 | File | Purpose |
 |---|---|
 | `jailscale.service` | systemd user unit for the node daemon. The node's own answer to "keep it running": `jailscale service install` wrote three of these for three platforms and was removed with the rest of the maintenance cut |
-| `jailhub.service` | systemd unit for the hub. Deliberately no `ExecReload`: `--takeover` needs the old process to stay alive through the hand-off, which `Type=simple` will not do. Upgrades are `systemctl restart` |
+| `jailhub.service` | systemd unit for the hub. Deliberately no `ExecReload`: upgrades are `systemctl restart`, and the nodes' backoff covers the few seconds |
 | `Dockerfile.hub` | Hub container: the native binary on a distroless base, about 35 MB. Packaging only -- build the binary first, `./mvnw -DskipTests -Pnative -pl hub -am package` |
 | `Dockerfile.node` | Node container, same shape, `-pl node -am` |
 
