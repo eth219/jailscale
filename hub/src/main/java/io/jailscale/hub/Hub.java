@@ -149,7 +149,7 @@ public final class Hub implements AutoCloseable {
         });
         timer.scheduleAtFixedRate(this::tick, KEEPALIVE_SECONDS, KEEPALIVE_SECONDS, TimeUnit.SECONDS);
 
-        LOG.info("jailhub {} listening on {}:{} for {} (hub key {}){}", version(), config.listenHost(), port(),
+        LOG.info("jailhub {} listening on {}:{} for {} (hub key {})", version(), config.listenHost(), port(),
             config.hostname(), keys.publicText());
         if (!store.hasAnyAdmin()) {
             Invites.Created c = invites.create(null, 1, 24 * 3600, "bootstrap", true);

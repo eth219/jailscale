@@ -1,11 +1,16 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.jailscale.proto.net.TestPorts;
+import io.jailscale.proto.util.Log;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -28,6 +33,42 @@ class ListenOnTest {
             Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath(),
             Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath(),
             false, HubConfig.POLICY_MEMBERS, true, "hub.test");
+    }
+
+    /**
+     * The line a hub prints when it comes up, with every placeholder filled.
+     *
+     * <p>{@code Log.format} walks the message and substitutes while arguments last; a {@code {}}
+     * with nothing left to put in it is copied through verbatim, which is the right thing for a
+     * logger to do and means an argument removed without its placeholder is invisible to the
+     * compiler. v0.2.0 shipped exactly that: the standby suffix went (§13) and the `{}` stayed, so
+     * every jailhub in the field printed its startup line ending in a literal `{}`.
+     *
+     * <p>Asserted on the rendered line and not on the format string, because the format string is
+     * what was wrong: a test that read it would have agreed with it. This starts a hub through the
+     * same path an operator does and reads what came out.
+     */
+    @Test
+    void theStartupLineHasNoPlaceholderLeftInIt() throws Exception {
+        Path root = TestDirs.newRoot("lo3");
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream to = new PrintStream(captured, true, StandardCharsets.UTF_8);
+        PrintStream was = System.err;
+        Log.setOutput(to);
+        try (ServerSocket socket = TestPorts.listen(1024)) {
+            try (Hub hub = new Hub(config(root, socket.getLocalPort()))) {
+                hub.listenOn(socket);
+                hub.start();
+            }
+        } finally {
+            Log.setOutput(was);
+        }
+        String log = captured.toString(StandardCharsets.UTF_8);
+        String line = log.lines().filter(l -> l.contains("listening on")).findFirst()
+            .orElseThrow(() -> new AssertionError("no startup line in:\n" + log));
+        assertTrue(line.contains("jailhub"), line);
+        assertTrue(line.contains("hub key hkey:"), line);
+        assertFalse(line.contains("{}"), "a placeholder with no argument was printed: " + line);
     }
 
     @Test
