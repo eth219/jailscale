@@ -45,9 +45,6 @@ final class Store implements AutoCloseable {
     /** A claimed name: who owns it and which node/local target last used it (ARCHITECTURE.md §8.2). */
     record NameRec(String name, String user, String mkey, String local, long at) {}
 
-    /** A user domain proven by a node's own certificate (ARCHITECTURE.md §8.3). */
-    record DomainRec(String domain, String user, String mkey, long at) {}
-
     /** An address or CIDR block barred from the control plane (ARCHITECTURE.md §11.5). */
     record BanRec(String cidr, String reason, long at) {}
 
@@ -80,7 +77,6 @@ final class Store implements AutoCloseable {
     private final Map<String, PendingRec> pending = new LinkedHashMap<>();
     private final Map<String, NameRec> names = new LinkedHashMap<>();
     private final Map<String, String> settings = new LinkedHashMap<>();
-    private final Map<String, DomainRec> domains = new LinkedHashMap<>();
     /** mkey -> notices waiting for that node to reconnect. */
     private final Map<String, List<NoticeRec>> notices = new LinkedHashMap<>();
     /** cidr text -> ban. Small enough that a list scan per check is cheaper than an index. */
@@ -172,7 +168,7 @@ final class Store implements AutoCloseable {
 
     /**
      * Whether a user name already means someone here: a node's user, an admin, or the owner of a
-     * name or domain. Ownership outlives a node (§8.2: releasing is the operator's act), so a
+     * name. Ownership outlives a node (§8.2: releasing is the operator's act), so a
      * user whose machines are all gone still exists as far as identity goes, or a stranger could
      * join under that name and inherit what it owns.
      */
@@ -190,11 +186,6 @@ final class Store implements AutoCloseable {
         }
         for (NameRec n : names.values()) {
             if (n.user().equals(user)) {
-                return true;
-            }
-        }
-        for (DomainRec d : domains.values()) {
-            if (d.user().equals(user)) {
                 return true;
             }
         }
@@ -226,28 +217,6 @@ final class Store implements AutoCloseable {
 
     synchronized List<NameRec> names() {
         return new ArrayList<>(names.values());
-    }
-
-    synchronized DomainRec domain(String domain) {
-        return domains.get(domain);
-    }
-
-    synchronized List<DomainRec> domains() {
-        return new ArrayList<>(domains.values());
-    }
-
-    synchronized void claimDomain(String domain, String user, String mkey) throws IOException {
-        DomainRec r = domains.get(domain);
-        if (r == null || !r.user().equals(user) || !r.mkey().equals(mkey)) {
-            append(JsonObject.builder().put("e", "domain-claimed").put("domain", domain).put("user", user).put("mkey", mkey)
-                .put("at", System.currentTimeMillis()));
-        }
-    }
-
-    synchronized void releaseDomain(String domain) throws IOException {
-        if (domains.containsKey(domain)) {
-            append(JsonObject.builder().put("e", "domain-released").put("domain", domain));
-        }
     }
 
     synchronized void claimName(String name, String user, String mkey, String local) throws IOException {
@@ -506,13 +475,12 @@ final class Store implements AutoCloseable {
      * What this store held that the primary's state does not, and is about to lose
      * (ARCHITECTURE.md §13.5). Counts for everything, names for the things a person holds.
      */
-    record Superseded(List<String> nodes, List<String> names, List<String> domains,
-        int credentials, Path kept) {
+    record Superseded(List<String> nodes, List<String> names, int credentials, Path kept) {
         // `kept`: where the copy of what went is, or null when there is no copy -- nothing was lost,
         // or the write failed. Nothing may send an operator to a path that was not written.
 
         boolean any() {
-            return !nodes.isEmpty() || !names.isEmpty() || !domains.isEmpty() || credentials > 0;
+            return !nodes.isEmpty() || !names.isEmpty() || credentials > 0;
         }
 
         /** How many of each are named before the line gives up and quotes a count instead. */
@@ -530,7 +498,6 @@ final class Store implements AutoCloseable {
             StringBuilder b = new StringBuilder();
             append(b, "nodes", nodes);
             append(b, "names", names);
-            append(b, "domains", domains);
             if (credentials > 0) {
                 b.append(b.length() == 0 ? "" : ", ").append(credentials).append(" unused invites");
             }
@@ -578,7 +545,6 @@ final class Store implements AutoCloseable {
         pending.clear();
         names.clear();
         settings.clear();
-        domains.clear();
         notices.clear();
         bans.clear();
         nextHubKey = null;
@@ -598,12 +564,12 @@ final class Store implements AutoCloseable {
         Store theirs = new Store();
         theirs.loadSnapshot(incoming);
         // By record and not by key. A key comparison only sees what vanished, so a name released
-        // here and re-claimed by somebody else, a port reassigned, a domain taken over or a node
+        // here and re-claimed by somebody else, or a node
         // re-approved under another user all came out as "nothing lost" -- the record changed
         // owner, and the owner is the whole of what these hold.
         // By owner, not by whole record and not by key alone. A key comparison sees only what
         // vanished, so a name released here and re-claimed by somebody else -- or a port reassigned,
-        // a domain taken over, a node re-approved under another user -- read as "nothing lost", and
+        // a node re-approved under another user -- read as "nothing lost", and
         // the owner is the whole of what these records hold. Whole-record equality is the other
         // error: NodeRec carries an id counted per store and every one of these carries a local
         // timestamp, so two stores that agree completely would differ in all of them.
@@ -619,13 +585,6 @@ final class Store implements AutoCloseable {
             NameRec t = theirs.names.get(r.name());
             if (t == null || !t.user().equals(r.user())) {
                 lostNames.add(r.name());
-            }
-        }
-        List<String> lostDomains = new ArrayList<>();
-        for (DomainRec r : domains.values()) {
-            DomainRec t = theirs.domains.get(r.domain());
-            if (t == null || !t.user().equals(r.user())) {
-                lostDomains.add(r.domain());
             }
         }
         int credentials = 0;
@@ -654,7 +613,7 @@ final class Store implements AutoCloseable {
             lostNames.add("hub-key rotation");
         }
         Path keptAt = dir.resolve("state.superseded.snapshot");
-        Superseded lost = new Superseded(lostNodes, lostNames, lostDomains, credentials, null);
+        Superseded lost = new Superseded(lostNodes, lostNames, credentials, null);
         if (!lost.any()) {
             // Nothing to keep, so nothing may be left lying at that path: a copy from an earlier
             // hand-off beside a fresh state.snapshot reads as "what this host just lost".
@@ -685,7 +644,7 @@ final class Store implements AutoCloseable {
             LOG.warn("could not keep the superseded state at {}: {}", keptAt, e.toString());
             return lost;
         }
-        return new Superseded(lostNodes, lostNames, lostDomains, credentials, keptAt);
+        return new Superseded(lostNodes, lostNames, credentials, keptAt);
     }
 
     /** An empty store with no directory behind it: somewhere to replay another's snapshot and compare. */
@@ -764,9 +723,10 @@ final class Store implements AutoCloseable {
             // these in it, and dropping them on read is what lets that hub's state load at all --
             // an unknown event is a refusal below, which would make the upgrade a manual edit.
             case "port-assigned", "port-released" -> { }
-            case "domain-claimed" -> domains.put(ev.string("domain"), new DomainRec(ev.string("domain"), ev.string("user"),
-                ev.string("mkey"), ev.lng("at")));
-            case "domain-released" -> domains.remove(ev.string("domain"));
+            // User domains were removed (§8.3), and these are dropped on read for the reason the
+            // port events above are: an unknown event is a refusal, and an upgraded hub has to be
+            // able to load the log a previous one wrote.
+            case "domain-claimed", "domain-released" -> { }
             case "notice-added" -> {
                 List<NoticeRec> l = notices.computeIfAbsent(ev.string("mkey"), k -> new ArrayList<>());
                 NoticeRec r = new NoticeRec(ev.string("mkey"), ev.optString("linkId", null), ev.string("name"),
@@ -931,10 +891,6 @@ final class Store implements AutoCloseable {
         for (NameRec r : names.values()) {
             events.add(JsonObject.builder().put("e", "name-claimed").put("name", r.name()).put("user", r.user())
                 .put("mkey", r.mkey()).put("local", r.local()).put("at", r.at()).build().asMap());
-        }
-        for (DomainRec r : domains.values()) {
-            events.add(JsonObject.builder().put("e", "domain-claimed").put("domain", r.domain()).put("user", r.user())
-                .put("mkey", r.mkey()).put("at", r.at()).build().asMap());
         }
         for (List<NoticeRec> l : notices.values()) {
             for (NoticeRec r : l) {

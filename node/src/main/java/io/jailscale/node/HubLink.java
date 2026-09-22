@@ -593,7 +593,6 @@ final class HubLink implements AutoCloseable {
             case Message.Pong _ -> complete("Pong", m);
             case Message.InviteCreated _ -> complete("InviteCreated", m);
             case Message.LinkOpened _ -> complete("LinkOpened", m);
-            case Message.Ack _ -> complete("Ack", m);
             case Message.SignResponse sr -> complete("SignResponse:" + sr.streamId(), m);
             case Message.Error e -> {
                 String key = e.inReplyTo() == null ? "" : replyKeyFor(e.inReplyTo());
@@ -613,7 +612,6 @@ final class HubLink implements AutoCloseable {
             case "InviteCreate" -> "InviteCreated";
             case "Ping" -> "Pong";
             case "LinkOpen" -> "LinkOpened";
-            case "ChallengeSet", "ChallengeClear" -> "Ack";
             default -> request;
         };
     }

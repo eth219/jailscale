@@ -131,18 +131,7 @@ final class AdminIpc implements Ipc.Handler {
             }
             case "name-release" -> {
                 store.releaseName(req.string("name"));
-                hub.links().releasedByOperator(req.string("name"), false); // §11.4
-                reply.ok();
-            }
-            case "domain-list" -> {
-                List<Object> rows = store.domains().stream().<Object>map(d -> JsonObject.builder()
-                    .put("domain", d.domain()).put("user", d.user()).put("mkey", d.mkey())
-                    .put("open", hub.links().byDomain(d.domain()) != null).build().asMap()).toList();
-                reply.done(JsonObject.builder().put("ok", true).put("domains", rows));
-            }
-            case "domain-release" -> {
-                store.releaseDomain(req.string("domain"));
-                hub.links().releasedByOperator(req.string("domain"), true);
+                hub.links().releasedByOperator(req.string("name")); // §11.4
                 reply.ok();
             }
             case "ban-list" -> {
@@ -356,7 +345,6 @@ final class AdminIpc implements Ipc.Handler {
             case "ban-remove" -> b.put("cidr", need(a.positional(2), "<ip|cidr>"));
             case "name-reassign" -> b.put("name", need(a.positional(2), "<name>")).put("user", a.require("user"));
             case "name-release" -> b.put("name", need(a.positional(2), "<name>"));
-            case "domain-release" -> b.put("domain", need(a.positional(2), "<domain>"));
             case "invite-create" -> b.put("user", a.get("user")).put("uses", a.integer("uses", 0))
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null).put("admin", a.flag("admin"));
             case "invite-revoke" -> b.put("id", need(a.positional(2), "<id>"));

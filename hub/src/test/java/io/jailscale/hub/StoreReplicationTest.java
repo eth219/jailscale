@@ -98,7 +98,6 @@ class StoreReplicationTest {
             winner.registerNode("mkey:carol", "carol", "ci-box", "linux");
             loser.registerNode("mkey:bob", "bob", "desktop", "linux");
             loser.claimName("bobapp", "bob", "mkey:bob", "127.0.0.1:8080");
-            loser.claimDomain("app.example.com", "bob", "mkey:bob");
             loser.createInvite("tok_partition", "PART-0001", null, 1, 3600, 600, "bob", false);
 
             Store.Superseded lost = loser.replaceWith(winner.snapshotJson());
@@ -106,7 +105,6 @@ class StoreReplicationTest {
             assertTrue(lost.any(), "the loser held things the winner does not");
             assertEquals(List.of("bob/desktop"), lost.nodes());
             assertEquals(List.of("bobapp"), lost.names());
-            assertEquals(List.of("app.example.com"), lost.domains());
             assertEquals(1, lost.credentials(), "the invite created here");
             // Not what they agreed on, and not what the winner has that this host never had.
             assertFalse(lost.names().contains("web"), "a name both held is not lost");

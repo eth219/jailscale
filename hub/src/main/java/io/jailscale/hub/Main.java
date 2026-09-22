@@ -25,7 +25,6 @@ public final class Main {
                         [--no-selfcheck]  do not hold issuance on the dns-01 check
                         [--no-address-check]  do not report whether the name points here (ARCHITECTURE.md §7.2)
                       or your own files: --tls-cert FILE --tls-key FILE
-                      [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (ARCHITECTURE.md §8.3)
                       [--takeover]  replace a running jailhub without dropping nodes (ARCHITECTURE.md §13)
                       [--peer https://primary.example.com [--peer-ca FILE] [--peer-addr IP]]  run as that hub's standby (ARCHITECTURE.md §13.1)
                       [--advertise IP]  answer this address for the hub's name; default: found from the ns1/ns2 glue (ARCHITECTURE.md §13.3)
@@ -36,7 +35,6 @@ public final class Main {
         jailhub node list | approve <node> [--user NAME] | deny <node> | remove <node> | rename <node> --user NAME
         jailhub user list | remove <user>
         jailhub name list | reassign <name> --user NAME | release <name>
-        jailhub domain list | release <domain>
         jailhub ban list | add <ip|cidr> [--reason R] | remove <ip|cidr>
         jailhub invite create [--user NAME] [--uses N] [--ttl 24h] [--admin] | list | revoke <id>
         jailhub admin add <user> | remove <user>

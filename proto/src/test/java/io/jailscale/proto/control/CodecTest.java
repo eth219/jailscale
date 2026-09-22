@@ -29,10 +29,7 @@ class CodecTest {
             new Message.InviteCreated("https://hub/join/x", "7F3K-92QX", 1789000000L),
             new Message.Error("InviteCreate", "policy"),
             new Message.CertUpdate(List.of("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----"), "sha256:ab"),
-            new Message.LinkOpen("myapp", null, "127.0.0.1:3000", null, null),
-            new Message.LinkOpen(null, "app.example.com", "127.0.0.1:3000",
-                java.util.List.of("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), new byte[] {9, 8, 7}),
-            new Message.Ack("ChallengeSet"),
+            new Message.LinkOpen("myapp", "127.0.0.1:3000"),
             new Message.LinkOpened("l1", "myapp", "https://myapp.hub.example.com", null),
             new Message.LinkOpened(null, null, null, "taken"),
             new Message.LinkClose("l1"),
@@ -41,8 +38,6 @@ class CodecTest {
             new Message.SignRequest(41, "sha256:ab", "ECDSA-P256-SHA256", new byte[] {1}, new byte[] {2}, new byte[] {8}, new byte[] {2, 9}),
             new Message.SignResponse(40, new byte[] {4, 5}, null),
             new Message.SignResponse(40, null, "not-your-stream"),
-            new Message.ChallengeSet("app.example.com", "tok", "tok.thumb"),
-            new Message.ChallengeClear("tok"),
             new Message.PeerHello(1, "0.2.0", "hub-b.example.com", "203.0.113.2"),
             new Message.PeerHello(1, "0.2.0", "hub-b.example.com", "203.0.113.2", "203.0.113.2:8443"),
             new Message.PeerHelloResponse(1, "0.2.0", "hub.example.com", "203.0.113.1", "203.0.113.1:8443"),
@@ -76,11 +71,7 @@ class CodecTest {
                 assertArrayEquals(a.serverHello(), b.serverHello());
                 assertArrayEquals(a.encryptedExtensions(), b.encryptedExtensions());
                 assertArrayEquals(a.helloRetryRequest(), b.helloRetryRequest());
-            } else if (m instanceof Message.LinkOpen a && dec instanceof Message.LinkOpen b) {
-                assertEquals(a.domain(), b.domain());
-                assertEquals(a.chainPem(), b.chainPem());
-                assertArrayEquals(a.domainProof(), b.domainProof());
-            } else if (m instanceof Message.PeerProbe a && dec instanceof Message.PeerProbe b) {
+                        } else if (m instanceof Message.PeerProbe a && dec instanceof Message.PeerProbe b) {
                 assertArrayEquals(a.nonce(), b.nonce());
             } else if (m instanceof Message.PeerProbeAnswer a && dec instanceof Message.PeerProbeAnswer b) {
                 assertArrayEquals(a.nonce(), b.nonce());

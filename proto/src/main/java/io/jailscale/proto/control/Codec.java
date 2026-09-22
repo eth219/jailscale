@@ -49,8 +49,7 @@ public final class Codec {
             case Message.InviteCreated x -> b.put("url", x.url()).put("code", x.code()).put("expiresAt", x.expiresAt());
             case Message.Error x -> b.put("inReplyTo", x.inReplyTo()).put("reason", x.reason());
             case Message.CertUpdate x -> b.put("chainPem", x.chainPem()).put("keyId", x.keyId());
-            case Message.LinkOpen x -> b.put("name", x.name()).put("domain", x.domain())
-                .put("local", x.local()).put("chainPem", x.chainPem()).putBytes("domainProof", x.domainProof());
+            case Message.LinkOpen x -> b.put("name", x.name()).put("local", x.local());
             case Message.LinkOpened x -> b.put("linkId", x.linkId()).put("name", x.name()).put("url", x.url())
                 .put("reason", x.reason());
             case Message.LinkClose x -> b.put("linkId", x.linkId());
@@ -60,9 +59,6 @@ public final class Codec {
                 .putBytes("content", x.content()).putBytes("serverHello", x.serverHello())
                 .putBytes("encryptedExtensions", x.encryptedExtensions()).putBytes("helloRetryRequest", x.helloRetryRequest());
             case Message.SignResponse x -> b.put("streamId", x.streamId()).putBytes("sig", x.sig()).put("reason", x.reason());
-            case Message.ChallengeSet x -> b.put("domain", x.domain()).put("token", x.token()).put("keyAuthorization", x.keyAuthorization());
-            case Message.ChallengeClear x -> b.put("token", x.token());
-            case Message.Ack x -> b.put("inReplyTo", x.inReplyTo());
             case Message.PeerHello x -> b.put("proto", x.proto()).put("version", x.version()).put("host", x.host())
                 .put("address", x.address()).put("endpoint", x.endpoint()).put("role", x.role())
                 .put("epoch", x.role() == null ? null : Long.valueOf(x.epoch()));
@@ -109,9 +105,7 @@ public final class Codec {
                 case "InviteCreated" -> new Message.InviteCreated(o.string("url"), o.optString("code", null), o.lng("expiresAt"));
                 case "Error" -> new Message.Error(o.optString("inReplyTo", null), o.string("reason"));
                 case "CertUpdate" -> new Message.CertUpdate(o.stringArray("chainPem"), o.string("keyId"));
-                case "LinkOpen" -> new Message.LinkOpen(o.optString("name", null), o.optString("domain", null),
-                    o.optString("local", null), o.has("chainPem") ? o.stringArray("chainPem") : null,
-                    o.optBytes("domainProof"));
+                case "LinkOpen" -> new Message.LinkOpen(o.optString("name", null), o.optString("local", null));
                 case "LinkOpened" -> new Message.LinkOpened(o.optString("linkId", null), o.optString("name", null),
                     o.optString("url", null), o.optString("reason", null));
                 case "LinkClose" -> new Message.LinkClose(o.string("linkId"));
@@ -120,9 +114,6 @@ public final class Codec {
                 case "SignRequest" -> new Message.SignRequest(o.lng("streamId"), o.string("keyId"), o.string("alg"), o.bytes("content"),
                     o.optBytes("serverHello"), o.optBytes("encryptedExtensions"), o.optBytes("helloRetryRequest"));
                 case "SignResponse" -> new Message.SignResponse(o.lng("streamId"), o.optBytes("sig"), o.optString("reason", null));
-                case "ChallengeSet" -> new Message.ChallengeSet(o.optString("domain", null), o.string("token"), o.string("keyAuthorization"));
-                case "ChallengeClear" -> new Message.ChallengeClear(o.string("token"));
-                case "Ack" -> new Message.Ack(o.optString("inReplyTo", null));
                 case "PeerHello" -> new Message.PeerHello(o.integer("proto"), o.string("version"), o.optString("host", null),
                     o.optString("address", null), o.optString("endpoint", null), o.optString("role", null),
                     o.has("epoch") ? o.lng("epoch") : 0);

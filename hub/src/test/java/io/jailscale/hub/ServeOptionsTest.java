@@ -88,9 +88,6 @@ class ServeOptionsTest {
         assertTrue(c.selfCheck());
         assertTrue(c.addressCheck());
 
-        assertTrue(c.hasHttp(), "port 80 is the precondition for user domains");
-        assertEquals("0.0.0.0", c.httpListenHost());
-        assertEquals(80, c.httpListenPort());
     }
 
     @Test
@@ -167,15 +164,12 @@ class ServeOptionsTest {
         assertTrue(serve("--no-address-check").selfCheck());
     }
 
-    // --- the listeners that can be switched off --------------------------------------------------
+    // --- the listeners ---------------------------------------------------------------------------
 
     @Test
-    void portEightyCanBeTurnedOffButNotTheDnsListener() {
-        HubConfig noHttp = serve("--http-listen", "none");
-        assertFalse(noHttp.hasHttp());
-        assertEquals(8080, serve("--http-listen", "127.0.0.1:8080").httpListenPort());
-
-        // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here.
+    void theDnsListenerCannotBeTurnedOff() {
+        // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here, so a
+        // hub without it cannot get a certificate at all.
         assertEquals("--dns-listen must be host:port", refused("--dns-listen", "none"));
     }
 
@@ -201,19 +195,18 @@ class ServeOptionsTest {
     @Test
     void aListenerWithoutAPortIsRefused() {
         assertEquals("--listen must be host:port", refused("--listen", "0.0.0.0"));
-        assertEquals("--http-listen must be host:port or none", refused("--http-listen", "8080"));
     }
 
     /**
      * An IPv6 address has colons of its own, so `--listen ::443` parses as the host `:` and binds
      * nothing -- it used to reach the operator as `SocketException: Unresolved address`, a sentence
-     * that says nothing about brackets (#63). All three host:port flags parse the same way and all
-     * three had it.
+     * that says nothing about brackets (#63). Both host:port flags parse the same way and both
+     * had it.
      */
     @Test
     void anUnbracketedIpv6ListenerSaysToBracketIt() {
         String want = " needs an IPv6 address in brackets, as in ";
-        for (String flag : new String[] {"--listen", "--http-listen", "--dns-listen"}) {
+        for (String flag : new String[] {"--listen", "--dns-listen"}) {
             String msg = refused(flag, "::443");
             assertTrue(msg.startsWith(flag + want), flag + " said: " + msg);
         }
@@ -232,9 +225,8 @@ class ServeOptionsTest {
      */
     @Test
     void aBracketedIpv6ListenerIsTheForm() {
-        HubConfig c = serve("--listen", "[::]:443", "--http-listen", "[::]:80", "--dns-listen", "[::]:53");
+        HubConfig c = serve("--listen", "[::]:443", "--dns-listen", "[::]:53");
         assertEquals("[::]", c.listenHost());
-        assertEquals("[::]", c.httpListenHost());
         assertEquals("[::]", c.dnsListenHost());
     }
 

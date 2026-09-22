@@ -252,9 +252,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             if (group != null) {
                 hub.registry().detach(this);
             }
-            if (conn == 0 && mkey != null) {
-                hub.challenges().clearNode(mkey);
-            }
             close();
         }
     }
@@ -336,16 +333,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         return true;
     }
 
-    /**
-     * Why a node may not have the hub answer http-01 for this domain, or null. The hub owns port 80
-     * for every name that resolves to it, so relaying a token is lending out domain validation:
-     * it is lent only for a domain this node may claim (the same rule {@code LinkOpen} applies),
-     * and never for the hub's own name (which serves /admin, /join and the first-contact key).
-     */
-    private String challengeRefusal(String domain) {
-        return domain == null ? "bad-domain" : hub.links().domainRefusal(node, domain);
-    }
-
     private boolean handleControl(Message m) throws IOException {
         switch (m) {
             case Message.RegisterRequest r -> {
@@ -360,26 +347,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             }
             case Message.InviteCreate ic -> send(hub.invites().createForNode(this, ic));
             case Message.LinkOpen lo -> send(hub.links().open(this, lo));
-            case Message.ChallengeSet cs -> {
-                String domain = cs.domain() == null ? null : cs.domain().toLowerCase(Locale.ROOT);
-                String refusal = node == null ? null : challengeRefusal(domain);
-                if (node == null) {
-                    send(new Message.Error(cs.type(), "not-registered"));
-                } else if (!hub.config().hasHttp()) {
-                    send(new Message.Error(cs.type(), "hub-has-no-port-80"));
-                } else if (refusal != null) {
-                    LOG.warn("node {}: refused http-01 relay for {}: {}", mkey, cs.domain(), refusal);
-                    send(new Message.Error(cs.type(), refusal));
-                } else if ((refusal = hub.challenges().set(mkey, domain, cs.token(), cs.keyAuthorization())) != null) {
-                    send(new Message.Error(cs.type(), refusal));
-                } else {
-                    send(new Message.Ack(cs.type()));
-                }
-            }
-            case Message.ChallengeClear cc -> {
-                hub.challenges().clear(mkey, cc.token());
-                send(new Message.Ack(cc.type()));
-            }
             case Message.LinkClose lc -> hub.links().close(group, lc.linkId());
             default -> {
                 LOG.warn("node {}: unexpected {} from node", mkey, m.type());

@@ -23,8 +23,6 @@ public final class Main {
         jailscale up --hub HOST [--code XXXX-XXXX] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate] [--proxy-protocol]
-        jailscale open PORT --domain app.example.com [--acme-email E] [--acme-staging | --acme-directory URL]
-                                                              your own domain, CNAME'd to the hub (ARCHITECTURE.md §8.3)
         jailscale gate NAME [--ttl 24h | --off]              each run issues a fresh visit link
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | daemon
@@ -43,7 +41,7 @@ public final class Main {
      * fresh link every run with or without it.
      */
     static final String[] FLAGS = {"debug", "self", "tls-insecure", "help", "gate", "off",
-        "acme-staging", "proxy-protocol", "download"};
+        "proxy-protocol", "download"};
 
     private Main() {}
 
@@ -244,18 +242,6 @@ public final class Main {
             .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("gate", a.flag("gate"));
         if (a.has("proxy-protocol")) {
             b.put("proxyProtocol", a.flag("proxy-protocol"));
-        }
-        if (a.has("domain")) {
-            b.put("domain", a.get("domain"));
-            if (a.has("acme-directory")) {
-                b.put("acmeDirectory", a.get("acme-directory"));
-            } else if (a.flag("acme-staging")) {
-                b.put("acmeDirectory", "https://acme-staging-v02.api.letsencrypt.org/directory");
-            }
-            if (a.has("acme-email")) {
-                b.put("acmeEmail", a.get("acme-email"));
-            }
-            System.out.println(a.get("domain") + ": checking the certificate… (the first ACME issuance takes tens of seconds)");
         }
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");

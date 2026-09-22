@@ -772,8 +772,7 @@ final class HttpFront {
             b.append("""
                 <p>That serves <code>127.0.0.1:3000</code> at <code>https://&lt;name&gt;.%s</code>, with a \
                 certificate your own machine terminates. <code>--name myapp</code> asks for a particular \
-                name, <code>--tcp</code> forwards a raw port instead, and <code>--domain app.example.com</code> \
-                uses a domain of yours, whose key never leaves your machine.</p>""".formatted(host));
+                name.</p>""".formatted(host));
         }
 
         // A public hub is asking people to route their traffic through a stranger's machine. What it
@@ -784,8 +783,7 @@ final class HttpFront {
             session key belongs to the machine at the other end. It does hold the wildcard private key for \
             <code>*.%s</code> and signs one handshake digest per visitor, so a dishonest hub could point a \
             name at a machine of its own instead. That is what <code>jailscale verify</code> checks from \
-            your side, and what the daemon re-checks on its own every half hour. A domain you bring \
-            yourself never involves this hub's key at all.</p>""".formatted(host));
+            your side, and what the daemon re-checks on its own every half hour.</p>""".formatted(host));
 
         // Who runs this hub, and what it keeps. Drawn only when the operator has said so: a hub
         // somebody runs for themselves has nobody to name and no terms to point at, and a section
@@ -823,13 +821,13 @@ final class HttpFront {
             // about the traffic while it is moving. These are what stays afterwards, and the last
             // line is the important one: the process can speak for the process and no further.
             // Not an inventory. Three attempts at one were each found short -- the pending
-            // record's address, then the hostname and system, then the invites, domains,
+            // record's address, then the hostname and system, then the invites,
             // raw-port targets and notices -- and a list that has to be complete to be
             // honest is a list that goes stale the next time anything is added to the store. So:
             // the shape of it, the part a visitor is actually asking about, and where it stops.
             b.append("""
-                <p>What it keeps is what an operator administers: the nodes and who owns them, the names, \
-                domains and ports they hold, the invitations that let them in, and what each machine said \
+                <p>What it keeps is what an operator administers: the nodes and who owns them, the names \
+                they hold, the invitations that let them in, and what each machine said \
                 about itself when it joined -- its hostname, its system, and the address it knocked from. \
                 That stays until the operator removes it. Beside it, thirty days of uptime record and the \
                 addresses they have barred.</p>\

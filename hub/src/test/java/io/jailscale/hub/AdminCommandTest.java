@@ -49,8 +49,6 @@ class AdminCommandTest {
             new Route("name-list", "name", "list"),
             new Route("name-reassign", "name", "reassign", "web", "--user", "bob"),
             new Route("name-release", "name", "release", "web"),
-            new Route("domain-list", "domain", "list"),
-            new Route("domain-release", "domain", "release", "app.example.com"),
             new Route("ban-list", "ban", "list"),
             new Route("ban-add", "ban", "add", "203.0.113.7"),
             new Route("ban-remove", "ban", "remove", "203.0.113.7"),
@@ -126,7 +124,7 @@ class AdminCommandTest {
                 }
                 // Every field any case reads, so a verb that lands gets as far as its own objection.
                 JsonObject req = JsonObject.builder().put("cmd", r.verb()).put("mkey", "3").put("user", "alice")
-                    .put("cidr", "203.0.113.7").put("name", "web").put("domain", "app.example.com")
+                    .put("cidr", "203.0.113.7").put("name", "web")
                     .put("id", "x").put("key", "knock").put("value", "off").put("tag", "ci").build();
                 JsonObject[] last = new JsonObject[1];
                 try {
@@ -199,7 +197,6 @@ class AdminCommandTest {
         assertEquals("alice", req("admin", "remove", "alice").string("user"));
         assertEquals("inv_1", req("invite", "revoke", "inv_1").string("id"));
         assertEquals("web", req("name", "release", "web").string("name"));
-        assertEquals("app.example.com", req("domain", "release", "app.example.com").string("domain"));
         assertEquals("bob", req("name", "reassign", "web", "--user", "bob").string("user"));
     }
 
@@ -224,7 +221,6 @@ class AdminCommandTest {
             new Missing("missing <ip|cidr>", "ban", "add"),
             new Missing("missing <ip|cidr>", "ban", "remove"),
             new Missing("missing <name>", "name", "release"),
-            new Missing("missing <domain>", "domain", "release"),
             new Missing("missing <id>", "invite", "revoke"),
             new Missing("missing <user>", "admin", "add"),
             new Missing("missing <user>", "admin", "remove"),

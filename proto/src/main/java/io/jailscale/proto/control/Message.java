@@ -161,15 +161,11 @@ public sealed interface Message {
     }
 
     /**
-     * {@code local} is the node-side target ("host:port"); it keys the stable random name.
-     * {@code chainPem}: for user domains, the node's own certificate chain for the name (§8.3).
-     * {@code domainProof}: a signature with that certificate's private key over
-     * {@code "jailscale domain claim v1" || handshakeHash || domain}, bound to the Noise handshake
-     * of the connection carrying it so it cannot be replayed onto another one. A chain on its own
-     * proves nothing, being public in every TLS handshake and in CT logs.
+     * A node asking the hub to serve {@code name} for it (ARCHITECTURE.md §8.2). {@code name} is
+     * null to be given one; {@code local} is where the node forwards it, for the hub's records
+     * only -- nothing on the hub connects to it.
      */
-    record LinkOpen(String name, String domain, String local, List<String> chainPem,
-        byte[] domainProof) implements Message {
+    record LinkOpen(String name, String local) implements Message {
         @Override public String type() { return "LinkOpen"; }
     }
 
@@ -189,7 +185,7 @@ public sealed interface Message {
     record LinkRevoked(String linkId, String name, String reason, long at) implements Message {
         /** Another node opened the same name; the newest opener won (§8.2). */
         public static final String REASSIGNED = "reassigned";
-        /** An operator released the name or domain on the hub. */
+        /** An operator released the name on the hub. */
         public static final String RELEASED = "released";
         @Override public String type() { return "LinkRevoked"; }
     }
@@ -209,24 +205,6 @@ public sealed interface Message {
 
     record SignResponse(long streamId, byte[] sig, String reason) implements Message {
         @Override public String type() { return "SignResponse"; }
-    }
-
-    /**
-     * {@code domain} is the identifier the token belongs to. The hub answers the challenge only for
-     * that Host, and only for a domain this node may claim: without it the relay validates any name
-     * that resolves to the hub, for any node.
-     */
-    record ChallengeSet(String domain, String token, String keyAuthorization) implements Message {
-        @Override public String type() { return "ChallengeSet"; }
-    }
-
-    record ChallengeClear(String token) implements Message {
-        @Override public String type() { return "ChallengeClear"; }
-    }
-
-    /** Positive reply to a request that has no result of its own (ChallengeSet/Clear). */
-    record Ack(String inReplyTo) implements Message {
-        @Override public String type() { return "Ack"; }
     }
 
     // --- hub to hub (ARCHITECTURE.md §13.1) --------------------------------------------------

@@ -42,21 +42,17 @@ class WireFormatTest {
         "{\"t\":\"InviteCreated\",\"url\":\"https://hub.example.com/join/x\",\"code\":\"7F3K-92QX\",\"expiresAt\":1789000000}",
         "{\"t\":\"Error\",\"inReplyTo\":\"InviteCreate\",\"reason\":\"policy\"}",
         "{\"t\":\"CertUpdate\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],\"keyId\":\"sha256:ab\"}",
-        // LinkOpen lost `kind` and `port`, and LinkOpened lost `hubPort`, when raw tcp and udp
-        // links went (§8.4). That is a removal, not an addition, so it is a protocol break and the
-        // PROTO bump in §5.4 is what makes it one: these are the proto 2 lines.
-        "{\"t\":\"LinkOpen\",\"name\":\"myapp\",\"domain\":\"app.example.com\","
-            + "\"local\":\"127.0.0.1:3000\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],"
-            + "\"domainProof\":\"AQID\"}",
+        // LinkOpen lost `kind` and `port` with raw tcp and udp links (§8.4) and `domain`,
+        // `chainPem` and `domainProof` with user domains (§8.3); LinkOpened lost `hubPort`. Those
+        // are removals, not additions, so they are a protocol break and the PROTO bump in §5.4 is
+        // what makes it one: these are the proto 2 lines.
+        "{\"t\":\"LinkOpen\",\"name\":\"myapp\",\"local\":\"127.0.0.1:3000\"}",
         "{\"t\":\"LinkOpened\",\"linkId\":\"l1\",\"name\":\"myapp\",\"url\":\"https://myapp.hub.example.com\",\"reason\":\"taken\"}",
         "{\"t\":\"LinkClose\",\"linkId\":\"l1\"}",
         "{\"t\":\"LinkRevoked\",\"linkId\":\"l1\",\"name\":\"myapp\",\"reason\":\"released\",\"at\":1789000000}",
         "{\"t\":\"SignRequest\",\"streamId\":33554472,\"keyId\":\"sha256:ab\",\"alg\":\"ECDSA-P256-SHA256\",\"content\":\"AQID\","
             + "\"serverHello\":\"AgAAAA\",\"encryptedExtensions\":\"CAAAAA\",\"helloRetryRequest\":\"_gk\"}",
         "{\"t\":\"SignResponse\",\"streamId\":40,\"sig\":\"AQID\",\"reason\":\"not-your-stream\"}",
-        "{\"t\":\"ChallengeSet\",\"domain\":\"app.example.com\",\"token\":\"tok\",\"keyAuthorization\":\"tok.thumb\"}",
-        "{\"t\":\"ChallengeClear\",\"token\":\"tok\"}",
-        "{\"t\":\"Ack\",\"inReplyTo\":\"ChallengeSet\"}",
         // Hello again, carrying the field added after v0.1.0 (§9.3). The Hello at the top of this
         // array keeps its exact bytes and is now the old-node case as well: a node with no bound to
         // declare omits the field and puts the same wire out as a build from before it existed.
@@ -131,13 +127,8 @@ class WireFormatTest {
         assertArrayEquals(new byte[] {(byte) 0xfe, 9}, sr.helloRetryRequest());
 
         Message.LinkOpen lo = only(Message.LinkOpen.class);
-        assertEquals("app.example.com", lo.domain());
-        assertArrayEquals(new byte[] {1, 2, 3}, lo.domainProof());
-
-        Message.ChallengeSet cs = only(Message.ChallengeSet.class);
-        assertEquals("app.example.com", cs.domain());
-        assertEquals("tok", cs.token());
-        assertEquals("tok.thumb", cs.keyAuthorization());
+        assertEquals("myapp", lo.name());
+        assertEquals("127.0.0.1:3000", lo.local());
     }
 
     /**
@@ -188,9 +179,8 @@ class WireFormatTest {
             Codec.decode("{\"t\":\"SignRequest\",\"streamId\":1,\"keyId\":\"k\",\"alg\":\"a\",\"content\":\"AQID\"}"));
         assertEquals(null, bare.serverHello());
         Message.LinkOpen bareLink = assertInstanceOf(Message.LinkOpen.class,
-            Codec.decode("{\"t\":\"LinkOpen\",\"kind\":\"https\",\"local\":\"127.0.0.1:3000\"}"));
-        assertEquals(null, bareLink.name());
-        assertEquals(null, bareLink.domainProof());
+            Codec.decode("{\"t\":\"LinkOpen\",\"local\":\"127.0.0.1:3000\"}"));
+        assertEquals(null, bareLink.name(), "a node asking to be given a name sends none");
     }
 
     @Test

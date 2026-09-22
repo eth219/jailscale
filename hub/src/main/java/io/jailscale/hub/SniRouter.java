@@ -194,30 +194,23 @@ final class SniRouter {
                 return;
             }
             name = hub.links().nameOf(sni);
-            Links.Link link;
-            if (name != null) {
-                link = hub.links().byName(name);
-                if (link == null && hub.store().nameOwner(name) != null) {
-                    link = hub.links().awaitOnline(name, false, HOLD_MS); // node reconnecting (hand-off, restart)
-                }
-                if (link == null) {
-                    refused.increment();
-                    fallback(socket, peek.consumed(), name);
-                    return;
-                }
-            } else {
-                // A user domain (ARCHITECTURE.md §8.3): passthrough only, the hub has no certificate to answer with.
-                name = sni.toLowerCase(java.util.Locale.ROOT);
-                link = hub.links().byDomain(name);
-                if (link == null && hub.store().domain(name) != null) {
-                    link = hub.links().awaitOnline(name, true, HOLD_MS);
-                }
-                if (link == null) {
-                    LOG.debug("{}: unknown SNI {}, closing", ip, sni);
-                    refused.increment();
-                    Relay.closeQuietly(socket);
-                    return;
-                }
+            if (name == null) {
+                // Not a name under this hub's domain, and there is nothing else it could be: user
+                // domains went with the maintenance cut (§8.3), so an SNI from somewhere else is a
+                // visitor sent here by a record nobody on this hub asked for.
+                LOG.debug("{}: unknown SNI {}, closing", ip, sni);
+                refused.increment();
+                Relay.closeQuietly(socket);
+                return;
+            }
+            Links.Link link = hub.links().byName(name);
+            if (link == null && hub.store().nameOwner(name) != null) {
+                link = hub.links().awaitOnline(name, HOLD_MS); // node reconnecting (hand-off, restart)
+            }
+            if (link == null) {
+                refused.increment();
+                fallback(socket, peek.consumed(), name);
+                return;
             }
             if (acquire(perName, name) > MAX_PER_NAME) {
                 release(perName, name);
@@ -270,8 +263,7 @@ final class SniRouter {
         socket.setSoTimeout(0);
         MuxStream stream;
         try {
-            stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
-                link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId());
+            stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort, hub.tls().keyId());
         } catch (IOException e) {
             refused(visitorIp, peek.serverName(), e.getMessage());
             throw e;

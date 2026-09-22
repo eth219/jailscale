@@ -21,16 +21,16 @@ import org.junit.jupiter.api.Timeout;
 import io.jailscale.proto.net.TestPorts;
 
 /**
- * A HEAD is answered with the header fields a GET would have and no body (RFC 9110 §9.3.2). All
- * three cases here go through one writer, {@code HttpResponse.writeTo}, which is where the defect
- * was; they are separate because each front decides for itself whether to tell the writer what the
+ * A HEAD is answered with the header fields a GET would have and no body (RFC 9110 §9.3.2). Both
+ * cases here go through one writer, {@code HttpResponse.writeTo}, which is where the defect was;
+ * they are separate because each front decides for itself whether to tell the writer what the
  * method was, and a front that forgets looks exactly like a front that was never wired up.
  *
  * <p>Each case reads the status line and headers and then asserts the stream ends there. That is
  * the whole finding: {@code Connection: close} makes the extra bytes invisible to a client that
  * reads to EOF, and visible to anything that frames the next response by Content-Length.
  *
- * <p>Two of the three compare the Content-Length against the bytes a GET returns; the hub's page
+ * <p>One of them compares the Content-Length against the bytes a GET returns; the hub's page
  * carries live state, so that one asserts only that the length is not zero -- which is still the
  * direction a response whose body was dropped rather than suppressed would fail.
  */
@@ -49,11 +49,8 @@ class HeadHasNoBodyTest {
         Path root = TestDirs.newRoot("head");
         java.net.ServerSocket portSocket = TestPorts.listen(1024);
         port = portSocket.getLocalPort();
-        // Port 0 on the plain-HTTP front: the default (80) would collide with a second test JVM,
-        // and needs root besides.
         hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
-            CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test")
-            .withHttp("127.0.0.1", 0));
+            CERT, KEY, false, HubConfig.POLICY_MEMBERS, true, "hub.test"));
         hub.listenOn(portSocket);
         hub.start();
     }
@@ -108,25 +105,6 @@ class HeadHasNoBodyTest {
     }
 
     @Test
-    void portEightyChallengeFront() throws Exception {
-        int expected;
-        try (Socket s = new Socket("127.0.0.1", hub.httpPort())) {
-            s.setSoTimeout(10_000);
-            HttpResponse r = get(s, "app.example.test", "/.well-known/acme-challenge/nope");
-            assertEquals(404, r.status());
-            expected = r.body().length;
-            assertTrue(expected > 0);
-        }
-        try (Socket s = new Socket("127.0.0.1", hub.httpPort())) {
-            s.setSoTimeout(10_000);
-            Head h = head(s, "app.example.test", "/.well-known/acme-challenge/nope");
-            assertEquals(404, h.resp().status());
-            assertEquals(expected, contentLength(h.resp()));
-            assertEquals(-1, h.next(), "port 80 sent a body for a HEAD");
-        }
-    }
-
-    @Test
     void aRejectedHeadIsAnsweredWithoutABodyToo() throws Exception {
         // None of these ever becomes an HttpRequest, so the front answers out of the exception,
         // which is the one place the method has to be carried rather than read off the request.
@@ -157,17 +135,6 @@ class HeadHasNoBodyTest {
                 assertEquals(contentLength(r), r.body().length);
                 assertTrue(r.body().length > 0);
             }
-        }
-        // The plain-HTTP front reads the method off the exception itself, and one that got that
-        // wrong still passes every case above. badHeader and not badTarget, because it is
-        // plaintext: badTarget is rejected with its headers still unread, and closing a socket that
-        // has bytes left in its receive queue sends an RST, which would lose the answer this is
-        // about to read rather than test it.
-        try (Socket s = new Socket("127.0.0.1", hub.httpPort())) {
-            s.setSoTimeout(10_000);
-            Head h = raw(s, String.format(badHeader, "HEAD"));
-            assertEquals(400, h.resp().status());
-            assertEquals(-1, h.next(), "port 80 answered a rejected HEAD with the error text");
         }
     }
 

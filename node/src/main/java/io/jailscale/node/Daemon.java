@@ -1,14 +1,12 @@
 package io.jailscale.node;
 
 import io.jailscale.crypto.KeyText;
-import io.jailscale.proto.acme.AcmeException;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.mux.MuxSession;
 import io.jailscale.proto.mux.MuxStream;
-import io.jailscale.proto.tls.DomainProof;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
@@ -43,7 +41,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private static final int VERIFY_TIMEOUT_MS = 10_000;
 
     private final Visitors visitors;
-    private final DomainCerts domainCerts;
     private volatile boolean closed;
     /** The last release check, for {@code status}; null until the first one has run. */
     private volatile Updates.Result lastUpdate;
@@ -87,7 +84,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         // visitors first: its bound goes into every Hello this link sends (ARCHITECTURE.md §9.3).
         this.visitors = new Visitors(state, config.tuning().visitorCeiling(), config.tuning().firstByteMs());
         this.link = new HubLink(state, Version.string(), this, visitors.maxInFlight());
-        this.domainCerts = new DomainCerts(config.configDir());
     }
 
     public void start() throws IOException {
@@ -96,7 +92,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (state.hasHub()) {
             link.start(null);
         }
-        Thread.ofVirtual().name("domain-renew").start(this::renewLoop);
         Thread.ofVirtual().name("update-check").start(this::updateLoop);
         Thread.ofVirtual().name("self-probe").start(this::probeLoop);
     }
@@ -268,9 +263,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             }
         }
         if (rec != null) {
-            if (rec.domain != null) {
-                visitors.removeDomain(rec.domain);
-            }
             state.links.remove(rec);
         }
         state.revoked.add(new NodeState.RevokedRec(r.name(), r.reason(), r.at()));
@@ -314,22 +306,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (on.isRelay() && rec.name == null) {
             throw new IOException("not yet named by the primary");
         }
-        DomainCerts.Material material = rec.domain == null ? null : domainMaterial(rec, false);
-        List<String> chain = material == null ? null : material.chainPem();
-        Message r = on.request(handshakeHash -> {
-            byte[] proof = null;
-            if (material != null) {
-                // The chain says which certificate; the proof says we hold its key. Signed over
-                // the handshake hash of the connection the claim goes out on, so it is good for
-                // this claim on this connection only.
-                try {
-                    proof = DomainProof.sign(material.key(), handshakeHash, rec.domain);
-                } catch (GeneralSecurityException e) {
-                    throw new IOException("cannot prove " + rec.domain + " with its certificate key: " + e.getMessage(), e);
-                }
-            }
-            return new Message.LinkOpen(rec.name, rec.domain, rec.local(), chain, proof);
-        }, "LinkOpened", REPLY_TIMEOUT_MS);
+        Message r = on.request(new Message.LinkOpen(rec.name, rec.local()), "LinkOpened", REPLY_TIMEOUT_MS);
         if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
             if (on.isRelay()) {
                 rec.relayLinkIds.put(on.relayAddress(), lo.linkId());
@@ -412,9 +389,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                         }
                     }
                 }
-                if (rec.domain != null) {
-                    visitors.removeDomain(rec.domain);
-                }
                 state.links.remove(rec);
                 state.save();
                 reply.ok();
@@ -490,7 +464,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return state.links.stream().<Object>map(l -> JsonObject.builder()
             .put("name", l.name).put("local", l.local())
             .put("url", l.url).put("gate", l.gateHash != null).put("open", isOpen(l))
-            .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
             .put("probe", l.lastProbe == null ? null : l.lastProbe.json()).build().asMap()).toList();
     }
 
@@ -548,35 +521,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     /**
-     * The certificate for a domain link: from disk, or freshly issued when missing, due for
-     * renewal, or {@code force}. Installs it for TLS termination either way.
-     */
-    private DomainCerts.Material domainMaterial(NodeState.LinkRec rec, boolean force) throws IOException {
-        DomainCerts.Material m = domainCerts.load(rec.domain);
-        if (m == null || force || m.dueForRenewal()) {
-            if (!link.isConnected()) {
-                throw new IOException("not connected to the hub; cannot run the ACME challenge");
-            }
-            URI directory = rec.acmeDirectory != null ? URI.create(rec.acmeDirectory) : LETS_ENCRYPT;
-            try {
-                m = domainCerts.issue(rec.domain, directory, rec.acmeEmail, link);
-            } catch (AcmeException | GeneralSecurityException e) {
-                throw new IOException("certificate for " + rec.domain + ": " + e.getMessage(), e);
-            } catch (InterruptedException _) {
-                Thread.currentThread().interrupt();
-                throw new IOException("interrupted");
-            }
-        }
-        try {
-            visitors.installDomain(m);
-        } catch (GeneralSecurityException e) {
-            throw new IOException("cannot use certificate for " + rec.domain + ": " + e.getMessage(), e);
-        }
-        rec.certExpiresAt = m.notAfter();
-        return m;
-    }
-
-    /**
      * Daily: ask whether a newer jailscale has been published and keep the answer for {@code status}
      * (ARCHITECTURE.md §9.4). The first check waits a random few minutes so that a fleet started
      * together does not arrive in one burst, and a failure is kept rather than logged every day --
@@ -601,103 +545,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
     }
 
-    /**
-     * Hourly: renew domain certificates that have a third of their lifetime left
-     * (ARCHITECTURE.md §8.3), and say so when one is running out anyway.
-     *
-     * <p>The warning is not conditional on being connected, which is the whole point: renewal needs
-     * the hub, so the node that cannot renew is exactly the node nobody is going to hear from. §15
-     * called this out as nothing counting down for the operator.
-     *
-     * <p>The first pass runs before the first sleep and only warns. A node that reaches its hub has
-     * its expiry dates already, because {@link #onConnected} reopens every link and that loads the
-     * certificate; a node that cannot connect has nothing, and it is the one the warning is for, so
-     * making it wait an hour to hear that its certificate ran out yesterday is the wrong hour.
-     * Renewal is left to the tick, since at startup there is nothing to renew against yet.
-     */
-    private void renewLoop() {
-        warnAboutStoredCertificates();
-        while (!closed) {
-            try {
-                Thread.sleep(RENEW_CHECK_MS);
-            } catch (InterruptedException _) {
-                return;
-            }
-            for (NodeState.LinkRec rec : state.links) {
-                if (rec.domain == null) {
-                    continue;
-                }
-                DomainCerts.Material m = domainCerts.load(rec.domain);
-                rememberExpiry(rec, m);
-                if (link.isConnected() && (m == null || m.dueForRenewal())) {
-                    try {
-                        LOG.info("renewing certificate for {}", rec.domain);
-                        reopen(rec);
-                    } catch (IOException | TimeoutException e) {
-                        LOG.warn("renewal of {} failed: {}", rec.domain, e.getMessage());
-                    }
-                }
-                warnIfExpiring(rec);
-            }
-        }
-    }
-
-    /**
-     * Reads what is on disk and warns about anything close to its end, without renewing and without
-     * a hub. Called once before {@link #renewLoop} starts sleeping, so that a node which comes up
-     * unable to reach its hub says so at once instead of an hour later.
-     */
-    void warnAboutStoredCertificates() {
-        for (NodeState.LinkRec rec : state.links) {
-            if (rec.domain != null) {
-                rememberExpiry(rec, domainCerts.load(rec.domain));
-                warnIfExpiring(rec);
-            }
-        }
-    }
-
-    /** Remembers when a loaded certificate runs out; a link with none keeps the 0 that means "not known". */
-    private static void rememberExpiry(NodeState.LinkRec rec, DomainCerts.Material m) {
-        if (m != null) {
-            rec.certExpiresAt = m.notAfter();
-        }
-    }
-
-    /** Logs {@link #expiryWarning} at most once a day per name, so a fortnight is not 336 lines. */
-    private void warnIfExpiring(NodeState.LinkRec rec) {
-        long now = System.currentTimeMillis();
-        String w = expiryWarning(rec.domain, rec.certExpiresAt, now);
-        if (w == null) {
-            rec.certWarnedAt = 0;
-            return;
-        }
-        if (now - rec.certWarnedAt < CERT_WARN_REPEAT_MS) {
-            return;
-        }
-        rec.certWarnedAt = now;
-        LOG.warn("{}", w);
-    }
-
-    /**
-     * What to say about a certificate close to its end, or null while there is nothing to say.
-     * Separate from the logging so the wording of the one message an operator may act on can be
-     * checked without a clock or a daemon.
-     */
-    static String expiryWarning(String domain, long expiresAt, long now) {
-        if (expiresAt <= 0) {
-            return null;
-        }
-        long left = expiresAt - now;
-        if (left > CERT_WARN_MS) {
-            return null;
-        }
-        if (left <= 0) {
-            return "the certificate for " + domain + " EXPIRED " + days(-left) + " ago: visitors now see a warning"
-                + " instead of your site. Renewal needs this node connected to its hub.";
-        }
-        return "the certificate for " + domain + " expires in " + days(left) + " and has not renewed."
-            + " Renewal needs this node connected to its hub.";
-    }
 
     private static String days(long millis) {
         long d = millis / 86400_000L;
@@ -720,40 +567,25 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         int port = req.integer("port");
         String host = req.optString("host", "127.0.0.1");
-        String domain = req.optString("domain", null);
-        if (domain != null) {
-            domain = domain.toLowerCase(java.util.Locale.ROOT);
-        }
-        String name = domain != null ? null : req.optString("name", null);
+        String name = req.optString("name", null);
         NodeState.LinkRec rec = null;
         for (NodeState.LinkRec l : state.links) {
-            if (l.host.equals(host) && l.port == port && (name == null || name.equals(l.name))
-                && java.util.Objects.equals(domain, l.domain)) {
+            if (l.host.equals(host) && l.port == port && (name == null || name.equals(l.name))) {
                 rec = l;
             }
         }
         // Opening a name deliberately answers the warning about it, so stop repeating it.
-        if (name != null || domain != null) {
-            String wanted = domain != null ? domain : name;
-            state.revoked.removeIf(r -> r.name().equals(wanted) || r.name().equals(wanted + "." + state.dnsSuffix));
+        if (name != null) {
+            state.revoked.removeIf(r -> r.name().equals(name) || r.name().equals(name + "." + state.dnsSuffix));
         }
         boolean fresh = rec == null;
         if (fresh) {
             rec = new NodeState.LinkRec(host, port, name);
-            rec.domain = domain;
         } else if (name != null) {
             rec.name = name;
         }
         if (req.has("proxyProtocol")) {
             rec.proxyProtocol = req.optBool("proxyProtocol", false);
-        }
-        if (domain != null) {
-            if (req.has("acmeDirectory")) {
-                rec.acmeDirectory = req.string("acmeDirectory");
-            }
-            if (req.has("acmeEmail")) {
-                rec.acmeEmail = req.string("acmeEmail");
-            }
         }
         Message.LinkOpened lo;
         try {

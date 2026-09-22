@@ -43,7 +43,7 @@ machines, of which Funnel is this one job.
 4. **Least privilege at the edge.** The hub reads the TLS SNI and nothing else,
    so it never parses visitor HTTP and never holds plaintext. Its wildcard key
    signs one handshake digest per visitor, and only for a stream the hub itself
-   delivered to that node; domains you bring yourself never involve that key.
+   delivered to that node.
    The node checks the hub's honesty from its own side ([Trust](#trust)), and
    the control channel is Noise IK inside TLS, so a compromised certificate
    authority still does not get you the control plane.
@@ -148,7 +148,6 @@ Other things a node can do:
 
 ```sh
 jailscale open 3000 --gate                    # visitors need a one-time link
-jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
 jailscale verify                              # check that this node, not the hub, terminated the TLS
 jailscale update                              # say whether a newer release is out; never installs it
 jailscale ls | close NAME | status | down
@@ -163,9 +162,8 @@ task.
 
 You need a host with a public address, a domain, and two ports: 443, and 53
 because the hub answers DNS for its own `_acme-challenge` name, which is how it
-issues its own wildcard certificate with no DNS provider API token. Port 80 is a
-third only for domains a node brings itself, which are proven by an http-01
-challenge the hub relays; without it that one feature is off.
+issues its own wildcard certificate with no DNS provider API token. That is the
+whole list — there is no third port.
 
 ```
 jailscale.example.com.                  A   203.0.113.10
@@ -245,7 +243,7 @@ What each side needs:
 
 | | Hub | Node |
 |---|---|---|
-| Inbound ports | 443 and 53, plus 80 for user domains | none |
+| Inbound ports | 443 and 53 | none |
 | Public address | yes | no |
 | Root | no (`CAP_NET_BIND_SERVICE`) | no |
 | TUN device | no | no |

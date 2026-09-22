@@ -309,7 +309,7 @@ final class Standby {
         primaryLostAt = 0;
         LOG.warn("standing down: {} is the primary at epoch {}, this hub was one at a lower epoch and is now its standby",
             theirHost, theirEpoch);
-        hub.stopIssuanceAndPort80();
+        hub.stopIssuance();
         hub.peers().closeAll();
         hub.registry().closeAll("standby");
         hub.relaysChanged();

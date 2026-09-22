@@ -33,7 +33,7 @@ class CliFlagsTest {
      * the list -- exactly the bug it exists to find.
      */
     private static final String[] READ_BY_THE_CLI = {"debug", "self", "tls-insecure", "help", "gate", "off",
-        "acme-staging", "proxy-protocol", "download"};
+        "proxy-protocol", "download"};
 
     @Test
     void everyFlagTheCliReadsIsDeclaredAndTakesNoValue() {

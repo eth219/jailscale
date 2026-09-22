@@ -50,7 +50,6 @@ class StoreSnapshotTest {
             assertEquals(before.invites(), after.invites(), "invites");
             assertEquals(before.pending(), after.pending(), "pending");
             assertEquals(before.names(), after.names(), "names");
-            assertEquals(before.domains(), after.domains(), "domains");
             assertEquals(before.notices(), after.notices(), "notices");
             assertEquals(before.bans(), after.bans(), "bans");
             assertEquals(before.setting(), after.setting(), "setting");
@@ -86,7 +85,6 @@ class StoreSnapshotTest {
         s.createInvite("token-one", "CODE-ABCD", "bob", 3, 3600, 600, "alice", true);
         s.addPending("mkeydavedesktop", "desktop", "linux", "203.0.113.9", "dave");
         s.claimName("myapp", "alice", NODE, "127.0.0.1:3000");
-        s.claimDomain("app.example.com", "alice", NODE);
         s.addNotice(NODE, "link-7", "myapp", "reassigned");
         s.addBan("198.51.100.0/24", "abuse");
         s.setSetting("registration", "invite");
@@ -96,12 +94,12 @@ class StoreSnapshotTest {
     /** Everything the store can be asked for, as one value, so the comparison is total. */
     private static Everything capture(Store s) {
         return new Everything(s.nodes(), s.admins(), s.invites(), s.pending(), s.names(),
-            s.domains(), s.notices(NODE), s.bans(), s.setting("registration", null),
+            s.notices(NODE), s.bans(), s.setting("registration", null),
             s.nextHubKey(), s.hubKeyActivatesAt());
     }
 
     private record Everything(List<Store.NodeRec> nodes, Set<String> admins, List<Store.InviteRec> invites,
         List<Store.PendingRec> pending, List<Store.NameRec> names,
-        List<Store.DomainRec> domains, List<Store.NoticeRec> notices,
+        List<Store.NoticeRec> notices,
         List<Store.BanRec> bans, String setting, String nextHubKey, long hubKeyActivatesAt) {}
 }

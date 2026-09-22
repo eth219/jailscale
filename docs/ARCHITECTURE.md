@@ -47,7 +47,6 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Visitor protocols | HTTP/1.1, WebSocket, SSE, chunked bodies, and anything else the app speaks | the node copies bytes, and the only HTTP it reads is the gate's first request head (§9.3), so nothing routes on a path or a header |
 | Visitor TLS | TLS 1.3 with X25519, terminated on the node, signed by the hub (§9.2) | that pair only, because the signature binding reconstructs what JSSE wrote (§11.1) |
 | Names | `<name>.<hub-domain>` (§8.2), up to `MAX_LINKS_PER_NODE` = 20 links on one node | exactly one node behind a name, and that node's 450 visitor slots are first come, first served across all of them (§15) |
-| Your own domains | brought by the operator, verified by the hub (§8.3) | the hub holds port 80 as well as 443, since http-01 is the only verification path built |
 | IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
 | Behind a TCP proxy | nginx or HAProxy in front, PROXY protocol v1 and v2 (§8.5) | the proxy forwards bytes without opening TLS, and `--proxy-protocol` needs loopback or `--trusted-proxy` |
 | Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2); nothing here installs a service, so keeping the daemon up is a unit of the operator's own (`deploy/`) |
@@ -64,7 +63,6 @@ behind it, so that "not built" is never read as "not wanted".
 | What | Why | Issue |
 |---|---|---|
 | The hub answering AAAA itself | under delegation the hub *is* the authoritative server, so v6 has nowhere else to come from | [#63](https://github.com/eth219/jailscale/issues/63) |
-| tls-alpn-01, so port 80 stops being required for your own domains | it makes 80 a preference; http-01 stays, since not every CA offers the alternative | [#70](https://github.com/eth219/jailscale/issues/70) |
 | systemd socket activation | it is the one mechanism that also helps the single-hub operator, who is most deployments | [#71](https://github.com/eth219/jailscale/issues/71) |
 | A gauge for the soonest certificate expiry among absent nodes | the lapse the node cannot report is one the hub can already see, and alerting can watch a gauge | [#75](https://github.com/eth219/jailscale/issues/75) |
 
@@ -101,8 +99,8 @@ on it, and this section edited in the same change ([docs/issue-workflow.md](issu
    https://myapp.hub.example.com     ┌──────────────────────────────────┐      ┌──────────────────────┐
           │                          │  :443  SNI router                │      │ TLS termination      │
           │  TLS ClientHello         │   ├ hub.example.com -> own HTTP  │ mux  │  ├ signing delegated │
-          ├─────────────────────────>│   ├ *.hub...       -> node stream├─────>│  ├ visitor gate      │
-          │  (ciphertext passes      │   └ user domain    -> node stream│Noise │  └ plaintext to      │
+          ├─────────────────────────>│   └ *.hub...       -> node stream├─────>│  ├ visitor gate      │
+          │  (ciphertext passes      │                                  │Noise │  └ plaintext to      │
           │   through untouched)     │  coordinator: invites, names     │ in   │     127.0.0.1:3000   │
           │                          │  ACME: wildcard via own DNS-01   │ TLS  │                      │
           │                          │  :53   _acme-challenge TXT       │<─────│ CLI <-> daemon       │
@@ -121,9 +119,8 @@ on it, and this section edited in the same change ([docs/issue-workflow.md](issu
   HTTP/1.1, WebSocket, SSE and chunked bodies all pass. The only HTTP parsers in the system are a
   small one for the control channel and the first-request-head read the visitor gate needs.
 
-TCP 443 carries everything and UDP/TCP 53 carries the ACME DNS-01 answers. TCP 80 is optional (HTTPS
-redirect and the http-01 relay user domains need).
-The node needs outbound 443 and nothing else. A local port exposed to the internet is a **link**;
+TCP 443 carries everything and UDP/TCP 53 carries the ACME DNS-01 answers. Those two ports are the
+whole of what the operator opens. The node needs outbound 443 and nothing else. A local port exposed to the internet is a **link**;
 invite links (§10) and visit links (§9.3) are different things.
 
 ---
@@ -265,12 +262,11 @@ condition, in `docs/windows-virtual-thread-stall/`.
 | **MachineKey** (`mkey:`) | node | Noise static key of the control-channel client. The machine's identity | Life of the machine |
 | **hub key** (`hkey:`) | hub | Noise static key of the control-channel server. Pinned by nodes | Rotatable (§5.2) |
 | **Wildcard certificate key** | hub | ECDSA P-256 for `hub.example.com` and `*.hub.example.com`. **Never leaves the hub** | New on each ACME renewal |
-| **User domain key** | node | Certificate key for a domain the user brought. Not on the hub | New on each node-side renewal |
 
 A node's identity is its MachineKey alone; node id and name ownership hang off it. Encoding is
 `prefix:base64url-nopad`, so the key type is visible in logs and a key pasted into the wrong slot
 fails at parse time. Node state is `node.json` (0600) under `$XDG_CONFIG_HOME/jailscale/` or
-`%LOCALAPPDATA%\jailscale\`, with user-domain keys beside it under `domains/`. Hub state is §6.2.
+`%LOCALAPPDATA%\jailscale\`. Hub state is §6.2.
 
 ---
 
@@ -503,12 +499,11 @@ JSON on **stream 0**, each `{"t": "<type>", ...}`.
 | `Goodbye` | `upgrade-required`, `revoked`, `shutdown`, `draining`, plus an optional human `detail` |
 | `RegisterRequest` / `RegisterResponse` | hostname, os, self-chosen user, and one of `invite` / `code` or none to knock. Reply is `approved{nodeId, user}`, `pending` or `rejected{reason}` |
 | `CertUpdate` | Wildcard chain (public part) and its `keyId`, on connect and on renewal |
-| `LinkOpen` / `LinkOpened` | `kind: https\|tcp\|udp`, optional name, domain, port, local target, and for user domains the certificate chain. Reply carries `linkId` and a URL or hub port, or a reason |
-| `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name, domain or port (§11.4) |
+| `LinkOpen` / `LinkOpened` | An optional name -- absent to be given one -- and the local target the node forwards to. Reply carries `linkId` and the URL, or a reason |
+| `LinkClose` / `LinkRevoked` | Stop serving, ownership surviving / this node no longer serves that name (§11.4) |
 | `SignRequest` / `SignResponse` | `streamId`, `keyId`, `alg`, `content`, `serverHello`, `encryptedExtensions`, optional `helloRetryRequest`; then a signature or a reason (§9.2) |
-| `ChallengeSet` / `ChallengeClear` | Register or drop a user-domain http-01 token (§8.3) |
 | `InviteCreate` / `InviteCreated` | A member node issuing an invite. `AdminLinkRequest` / `AdminLink` sat here until #253 removed the admin web; §5.4 covers what an older peer sending one now gets |
-| `HubKeyRotation`, `Ping` / `Pong`, `Ack` / `Error` | §5.2; on-demand round trip; generic replies |
+| `HubKeyRotation`, `Ping` / `Pong`, `Error` | §5.2; on-demand round trip; the generic failure reply |
 
 **Versioning.** `proto` versions the message schema and the frame set together, and the hub accepts
 `minProto` and above. Below that it answers `Goodbye{upgrade-required}` **as the handshake reply**,
@@ -523,9 +518,8 @@ when the Noise parameters change.
 
 `proto` is **1**, and `minProto` is 1 with it. The number moves when a message gains a field the
 hub needs in order to check the request at all; a signing request without the node's ServerHello and
-EncryptedExtensions, a domain claim without its proof of key possession or an http-01 challenge
-without its domain would each have to be refused rather than accepted unchecked, so a node speaking
-an older version is told to upgrade.
+EncryptedExtensions would have to be refused rather than accepted unchecked, so a node speaking an
+older version is told to upgrade.
 
 ### 6.2 Storage
 
@@ -576,8 +570,8 @@ under that rule and not with a bump: an older binary ignores them and replays th
 what it does with its own state anyway, so a rollback gets the old defect back rather than a new
 misreading — and a state written before they existed reads a missing `seq` as zero, skips nothing,
 and behaves exactly as it used to until the first snapshot the newer binary writes. A hub that cannot
-read its state should stop rather than come up holding part of it. In memory the state is plain maps (nodes, names,
-domains, ports, credential hashes, admins, the pending queue, undelivered notices), which is the
+read its state should stop rather than come up holding part of it. In memory the state is plain maps
+(nodes, names, credential hashes, admins, the pending queue, undelivered notices), which is the
 simplest thing that works up to thousands of names.
 
 ### 6.3 Admin IPC and the status page
@@ -646,7 +640,7 @@ is stripped before either test, so a blank name is never a third state between s
 **The whole section is drawn only when one of the three is set**, and with it the only honest
 retention sentence the hub has -- which is deliberately **not an inventory**. Three attempts at one
 were each found short: the pending record's address, then the hostname and system in both records,
-then the invites, domains, raw-port targets and notices. A list that has to be complete
+then the invites and the notices. A list that has to be complete
 to be honest goes stale the next time anything is added to the store, so the page says the shape
 instead: what an operator administers stays until they remove it, including what a machine said
 about itself when it joined -- its hostname, its system, the address it knocked from -- beside
@@ -945,7 +939,6 @@ A single `ServerSocket` accepts on 443. Without opening TLS the router reads the
 | `hub.example.com` | Handed to the hub's own `SSLServerSocket`: control channel, `/join`, `/v1/*` |
 | `<name>.hub.example.com`, active | Open an `OPEN` stream on the owning node and replay the ClientHello bytes already read |
 | `<name>.hub.example.com`, claimed but offline | Wait up to 3 s for the node to return (hand-off, restarts), then serve a short "not open" page under the wildcard certificate, which the hub can do because it holds the key |
-| A registered user domain | Stream to the owning node with `keyId = domain:<domain>`. The hub has no key for it |
 | Anything else, or no SNI | Closed immediately |
 
 After that the hub copies bytes both ways and looks at neither TLS records nor HTTP; a visitor half
@@ -976,46 +969,34 @@ local target gets the same name back, so the URL survives restarts. `--name myap
 the first requester's *user*, so that user's other nodes may use it while another user gets `taken`,
 and an admin moves it with `name reassign`. A name routes only while the node holds the link open and
 is connected; otherwise it stays claimed and visitors see the "not open" page. Opening a name costs
-one `LinkOpen` round trip because the wildcard already covers it, and a node may hold at most 20 name
-and domain links.
+one `LinkOpen` round trip because the wildcard already covers it, and a node may hold at most 20
+links.
 
-### 8.3 User domains
+### 8.3 No user domains, and no port 80
 
-`jailscale open 3000 --domain myapp.com` publishes a domain the user owns, pointed at the hub with a
-CNAME or A record. When the node has no certificate for it, or renewal is due, the node runs ACME
-**http-01 with its own key**: since DNS points at the hub, the CA's
-`http://myapp.com/.well-known/acme-challenge/...` request arrives on the hub's port 80, the node
-uploads `ChallengeSet{domain, token, keyAuthorization}` (at most 10 per node, 10 minutes each), the
-hub answers on its behalf, and `ChallengeClear` removes it. The hub learns the token and the response
-string and nothing about the node's key.
+Every name is `<name>.<hub-domain>`. A domain the user owns, pointed at the hub with a CNAME and
+published as `jailscale open 3000 --domain myapp.com`, was supported and was removed in the
+maintenance cut. With it went the hub's **port 80**: the only verification path built was ACME
+http-01, relayed through that port, so the operator's setup is now one port for visitors and one for
+DNS, and `--http-listen` is gone.
 
-**The relay is lending out domain validation, so it is lent narrowly.** The hub owns port 80 for
-every name that resolves to it, which is every user domain any member has pointed here and every name
-under the hub's own. A token is therefore stored against the domain it was issued for and answered
-only when the request's `Host` is that domain; a token for `<hub>` or anything under it is refused
-outright, and a domain another user already holds is refused too. Answering any token under any Host
-would let one member pass validation for another member's domain, or for the hub's own name — the
-origin that serves `/join` and the first-contact key — and walk away with a publicly trusted
-certificate for it.
+What it was, since the shape is worth keeping: the node ran ACME with **its own key**, uploaded
+`ChallengeSet{domain, token, keyAuthorization}` for the hub to answer on port 80, and then claimed
+the domain with `LinkOpen{domain, chainPem, domainProof}` -- a chain saying which certificate and a
+signature by the leaf's key over `"jailscale domain claim v1" || handshakeHash || domain`, bound to
+the Noise handshake of the connection carrying it, because a chain is public and only the key proves
+possession. After that it was pure SNI passthrough: the certificate and its key existed only on the
+node and the hub's wildcard key was never involved, which is why §11.2 could say a compromised hub
+cannot impersonate a domain you brought yourself. That exception is gone with the feature: every
+name the hub serves is now one it signs for.
 
-Then comes `LinkOpen{domain, chainPem, domainProof}`. **The chain says which certificate; the proof
-says the node holds its key.** A chain is public — it is handed to every visitor in the clear and
-mirrored in CT logs — so presenting one shows only that the presenter has seen the site. The key is
-what the CA bound to the domain, so the key is what answers: `domainProof` is a signature by the
-leaf's private key over `"jailscale domain claim v1" || handshakeHash || domain`, where
-`handshakeHash` is the Noise handshake hash of the connection carrying the claim. Both ends derive it
-and nobody else can, so the proof is good for that claim on that connection only, and no round trip
-is needed to agree a nonce. The hub binds the domain when the chain validates against public roots,
-its SAN is that domain, and the proof verifies against the leaf's public key — rejecting otherwise
-with `domain-unverified`, `domain-cert-name-mismatch`, `domain-cert-untrusted`,
-`domain-proof-missing`, `domain-proof-invalid`, or `bad-domain` for a name under the hub's own domain.
+**The relay was the expensive half.** The hub owned port 80 for every name resolving to it, so
+answering a token was lending out domain validation; it had to be lent narrowly -- a token stored
+against its own domain, answered only for that `Host`, refused for the hub's own name and for a
+domain another user held -- and every one of those rules was a thing to get right for a feature
+beside the core tunnel. Removing it is also one fewer plaintext listener on the public internet.
 
-A domain already held by **another user** is `taken`, the same rule as a name (§8.2): the operator
-releases it with `domain release` and the new owner claims it then. Between machines of the same user
-the newest claim wins, as names do. After that it is pure SNI passthrough: certificate and key exist
-only on the node, the hub forwards ciphertext, and there is no `SignRequest`. The node renews on the
-same third-of-lifetime rule, checked hourly, and an offline node does not renew. **Port 80 on the hub
-is a precondition**; `--http-listen none` means user domains are refused.
+`ChallengeSet`, `ChallengeClear` and `Ack` leave the protocol with it (§5.4).
 
 ### 8.4 No raw TCP or UDP ports
 
@@ -1071,7 +1052,6 @@ so a hub with something in front of it has no per-address cap at all (§15). The
 $ jailscale open 3000                      # https://q7x2k.hub.example.com -> 127.0.0.1:3000
 $ jailscale open 3000 --name myapp         # chosen name
 $ jailscale open 3000 --gate               # visitor gate; prints a visit link too (§9.3)
-$ jailscale open 3000 --domain myapp.com   # user domain (§8.3)
 $ jailscale open 8080 --host 192.168.1.20  # another machine on the same LAN
 $ jailscale ls ; jailscale close q7x2k
 ```
@@ -1617,14 +1597,15 @@ Stated plainly. If the hub is compromised:
 | It cannot | It can |
 |---|---|
 | Read visitor traffic to an honest node (the node terminates it) | **Reassign a name to an attacker node** and sign with the wildcard key, intercepting that name entirely. Not preventable, but detectable (§11.3) |
-| Obtain a node's MachineKey or user-domain keys (it never has them) | Register arbitrary nodes and issue invites at will |
+| Obtain a node's MachineKey (it never has it) | Register arbitrary nodes and issue invites at will |
 | Reach local services a node has not published | See who connected to which name, when, and how much |
 
 The hub is the TLS authority for its own domain, so its compromise is impersonation of every name
-under it. User domains are the exception, since their keys live on the node and a compromised hub can
-only stop routing them. For a self-hosted deployment where the hub operator *is* the organisation
-this matches the usual threat model, and names needing more should be user domains. Preventing and
-knowing are different: the hub decides who owns a name, so it cannot be stopped from reassigning one,
+under it, without exception. Domains a user brought themselves were that exception, because their
+keys lived on the node and a compromised hub could only stop routing them; they are gone (§8.3), so
+what is left is one rule and no special case. For a self-hosted deployment where the hub operator
+*is* the organisation this matches the usual threat model, and a name needing more than that needs
+a different tool. Preventing and knowing are different: the hub decides who owns a name, so it cannot be stopped from reassigning one,
 and §11.3 makes the node notice instead.
 
 ### 11.3 Self-probe
@@ -2015,7 +1996,7 @@ There is no packet hot path, so there is no reason to insist on platform threads
 accept loop is the one platform thread; a visitor connection uses two virtual threads, one per
 direction, at both ends; each mux connection has a virtual reader plus a virtual keepalive, with
 writes running on the producing thread under a lock because the Noise nonce counter must advance in
-wire order; and the hub's own HTTP, ACME, port 80, DNS and both IPC servers use one virtual thread
+wire order; and the hub's own HTTP, ACME, DNS and both IPC servers use one virtual thread
 per request. Remote signing blocks on the calling thread, which is free on a virtual thread. Buffers
 are 16 KB per direction, allocated per stream, and the per-stream flow-control window is 256 KB.
 
@@ -2067,7 +2048,7 @@ what one host does on its own -- fast recovery -- and adds the second host from 
 
 **Hand-off.** Updating the binary does not need a restart. `jailhub serve --takeover` starts a new
 process that asks the old one to hand off over the IPC socket. The old process closes the 443
-listener, the raw ports, port 80, the DNS responder and ACME, snapshots its state, releases the state
+listener, the DNS responder and ACME, snapshots its state, releases the state
 lock, and sends `Goodbye{draining}` to every node; visitor streams already in flight keep flowing on
 those connections, and no new ones are opened on them. The new process takes the lock, replays the
 state and opens 443, and for the few hundred milliseconds in between new visitors are refused
@@ -2127,13 +2108,13 @@ It opens 443 once the certificate has arrived -- blocking for it the way a first
 -- and serves its own page and `/v1/status`, which say what it is and whether it is in sync. A node
 that reaches it is told `Goodbye{standby}` with the primary's name, a reason the node does not stop
 retrying for, so it keeps trying until DNS moves or the standby is promoted. It runs no ACME, no
-DNS responder, no port 80, no address check. It does hold the wildcard key, and the count of hosts
+DNS responder, no address check. It does hold the wildcard key, and the count of hosts
 that hold it is the count of control hosts, two, whatever else is added later
 ([docs/ha-design](ha-design/README.md)).
 
 **Promotion** is `jailhub promote` on the standby, over the admin socket. It stops following, starts
 what a primary runs and a standby does not -- issuance and the DNS responder when the hub obtains its
-own certificate, port 80 -- and takes nodes. The certificate it has is already in `tls/` where
+own certificate -- and takes nodes. The certificate it has is already in `tls/` where
 `AcmeManager` looks, so a restart afterwards finds it and renews from there. The operator points the
 apex at the new host; nothing here can change a DNS record. Promotion is one way and says so in the
 log: an old primary that returns is not told anything, because nothing is connected to it, and has
@@ -2349,7 +2330,7 @@ down and becomes the other's standby, following from the connection that found i
 lower address stays, so both sides decide the same way. A primary that names a peer dials it for
 that one purpose, and the standby of a newer primary that returns from the dead is settled by the
 old primary's next dial or the new one's next hello. Standing down closes the control connections
-with `Goodbye{standby}`, stops issuance and port 80, and keeps the relay connections, which serve
+with `Goodbye{standby}`, stops issuance, and keeps the relay connections, which serve
 on. `AutoPromoteTest` runs the three cases: a dead primary replaced with nobody typing, a partition
 with one node still reaching the primary and nothing promoted, and no witness at all leaving the
 decision where it was; and a returning primary standing down by epoch.
@@ -2905,9 +2886,6 @@ say so and name the issue. An entry that does neither has not been through that 
   until the reconstruction is updated; it cannot weaken the binding, because the hub recomputes
   the hash itself, but it can take the service down. `TranscriptTest` exists to catch that at
   build time. Visitors are also confined to TLS 1.3 with X25519 for the same reason.
-- **User domains require port 80 on the hub.** The http-01 relay is the only verification path
-  implemented; tls-alpn-01 would remove that requirement, and is decided work
-  (§1.2, [#70](https://github.com/eth219/jailscale/issues/70)).
 - **Upgrading stops one step short of automatic.** `jailscale update`, and the daemon's daily check
   behind `status`, say that a newer release exists; `update --download` fetches it and checks it
   against a signed `RELEASE.txt` (§9.4); the command that puts it in place is printed for the

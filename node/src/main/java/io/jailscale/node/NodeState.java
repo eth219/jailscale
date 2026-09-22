@@ -52,9 +52,6 @@ final class NodeState {
         volatile String url;
         volatile String gateHash;      // visitor gate (ARCHITECTURE.md §9.3): SHA-256 of the visit token, or null
         volatile long gateExpiresAt;   // ms epoch; 0 = never
-        volatile String domain;        // user domain (ARCHITECTURE.md §8.3), or null
-        volatile String acmeDirectory; // ACME directory used for the domain, or null for Let's Encrypt
-        volatile String acmeEmail;
         volatile long certExpiresAt;   // not persisted: from the loaded certificate
         volatile ProbeResult lastProbe; // not persisted: the last self-probe of this name (§11.3)
         volatile long certWarnedAt;    // not persisted: when the expiry warning was last logged
@@ -146,9 +143,6 @@ final class NodeState {
                     LinkRec rec = new LinkRec(lo.string("host"), lo.integer("port"), lo.optString("name", null));
                     rec.gateHash = lo.optString("gateHash", null);
                     rec.gateExpiresAt = lo.has("gateExpiresAt") ? lo.lng("gateExpiresAt") : 0;
-                    rec.domain = lo.optString("domain", null);
-                    rec.acmeDirectory = lo.optString("acmeDirectory", null);
-                    rec.acmeEmail = lo.optString("acmeEmail", null);
                     rec.proxyProtocol = lo.optBool("proxyProtocol", false);
                     s.links.add(rec);
                 }
@@ -178,7 +172,6 @@ final class NodeState {
         for (LinkRec l : links) {
             ls.add(JsonObject.builder().put("host", l.host).put("port", l.port).put("name", l.name)
                 .put("gateHash", l.gateHash).put("gateExpiresAt", l.gateExpiresAt > 0 ? Long.valueOf(l.gateExpiresAt) : null)
-                .put("domain", l.domain).put("acmeDirectory", l.acmeDirectory).put("acmeEmail", l.acmeEmail)
                 .put("proxyProtocol", l.proxyProtocol).build().asMap());
         }
         java.util.List<Object> rs = new java.util.ArrayList<>();

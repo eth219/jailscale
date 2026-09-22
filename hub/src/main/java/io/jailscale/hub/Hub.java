@@ -61,8 +61,6 @@ public final class Hub implements AutoCloseable {
     private final HttpFront front;
     private final HubTls tls;
     private final Links links;
-    private final Challenges challenges;
-    private volatile HttpChallengeFront http;
     private final SniRouter router;
     private io.jailscale.hub.dns.DnsResponder dns;
     private AcmeManager acme;
@@ -146,12 +144,7 @@ public final class Hub implements AutoCloseable {
         this.invites = new Invites(config, store);
         this.front = new HttpFront(this);
         this.tls = new HubTls(config.hostname());
-        this.challenges = new Challenges();
-        try {
-            this.links = new Links(config, store, new DomainVerifier(config.userDomainCa()), registry);
-        } catch (GeneralSecurityException e) {
-            throw new IOException("trust store: " + e.getMessage(), e);
-        }
+        this.links = new Links(config, store, registry);
         this.links.standby(() -> ha.isStandby());
         this.router = new SniRouter(this);
         // Flags seed the runtime settings once; afterwards `jailhub setting` owns them.
@@ -559,9 +552,8 @@ public final class Hub implements AutoCloseable {
     }
 
     /**
-     * What only a primary serves besides 443: the address check, and port 80 for user domains.
-     * A standby has no nodes to relay challenges for and its address records are not the ones
-     * being checked.
+     * What only a primary serves besides 443: the address check. A standby's address records are
+     * not the ones being checked.
      */
     private void startPrimaryFronts() {
         if (config.acme() && config.addressCheck() && addressCheckThread == null) {
@@ -573,13 +565,6 @@ public final class Hub implements AutoCloseable {
             // and demote() ends the loop, so a hub that takes over starts a fresh one that checks
             // at once; the null check is for the ordinary case of starting as the primary.
             addressCheckThread = Thread.ofVirtual().name("address-check").start(this::addressCheckLoop);
-        }
-        if (config.hasHttp() && http == null) {
-            try {
-                http = new HttpChallengeFront(this, config.httpListenHost(), config.httpListenPort());
-            } catch (IOException e) {
-                LOG.warn("port {} unavailable ({}); user domains are disabled until it is", config.httpListenPort(), e.getMessage());
-            }
         }
     }
 
@@ -670,15 +655,11 @@ public final class Hub implements AutoCloseable {
         }
     }
 
-    /** Stops what a standby does not run: issuance, and port 80 for user domains. */
-    void stopIssuanceAndPort80() {
+    /** Stops what a standby does not run: its own certificate issuance. */
+    void stopIssuance() {
         if (acme != null) {
             acme.close();
             acme = null;
-        }
-        if (http != null) {
-            http.close();
-            http = null;
         }
     }
 
@@ -907,15 +888,6 @@ public final class Hub implements AutoCloseable {
         return router;
     }
 
-    Challenges challenges() {
-        return challenges;
-    }
-
-    /** The plain HTTP port, or -1 when port 80 is not served. */
-    int httpPort() {
-        return http == null ? -1 : http.port();
-    }
-
     static String version() {
         String v = Hub.class.getPackage() == null ? null : Hub.class.getPackage().getImplementationVersion();
         return v == null ? "dev" : v;
@@ -941,9 +913,6 @@ public final class Hub implements AutoCloseable {
         LOG.info("hand-off requested: releasing listener and state");
         if (listener != null) {
             listener.close();
-        }
-        if (http != null) {
-            http.close();
         }
         if (acme != null) {
             acme.close();
@@ -1025,9 +994,6 @@ public final class Hub implements AutoCloseable {
             dns.close();
         }
         registry.closeAll(Message.Goodbye.SHUTDOWN);
-        if (http != null) {
-            http.close();
-        }
         if (listener != null) {
             listener.close();
         }

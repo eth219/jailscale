@@ -80,10 +80,9 @@ class UserIdentityTest {
         store.addAdmin("carol");
         assertEquals("user-taken", join("m_mallory", "carol").reason());
 
-        // So is a user whose machines are gone: names and domains stay theirs until the operator
-        // releases them, and a stranger joining under the name would inherit them.
+        // So is a user whose machines are gone: a name stays theirs until the operator releases
+        // it, and a stranger joining under the name would inherit it.
         store.claimName("shared", "bob", "m_bob", "127.0.0.1:1");
-        store.claimDomain("bob.example", "bob", "m_bob");
         assertFalse(store.users().contains("bob"));
         assertTrue(store.userExists("bob"));
         assertEquals("user-taken", join("m_mallory", "bob").reason());

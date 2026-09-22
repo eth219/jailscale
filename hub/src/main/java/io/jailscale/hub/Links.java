@@ -24,21 +24,18 @@ final class Links {
     static final int MAX_LINKS_PER_NODE = 20;
 
     /** An active link: a name served by a node (all of its connections). */
-    record Link(String linkId, String name, String user, String mkey, NodeGroup group, String local,
-        String domain) {
+    record Link(String linkId, String name, String user, String mkey, NodeGroup group, String local) {
 
-        /** The SNI visitors use: the hub sub-name or the user domain. */
+        /** The SNI visitors use. */
         String host(HubConfig config) {
-            return domain != null ? domain : name + "." + config.hostname();
+            return name + "." + config.hostname();
         }
     }
 
     private final HubConfig config;
     private final Store store;
-    private final DomainVerifier domains;
     private final Registry registry;
     private final Map<String, Link> byName = new ConcurrentHashMap<>();
-    private final Map<String, Link> byDomain = new ConcurrentHashMap<>();
     private final Map<String, Link> byId = new ConcurrentHashMap<>();
     /**
      * The three maps a live link can be in, as one list instead of three names written out at
@@ -50,17 +47,12 @@ final class Links {
      * to have filled. {@code byId} is not here: it is an index of the same links, not a fourth place
      * one lives.
      */
-    private final List<Map<?, Link>> live = List.<Map<?, Link>>of(byName, byDomain);
+    private final List<Map<?, Link>> live = List.<Map<?, Link>>of(byName);
 
-    Links(HubConfig config, Store store, DomainVerifier domains, Registry registry) {
+    Links(HubConfig config, Store store, Registry registry) {
         this.config = config;
         this.store = store;
-        this.domains = domains;
         this.registry = registry;
-    }
-
-    Link byDomain(String domain) {
-        return byDomain.get(domain);
     }
 
     Link byName(String name) {
@@ -130,9 +122,6 @@ final class Links {
         if (mine >= MAX_LINKS_PER_NODE) {
             return new Message.LinkOpened(null, null, null, "too-many-links");
         }
-        if (req.domain() != null) {
-            return openDomain(s, node, req);
-        }
         String name;
         if (req.name() != null) {
             name = req.name().toLowerCase(Locale.ROOT);
@@ -169,7 +158,7 @@ final class Links {
             // Same owner from another (or restarted) node: the newest opener wins.
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, node.user(), node.mkey(), s.group(), req.local(), null);
+        Link link = new Link(Tokens.id("l_"), name, node.user(), node.mkey(), s.group(), req.local());
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
@@ -178,33 +167,13 @@ final class Links {
 
     /**
      * A link opened on a host that must not write (ARCHITECTURE.md §13.4): a standby, or any host
-     * reached by a relay connection. The name or domain has to be one the replicated store already
+     * reached by a relay connection. The name has to be one the replicated store already
      * gives this node -- the primary assigned it, and the assignment arrived over the hub-to-hub
      * channel -- so nothing here claims, reassigns, notifies or allocates. A name this node does
      * not hold and a random name it has not been given yet are the primary's to answer, and are
      * refused with {@code primary-only} so the node asks there.
      */
     private Message reopen(NodeSession s, Store.NodeRec node, Message.LinkOpen req) {
-        if (req.domain() != null) {
-            String domain = req.domain().toLowerCase(Locale.ROOT);
-            Store.DomainRec rec = store.domain(domain);
-            if (rec == null || !rec.mkey().equals(node.mkey())) {
-                return new Message.LinkOpened(null, null, null, "primary-only");
-            }
-            String problem = domains.verify(domain, req.chainPem(), s.handshakeHash(), req.domainProof());
-            if (problem != null) {
-                return new Message.LinkOpened(null, null, null, problem);
-            }
-            Link existing = byDomain.get(domain);
-            if (existing != null && existing.group() != s.group()) {
-                byId.remove(existing.linkId());
-            }
-            Link link = new Link(Tokens.id("l_"), domain, node.user(), node.mkey(), s.group(), req.local(), domain);
-            byDomain.put(domain, link);
-            byId.put(link.linkId(), link);
-            LOG.info("domain {} reopened here by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
-            return new Message.LinkOpened(link.linkId(), domain, "https://" + domain + portSuffix(), null);
-        }
         if (req.name() == null) {
             return new Message.LinkOpened(null, null, null, "primary-only");
         }
@@ -217,81 +186,27 @@ final class Links {
         if (existing != null && existing.group() != s.group()) {
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, node.user(), node.mkey(), s.group(), req.local(), null);
+        Link link = new Link(Tokens.id("l_"), name, node.user(), node.mkey(), s.group(), req.local());
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} reopened here by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
         return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null);
     }
 
-    /**
-     * Why {@code node} may not claim {@code domain}, or null: {@code bad-domain} for a name that is
-     * not a domain or is the hub's own, {@code taken} for one another user holds. One rule for the
-     * claim itself and for relaying its http-01 challenge, decided by user like a name (§8.2): a
-     * domain does not move between users on a claim alone — the operator takes it back with
-     * {@code domain release} and the new owner claims it then, so a hijack cannot pass for a
-     * handover.
-     */
-    String domainRefusal(Store.NodeRec node, String domain) {
-        if (!DomainVerifier.validName(domain) || domain.equals(config.hostname()) || domain.endsWith("." + config.hostname())) {
-            return "bad-domain";
-        }
-        Store.DomainRec prior = store.domain(domain);
-        if (prior != null && !prior.user().equals(node.user())) {
-            LOG.warn("node {} ({}) claimed {}, held by {}: refused", node.mkey(), node.user(), domain, prior.user());
-            return "taken";
-        }
-        return null;
-    }
-
-    /**
-     * ARCHITECTURE.md §8.3: the node brings its own certificate for its own domain, and proves it
-     * holds that certificate's private key. Pure SNI passthrough afterwards, no signing.
-     */
-    private Message openDomain(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
-        String domain = req.domain().toLowerCase(Locale.ROOT);
-        String refusal = domainRefusal(node, domain);
-        if (refusal != null) {
-            return new Message.LinkOpened(null, null, null, refusal);
-        }
-        String problem = domains.verify(domain, req.chainPem(), s.handshakeHash(), req.domainProof());
-        if (problem != null) {
-            return new Message.LinkOpened(null, null, null, problem);
-        }
-        Link existing = byDomain.get(domain);
-        if (existing != null && existing.group() != s.group()) {
-            byId.remove(existing.linkId());
-        }
-        Store.DomainRec prior = store.domain(domain);
-        store.claimDomain(domain, node.user(), node.mkey());
-        if (prior != null && !prior.mkey().equals(node.mkey())) {
-            notifyRevoked(prior.mkey(), null, domain, Message.LinkRevoked.REASSIGNED);
-        }
-        Link link = new Link(Tokens.id("l_"), domain, node.user(), node.mkey(), s.group(), req.local(), domain);
-        byDomain.put(domain, link);
-        byId.put(link.linkId(), link);
-        LOG.info("domain {} opened by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
-        return new Message.LinkOpened(link.linkId(), domain, "https://" + domain + portSuffix(), null);
-    }
-
     void close(NodeGroup g, String linkId) {
         Link l = byId.remove(linkId);
         if (l != null && l.group() == g) {
-            if (l.domain() != null) {
-                byDomain.remove(l.domain(), l);
-            } else {
-                byName.remove(l.name(), l);
-            }
+            byName.remove(l.name(), l);
             LOG.info("link {} closed", l.name());
         }
     }
 
     /**
-     * An operator released a name or domain (ARCHITECTURE.md §11.4): take the live link down and tell
-     * the node. Without this the name keeps serving from the old node until it closes the link.
+     * An operator released a name (ARCHITECTURE.md §11.4): take the live link down and tell the
+     * node. Without this the name keeps serving from the old node until it closes the link.
      */
-    void releasedByOperator(String name, boolean domain) {
-        Link l = domain ? byDomain.remove(name) : byName.remove(name);
+    void releasedByOperator(String name) {
+        Link l = byName.remove(name);
         if (l == null) {
             return;
         }
@@ -327,20 +242,16 @@ final class Links {
     void groupEnded(NodeGroup g) {
         for (Link l : all()) {
             if (l.group() == g) {
-                if (l.domain() != null) {
-                    byDomain.remove(l.domain(), l);
-                } else {
-                    byName.remove(l.name(), l);
-                }
+                byName.remove(l.name(), l);
                 byId.remove(l.linkId(), l);
             }
         }
     }
 
-    /** Waits up to {@code ms} for a claimed name or domain to come online (hand-off, node restarts). */
-    Link awaitOnline(String name, boolean domain, long ms) {
+    /** Waits up to {@code ms} for a claimed name to come online (hand-off, node restarts). */
+    Link awaitOnline(String name, long ms) {
         long deadline = System.currentTimeMillis() + ms;
-        Map<String, Link> map = domain ? byDomain : byName;
+        Map<String, Link> map = byName;
         Link l;
         while ((l = map.get(name)) == null && System.currentTimeMillis() < deadline) {
             try {
