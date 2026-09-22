@@ -2135,6 +2135,27 @@ The rest of the table is the gate's output, and it has not been re-recorded sinc
 | RSS with 1,000 held open | node 55, hub 62 | node 54.2, hub 62.8 |
 | CLI cold start | 2.6 ms | 3.6, median of 10 |
 
+**And what the cut did to those rows, measured the same way** — the `budget` job on PR #275, at
+87aa35d ([run 35735098638](https://github.com/eth219/jailscale/actions/runs/35735098638)), beside
+the `main` column above:
+
+| `linux-amd64` | `main` 899fbc7 | the cut |
+|---|---|---|
+| `jailscale` binary | 27.3 MiB | 25.9 |
+| `jailhub` binary | 26.7 | 25.9 |
+| Node idle RSS | 35.2 MB (2.1 anon) | 34.4 (2.1) |
+| Hub idle RSS | 36.0 (3.4) | 35.2 (3.3) |
+| RSS with 1,000 held open | node 54.2, hub 62.8 | node 51.9, hub 61.7 |
+| CLI cold start | 3.6 ms | 3.3, median of 10 |
+
+**Nine thousand lines bought about one megabyte**, and that is the number worth keeping: −1.4 MiB
+on the node's binary and −0.8 on the hub's, against a source tree that lost roughly a fifth of
+itself. A native image is mostly the JDK and the JSSE stack the node needs whatever else it does
+(`docs/jsse-idle-cost`), so deleting application code moves the binary by a fraction of what the
+diff suggests -- and idle RSS follows the binary, which is why it moved 0.8 MB with it and the
+anonymous share did not move at all. Anyone reading this to decide whether deleting more would pay
+should read that sentence as the answer: on this axis, no.
+
 **Two of those rows are not differences.** The held-open peaks are the noisy row this section warns
 about below: of the last thirty-two `ci-full` runs on `main`, the twelve whose commits changed no
 Java at all and whose `budget` job ran read between **52.5 and 58.5** for the node, so 54.2 against 55 is well inside the
