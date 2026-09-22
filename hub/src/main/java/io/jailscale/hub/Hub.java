@@ -163,7 +163,7 @@ public final class Hub implements AutoCloseable {
     }
 
     /**
-     * The hub's authoritative DNS (§7.1, §13.3), on both roles and whichever way the certificate
+     * The hub's authoritative DNS (§7.1), on both roles and whichever way the certificate
      * comes: a standby answers as the second name server, and an operator with their own files may
      * still delegate the subdomain. Port 53 not bindable is fatal only where issuance needs it --
      * a primary obtaining its own certificate -- and a warning everywhere else.
@@ -422,7 +422,7 @@ public final class Hub implements AutoCloseable {
             // process would arrive with nothing to answer it. Off the startup path: the answer is a
             // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied
             // to --no-selfcheck: that flag exists because the dns-01 check holds issuance until it
-            // passes, and nothing here can hold anything. Promotion comes back through here (§13.1)
+            // passes, and nothing here can hold anything. Promotion comes back through here (§13)
             // and demote() ends the loop, so a hub that takes over starts a fresh one that checks
             // at once; the null check is for the ordinary case of starting as the primary.
             addressCheckThread = Thread.ofVirtual().name("address-check").start(this::addressCheckLoop);
@@ -463,7 +463,7 @@ public final class Hub implements AutoCloseable {
         }
     }
 
-    /** The private half of the hub key, the secret the liveness proof (§13.5) is made under. */
+    /** The private half of the hub key, the secret the liveness proof (§13) is made under. */
     byte[] livenessSecret() {
         return keys.current().privateKey();
     }

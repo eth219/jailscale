@@ -39,7 +39,9 @@ import io.jailscale.proto.net.TestPorts;
  * hub's own prologue) with the protocol number as the only variable.
  *
  * <p>It uses the hub's constants, not the node's, so it is a statement about what the hub promises
- * rather than about the two halves agreeing with each other.
+ * rather than about the two halves agreeing with each other -- except for the one case below that
+ * writes the numbers out, which is the flag day itself and has to be read as a literal or it says
+ * nothing.
  */
 @Timeout(60)
 class ProtoSkewTest {
@@ -138,9 +140,9 @@ class ProtoSkewTest {
      * against {@code MIN_PROTO}, which is what a floor test should do -- and which means every one
      * of them passes at any floor, including the one the maintenance cut was supposed to leave
      * behind. This session's own branch reverted the hub's bump to 1 by accident and the whole
-     * suite stayed green, so the numbers are pinned here by hand: **a v0.1.x node speaks protocol
-     * 1, and a v0.2.0 hub refuses it.** Moving the floor again means editing this test, which is
-     * the point of it.
+     * suite stayed green, so the numbers are pinned here by hand: a v0.1.x node speaks protocol 1,
+     * and a v0.2.0 hub refuses it. Moving the floor again means editing this test, which is the
+     * point of it.
      */
     @Test
     void theFloorIsTwoAndAProtocolOneNodeIsRefused() throws Exception {

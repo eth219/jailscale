@@ -2047,7 +2047,7 @@ section says what it was and what it cost.
 a second process that asked the first to hand off -- listener closed, state snapshotted, lock
 released, `Goodbye{draining}` to every node, streams in flight allowed to finish -- so that
 replacing the binary cost a few hundred milliseconds of refused visitors instead of a restart. It
-went with the standby, for a reason §1.1's Upgrading row had already recorded against it: it does
+went with the standby, for a reason recorded against it before this cut and now in §15: it does
 not apply under a systemd unit, which is how a hub is actually run, because the unit owns the process and starting a
 second one beside it is not something the unit does. What is left is `systemctl restart`, and the
 nodes' backoff is what covers it.

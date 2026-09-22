@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Timeout;
 
 /**
  * A hub tells its own glue address from a peer's by asking each for {@code _jailhub-self} and
- * comparing the answer with its own token (ARCHITECTURE.md §13.3).
+ * comparing the answer with its own token (ARCHITECTURE.md §13).
  */
 @Timeout(30)
 class AdvertiseTest {

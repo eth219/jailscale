@@ -379,9 +379,6 @@ class MuxSessionTest {
         assertThrows(IOException.class, () -> hs2.out().write(1));
     }
 
-
-
-
     @Test
     void wrongParityOpenKillsSession() throws Exception {
         Pair p = pair();

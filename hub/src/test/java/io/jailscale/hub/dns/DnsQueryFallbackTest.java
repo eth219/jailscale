@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * ARCHITECTURE.md §11.5 and §13.3: {@link DnsQuery} asks over UDP and then over TCP.
+ * ARCHITECTURE.md §11.5: {@link DnsQuery} asks over UDP and then over TCP.
  *
  * <p>This is what lets the responder meter every name. `_jailhub-self` was exempt from the answer
  * rate because the lookup for it gave up when a datagram did not come back, so an attacker able to

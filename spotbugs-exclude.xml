@@ -95,10 +95,17 @@
   </Match>
 
   <!--
-    Path.getParent() can return null for a single-element relative path, which is the null path
-    SpotBugs is following. Every one of these parents is a directory the caller already resolved
-    against a state or config directory (`dir.resolve("node.json").getParent()` is `dir`), so the
-    null case needs a path with no directory part, which none of these can be handed.
+    Two return values SpotBugs follows into a null it cannot rule out.
+
+    Path.getParent() can return null for a single-element relative path. Every one of these parents
+    is a directory the caller already resolved against a state or config directory
+    (`dir.resolve("node.json").getParent()` is `dir`), so the null case needs a path with no
+    directory part, which none of these can be handed.
+
+    DaemonCommand is the other one and it is getFileName(), not getParent(): the path is this
+    process's own executable, from ProcessHandle.info().command(), and a running process cannot
+    have been started from a path with no last element. It arrived here when `service install` was
+    removed (#274) and the argument list it shared moved out of Service into a class of its own.
   -->
   <Match>
     <Bug pattern="NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE"/>

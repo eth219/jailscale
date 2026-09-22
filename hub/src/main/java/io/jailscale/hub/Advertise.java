@@ -10,7 +10,7 @@ import java.util.Map;
 
 /**
  * Which public address this hub answers for itself, and which name servers the parent delegates
- * to, found without asking the operator (ARCHITECTURE.md §13.3).
+ * to, found without asking the operator (ARCHITECTURE.md §13).
  *
  * <p>The operator has already written the addresses down once, in the glue at the parent:
  * {@code ns1.<hub>} and {@code ns2.<hub>}. So the hub asks the public resolvers for those, then

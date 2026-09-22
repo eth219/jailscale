@@ -120,7 +120,7 @@ public final class DnsQuery {
     /**
      * What a parent's name server says when asked, without recursion, for a name it has delegated:
      * a referral, whose additional section carries the glue. Returned as name to dotted quad for
-     * every A record in that section (§13.3). Asking a recursive resolver instead would get the
+     * every A record in that section (§13). Asking a recursive resolver instead would get the
      * child zone's own answer, which for the glue names is the very thing being looked for.
      */
     public static java.util.Map<String, String> referralGlue(String server, int port, String name, int timeoutMs) throws IOException {

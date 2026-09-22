@@ -53,7 +53,7 @@ final class HubKeys {
         return KeyText.format(KeyText.HUB, cur.publicKey());
     }
 
-    /** The current key pair, for a standby to authenticate to its primary with (§13.1). */
+    /** The current key pair, for a standby to authenticate to its primary with (§13). */
     synchronized X25519.Keypair current() {
         return cur;
     }
@@ -65,14 +65,6 @@ final class HubKeys {
     synchronized boolean isOwn(byte[] remoteStatic) {
         return java.util.Arrays.equals(remoteStatic, cur.publicKey())
             || (nxt != null && java.util.Arrays.equals(remoteStatic, nxt.publicKey()));
-    }
-
-    synchronized String privateText() {
-        return KeyText.format(PRIVATE_PREFIX, cur.privateKey());
-    }
-
-    synchronized String nextPrivateText() {
-        return nxt == null ? null : KeyText.format(PRIVATE_PREFIX, nxt.privateKey());
     }
 
     synchronized String nextPublicText() {

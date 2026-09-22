@@ -85,7 +85,7 @@ final class NodeGroup {
 
     /**
      * The control connection, or -- on a host the node reaches only by a relay connection
-     * (§13.4) -- the lowest-numbered connection it has here, which is what carries the
+     * (§13) -- the lowest-numbered connection it has here, which is what carries the
      * certificate and speaks for the node on this host.
      */
     NodeSession primary() {

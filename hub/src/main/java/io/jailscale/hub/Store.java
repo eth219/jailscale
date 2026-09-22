@@ -58,8 +58,6 @@ final class Store implements AutoCloseable {
     private final Path snapshotPath;
     private FileOutputStream log;
     private int eventsSinceSnapshot;
-    /** Who is told about every event as it is appended: the sessions replicating this store (§13.1). */
-
     private long nextNodeId = 1;
     private final Map<String, NodeRec> nodesByKey = new LinkedHashMap<>();
     private final Map<String, InviteRec> invites = new LinkedHashMap<>();
@@ -567,7 +565,7 @@ final class Store implements AutoCloseable {
             loadSnapshot(s);
             foldedThrough = s.has("seq") ? s.lng("seq") : 0;
             // And carry on from there rather than from zero. Read here and not in loadSnapshot,
-            // which a standby shares (§13.1): the number is a place in *this* log, so a standby
+            // which a standby shares (§13): the number is a place in *this* log, so a standby
             // adopting the primary's would start writing lines under ones it has already written.
             lastSeq = foldedThrough;
         }

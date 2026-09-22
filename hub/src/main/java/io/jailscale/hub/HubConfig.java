@@ -74,7 +74,7 @@ public record HubConfig(
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, on, advertise, tuning);
     }
 
-    /** ARCHITECTURE.md §13.3: answer this address for the hub's own name instead of finding it from the glue. */
+    /** ARCHITECTURE.md §13: answer this address for the hub's own name instead of finding it from the glue. */
     public HubConfig withAdvertise(String address) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, address, tuning);

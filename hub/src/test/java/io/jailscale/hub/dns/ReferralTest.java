@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * The glue is read from the parent's referral (ARCHITECTURE.md §13.3), which is what a parent's
+ * The glue is read from the parent's referral (ARCHITECTURE.md §13), which is what a parent's
  * server answers to a question without recursion about a name it has delegated: NS records in
  * the authority section and their addresses in the additional one.
  */

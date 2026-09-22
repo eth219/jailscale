@@ -67,8 +67,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * because a clock that steps must not move the interval anything here is written in.
      */
     private long lastSweepNanos = System.nanoTime() - PROBE_PASS_MS * 1_000_000L;
-    /** How close to its end a certificate has to be before anyone is told (ARCHITECTURE.md §15). */
-    private static final long CERT_WARN_REPEAT_MS = 86400_000L;
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
@@ -311,7 +309,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private boolean isOpen(NodeState.LinkRec rec) {
         return rec.linkId != null && link.isConnected();
     }
-
 
     private List<Object> linkRows() {
         return state.links.stream().<Object>map(l -> JsonObject.builder()
