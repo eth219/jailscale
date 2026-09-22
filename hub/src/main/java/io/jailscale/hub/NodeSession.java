@@ -59,7 +59,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private NodeGroup group;
     private volatile Store.NodeRec node;
     private volatile boolean closed;
-    private volatile boolean draining;
     private volatile byte[] handshakeHash;
     private final Semaphore signSlots = new Semaphore(concurrentSignLimit);
     /** Signing requests answered on the reader thread because the limit above was reached. */
@@ -93,10 +92,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     MuxSession mux() {
         return mux;
-    }
-
-    boolean isDraining() {
-        return draining;
     }
 
     String remoteIp() {
@@ -164,10 +159,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 return;
             }
             handshakeHash = ch.handshakeHash();
-            if (hub.isHandingOff()) {
-                LOG.info("node {} arrived during hand-off; asking it to retry", mkey);
-                return;
-            }
             node = hub.store().node(mkey);
             mux = new MuxSession(ch, true, this, hub.flowBudget());
             group = hub.registry().attach(this);
@@ -386,35 +377,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             // closing anyway
         }
         close();
-    }
-
-    /**
-     * Hand-off (ARCHITECTURE.md §13): the node is asked to reconnect elsewhere; this connection stays
-     * open only for the streams already on it and closes once they are gone.
-     */
-    void drain() {
-        draining = true;
-        try {
-            send(new Message.Goodbye(Message.Goodbye.DRAINING));
-        } catch (IOException _) {
-            close();
-            return;
-        }
-        Thread.ofVirtual().name("drain-" + mkey).start(() -> {
-            long deadline = System.currentTimeMillis() + Hub.DRAIN_TIMEOUT_MS;
-            try {
-                while (!closed && System.currentTimeMillis() < deadline) {
-                    MuxSession s = mux;
-                    if (s == null || s.isClosed() || s.streamCount() == 0) {
-                        break;
-                    }
-                    Thread.sleep(200);
-                }
-            } catch (InterruptedException _) {
-                // fall through
-            }
-            close();
-        });
     }
 
     @Override

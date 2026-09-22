@@ -54,7 +54,6 @@ public final class Hub implements AutoCloseable {
      */
     private final FlowBudget flowBudget = FlowBudget.ofHeap();
     static final long DRAIN_TIMEOUT_MS = 60_000;
-    private volatile boolean handingOff;
     private final Registrar registrar;
     private final Bans bans;
     private final Invites invites;
@@ -87,41 +86,16 @@ public final class Hub implements AutoCloseable {
     private volatile boolean running;
 
     public Hub(HubConfig config) throws IOException, GeneralSecurityException {
-        this(config, false);
-    }
-
-    /**
-     * With {@code takeover}, a running server in the same state directory is asked to hand off
-     * first (ARCHITECTURE.md §13); without it, a held lock is an error.
-     */
-    public Hub(HubConfig config, boolean takeover) throws IOException, GeneralSecurityException {
         Resources.markStarted(System.currentTimeMillis());
         this.config = config;
         java.nio.file.Files.createDirectories(config.stateDir());
         this.lockChannel = FileChannel.open(config.stateDir().resolve("jailhub.lock"),
             StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         FileLock l = tryLock(lockChannel);
-        if (l == null && takeover && Ipc.isAlive(config.socketPath())) {
-            LOG.info("asking the running jailhub to hand off");
-            io.jailscale.proto.json.JsonObject r = Ipc.call(config.socketPath(), io.jailscale.proto.json.JsonObject.builder().put("cmd", "handoff").build());
-            if (!r.optBool("ok", false)) {
-                lockChannel.close();
-                throw new IOException("hand-off refused: " + r.optString("error", "?"));
-            }
-            long deadline = System.currentTimeMillis() + 10_000;
-            while (l == null && System.currentTimeMillis() < deadline) {
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException e) {
-                    break;
-                }
-                l = tryLock(lockChannel);
-            }
-        }
         this.lock = l;
         if (lock == null) {
             lockChannel.close();
-            throw new IOException("another jailhub serve holds " + config.stateDir() + (takeover ? "" : " (use --takeover)"));
+            throw new IOException("another jailhub serve holds " + config.stateDir());
         }
         this.store = new Store(config.stateDir());
         this.keys = new HubKeys(config.stateDir());
@@ -704,70 +678,6 @@ public final class Hub implements AutoCloseable {
         return v == null ? "dev" : v;
     }
 
-    boolean isHandingOff() {
-        return handingOff;
-    }
-
-    /**
-     * Hand-off to a new process (ARCHITECTURE.md §13): stop accepting, persist and release the state,
-     * then ask nodes to reconnect while keeping their current streams. Returns once the new
-     * process may take the lock; this process exits when drained (or after a minute).
-     */
-    synchronized void handoff() throws IOException {
-        if (handingOff) {
-            return;
-        }
-        handingOff = true;
-        running = false;
-        stopped = true;
-        stopLoops();
-        LOG.info("hand-off requested: releasing listener and state");
-        if (listener != null) {
-            listener.close();
-        }
-        if (acme != null) {
-            acme.close();
-        }
-        if (dns != null) {
-            dns.close();
-        }
-        if (timer != null) {
-            timer.shutdownNow();
-        }
-        store.close();
-        lock.release();
-        lockChannel.close();
-        registry.drainAll();
-        Thread.ofVirtual().name("handoff-ipc").start(() -> {
-            try {
-                Thread.sleep(300); // let the hand-off reply go out first
-                if (ipc != null) {
-                    ipc.close();
-                    ipc = null;
-                }
-            } catch (IOException | InterruptedException ignored) {
-                // exiting
-            }
-        });
-        Thread.ofVirtual().name("handoff-exit").start(() -> {
-            long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
-            while (registry.liveSessions() > 0 && System.currentTimeMillis() < deadline) {
-                try {
-                    Thread.sleep(200);
-                } catch (InterruptedException e) {
-                    break;
-                }
-            }
-            LOG.info("drained, exiting");
-            if (exitOnDrain) {
-                System.exit(0);
-            }
-        });
-    }
-
-    /** Whether hand-off should end the process (true for the binary, false in tests). */
-    volatile boolean exitOnDrain = true;
-
     /** The DNS responder's port, or 0 when port 53 could not be bound. */
     public int dnsPort() {
         return dnsUp ? dns.port() : 0;
@@ -789,10 +699,6 @@ public final class Hub implements AutoCloseable {
         stopLoops();
         if (timer != null) {
             timer.shutdownNow();
-        }
-        if (handingOff) {
-            registry.closeAll(Message.Goodbye.SHUTDOWN);
-            return;
         }
         if (acme != null) {
             acme.close();

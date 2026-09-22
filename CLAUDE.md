@@ -4,6 +4,21 @@ A tunnel: a hub holds a wildcard certificate and routes by SNI, nodes dial out a
 port. Zero third-party runtime dependencies, four native targets, signed releases.
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the whole design; §15 is what it cannot do.
 
+## This project is in maintenance
+
+Since v0.2.0 (#274). That is a scope rule, not a mood:
+
+- **Fixes and security work are in scope.** A defect in what is here, a test that cannot fail in
+  the direction it claims, a dependency or toolchain that moved, a doc that says something untrue.
+- **New features are not**, including bringing back one the cut removed — a second hub, raw TCP and
+  UDP ports, user domains, the metrics endpoint, `service install`, the PROXY protocol. Each has a
+  section in ARCHITECTURE.md saying what it was and what removing it costs, and a row in §1.3. If
+  one is genuinely wanted again, that is a decision issue for the maintainer, not work to start.
+- **Deleting is the cheapest change available here**, and it is still a change: it needs the same
+  issue, the same tests-can-fail rule and the same commit message saying why it was worth doing.
+- The three §1.2 rows are what is left of "decided, and not built". They stay decided; nothing says
+  they are next.
+
 ## Before you start on an issue
 
 Read [docs/issue-workflow.md](docs/issue-workflow.md). It is short and it is the procedure, not a

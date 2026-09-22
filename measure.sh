@@ -272,7 +272,7 @@ net_denied() {
 # runtime options the native image reads before main, deliberately unquoted so several split.
 # shellcheck disable=SC2086
 "$HUB" ${HUB_OPTS:-} serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
-  --state "$W/hub" --port-range none --http-listen none > "$W/hub.log" 2>&1 &
+  --state "$W/hub" > "$W/hub.log" 2>&1 &
 HUBPID=$!
 sleep 1.5
 INV=$(grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" "$W/hub.log" | head -1)

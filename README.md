@@ -20,13 +20,19 @@ also the one that can read least.
 Two binaries, no runtime dependencies, nothing to install underneath them. Full
 design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+**This project is in maintenance.** v0.2.0 cut it back to the tunnel above: a
+second hub, raw TCP and UDP ports, domains you bring yourself, the Prometheus
+endpoint, `service install` and the PROXY protocol were all removed, and with
+them about 12,000 lines. What is left is fixed and kept working; it is not
+being extended. The wire moved with the cut, so **a hub and its nodes upgrade
+to v0.2.0 together** ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).
+
 ## Scope
 
-One server you own runs `jailhub`, or two that stand in for each other. Every
-machine that publishes something runs `jailscale`. It does what ngrok,
-Cloudflare Tunnel and frp do — the first two hosted, frp on a server you run —
-with no third party in the path. Tailscale is larger: a mesh between your own
-machines, of which Funnel is this one job.
+One server you own runs `jailhub`. Every machine that publishes something runs
+`jailscale`. It does what ngrok, Cloudflare Tunnel and frp do — the first two
+hosted, frp on a server you run — with no third party in the path. Tailscale is
+larger: a mesh between your own machines, of which Funnel is this one job.
 
 1. **Lightweight.** 25 MiB per binary, 25 MB idle, milliseconds for a CLI round
    trip ([Resource usage](#resource-usage)). That needs GraalVM Native Image,
@@ -71,13 +77,13 @@ own. Neither has a runtime dependency and neither needs root to run.
 
 ### A binary
 
-v0.1.10 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
+v0.2.0 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
 `darwin-arm64` and `windows-amd64.exe`. There is no `darwin-amd64`, because
 GraalVM CE 25.3 does not build one ([ARCHITECTURE.md
 §3.2](docs/ARCHITECTURE.md)); Intel Macs get [the JAR](#anything-else-with-a-jvm-25).
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.1.10
+base=https://github.com/eth219/jailscale/releases/download/v0.2.0
 target=darwin-arm64   # pick yours
 
 curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
@@ -101,8 +107,8 @@ code-signed is in [docs/release-verification.md](docs/release-verification.md).
 ### A container image
 
 ```
-docker pull ghcr.io/eth219/jailhub:v0.1.10
-docker pull ghcr.io/eth219/jailscale:v0.1.10
+docker pull ghcr.io/eth219/jailhub:v0.2.0
+docker pull ghcr.io/eth219/jailscale:v0.2.0
 ```
 
 linux/amd64 and linux/arm64, distroless, non-root, built by the same workflow
@@ -200,9 +206,9 @@ cost).
 
 Measured with the native binaries by `./measure.sh`, which CI runs as a budget
 on every push to main, with the toolchain and options the release workflow uses.
-The figures are v0.1.2's and the releases since have grown: v0.1.10 ships
-`jailscale` 0.75 MiB larger on linux-amd64 and 0.80 larger on arm64 macOS, and
-idle RSS has moved with it, every one still inside its budget.
+The figures are v0.1.2's and the releases since have moved: v0.1.10 shipped
+`jailscale` 0.75 MiB larger on linux-amd64 and 0.80 larger on arm64 macOS, every
+one still inside its budget, and v0.2.0 takes code away rather than adding it.
 [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has that drift, what it is made of,
 and what a release publishes that lets you check the binary rows yourself.
 

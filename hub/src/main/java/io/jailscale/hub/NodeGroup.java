@@ -170,7 +170,7 @@ final class NodeGroup {
         int bestLoad = Integer.MAX_VALUE;
         for (NodeSession s : sessions.values()) {
             MuxSession m = s.mux();
-            if (m == null || m.isClosed() || s.isDraining()) {
+            if (m == null || m.isClosed()) {
                 continue;
             }
             int load = m.streamCount();
@@ -407,10 +407,4 @@ final class NodeGroup {
         }
     }
 
-    /** Hand-off: tell the node to open fresh connections elsewhere but keep these until drained. */
-    void drain() {
-        for (NodeSession s : all()) {
-            s.drain();
-        }
-    }
 }

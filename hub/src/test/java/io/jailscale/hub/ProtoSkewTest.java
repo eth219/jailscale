@@ -29,12 +29,13 @@ import io.jailscale.proto.net.TestPorts;
 /**
  * What the hub answers a node whose protocol is not its own (ARCHITECTURE.md §5.4).
  *
- * <p>{@code Message.PROTO} and {@code NodeSession.MIN_PROTO} are both 1 today, so the branch that
- * refuses an old node has never run against a live peer: what was tested was the codec round trip
- * of {@code Goodbye(upgrade-required)}, which is the message and not the decision. The decision is
- * the thing that matters at a flag day -- a hub and its nodes are redeployed one after the other,
- * never at the same instant, so a mixed pair is the normal state of an upgrade and not an edge
- * case. This speaks the wire the way a node does (TLS, {@code POST /v1/noise}, Noise IK with the
+ * <p>{@code Message.PROTO} and {@code NodeSession.MIN_PROTO} are both 2, moved together by the
+ * maintenance cut (§5.4), so the branch that refuses an old node is the one every v0.1.x node meets
+ * at that upgrade. It had never run against a live peer before: what was tested was the codec round
+ * trip of {@code Goodbye(upgrade-required)}, which is the message and not the decision. The
+ * decision is the thing that matters at a flag day -- a hub and its nodes are redeployed one after
+ * the other, never at the same instant, so a mixed pair is the normal state of an upgrade and not
+ * an edge case. This speaks the wire the way a node does (TLS, {@code POST /v1/noise}, Noise IK with the
  * hub's own prologue) with the protocol number as the only variable.
  *
  * <p>It uses the hub's constants, not the node's, so it is a statement about what the hub promises

@@ -54,7 +54,6 @@ final class NodeState {
         volatile long gateExpiresAt;   // ms epoch; 0 = never
         volatile long certExpiresAt;   // not persisted: from the loaded certificate
         volatile ProbeResult lastProbe; // not persisted: the last self-probe of this name (§11.3)
-        volatile long certWarnedAt;    // not persisted: when the expiry warning was last logged
         volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (ARCHITECTURE.md §9.3)
         /** Not persisted: the link id each relay host gave this link (§13.4), by relay address. */
         final java.util.Map<String, String> relayLinkIds = new java.util.concurrent.ConcurrentHashMap<>();

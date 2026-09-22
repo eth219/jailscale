@@ -7,12 +7,18 @@ handshake.
 
 This describes the system as it stands, organised by subsystem. Section numbers are stable.
 
+**The project is in maintenance as of v0.2.0.** The tunnel above is what is kept working; what was
+built beside it -- a second hub (§13), raw TCP and UDP ports (§8.4), user domains (§8.3), the
+metrics endpoint (§6.3), `service install` (§9.4) and the PROXY protocol (§8.5) -- was removed, and
+each of those sections is now the record of what it was and what removing it costs. §1.3 is where
+the rows landed.
+
 [1. Scope](#1-scope) · [2. Pieces](#2-pieces) · [3. Modules and build](#3-modules-and-build) ·
 [4. Keys](#4-keys-and-identity) · [5. Control channel](#5-control-channel) ·
 [6. Control API and state](#6-control-api-and-hub-state) · [7. Certificates](#7-certificates-and-acme) ·
 [8. Public ingress](#8-public-ingress) · [9. The node](#9-the-node) · [10. Joining](#10-joining) ·
 [11. Security model](#11-security-model) · [12. Threading](#12-threading-and-memory) ·
-[13. Availability](#13-availability-and-hand-off) · [14. Characteristics](#14-current-characteristics) ·
+[13. Availability](#13-availability-one-hub) · [14. Characteristics](#14-current-characteristics) ·
 [15. Limits](#15-limits)
 
 ---
@@ -37,6 +43,11 @@ one pass on 2026-09-16, because until then the answer was spread across a one-li
 here, seventeen entries in §15 and eight open issues, and those three did not agree on which
 things were accepted limits and which were unfinished work.
 
+**The maintenance cut of 2026-09-22 moved six rows from §1.1 to §1.3** ([#274](https://github.com/eth219/jailscale/issues/274)): the second hub,
+raw TCP and UDP ports, user domains, the metrics endpoint, `service install` and the PROXY
+protocol. They are not limits waiting to be lifted and not decided work; §1.3 says what each was
+given up for, and the section behind each one says what it was.
+
 ### 1.1 Supported
 
 Works, and is meant to keep working. A condition in the right-hand column is **part of** what is
@@ -48,7 +59,6 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Visitor TLS | TLS 1.3 with X25519, terminated on the node, signed by the hub (§9.2) | that pair only, because the signature binding reconstructs what JSSE wrote (§11.1) |
 | Names | `<name>.<hub-domain>` (§8.2), up to `MAX_LINKS_PER_NODE` = 20 links on one node | exactly one node behind a name, and that node's 450 visitor slots are first come, first served across all of them (§15) |
 | IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
-| Behind a TCP proxy | nginx or HAProxy in front, PROXY protocol v1 and v2 (§8.5) | the proxy forwards bytes without opening TLS, and `--proxy-protocol` needs loopback or `--trusted-proxy` |
 | Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2); nothing here installs a service, so keeping the daemon up is a unit of the operator's own (`deploy/`) |
 | Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
 | Upgrading | a check against GitHub's newest release and a verified download (§9.4) | which release is current is GitHub's unsigned word and only what is in it is signed (§15), the install command is printed for the operator, and replacing the hub's binary is a restart (§13) |
@@ -77,6 +87,11 @@ given up for.
 | HTTP/2 and HTTP/3 on the visitor side | the node copies bytes to a local port, so speaking either would make it a protocol translator; h3 also wants UDP the hub does not route by name |
 | Routing on paths or headers, rewriting, per-request logs | the hub has only ciphertext to route on, and parsing on the node would put the request where the design keeps it out of |
 | More than one node behind a name | a name resolves to the node that owns it; sharing one needs a load balancer the hub is not |
+| Raw TCP and UDP ports, so anything that cannot speak TLS | a port instead of a name was a second kind of link with its own allocator, bounds and datagram carrier, and an app that does not encrypt itself put its plaintext inside the hub (§8.4) |
+| Domains you bring yourself | the http-01 relay lent out domain validation and cost the hub port 80, for names the hub does not sign for anyway (§8.3) |
+| A metrics endpoint | a third listener and a second place every number had to be wired into; `jailhub status` carries what an operator acts on (§6.3) |
+| Installing the node as a service | three unit templates for three platforms, verified on one; `deploy/` has a unit to copy (§9.4) |
+| The hub behind nginx or HAProxy | reading a PROXY header means a parser before anything is authenticated, and an attribution path every rate limit rested on (§8.5) |
 | A second hub of any kind | a standby was built and removed (§13): about 4,500 lines for redundancy no deployment here ran, and one hub is the shape this is maintained in |
 | Raw TCP and UDP ports, and so anything that cannot speak TLS | a port instead of a name is a second kind of link with its own allocator, bounds and datagram carrier, and the plaintext of an app that does not encrypt itself would be inside the hub (§8.4) |
 | Probing a name from another node's vantage point | the hub chooses which nodes exist, so it would choose the prober; the control would be probabilistic, and this project says what it cannot do instead (§11.3) |
@@ -461,6 +476,17 @@ rename is genuinely wanted, the field is added under the new name and the old on
 §11.1) could not be made to accept a protocol 1 `SignRequest`, because accepting one means signing
 something the hub cannot verify — which is the vulnerability, not a compatibility shim. That class
 of change moves `MIN_PROTO` and costs every node an upgrade, and is the reason the floor exists.
+
+**v0.2.0 is a flag day, and the first one.** The maintenance cut removed fields and message types
+rather than adding them: `kind` and `port` from `LinkOpen` and `hubPort` from `LinkOpened` with the
+raw ports (§8.4); `domain`, `chainPem` and `domainProof` from `LinkOpen`, and `ChallengeSet`,
+`ChallengeClear` and `Ack` entirely, with user domains (§8.3); `relay` from `Hello`, `relays` from
+`HelloResponse`, `RelaysChanged` and every `Peer*` type with the standby (§13). Removal is what
+"never compatible" means above, so `PROTO`, `MIN_PROTO` and `MIN_HUB_PROTO` all move to **2**
+together: a v0.1.x node meeting a v0.2.0 hub gets `Goodbye{upgrade-required}` naming the version,
+and a v0.2.0 node refuses a v0.1.x hub for the same reason in the other direction. **The hub and
+its nodes are upgraded together**, which is the one thing every release before this could avoid.
+The names of the removed types are not reused.
 
 **What each release has done to the wire, and which mismatches have run.** v0.1.1 and v0.1.2 each
 added one optional `Hello` field -- `host` before v0.1.1, `visitors` before v0.1.2 -- which is the

@@ -74,17 +74,4 @@ final class Registry {
         }
     }
 
-    void drainAll() {
-        for (NodeGroup g : all()) {
-            g.drain();
-        }
-    }
-
-    int liveSessions() {
-        int n = 0;
-        for (NodeGroup g : all()) {
-            n += g.connections();
-        }
-        return n;
-    }
 }

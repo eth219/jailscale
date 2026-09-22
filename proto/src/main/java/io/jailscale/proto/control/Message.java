@@ -15,7 +15,7 @@ public sealed interface Message {
      * not check a request would have to refuse it, so a node speaking an older version is told to
      * upgrade rather than served unchecked.
      */
-    int PROTO = 1;
+    int PROTO = 2;
 
     String type();
 

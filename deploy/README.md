@@ -27,8 +27,8 @@ toolchain and options as the release binaries, so §14's numbers describe them
 too:
 
 ```
-ghcr.io/eth219/jailhub:v0.1.10
-ghcr.io/eth219/jailscale:v0.1.10
+ghcr.io/eth219/jailhub:v0.2.0
+ghcr.io/eth219/jailscale:v0.2.0
 ```
 
 `:vX.Y.Z` pins that release. `:latest` follows releases: it moves when one is
@@ -52,7 +52,7 @@ The container runs the daemon, and the CLI is `exec`ed into it:
 ```sh
 docker network create demo   # the app joins this too, see below
 docker run -d --name jailscale --network demo \
-    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.10
+    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.2.0
 docker exec jailscale /jailscale up --hub jailscale.sinabro.io
 docker exec jailscale /jailscale open 3000 --host myapp --name myapp
 ```
