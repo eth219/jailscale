@@ -564,9 +564,8 @@ final class Store implements AutoCloseable {
             checkVersion(s, snapshotPath.toString());
             loadSnapshot(s);
             foldedThrough = s.has("seq") ? s.lng("seq") : 0;
-            // And carry on from there rather than from zero. Read here and not in loadSnapshot,
-            // which a standby shares (§13): the number is a place in *this* log, so a standby
-            // adopting the primary's would start writing lines under ones it has already written.
+            // And carry on from there rather than from zero: the number is a place in *this* log,
+            // so a snapshot's count is only meaningful beside the log it was folded from.
             lastSeq = foldedThrough;
         }
         if (Files.exists(logPath)) {

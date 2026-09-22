@@ -163,10 +163,10 @@ public final class Hub implements AutoCloseable {
     }
 
     /**
-     * The hub's authoritative DNS (§7.1), on both roles and whichever way the certificate
-     * comes: a standby answers as the second name server, and an operator with their own files may
-     * still delegate the subdomain. Port 53 not bindable is fatal only where issuance needs it --
-     * a primary obtaining its own certificate -- and a warning everywhere else.
+     * The hub's authoritative DNS (§7.1), whichever way the certificate comes: an operator with
+     * their own files may still delegate the subdomain and let this answer it. Port 53 not
+     * bindable is fatal only where issuance needs it -- a hub obtaining its own certificate --
+     * and a warning everywhere else.
      */
     private void startDns() throws IOException {
         dns = new io.jailscale.hub.dns.DnsResponder(config.hostname());
@@ -422,59 +422,9 @@ public final class Hub implements AutoCloseable {
             // process would arrive with nothing to answer it. Off the startup path: the answer is a
             // diagnosis for the operator, never a reason to refuse to serve. Deliberately not tied
             // to --no-selfcheck: that flag exists because the dns-01 check holds issuance until it
-            // passes, and nothing here can hold anything. Promotion comes back through here (§13)
-            // and demote() ends the loop, so a hub that takes over starts a fresh one that checks
-            // at once; the null check is for the ordinary case of starting as the primary.
+            // passes, and nothing here can hold anything. The null check is what keeps a second
+            // call from starting a second loop.
             addressCheckThread = Thread.ofVirtual().name("address-check").start(this::addressCheckLoop);
-        }
-    }
-
-    /** Whether {@link #close} has run; the watch reads it to stop promoting a hub on its way out. */
-    boolean isStopped() {
-        return stopped;
-    }
-
-    /**
-     * Starts what only a primary runs, after a promotion. Separate from {@link #startPrimaryFronts}
-     * because a promotion has to obtain a certificate as well, and it runs off the caller's thread.
-     */
-    void startPrimaryServices() throws IOException, GeneralSecurityException {
-        if (config.acme()) {
-            startAcme();
-        }
-        startPrimaryFronts();
-    }
-
-    /** Ends the address-check loop on standing down; a later promotion starts a fresh one (§7.2). */
-    void stopAddressCheck() {
-        addressStatus = null;
-        Thread checking = addressCheckThread;
-        if (checking != null) {
-            checking.interrupt();
-            addressCheckThread = null;
-        }
-    }
-
-    /** Stops what a standby does not run: its own certificate issuance. */
-    void stopIssuance() {
-        if (acme != null) {
-            acme.close();
-            acme = null;
-        }
-    }
-
-    /** The private half of the hub key, the secret the liveness proof (§13) is made under. */
-    byte[] livenessSecret() {
-        return keys.current().privateKey();
-    }
-
-    /** A standby installed a certificate from its primary: nodes on it, if any, get the public half. */
-    void certificateArrived() {
-        for (NodeGroup g : registry.all()) {
-            NodeSession p = g.primary();
-            if (p != null) {
-                p.certChanged();
-            }
         }
     }
 

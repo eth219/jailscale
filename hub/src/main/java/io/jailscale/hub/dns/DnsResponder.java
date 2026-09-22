@@ -91,12 +91,17 @@ public final class DnsResponder implements AutoCloseable {
         /** Name-server label (e.g. {@code ns1}) to IPv4 address, as delegated at the parent; empty when not. */
         Map<String, String> nameServers();
 
-        /** The apex: where the control channel, joining and the admin pages are (§13). Defaults to the serving set. */
+        /**
+         * The apex, and one label under it. Both default to the serving set and the hub leaves
+         * them there: with one hub every name in the zone resolves to the same host. They were the
+         * standby's hooks -- the apex was the primary alone, a name was the hosts that node was on
+         * (§13) -- and they stay as the seam a test overrides, which is how the per-label path is
+         * exercised at all.
+         */
         default List<String> control() {
             return serving();
         }
 
-        /** One label under the apex: the hosts that node is on (§13). Defaults to the serving set. */
         default List<String> forName(String label) {
             return serving();
         }

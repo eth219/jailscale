@@ -360,7 +360,7 @@ final class HttpFront {
             this.word = word;
         }
 
-        /** The dot, and the word beside it, because colour is never the only channel (§13). */
+        /** The dot, and the word beside it, because colour is never the only channel (§6.3). */
         String mark() {
             return this == OK ? "" : "<span class=\"sw\" style=\"background:" + colour + "\"></span><b>" + word + "</b>: ";
         }

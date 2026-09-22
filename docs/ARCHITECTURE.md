@@ -2638,15 +2638,13 @@ neither has not been through that pass.
   upgrade rather than forcing a downgrade — and the same party could equally delete the newer
   release. A signed pointer that bounded this further was built and removed (§9.4 says why); it is
   not planned again.
-- **A certificate that stops renewing is reported, not prevented.** Renewal is automatic on both
-  sides at a third of the lifetime remaining. When it does not happen the node logs the name and
-  the time left once a day inside the last fortnight, the hub says how long the installed wildcard
-  has next to every issuance failure and on its status page, and `ls` marks the link. None of that
-  helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
-  nobody hears from, and its domain goes dark when the certificate runs out. The hub can see that
-  coming, and a gauge for the soonest expiry among absent nodes was decided work until maintenance
-  closed it ([#75](https://github.com/eth219/jailscale/issues/75)); a notification channel was never
-  in scope (§1.3).
+- **The wildcard is the hub's to renew, and a hub that cannot is only reported.** Renewal is
+  automatic at a third of the lifetime remaining, and the hub says how long the installed wildcard
+  has next to every issuance failure and on its status page, graded there (§6.3). The node has
+  nothing of its own to renew any more: the per-name certificates it held were for domains a user
+  brought (§8.3), and the daily warning, `ls`'s mark on the link and the gauge that was decided work
+  ([#75](https://github.com/eth219/jailscale/issues/75)) all went with that feature. What is left to
+  watch is one certificate on one host, which is the hub's own page and `jailhub status`.
 - **A hub that dies takes its names down until it is started again** (§13). There is no second hub:
   the standby, its promotion and the relay connections that let it serve were removed, and what is
   left is the backup unit -- the state directory -- and a restart. Upgrading is a restart too, which

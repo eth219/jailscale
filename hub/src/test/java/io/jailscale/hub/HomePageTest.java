@@ -419,7 +419,7 @@ class HomePageTest {
         String both = HttpFront.verdict(List.of(warning, critical));
         assertTrue(both.contains("Critical &mdash; a critical; a warning"), both);
         assertFalse(both.contains("Degraded"), both);
-        // The dot never carries it alone, on this line as on the strips (§13).
+        // The dot never carries it alone: the word is beside it (§6.3).
         assertTrue(both.contains("class=\"sw\""), both);
     }
 

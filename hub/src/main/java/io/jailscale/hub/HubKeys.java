@@ -53,11 +53,6 @@ final class HubKeys {
         return KeyText.format(KeyText.HUB, cur.publicKey());
     }
 
-    /** The current key pair, for a standby to authenticate to its primary with (§13). */
-    synchronized X25519.Keypair current() {
-        return cur;
-    }
-
     /**
      * Whether {@code remoteStatic} is this hub's own public key, current or next. An initiator
      * that completed Noise IK with it holds the private half, which is what makes it a peer hub.
