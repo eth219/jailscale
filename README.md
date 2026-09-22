@@ -273,8 +273,9 @@ What a compromised hub can and cannot do is written out in
   uptime behind it, and it serves one person's names.
 - There is one hub, and a hub that dies takes its names down until somebody
   starts it again. Upgrading is a restart, which is what it already was under a
-  systemd unit; socket activation would narrow that window and is decided work,
-  not an accepted limit ([§1.2](docs/ARCHITECTURE.md)).
+  systemd unit. Socket activation would narrow that window; it was decided
+  work until maintenance closed it
+  ([#71](https://github.com/eth219/jailscale/issues/71)).
 - Redundancy would stop at the hub anyway. A name has exactly one node behind
   it, so when that node's host is asleep the name is down whatever the hub
   count is.

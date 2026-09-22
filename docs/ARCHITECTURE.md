@@ -58,7 +58,7 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 | Visitor protocols | HTTP/1.1, WebSocket, SSE, chunked bodies, and anything else the app speaks | the node copies bytes, and the only HTTP it reads is the gate's first request head (§9.3), so nothing routes on a path or a header |
 | Visitor TLS | TLS 1.3 with X25519, terminated on the node, signed by the hub (§9.2) | that pair only, because the signature binding reconstructs what JSSE wrote (§11.1) |
 | Names | `<name>.<hub-domain>` (§8.2), up to `MAX_LINKS_PER_NODE` = 20 links on one node | exactly one node behind a name, and that node's 450 visitor slots are first come, first served across all of them (§15) |
-| IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself yet (§1.2) |
+| IPv6 visitors | `--listen [::]:443`, routed and rate-limited per /64 like any other caller (§11.5) | the operator publishes the AAAA records; the hub does not answer AAAA itself (§15) |
 | Platforms | native `linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`; a JVM 25 JAR for everything else, Intel Macs included (§3.2) | Windows spends a platform thread per duplex socket (§3.2); nothing here installs a service, so keeping the daemon up is a unit of the operator's own (`deploy/`) |
 | Certificates | one wildcard through the hub's own DNS-01, renewed automatically on both sides (§7) | a node that stays offline cannot renew, and that is reported rather than prevented (§15) |
 | Upgrading | a check against GitHub's newest release and a verified download (§9.4) | which release is current is GitHub's unsigned word and only what is in it is signed (§15), the install command is printed for the operator, and replacing the hub's binary is a restart (§13) |
@@ -66,14 +66,15 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 
 ### 1.2 Decided, and not built
 
-These are in scope. Each was an open question on 2026-09-16 and is now a decision with an issue
-behind it, so that "not built" is never read as "not wanted".
-
-| What | Why | Issue |
-|---|---|---|
-| The hub answering AAAA itself | under delegation the hub *is* the authoritative server, so v6 has nowhere else to come from | [#63](https://github.com/eth219/jailscale/issues/63) |
-| systemd socket activation | it is the one mechanism that also helps the single-hub operator, who is most deployments | [#71](https://github.com/eth219/jailscale/issues/71) |
-| A gauge for the soonest certificate expiry among absent nodes | the lapse the node cannot report is one the hub can already see, and alerting can watch a gauge | [#75](https://github.com/eth219/jailscale/issues/75) |
+**Empty, as of the maintenance cut.** This table held three rows -- the hub answering AAAA itself
+([#63](https://github.com/eth219/jailscale/issues/63)), systemd socket activation
+([#71](https://github.com/eth219/jailscale/issues/71)) and a gauge for the soonest certificate
+expiry among absent nodes ([#75](https://github.com/eth219/jailscale/issues/75)) -- each a decision
+to build something. Maintenance does not take those: all three are closed as not planned, and what
+each of them was about is a limit in §15 rather than work waiting. The table stays because the
+distinction it draws is still the one that matters, and because a row could be added here again by
+the same route as before: an issue, a decision recorded on it, and this section edited in the same
+change.
 
 ### 1.3 Not supported
 
@@ -102,7 +103,7 @@ given up for.
 
 A row moves between these tables the way anything else here changes: an issue, a decision recorded
 on it, and this section edited in the same change ([docs/issue-workflow.md](issue-workflow.md)).
-§1.2 is what was decided, not when it will land.
+In maintenance the direction rows move is §1.1 to §1.3.
 
 ---
 
@@ -2574,8 +2575,9 @@ visitors per name (`SniRouter.MAX_PER_NAME`), 20 links per node, up to 4 control
 
 Everything below is true of the system as it stands, and §1 is where each entry was sorted into
 one of two kinds. Most are the condition on something §1.1 supports, or a §1.3 row spelled out in
-full — accepted, and not going to change. Seven are decisions to build something (§1.2), and those
-say so and name the issue. An entry that does neither has not been through that pass.
+full — accepted, and not going to change. The entries that were decisions to build something (§1.2)
+became limits when maintenance closed them, and each says which issue it was. An entry that is
+neither has not been through that pass.
 
 - **A compromised hub can impersonate every name under its domain** (§11.2). Detectable (§11.3) but
   not preventable, because the hub is what decides name ownership.
@@ -2620,14 +2622,15 @@ say so and name the issue. An entry that does neither has not been through that 
   has next to every issuance failure and on its status page, and `ls` marks the link. None of that
   helps a node that stays offline: renewal needs the hub, so the node that cannot renew is the one
   nobody hears from, and its domain goes dark when the certificate runs out. The hub can see that
-  coming, so a gauge for the soonest expiry among absent nodes is decided work
-  (§1.2, [#75](https://github.com/eth219/jailscale/issues/75)); a notification channel is not (§1.3).
+  coming, and a gauge for the soonest expiry among absent nodes was decided work until maintenance
+  closed it ([#75](https://github.com/eth219/jailscale/issues/75)); a notification channel was never
+  in scope (§1.3).
 - **A hub that dies takes its names down until it is started again** (§13). There is no second hub:
   the standby, its promotion and the relay connections that let it serve were removed, and what is
   left is the backup unit -- the state directory -- and a restart. Upgrading is a restart too, which
-  is what it already was under a systemd unit; socket activation, which would narrow that window for
-  the single-hub operator, is decided work (§1.2,
-  [#71](https://github.com/eth219/jailscale/issues/71)).
+  is what it already was under a systemd unit. Socket activation would narrow that window and was
+  decided work until maintenance closed it
+  ([#71](https://github.com/eth219/jailscale/issues/71)).
 - **IPv6 works for visitors and not for the hub's own DNS.** A hub bound to `::` (`--listen
   [::]:443`) serves v6 visitors today — routed by SNI, relayed to the node, counted and limited per
   /64 (§11.5) like any other caller — and an operator running the three-record setup publishes the
@@ -2636,8 +2639,9 @@ say so and name the issue. An entry that does neither has not been through that 
   zone view carries v4 addresses only, and `ns1`/`ns2` glue is A. That is exactly the setup where
   the operator cannot make up the difference — in the delegated mode of §13 the hub *is* the
   authoritative server for the subdomain, so there is nowhere else to put an AAAA record. So: v6
-  ingress on the operator's own records, and no v6 under delegation. **Answering AAAA is decided
-  work** (§1.2, [#63](https://github.com/eth219/jailscale/issues/63)).
+  ingress on the operator's own records, and no v6 under delegation. Answering AAAA was decided work
+  until maintenance closed it ([#63](https://github.com/eth219/jailscale/issues/63)), so this is a
+  limit now and not a plan.
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
   loses events when one socket is parked for read and for write together (JDK-8334574), so one side
   of each of those sockets is kept off the poller there. Measured at about 60 KB per concurrent
