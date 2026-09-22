@@ -84,9 +84,9 @@ final class NodeGroup {
     }
 
     /**
-     * The control connection, or -- on a host the node reaches only by a relay connection
-     * (§13.4) -- the lowest-numbered connection it has here, which is what carries the
-     * certificate and speaks for the node on this host.
+     * The control connection, or -- while it is reconnecting and only its extra connections are
+     * up -- the lowest-numbered connection this node has here, which is what carries the
+     * certificate and speaks for it.
      */
     NodeSession primary() {
         NodeSession p = sessions.get(0);
@@ -165,12 +165,12 @@ final class NodeGroup {
     }
 
     /** Opens a visitor stream on the least loaded connection. */
-    MuxStream openVisitor(Links.Link link, String sni, String visitorAddr, int visitorPort, String keyId, boolean dgram) throws IOException {
+    MuxStream openVisitor(Links.Link link, String sni, String visitorAddr, int visitorPort, String keyId) throws IOException {
         NodeSession best = null;
         int bestLoad = Integer.MAX_VALUE;
         for (NodeSession s : sessions.values()) {
             MuxSession m = s.mux();
-            if (m == null || m.isClosed() || s.isDraining()) {
+            if (m == null || m.isClosed()) {
                 continue;
             }
             int load = m.streamCount();
@@ -182,18 +182,15 @@ final class NodeGroup {
         if (best == null) {
             throw new IOException("node has no usable connection");
         }
-        // Checked here because this is the one place a visitor stream is opened -- TLS through the
-        // SNI router and raw TCP and UDP through RawPorts all arrive at this method -- and because
-        // the map below is already the exact count: it is filled on open, emptied on close, and
+        // Checked here because this is the one place a visitor stream is opened, and because the
+        // map below is already the exact count: it is filled on open, emptied on close, and
         // purged when a session detaches. A node that does not advertise a bound gets the behaviour
         // it had before the field existed, which is the hub sending and the node resetting.
         int ceiling = visitorCeiling();
         if (ceiling > 0 && visitors.size() >= ceiling) {
-            Metrics.VISITORS_REFUSED.increment();
-            Metrics.VISITORS_REFUSED_CAPACITY.increment();
             throw new AtCapacity(mkey, ceiling);
         }
-        JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("kind", link.kind()).put("sni", sni)
+        JsonObject meta = JsonObject.builder().put("linkId", link.linkId()).put("sni", sni)
             .put("visitorAddr", visitorAddr).put("visitorPort", visitorPort).put("keyId", keyId).build();
         // Recorded before the OPEN frame goes out, not after. The node begins the visitor's TLS
         // handshake the moment it sees that frame and asks this hub to sign inside it; a hub that
@@ -203,7 +200,7 @@ final class NodeGroup {
         NodeSession on = best;   // the lambda needs it effectively final
         MuxStream stream;
         try {
-            stream = on.mux().open(meta, dgram, s -> {
+            stream = on.mux().open(meta, s -> {
                 long id = fullId(on.conn(), s.id());
                 opened[0] = id;
                 streamIds.put(s, id);
@@ -322,13 +319,7 @@ final class NodeGroup {
         peakSignsInFlight.accumulateAndGet(inFlight, Math::max);
         try {
             onSignInFlight.accept(inFlight);
-            Message m = signChecked(sr);
-            // One place, so a refusal added later cannot forget to be counted: what went back to
-            // the node is what says whether it was signed.
-            if (m instanceof Message.SignResponse r) {
-                (r.sig() == null ? Metrics.SIGNATURES_REFUSED : Metrics.SIGNATURES).increment();
-            }
-            return m;
+            return signChecked(sr);
         } finally {
             signsInFlight.decrementAndGet();
         }
@@ -416,10 +407,4 @@ final class NodeGroup {
         }
     }
 
-    /** Hand-off: tell the node to open fresh connections elsewhere but keep these until drained. */
-    void drain() {
-        for (NodeSession s : all()) {
-            s.drain();
-        }
-    }
 }

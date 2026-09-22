@@ -42,51 +42,27 @@ class WireFormatTest {
         "{\"t\":\"InviteCreated\",\"url\":\"https://hub.example.com/join/x\",\"code\":\"7F3K-92QX\",\"expiresAt\":1789000000}",
         "{\"t\":\"Error\",\"inReplyTo\":\"InviteCreate\",\"reason\":\"policy\"}",
         "{\"t\":\"CertUpdate\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],\"keyId\":\"sha256:ab\"}",
-        "{\"t\":\"LinkOpen\",\"kind\":\"https\",\"name\":\"myapp\",\"domain\":\"app.example.com\",\"port\":10022,"
-            + "\"local\":\"127.0.0.1:3000\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],"
-            + "\"domainProof\":\"AQID\"}",
-        "{\"t\":\"LinkOpened\",\"linkId\":\"l1\",\"name\":\"myapp\",\"url\":\"https://myapp.hub.example.com\",\"hubPort\":10022,\"reason\":\"taken\"}",
+        // LinkOpen lost `kind` and `port` with raw tcp and udp links (§8.4) and `domain`,
+        // `chainPem` and `domainProof` with user domains (§8.3); LinkOpened lost `hubPort`. Those
+        // are removals, not additions, so they are a protocol break and the PROTO bump in §5.4 is
+        // what makes it one: these are the proto 2 lines.
+        "{\"t\":\"LinkOpen\",\"name\":\"myapp\",\"local\":\"127.0.0.1:3000\"}",
+        "{\"t\":\"LinkOpened\",\"linkId\":\"l1\",\"name\":\"myapp\",\"url\":\"https://myapp.hub.example.com\",\"reason\":\"taken\"}",
         "{\"t\":\"LinkClose\",\"linkId\":\"l1\"}",
         "{\"t\":\"LinkRevoked\",\"linkId\":\"l1\",\"name\":\"myapp\",\"reason\":\"released\",\"at\":1789000000}",
         "{\"t\":\"SignRequest\",\"streamId\":33554472,\"keyId\":\"sha256:ab\",\"alg\":\"ECDSA-P256-SHA256\",\"content\":\"AQID\","
             + "\"serverHello\":\"AgAAAA\",\"encryptedExtensions\":\"CAAAAA\",\"helloRetryRequest\":\"_gk\"}",
         "{\"t\":\"SignResponse\",\"streamId\":40,\"sig\":\"AQID\",\"reason\":\"not-your-stream\"}",
-        "{\"t\":\"ChallengeSet\",\"domain\":\"app.example.com\",\"token\":\"tok\",\"keyAuthorization\":\"tok.thumb\"}",
-        "{\"t\":\"ChallengeClear\",\"token\":\"tok\"}",
-        "{\"t\":\"Ack\",\"inReplyTo\":\"ChallengeSet\"}",
         // Hello again, carrying the field added after v0.1.0 (§9.3). The Hello at the top of this
         // array keeps its exact bytes and is now the old-node case as well: a node with no bound to
         // declare omits the field and puts the same wire out as a build from before it existed.
         // Appended here rather than next to the other Hello because three tests index this array.
         "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.1\",\"os\":\"linux\",\"conn\":0,\"visitors\":450}",
-        // Hub to hub (§13.1), added after v0.1.2. Only ever exchanged between two hubs that both
-        // hold hub.key; a node never sees them, and a hub that does not know them answers with
-        // Error{unknown-type} like any other message it has no case for.
-        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub-b.example.com\"}",
-        "{\"t\":\"PeerHelloResponse\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\"}",
-        "{\"t\":\"PeerSnapshot\",\"json\":\"{\\\"v\\\":1,\\\"nextNodeId\\\":3,\\\"events\\\":[]}\"}",
-        "{\"t\":\"PeerEvent\",\"json\":\"{\\\"e\\\":\\\"admin-added\\\",\\\"user\\\":\\\"wq\\\"}\"}",
-        "{\"t\":\"PeerCert\",\"chainPem\":[\"-----BEGIN CERTIFICATE-----\\nAA==\\n-----END CERTIFICATE-----\"],"
-            + "\"keyPem\":\"-----BEGIN PRIVATE KEY-----\\nAA==\\n-----END PRIVATE KEY-----\",\"keyId\":\"sha256:ab\"}",
-        "{\"t\":\"PeerHubKey\",\"current\":\"hkeypriv:AAAA\",\"next\":\"hkeypriv:BBBB\"}",
-        // §13.3: the hello carries the sender's advertised address (absent when unknown, so the
-        // v0.1.3 line above still reads the same), and the challenge values travel to the standby.
-        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.2\"}",
-        "{\"t\":\"PeerHelloResponse\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.1\"}",
-        "{\"t\":\"PeerChallenge\",\"txt\":[\"abc\",\"def\"]}",
-        // §13.4: a relay connection's Hello, the relay list on the response, its change, and the
-        // node set two hubs exchange. The Hello and HelloResponse lines above keep their bytes: the
-        // new fields are omitted when false or empty.
-        "{\"t\":\"Hello\",\"proto\":1,\"version\":\"0.1.6\",\"os\":\"linux\",\"conn\":3,\"visitors\":450,\"relay\":true}",
-        "{\"t\":\"HelloResponse\",\"proto\":1,\"minProto\":1,\"version\":\"0.1.6\",\"dnsSuffix\":\"hub.example.com\",\"relays\":[\"203.0.113.1\",\"203.0.113.2:8443\"]}",
-        "{\"t\":\"RelaysChanged\",\"relays\":[\"203.0.113.2\"]}",
-        "{\"t\":\"PeerNodes\",\"mkeys\":[\"mkey:a\",\"mkey:b\"]}",
-        "{\"t\":\"PeerHello\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.2\",\"endpoint\":\"203.0.113.2:8443\"}",
-        // §13.5: role and epoch on the hellos (omitted before a hub has a role to state), and the
-        // liveness proof a node carries between the standby and the primary.
-        "{\"t\":\"PeerHelloResponse\",\"proto\":1,\"version\":\"0.2.0\",\"host\":\"hub.example.com\",\"address\":\"203.0.113.1\",\"role\":\"primary\",\"epoch\":4}",
-        "{\"t\":\"PeerProbe\",\"nonce\":\"AQID\"}",
-        "{\"t\":\"PeerProbeAnswer\",\"nonce\":\"AQID\",\"mac\":\"CQk\",\"epoch\":4}"
+        // The hub-to-hub lines that stood here -- PeerHello and its response, the snapshot and
+        // event stream, the certificate and key, the probe pair, the relay list and the node set --
+        // went with the standby (§13), as did `relay` on Hello and `relays` on HelloResponse. Both
+        // of those were fields omitted when false or empty, so the two lines above keep the exact
+        // bytes they always had.
     };
 
     @Test
@@ -128,13 +104,8 @@ class WireFormatTest {
         assertArrayEquals(new byte[] {(byte) 0xfe, 9}, sr.helloRetryRequest());
 
         Message.LinkOpen lo = only(Message.LinkOpen.class);
-        assertEquals("app.example.com", lo.domain());
-        assertArrayEquals(new byte[] {1, 2, 3}, lo.domainProof());
-
-        Message.ChallengeSet cs = only(Message.ChallengeSet.class);
-        assertEquals("app.example.com", cs.domain());
-        assertEquals("tok", cs.token());
-        assertEquals("tok.thumb", cs.keyAuthorization());
+        assertEquals("myapp", lo.name());
+        assertEquals("127.0.0.1:3000", lo.local());
     }
 
     /**
@@ -185,9 +156,8 @@ class WireFormatTest {
             Codec.decode("{\"t\":\"SignRequest\",\"streamId\":1,\"keyId\":\"k\",\"alg\":\"a\",\"content\":\"AQID\"}"));
         assertEquals(null, bare.serverHello());
         Message.LinkOpen bareLink = assertInstanceOf(Message.LinkOpen.class,
-            Codec.decode("{\"t\":\"LinkOpen\",\"kind\":\"https\",\"local\":\"127.0.0.1:3000\"}"));
-        assertEquals(null, bareLink.name());
-        assertEquals(null, bareLink.domainProof());
+            Codec.decode("{\"t\":\"LinkOpen\",\"local\":\"127.0.0.1:3000\"}"));
+        assertEquals(null, bareLink.name(), "a node asking to be given a name sends none");
     }
 
     @Test

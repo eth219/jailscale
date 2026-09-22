@@ -20,8 +20,9 @@ public record Frame(long streamId, int type, int flags, byte[] payload) {
     public static final int CTRL = 6;
     public static final int KEEPALIVE = 7;
 
-    /** Flag: DATA frames on this stream are datagrams (one frame = one UDP packet). */
-    public static final int FLAG_DGRAM = 0x01;
+    // No flags are defined. The byte stays in the header: it is what a later protocol version has
+    // to say something new in, and FLAG_DGRAM (0x01, one frame per UDP packet) used it until raw
+    // UDP ports were removed (§8.4). A peer that sets it now is talking to the wrong version.
 
     // RST reasons the multiplexer sends for itself, above the range an application picks from. The
     // byte is diagnostic only -- a peer fails the stream whatever it says -- and the low numbers are

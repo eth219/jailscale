@@ -166,7 +166,7 @@ class NameRevocationTest {
         assertTrue(hub.links().byName("bye") != null);
 
         hub.store().releaseName("bye");
-        hub.links().releasedByOperator("bye", false);
+        hub.links().releasedByOperator("bye");
 
         // The live link goes down, not just the claim: before this the name kept serving.
         assertEquals(null, hub.links().byName("bye"));
@@ -180,7 +180,7 @@ class NameRevocationTest {
         join("a");
         ok(cli("a", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "mine")));
         hub.store().releaseName("mine");
-        hub.links().releasedByOperator("mine", false);
+        hub.links().releasedByOperator("mine");
         waitFor(() -> revoked("a").size() == 1);
 
         ok(cli("a", JsonObject.builder().put("cmd", "open").put("port", localApp.getLocalPort()).put("name", "mine")));

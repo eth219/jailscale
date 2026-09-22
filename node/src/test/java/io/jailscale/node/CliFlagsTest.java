@@ -29,11 +29,11 @@ class CliFlagsTest {
     /**
      * Spelled out rather than read from {@link Main#FLAGS}, which would make this tautological:
      * iterating the list can only ever confirm what is on it, and the mistake worth catching is a
-     * flag that has fallen off. Written the lazy way first, this passed with "tcp" deleted from
+     * flag that has fallen off. Written the lazy way first, this passed with a flag deleted from
      * the list -- exactly the bug it exists to find.
      */
     private static final String[] READ_BY_THE_CLI = {"debug", "self", "tls-insecure", "help", "gate", "off",
-        "tcp", "udp", "acme-staging", "proxy-protocol", "download"};
+        "proxy-protocol", "download"};
 
     @Test
     void everyFlagTheCliReadsIsDeclaredAndTakesNoValue() {

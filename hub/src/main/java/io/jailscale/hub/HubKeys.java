@@ -44,18 +44,13 @@ final class HubKeys {
         }
     }
 
-    /** Whether a hub key exists in {@code stateDir}: a standby must be given one, not make one. */
+    /** Whether a hub key exists in {@code stateDir}, so that a hub makes one only on a first run. */
     static boolean exists(Path stateDir) {
         return Files.exists(stateDir.resolve("hub.key"));
     }
 
     synchronized String publicText() {
         return KeyText.format(KeyText.HUB, cur.publicKey());
-    }
-
-    /** The current key pair, for a standby to authenticate to its primary with (§13.1). */
-    synchronized X25519.Keypair current() {
-        return cur;
     }
 
     /**
@@ -65,42 +60,6 @@ final class HubKeys {
     synchronized boolean isOwn(byte[] remoteStatic) {
         return java.util.Arrays.equals(remoteStatic, cur.publicKey())
             || (nxt != null && java.util.Arrays.equals(remoteStatic, nxt.publicKey()));
-    }
-
-    synchronized String privateText() {
-        return KeyText.format(PRIVATE_PREFIX, cur.privateKey());
-    }
-
-    synchronized String nextPrivateText() {
-        return nxt == null ? null : KeyText.format(PRIVATE_PREFIX, nxt.privateKey());
-    }
-
-    /**
-     * Takes the primary's keys as this hub's own (§13.1). Both are written before either is used,
-     * so a crash between the two leaves files that agree with each other.
-     */
-    synchronized void installFromPeer(String currentText, String nextText) throws IOException {
-        byte[] curPriv = KeyText.parse(PRIVATE_PREFIX, currentText);
-        X25519.Keypair c = new X25519.Keypair(curPriv, X25519.publicKey(curPriv));
-        X25519.Keypair n = null;
-        if (nextText != null) {
-            byte[] nextPriv = KeyText.parse(PRIVATE_PREFIX, nextText);
-            n = new X25519.Keypair(nextPriv, X25519.publicKey(nextPriv));
-        }
-        boolean curChanged = !java.util.Arrays.equals(c.publicKey(), cur.publicKey());
-        boolean nextChanged = (n == null) != (nxt == null) || (n != null && !java.util.Arrays.equals(n.publicKey(), nxt.publicKey()));
-        if (!curChanged && !nextChanged) {
-            return;
-        }
-        save(current, c);
-        if (n != null) {
-            save(next, n);
-        } else {
-            Files.deleteIfExists(next);
-        }
-        cur = c;
-        nxt = n;
-        LOG.info("hub key follows the primary: {}{}", publicText(), n == null ? "" : ", next " + nextPublicText());
     }
 
     synchronized String nextPublicText() {

@@ -25,7 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
- * The hub's authoritative DNS server (ARCHITECTURE.md §7.1, §13.3). It began as the responder
+ * The hub's authoritative DNS server (ARCHITECTURE.md §7.1). It began as the responder
  * behind {@code _acme-challenge.<hub>} alone, and still answers that name exactly as it always
  * has: TXT for the current challenge values, NS and SOA for the delegation the single-host
  * operator makes. It now also answers for the hub's whole name, for the operator who delegates
@@ -66,7 +66,7 @@ public final class DnsResponder implements AutoCloseable {
     static final int PAIR_TRIES = 16;
     /** Challenge values change per issuance and are polled by the CA: barely cached at all. */
     static final int TTL_TXT = 5;
-    /** The serving set moves when a host goes; a resolver may hold it this long (§13.3). */
+    /** The serving set moves when a host goes; a resolver may hold it this long (§13). */
     public static final int TTL_ADDRESS = 30;
     /** Delegation and zone records change when the operator changes them. */
     static final int TTL_ZONE = 3600;
@@ -74,7 +74,7 @@ public final class DnsResponder implements AutoCloseable {
     static final int TTL_GLUE = 300;
     /** The labels the parent may delegate to; never answered from the wildcard, even before the glue is known. */
     public static final List<String> GLUE_LABELS = List.of("ns1", "ns2");
-    /** The name whose TXT is this process's own token (§13.3). */
+    /** The name whose TXT is this process's own token (§13). */
     public static final String SELF_LABEL = "_jailhub-self";
     /** The label a dns-01 challenge points the CA at. */
     static final String CHALLENGE_LABEL = "_acme-challenge";
@@ -91,12 +91,18 @@ public final class DnsResponder implements AutoCloseable {
         /** Name-server label (e.g. {@code ns1}) to IPv4 address, as delegated at the parent; empty when not. */
         Map<String, String> nameServers();
 
-        /** The apex: where the control channel, joining and the admin pages are (§13.4). Defaults to the serving set. */
+        /**
+         * The apex, and one label under it. Both default to the serving set and the hub leaves
+         * them there: with one hub every name in the zone resolves to the same host. They were the
+         * two-hub hooks -- the apex was the primary alone, a name was the hosts that node was on
+         * (§13). {@code control()} still has its caller below; {@code forName} is the seam a test
+         * overrides, which is the only thing that exercises the per-label path at all.
+         */
         default List<String> control() {
             return serving();
         }
 
-        /** One label under the apex: the hosts that node is on (§13.4). Defaults to the serving set. */
+        /** See above: overridden by {@code DnsResponderTest}, defaulted everywhere else. */
         default List<String> forName(String label) {
             return serving();
         }
@@ -275,7 +281,7 @@ public final class DnsResponder implements AutoCloseable {
         return zone;
     }
 
-    /** The token {@code _jailhub-self.<hub>} answers; only this process has it (§13.3). */
+    /** The token {@code _jailhub-self.<hub>} answers; only this process has it (§13). */
     public String selfToken() {
         return selfToken;
     }
@@ -285,7 +291,7 @@ public final class DnsResponder implements AutoCloseable {
         this.view = z == null ? NOTHING : z;
     }
 
-    /** Told whenever the challenge values change, so a standby can be sent the same ones (§13.3). */
+    /** Told whenever the challenge values change. The hub registers nothing here; a test does. */
     public void onTxtChanged(Consumer<List<String>> l) {
         this.onTxtChanged = l;
     }
@@ -791,7 +797,7 @@ public final class DnsResponder implements AutoCloseable {
         return build(qn, answers, List.of(), List.of());
     }
 
-    /** The zone apex: A is the serving set, NS and SOA the delegation (§13.3). */
+    /** The zone apex: A is the serving set, NS and SOA the delegation (§13). */
     private byte[] apex(Question qn) {
         int qtype = qn.type();
         Zone z = view;

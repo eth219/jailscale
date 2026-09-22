@@ -211,8 +211,8 @@ public final class MuxSession implements AutoCloseable {
     }
 
     /** Opens a stream toward the peer with the given metadata. */
-    public MuxStream open(JsonObject meta, boolean dgram) throws IOException {
-        return open(meta, dgram, s -> { });
+    public MuxStream open(JsonObject meta) throws IOException {
+        return open(meta, s -> { });
     }
 
     /**
@@ -229,17 +229,17 @@ public final class MuxSession implements AutoCloseable {
      * <p>If it throws, the stream is taken back out and the OPEN frame is never written, so the
      * peer never hears of a stream whose registration failed.
      */
-    public MuxStream open(JsonObject meta, boolean dgram, java.util.function.Consumer<MuxStream> beforeThePeerKnows)
+    public MuxStream open(JsonObject meta, java.util.function.Consumer<MuxStream> beforeThePeerKnows)
         throws IOException {
         long id = nextId.getAndAdd(2);
         if (id > 0xFFFFFFFFL) {
             throw new IOException("stream ids exhausted");
         }
-        MuxStream s = new MuxStream(this, budget, id, meta, dgram);
+        MuxStream s = new MuxStream(this, budget, id, meta);
         streams.put(id, s);
         try {
             beforeThePeerKnows.accept(s);
-            write(new Frame(id, Frame.OPEN, dgram ? Frame.FLAG_DGRAM : 0, Json.writeUtf8(meta.asMap())));
+            write(new Frame(id, Frame.OPEN, 0, Json.writeUtf8(meta.asMap())));
         } catch (IOException | RuntimeException e) {
             streams.remove(id);
             throw e;
@@ -247,8 +247,8 @@ public final class MuxSession implements AutoCloseable {
         return s;
     }
 
-    void sendData(long id, byte[] chunk, boolean dgram) throws IOException {
-        write(new Frame(id, Frame.DATA, dgram ? Frame.FLAG_DGRAM : 0, chunk));
+    void sendData(long id, byte[] chunk) throws IOException {
+        write(new Frame(id, Frame.DATA, 0, chunk));
     }
 
     void sendWindow(long id, int delta) throws IOException {
@@ -514,7 +514,7 @@ public final class MuxSession implements AutoCloseable {
                 } catch (JsonException e) {
                     throw new MuxException("bad OPEN metadata: " + e.getMessage());
                 }
-                MuxStream s = new MuxStream(this, budget, id, meta, (f.flags() & Frame.FLAG_DGRAM) != 0);
+                MuxStream s = new MuxStream(this, budget, id, meta);
                 streams.put(id, s);
                 long beforeOpen = System.nanoTime();
                 listener.onOpen(this, s);

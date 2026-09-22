@@ -24,30 +24,18 @@ final class Links {
     static final int MAX_LINKS_PER_NODE = 20;
 
     /** An active link: a name served by a node (all of its connections). */
-    record Link(String linkId, String name, String kind, String user, String mkey, NodeGroup group, String local, int port,
-        String domain) {
+    record Link(String linkId, String name, String user, String mkey, NodeGroup group, String local) {
 
-        boolean raw() {
-            return port > 0;
-        }
-
-        /** The SNI visitors use: the hub sub-name or the user domain. */
+        /** The SNI visitors use. */
         String host(HubConfig config) {
-            return domain != null ? domain : name + "." + config.hostname();
+            return name + "." + config.hostname();
         }
     }
 
-    static final String TCP = Message.LinkOpen.TCP;
-    static final String UDP = Message.LinkOpen.UDP;
-
     private final HubConfig config;
     private final Store store;
-    private final RawPorts raw;
-    private final DomainVerifier domains;
     private final Registry registry;
     private final Map<String, Link> byName = new ConcurrentHashMap<>();
-    private final Map<String, Link> byDomain = new ConcurrentHashMap<>();
-    private final Map<Integer, Link> byPort = new ConcurrentHashMap<>();
     private final Map<String, Link> byId = new ConcurrentHashMap<>();
     /**
      * The three maps a live link can be in, as one list instead of three names written out at
@@ -59,18 +47,12 @@ final class Links {
      * to have filled. {@code byId} is not here: it is an index of the same links, not a fourth place
      * one lives.
      */
-    private final List<Map<?, Link>> live = List.<Map<?, Link>>of(byName, byDomain, byPort);
+    private final List<Map<?, Link>> live = List.<Map<?, Link>>of(byName);
 
-    Links(HubConfig config, Store store, RawPorts raw, DomainVerifier domains, Registry registry) {
+    Links(HubConfig config, Store store, Registry registry) {
         this.config = config;
         this.store = store;
-        this.raw = raw;
-        this.domains = domains;
         this.registry = registry;
-    }
-
-    Link byDomain(String domain) {
-        return byDomain.get(domain);
     }
 
     Link byName(String name) {
@@ -115,27 +97,11 @@ final class Links {
         return name.contains(".") ? null : name;
     }
 
-    private volatile java.util.function.BooleanSupplier standby = () -> false;
-
-    /** Whether this hub is a standby (§13.4), which decides what {@link #open} may write: nothing. */
-    void standby(java.util.function.BooleanSupplier standby) {
-        this.standby = standby;
-    }
-
     /** Handles LinkOpen from a registered node. */
     synchronized Message open(NodeSession s, Message.LinkOpen req) throws IOException {
         Store.NodeRec node = s.node();
         if (node == null) {
-            return new Message.LinkOpened(null, null, null, null, "not-registered");
-        }
-        if (standby.getAsBoolean() || s.isRelay()) {
-            return reopen(s, node, req);
-        }
-        if (TCP.equals(req.kind()) || UDP.equals(req.kind())) {
-            return openRaw(s, node, req);
-        }
-        if (!Message.LinkOpen.HTTPS.equals(req.kind())) {
-            return new Message.LinkOpened(null, null, null, null, "bad-kind");
+            return new Message.LinkOpened(null, null, null, "not-registered");
         }
         int mine = 0;
         for (Link l : all()) {
@@ -144,20 +110,17 @@ final class Links {
             }
         }
         if (mine >= MAX_LINKS_PER_NODE) {
-            return new Message.LinkOpened(null, null, null, null, "too-many-links");
-        }
-        if (req.domain() != null) {
-            return openDomain(s, node, req);
+            return new Message.LinkOpened(null, null, null, "too-many-links");
         }
         String name;
         if (req.name() != null) {
             name = req.name().toLowerCase(Locale.ROOT);
             if (!NAME.matcher(name).matches() || RESERVED.contains(name)) {
-                return new Message.LinkOpened(null, null, null, null, "bad-name");
+                return new Message.LinkOpened(null, null, null, "bad-name");
             }
             Store.NameRec prior = store.name(name);
             if (prior != null && !prior.user().equals(node.user())) {
-                return new Message.LinkOpened(null, null, null, null, "taken");
+                return new Message.LinkOpened(null, null, null, "taken");
             }
             if (prior == null || !prior.mkey().equals(node.mkey())) {
                 store.claimName(name, node.user(), node.mkey(), req.local());
@@ -180,222 +143,35 @@ final class Links {
         Link existing = byName.get(name);
         if (existing != null && existing.group() != s.group()) {
             if (!existing.mkey().equals(node.mkey()) && !existing.user().equals(node.user())) {
-                return new Message.LinkOpened(null, null, null, null, "taken");
+                return new Message.LinkOpened(null, null, null, "taken");
             }
             // Same owner from another (or restarted) node: the newest opener wins.
             byId.remove(existing.linkId());
         }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
+        Link link = new Link(Tokens.id("l_"), name, node.user(), node.mkey(), s.group(), req.local());
         byName.put(name, link);
         byId.put(link.linkId(), link);
         LOG.info("link {} opened by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
-        return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null, null);
-    }
-
-    /**
-     * A link opened on a host that must not write (ARCHITECTURE.md §13.4): a standby, or any host
-     * reached by a relay connection. The name or domain has to be one the replicated store already
-     * gives this node -- the primary assigned it, and the assignment arrived over the hub-to-hub
-     * channel -- so nothing here claims, reassigns, notifies or allocates. A name this node does
-     * not hold, a random name it has not been given yet, and every raw port are the primary's to
-     * answer, and are refused with {@code primary-only} so the node asks there.
-     */
-    private Message reopen(NodeSession s, Store.NodeRec node, Message.LinkOpen req) {
-        if (!Message.LinkOpen.HTTPS.equals(req.kind())) {
-            return new Message.LinkOpened(null, null, null, null, "primary-only");
-        }
-        if (req.domain() != null) {
-            String domain = req.domain().toLowerCase(Locale.ROOT);
-            Store.DomainRec rec = store.domain(domain);
-            if (rec == null || !rec.mkey().equals(node.mkey())) {
-                return new Message.LinkOpened(null, null, null, null, "primary-only");
-            }
-            String problem = domains.verify(domain, req.chainPem(), s.handshakeHash(), req.domainProof());
-            if (problem != null) {
-                return new Message.LinkOpened(null, null, null, null, problem);
-            }
-            Link existing = byDomain.get(domain);
-            if (existing != null && existing.group() != s.group()) {
-                byId.remove(existing.linkId());
-            }
-            Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
-            byDomain.put(domain, link);
-            byId.put(link.linkId(), link);
-            LOG.info("domain {} reopened here by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
-            return new Message.LinkOpened(link.linkId(), domain, "https://" + domain + portSuffix(), null, null);
-        }
-        if (req.name() == null) {
-            return new Message.LinkOpened(null, null, null, null, "primary-only");
-        }
-        String name = req.name().toLowerCase(Locale.ROOT);
-        Store.NameRec rec = store.name(name);
-        if (rec == null || !node.mkey().equals(rec.mkey())) {
-            return new Message.LinkOpened(null, null, null, null, "primary-only");
-        }
-        Link existing = byName.get(name);
-        if (existing != null && existing.group() != s.group()) {
-            byId.remove(existing.linkId());
-        }
-        Link link = new Link(Tokens.id("l_"), name, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, null);
-        byName.put(name, link);
-        byId.put(link.linkId(), link);
-        LOG.info("link {} reopened here by {} ({}) -> {}", name, node.user(), node.mkey(), req.local());
-        return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null, null);
-    }
-
-    /**
-     * Why {@code node} may not claim {@code domain}, or null: {@code bad-domain} for a name that is
-     * not a domain or is the hub's own, {@code taken} for one another user holds. One rule for the
-     * claim itself and for relaying its http-01 challenge, decided by user like a name (§8.2): a
-     * domain does not move between users on a claim alone — the operator takes it back with
-     * {@code domain release} and the new owner claims it then, so a hijack cannot pass for a
-     * handover.
-     */
-    String domainRefusal(Store.NodeRec node, String domain) {
-        if (!DomainVerifier.validName(domain) || domain.equals(config.hostname()) || domain.endsWith("." + config.hostname())) {
-            return "bad-domain";
-        }
-        Store.DomainRec prior = store.domain(domain);
-        if (prior != null && !prior.user().equals(node.user())) {
-            LOG.warn("node {} ({}) claimed {}, held by {}: refused", node.mkey(), node.user(), domain, prior.user());
-            return "taken";
-        }
-        return null;
-    }
-
-    /**
-     * ARCHITECTURE.md §8.3: the node brings its own certificate for its own domain, and proves it
-     * holds that certificate's private key. Pure SNI passthrough afterwards, no signing.
-     */
-    private Message openDomain(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
-        String domain = req.domain().toLowerCase(Locale.ROOT);
-        String refusal = domainRefusal(node, domain);
-        if (refusal != null) {
-            return new Message.LinkOpened(null, null, null, null, refusal);
-        }
-        String problem = domains.verify(domain, req.chainPem(), s.handshakeHash(), req.domainProof());
-        if (problem != null) {
-            return new Message.LinkOpened(null, null, null, null, problem);
-        }
-        Link existing = byDomain.get(domain);
-        if (existing != null && existing.group() != s.group()) {
-            byId.remove(existing.linkId());
-        }
-        Store.DomainRec prior = store.domain(domain);
-        store.claimDomain(domain, node.user(), node.mkey());
-        if (prior != null && !prior.mkey().equals(node.mkey())) {
-            notifyRevoked(prior.mkey(), null, domain, Message.LinkRevoked.REASSIGNED);
-        }
-        Link link = new Link(Tokens.id("l_"), domain, req.kind(), node.user(), node.mkey(), s.group(), req.local(), 0, domain);
-        byDomain.put(domain, link);
-        byId.put(link.linkId(), link);
-        LOG.info("domain {} opened by {} ({}) -> {}", domain, node.user(), node.mkey(), req.local());
-        return new Message.LinkOpened(link.linkId(), domain, "https://" + domain + portSuffix(), null, null);
-    }
-
-    /** ARCHITECTURE.md §8.4: a port instead of a name. Stable per node, kind and local target. */
-    private Message openRaw(NodeSession s, Store.NodeRec node, Message.LinkOpen req) throws IOException {
-        if (!config.hasPortRange()) {
-            return new Message.LinkOpened(null, null, null, null, "raw-ports-disabled");
-        }
-        if (req.local() == null) {
-            return new Message.LinkOpened(null, null, null, null, "local-required");
-        }
-        boolean explicit = req.port() != null && req.port() > 0;
-        List<Integer> candidates = new ArrayList<>();
-        if (explicit) {
-            if (req.port() < config.portRangeLo() || req.port() > config.portRangeHi()) {
-                return new Message.LinkOpened(null, null, null, null, "port-out-of-range");
-            }
-            candidates.add(req.port());
-        } else {
-            int remembered = store.portFor(node.mkey(), req.kind(), req.local());
-            if (remembered > 0) {
-                candidates.add(remembered);
-            }
-            for (int p = config.portRangeLo(); p <= config.portRangeHi(); p++) {
-                if (p != remembered && store.port(p) == null && !byPort.containsKey(p)) {
-                    candidates.add(p);
-                }
-            }
-            if (candidates.isEmpty()) {
-                return new Message.LinkOpened(null, null, null, null, "no-free-port");
-            }
-        }
-        for (int port : candidates) {
-            Store.PortRec rec = store.port(port);
-            if (rec != null && !rec.mkey().equals(node.mkey()) && !rec.user().equals(node.user())) {
-                return new Message.LinkOpened(null, null, null, null, "port-taken");
-            }
-            Link existing = byPort.get(port);
-            if (existing != null) {
-                if (existing.group() != s.group() && !existing.mkey().equals(node.mkey()) && !existing.user().equals(node.user())) {
-                    return new Message.LinkOpened(null, null, null, null, "port-taken");
-                }
-                // The newest opener wins, as with names.
-                raw.stop(existing);
-                byId.remove(existing.linkId());
-                byPort.remove(port);
-            }
-            Link link = new Link(Tokens.id("l_"), req.kind() + "/" + port, req.kind(), node.user(), node.mkey(), s.group(), req.local(), port, null);
-            try {
-                raw.start(link);
-            } catch (IOException e) {
-                LOG.warn("cannot bind {} port {}: {}", req.kind(), port, e.getMessage());
-                if (explicit) {
-                    return new Message.LinkOpened(null, null, null, null, "port-bind-failed");
-                }
-                continue;
-            }
-            if (rec == null || !rec.mkey().equals(node.mkey()) || !rec.kind().equals(req.kind()) || !rec.local().equals(req.local())) {
-                store.assignPort(port, req.kind(), node.user(), node.mkey(), req.local());
-            }
-            if (rec != null && !rec.mkey().equals(node.mkey())) {
-                notifyRevoked(rec.mkey(), existing == null ? null : existing.linkId(), req.kind() + "/" + port,
-                    Message.LinkRevoked.REASSIGNED);
-            }
-            byPort.put(port, link);
-            byId.put(link.linkId(), link);
-            return new Message.LinkOpened(link.linkId(), link.name(), req.kind() + "://" + config.hostname() + ":" + port, port, null);
-        }
-        return new Message.LinkOpened(null, null, null, null, "no-free-port");
+        return new Message.LinkOpened(link.linkId(), name, "https://" + name + "." + config.hostname() + portSuffix(), null);
     }
 
     void close(NodeGroup g, String linkId) {
         Link l = byId.remove(linkId);
         if (l != null && l.group() == g) {
-            if (l.raw()) {
-                raw.stop(l);
-                byPort.remove(l.port(), l);
-            } else if (l.domain() != null) {
-                byDomain.remove(l.domain(), l);
-            } else {
-                byName.remove(l.name(), l);
-            }
+            byName.remove(l.name(), l);
             LOG.info("link {} closed", l.name());
         }
     }
 
     /**
-     * An operator released a name or domain (ARCHITECTURE.md §11.4): take the live link down and tell
-     * the node. Without this the name keeps serving from the old node until it closes the link.
+     * An operator released a name (ARCHITECTURE.md §11.4): take the live link down and tell the
+     * node. Without this the name keeps serving from the old node until it closes the link.
      */
-    void releasedByOperator(String name, boolean domain) {
-        Link l = domain ? byDomain.remove(name) : byName.remove(name);
+    void releasedByOperator(String name) {
+        Link l = byName.remove(name);
         if (l == null) {
             return;
         }
-        byId.remove(l.linkId(), l);
-        notifyRevoked(l.mkey(), l.linkId(), l.name(), Message.LinkRevoked.RELEASED);
-    }
-
-    /** As above for a raw port. */
-    void portReleasedByOperator(int port) {
-        Link l = byPort.remove(port);
-        if (l == null) {
-            return;
-        }
-        raw.stop(l);
         byId.remove(l.linkId(), l);
         notifyRevoked(l.mkey(), l.linkId(), l.name(), Message.LinkRevoked.RELEASED);
     }
@@ -424,27 +200,20 @@ final class Links {
         }
     }
 
-    /** Called when a node's last connection ends: its links go offline (names and ports stay assigned). */
+    /** Called when a node's last connection ends: its links go offline (the names stay claimed). */
     void groupEnded(NodeGroup g) {
         for (Link l : all()) {
             if (l.group() == g) {
-                if (l.raw()) {
-                    raw.stop(l);
-                    byPort.remove(l.port(), l);
-                } else if (l.domain() != null) {
-                    byDomain.remove(l.domain(), l);
-                } else {
-                    byName.remove(l.name(), l);
-                }
+                byName.remove(l.name(), l);
                 byId.remove(l.linkId(), l);
             }
         }
     }
 
-    /** Waits up to {@code ms} for a claimed name or domain to come online (hand-off, node restarts). */
-    Link awaitOnline(String name, boolean domain, long ms) {
+    /** Waits up to {@code ms} for a claimed name to come online (hand-off, node restarts). */
+    Link awaitOnline(String name, long ms) {
         long deadline = System.currentTimeMillis() + ms;
-        Map<String, Link> map = domain ? byDomain : byName;
+        Map<String, Link> map = byName;
         Link l;
         while ((l = map.get(name)) == null && System.currentTimeMillis() < deadline) {
             try {

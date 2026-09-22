@@ -77,7 +77,7 @@ HUB=$R/hub/target/jailhub
 NODE=$R/node/target/jailscale
 CERT=$R/hub/src/test/resources/tls/hub-test.crt
 KEY=$R/hub/src/test/resources/tls/hub-test.key
-PORT=${PORT:-19643}; APP_PORT=$((PORT + 138)); METRICS_PORT=$((PORT + 139))
+PORT=${PORT:-19643}; APP_PORT=$((PORT + 138))
 RUNS=${RUNS:-3}; SETTLE=${SETTLE:-8}
 # State A's whole definition is that no SSLContext is ever built, and the daemon's first update check
 # fires 60 to 300 s after start (Daemon.updateLoop), reaching api.github.com over the default trust
@@ -113,7 +113,7 @@ die() { echo "  !! $*" >&2; exit 1; }
 
 start_hub() {
   "$HUB" serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
-    --state "$W/hub" --port-range none --http-listen none --metrics-listen "127.0.0.1:$METRICS_PORT" >> "$W/hub.log" 2>&1 &
+    --state "$W/hub" >> "$W/hub.log" 2>&1 &
   HUBPID=$!
 }
 stop_hub() { [ -n "${HUBPID:-}" ] && kill "$HUBPID" 2>/dev/null; HUBPID=; naps 1; }

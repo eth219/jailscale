@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Args;
 import java.net.URI;
@@ -49,8 +48,6 @@ class AdminCommandTest {
             new Route("name-list", "name", "list"),
             new Route("name-reassign", "name", "reassign", "web", "--user", "bob"),
             new Route("name-release", "name", "release", "web"),
-            new Route("domain-list", "domain", "list"),
-            new Route("domain-release", "domain", "release", "app.example.com"),
             new Route("ban-list", "ban", "list"),
             new Route("ban-add", "ban", "add", "203.0.113.7"),
             new Route("ban-remove", "ban", "remove", "203.0.113.7"),
@@ -63,10 +60,7 @@ class AdminCommandTest {
             new Route("admin-remove", "admin", "remove", "alice"),
             new Route("key-rotate", "key", "rotate"),
             new Route("setting", "setting", "knock", "off"),
-            new Route("promote", "promote"),
-            new Route("address-check", "address", "check"),
-            new Route("availability-reset", "availability", "reset"),
-            new Route("handoff", "handoff"));
+            new Route("address-check", "address", "check"));
     }
 
     private static JsonObject req(String... argv) {
@@ -86,16 +80,10 @@ class AdminCommandTest {
      * written up in ARCHITECTURE.md 11.4, and absent from the usage text -- so the way to take
      * back a claimed name was discoverable only by reading the source.
      *
-     * <p>{@code handoff} is the exception and stays one: it is not an operator's command but the
-     * message a second process sends with {@code --takeover}, and listing it would invite someone
-     * to dismantle a running hub by hand.
      */
     @Test
     void everyRoutedVerbIsInTheUsageText() {
         for (Route r : routes()) {
-            if (r.verb().equals("handoff")) {
-                continue;
-            }
             String line = Main.USAGE.lines()
                 .filter(l -> l.strip().startsWith("jailhub " + r.argv()[0]))
                 .findFirst()
@@ -111,9 +99,6 @@ class AdminCommandTest {
      * on a running hub. Only the fall-through reply proves a missing handler -- a verb that lands
      * and then refuses ("no node matches 3") has been routed, which is all this asserts.
      *
-     * <p>{@code handoff} is left out on purpose: it is the one verb that dismantles the hub it is
-     * sent to, and {@link HandoffTest} exercises it the way it is really sent, by a second process
-     * started with {@code --takeover}.
      */
     @Test
     void everyRoutedVerbLandsOnTheServer() throws Exception {
@@ -121,12 +106,9 @@ class AdminCommandTest {
         try {
             AdminIpc ipc = new AdminIpc(hub);
             for (Route r : routes()) {
-                if (r.verb().equals("handoff")) {
-                    continue;
-                }
                 // Every field any case reads, so a verb that lands gets as far as its own objection.
                 JsonObject req = JsonObject.builder().put("cmd", r.verb()).put("mkey", "3").put("user", "alice")
-                    .put("cidr", "203.0.113.7").put("name", "web").put("domain", "app.example.com")
+                    .put("cidr", "203.0.113.7").put("name", "web")
                     .put("id", "x").put("key", "knock").put("value", "off").put("tag", "ci").build();
                 JsonObject[] last = new JsonObject[1];
                 try {
@@ -199,7 +181,6 @@ class AdminCommandTest {
         assertEquals("alice", req("admin", "remove", "alice").string("user"));
         assertEquals("inv_1", req("invite", "revoke", "inv_1").string("id"));
         assertEquals("web", req("name", "release", "web").string("name"));
-        assertEquals("app.example.com", req("domain", "release", "app.example.com").string("domain"));
         assertEquals("bob", req("name", "reassign", "web", "--user", "bob").string("user"));
     }
 
@@ -224,7 +205,6 @@ class AdminCommandTest {
             new Missing("missing <ip|cidr>", "ban", "add"),
             new Missing("missing <ip|cidr>", "ban", "remove"),
             new Missing("missing <name>", "name", "release"),
-            new Missing("missing <domain>", "domain", "release"),
             new Missing("missing <id>", "invite", "revoke"),
             new Missing("missing <user>", "admin", "add"),
             new Missing("missing <user>", "admin", "remove"),
@@ -262,6 +242,26 @@ class AdminCommandTest {
             more.getMessage());
         // And the quoted form, which is one positional, still goes through.
         assertEquals("Example Ltd", req("setting", "operator", "Example Ltd").string("value"));
+    }
+
+    /**
+     * The one expiry an operator has left to watch is the hub's own wildcard (§15), and until the
+     * maintenance cut the only places it was published were the public page and {@code /v1/status}
+     * -- so an operator watching from a terminal had to load a web page. {@code jailhub status}
+     * carries it now, in unix seconds as the JSON endpoint reports it.
+     *
+     * <p>Against the certificate's own notAfter and not merely "present": a field that carried 0,
+     * or the wrong unit, would pass a null check and read as 1970 on the operator's screen.
+     */
+    @Test
+    void statusCarriesWhenTheWildcardExpires() throws Exception {
+        try (Hub hub = startedHub()) {
+            JsonObject[] last = new JsonObject[1];
+            new AdminIpc(hub).handle(JsonObject.builder().put("cmd", "status").build(), o -> last[0] = o);
+            long expected = hub.tls().leaf().getNotAfter().getTime() / 1000;
+            assertEquals(expected, last[0].lng("certificateNotAfter"),
+                "jailhub status should say when the wildcard runs out, in unix seconds");
+        }
     }
 
     /** A throwaway hub on a free port, with the test certificate. */
@@ -302,7 +302,7 @@ class AdminCommandTest {
             assertEquals("knock is on or off, not OFF", set(ipc, "knock", "OFF"));
             assertEquals("registration is invite or open, not opne", set(ipc, "registration", "opne"));
             assertEquals("invitePolicy is members or admins, not admin", set(ipc, "invitePolicy", "admin"));
-            assertEquals("no such setting knok (autoPromote, contact, invitePolicy, knock, operator, registration, terms)",
+            assertEquals("no such setting knok (contact, invitePolicy, knock, operator, registration, terms)",
                 set(ipc, "knok", "off"), "the list an operator is offered has to be all of them");
             assertEquals("on", hub.store().setting(Store.SETTING_KNOCK, "on"), "a refused setting must not have been written");
 

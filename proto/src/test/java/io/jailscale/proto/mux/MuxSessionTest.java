@@ -16,13 +16,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -150,7 +148,7 @@ class MuxSessionTest {
     @Test
     void whatTheOpenerRecordsIsRecordedBeforeThePeerHearsOfTheStream() throws Exception {
         Pair p = pair();
-        MuxStream opened = p.hub().open(JsonObject.builder().put("sni", "race.hub.test").build(), false,
+        MuxStream opened = p.hub().open(JsonObject.builder().put("sni", "race.hub.test").build(),
             s -> {
                 try {
                     // Half a second of the peer being given every chance. With the callback where
@@ -176,7 +174,7 @@ class MuxSessionTest {
     void aStreamWhoseRecordingThrowsIsNotOpenedAtAll() throws Exception {
         Pair p = pair();
         assertThrows(IllegalStateException.class, () -> p.hub().open(
-            JsonObject.builder().put("sni", "doomed.hub.test").build(), false,
+            JsonObject.builder().put("sni", "doomed.hub.test").build(),
             s -> {
                 throw new IllegalStateException("no");
             }));
@@ -190,7 +188,7 @@ class MuxSessionTest {
         p.node().control("{\"t\":\"Ping\"}".getBytes());
         assertEquals("{\"t\":\"Ping\"}", new String(p.hubCtrl().poll(5, TimeUnit.SECONDS)));
 
-        MuxStream hs = p.hub().open(JsonObject.builder().put("sni", "x.hub.test").build(), false);
+        MuxStream hs = p.hub().open(JsonObject.builder().put("sni", "x.hub.test").build());
         assertEquals(2, hs.id());
         MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         assertNotNull(ns);
@@ -211,7 +209,7 @@ class MuxSessionTest {
         assertEquals(-1, hs.in().read());
         awaitNoStreams(p);
 
-        MuxStream odd = p.node().open(JsonObject.builder().put("k", "v").build(), false);
+        MuxStream odd = p.node().open(JsonObject.builder().put("k", "v").build());
         assertEquals(1, odd.id());
         assertNotNull(p.hubOpened().poll(5, TimeUnit.SECONDS));
         p.hub().close();
@@ -226,7 +224,7 @@ class MuxSessionTest {
     @Test
     void aReadDeadlineEndsAWaitAndNothingElse() throws Exception {
         Pair p = pair();
-        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream hs = p.hub().open(JsonObject.builder().build());
         MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         assertNotNull(ns);
 
@@ -275,7 +273,7 @@ class MuxSessionTest {
     @Test
     void anEnormousDeadlineIsNotADeadlineAlreadyPassed() throws Exception {
         Pair p = pair();
-        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream hs = p.hub().open(JsonObject.builder().build());
         MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         assertNotNull(ns);
         // Long.MAX_VALUE is how a caller says "effectively never"; added to a clock reading it used
@@ -290,7 +288,7 @@ class MuxSessionTest {
     @Test
     void largeTransferRespectsFlowControl() throws Exception {
         Pair p = pair();
-        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream hs = p.hub().open(JsonObject.builder().build());
         MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         byte[] data = new byte[3 * MuxStream.WINDOW + 12345];
         new Random(1).nextBytes(data);
@@ -336,7 +334,7 @@ class MuxSessionTest {
     @Test
     void writeToMovesTheBytesAndKeepsTheAccounting() throws Exception {
         Pair p = pair(FlowBudget.of(2 * MuxStream.WINDOW));
-        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream hs = p.hub().open(JsonObject.builder().build());
         MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         byte[] data = new byte[3 * MuxStream.WINDOW + 4321];
         new Random(7).nextBytes(data);
@@ -366,93 +364,19 @@ class MuxSessionTest {
     @Test
     void resetAndSessionCloseUnblockReaders() throws Exception {
         Pair p = pair();
-        MuxStream hs = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream hs = p.hub().open(JsonObject.builder().build());
         MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         hs.reset(3);
         assertThrows(IOException.class, () -> ns.in().read());
         assertThrows(IOException.class, () -> ns.out().write(1));
 
-        MuxStream hs2 = p.hub().open(JsonObject.builder().build(), false);
+        MuxStream hs2 = p.hub().open(JsonObject.builder().build());
         MuxStream ns2 = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         p.hub().close();
         assertThrows(IOException.class, () -> ns2.in().read());
         assertNotNull(p.nodeClosed().get(5, TimeUnit.SECONDS));
         assertTrue(p.node().isClosed());
         assertThrows(IOException.class, () -> hs2.out().write(1));
-    }
-
-    @Test
-    void datagramStreamsKeepBoundaries() throws Exception {
-        Pair p = pair();
-        MuxStream hs = p.hub().open(JsonObject.builder().put("linkId", "u1").build(), true);
-        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
-        assertTrue(ns.isDatagram());
-        hs.send(new byte[] {1, 2, 3});
-        hs.send(new byte[] {4});
-        assertArrayEquals(new byte[] {1, 2, 3}, ns.receive());
-        assertArrayEquals(new byte[] {4}, ns.receive());
-        ns.send(new byte[1200]);
-        assertEquals(1200, hs.receive().length);
-        hs.close();
-        assertEquals(null, ns.receive());
-        p.hub().close();
-        p.node().close();
-    }
-
-    /**
-     * A datagram send after this side half-closed is refused, the same as {@code out().write}.
-     * It used to be let through: the credit wait ends on localClosed as well as on credits
-     * arriving, and only {@code error} was re-checked afterwards, so the datagram went out on a
-     * closed stream and subtracted from `credits` on the way. A stream left with negative credits
-     * blocks every later send against a debt no WINDOW frame repays.
-     */
-    @Test
-    void sendingADatagramAfterHalfCloseIsRefused() throws Exception {
-        Pair p = pair();
-        MuxStream hs = p.hub().open(JsonObject.builder().put("linkId", "u1").build(), true);
-        MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
-        hs.send(new byte[] {1});
-        assertArrayEquals(new byte[] {1}, ns.receive());
-        hs.close();
-        assertThrows(IOException.class, () -> hs.send(new byte[] {2}), "a half-closed stream may not send");
-        // And the peer sees the close, not a stray datagram after it.
-        assertEquals(null, ns.receive());
-        p.hub().close();
-        p.node().close();
-    }
-
-    /**
-     * The same when the close lands while a sender is parked for credits: the waiter must wake to
-     * a refusal rather than to permission it never had.
-     */
-    @Test
-    void aDatagramSenderParkedForCreditsIsRefusedWhenTheStreamCloses() throws Exception {
-        Pair p = pair();
-        MuxStream hs = p.hub().open(JsonObject.builder().put("linkId", "u1").build(), true);
-        assertNotNull(p.nodeOpened().poll(5, TimeUnit.SECONDS));
-        // Spend the window without the peer reading, so the next send has to wait for credits.
-        byte[] full = new byte[Frame.MAX_DATA];
-        for (int sent = 0; sent < MuxStream.WINDOW; sent += full.length) {
-            hs.send(full);
-        }
-        AtomicReference<Throwable> thrown = new AtomicReference<>();
-        CountDownLatch parked = new CountDownLatch(1);
-        Thread w = Thread.ofVirtual().start(() -> {
-            parked.countDown();
-            try {
-                hs.send(new byte[] {9});
-            } catch (Throwable t) {
-                thrown.set(t);
-            }
-        });
-        assertTrue(parked.await(5, TimeUnit.SECONDS));
-        Thread.sleep(200); // let it reach the wait
-        hs.close();
-        w.join(5000);
-        assertNotNull(thrown.get(), "the parked sender should have been refused, not released to send");
-        assertTrue(thrown.get() instanceof IOException, "expected an IOException, got " + thrown.get());
-        p.hub().close();
-        p.node().close();
     }
 
     @Test
@@ -482,7 +406,7 @@ class MuxSessionTest {
         // Still alive, still in sync: control and a stream both work after the unknown frame.
         p.node().control("{\"t\":\"Ping\",\"id\":1}".getBytes());
         assertArrayEquals("{\"t\":\"Ping\",\"id\":1}".getBytes(), p.hubCtrl().poll(5, TimeUnit.SECONDS));
-        MuxStream hs = p.hub().open(JsonObject.builder().put("sni", "x.hub.test").build(), false);
+        MuxStream hs = p.hub().open(JsonObject.builder().put("sni", "x.hub.test").build());
         MuxStream ns = p.nodeOpened().poll(5, TimeUnit.SECONDS);
         assertNotNull(ns);
         hs.out().write("hello".getBytes());

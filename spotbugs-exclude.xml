@@ -95,20 +95,17 @@
   </Match>
 
   <!--
-    Service writes launchd plists and systemd units, where the line terminator is LF on every
-    platform the file is read on. `%n` would emit CRLF when the CLI happens to run on Windows and
-    produce a unit file systemd rejects. The literal "\n" is the correct one here.
-  -->
-  <Match>
-    <Class name="io.jailscale.node.Service"/>
-    <Bug pattern="VA_FORMAT_STRING_USES_NEWLINE"/>
-  </Match>
+    Two return values SpotBugs follows into a null it cannot rule out.
 
-  <!--
-    Path.getParent() can return null for a single-element relative path, which is the null path
-    SpotBugs is following. Every one of these parents is a directory the caller already resolved
-    against a state or config directory (`dir.resolve("node.json").getParent()` is `dir`), so the
-    null case needs a path with no directory part, which none of these can be handed.
+    Path.getParent() can return null for a single-element relative path. Every one of these parents
+    is a directory the caller already resolved against a state or config directory
+    (`dir.resolve("node.json").getParent()` is `dir`), so the null case needs a path with no
+    directory part, which none of these can be handed.
+
+    DaemonCommand is the other one and it is getFileName(), not getParent(): the path is this
+    process's own executable, from ProcessHandle.info().command(), and a running process cannot
+    have been started from a path with no last element. It arrived here when `service install` was
+    removed (#274) and the argument list it shared moved out of Service into a class of its own.
   -->
   <Match>
     <Bug pattern="NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE"/>
@@ -116,18 +113,8 @@
       <Class name="io.jailscale.proto.acme.AcmeKeys"/>
       <Class name="io.jailscale.proto.ipc.Ipc"/>
       <Class name="io.jailscale.node.NodeState"/>
-      <Class name="io.jailscale.node.Service"/>
+      <Class name="io.jailscale.node.DaemonCommand"/>
     </Or>
-  </Match>
-
-  <!--
-    Hub's hand-off path calls System.exit: the old process has handed its listeners over and has
-    nothing left to do, and it must not run shutdown hooks that would delete the new process's
-    socket (§13). A CLI ending itself on purpose is not the bug this pattern is about.
-  -->
-  <Match>
-    <Class name="io.jailscale.hub.Hub"/>
-    <Bug pattern="DM_EXIT"/>
   </Match>
 
   <!--

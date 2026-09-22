@@ -100,7 +100,7 @@ class ControlPriorityTest {
             // writer blocks on its first frame and everything after it queues behind that.
             gate.shut.set(true);
 
-            MuxStream s = sender.open(JsonObject.builder().put("sni", "x").build(), false);
+            MuxStream s = sender.open(JsonObject.builder().put("sni", "x").build());
             AtomicInteger offered = new AtomicInteger();
             ex.submit(() -> {
                 byte[] chunk = new byte[Frame.MAX_DATA];

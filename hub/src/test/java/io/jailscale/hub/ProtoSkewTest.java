@@ -29,16 +29,19 @@ import io.jailscale.proto.net.TestPorts;
 /**
  * What the hub answers a node whose protocol is not its own (ARCHITECTURE.md §5.4).
  *
- * <p>{@code Message.PROTO} and {@code NodeSession.MIN_PROTO} are both 1 today, so the branch that
- * refuses an old node has never run against a live peer: what was tested was the codec round trip
- * of {@code Goodbye(upgrade-required)}, which is the message and not the decision. The decision is
- * the thing that matters at a flag day -- a hub and its nodes are redeployed one after the other,
- * never at the same instant, so a mixed pair is the normal state of an upgrade and not an edge
- * case. This speaks the wire the way a node does (TLS, {@code POST /v1/noise}, Noise IK with the
+ * <p>{@code Message.PROTO} and {@code NodeSession.MIN_PROTO} are both 2, moved together by the
+ * maintenance cut (§5.4), so the branch that refuses an old node is the one every v0.1.x node meets
+ * at that upgrade. It had never run against a live peer before: what was tested was the codec round
+ * trip of {@code Goodbye(upgrade-required)}, which is the message and not the decision. The
+ * decision is the thing that matters at a flag day -- a hub and its nodes are redeployed one after
+ * the other, never at the same instant, so a mixed pair is the normal state of an upgrade and not
+ * an edge case. This speaks the wire the way a node does (TLS, {@code POST /v1/noise}, Noise IK with the
  * hub's own prologue) with the protocol number as the only variable.
  *
  * <p>It uses the hub's constants, not the node's, so it is a statement about what the hub promises
- * rather than about the two halves agreeing with each other.
+ * rather than about the two halves agreeing with each other -- except for the one case below that
+ * writes the numbers out, which is the flag day itself and has to be read as a literal or it says
+ * nothing.
  */
 @Timeout(60)
 class ProtoSkewTest {
@@ -130,6 +133,24 @@ class ProtoSkewTest {
         // above PROTO refuses every node in existence, including the ones built from that commit.
         assertTrue(NodeSession.MIN_PROTO <= Message.PROTO,
             "MIN_PROTO=" + NodeSession.MIN_PROTO + " is above the PROTO=" + Message.PROTO + " this hub speaks");
+    }
+
+    /**
+     * The flag day itself, in literals (§5.4). Every other assertion in this class is written
+     * against {@code MIN_PROTO}, which is what a floor test should do -- and which means every one
+     * of them passes at any floor, including the one the maintenance cut was supposed to leave
+     * behind. This session's own branch reverted the hub's bump to 1 by accident and the whole
+     * suite stayed green, so the numbers are pinned here by hand: a v0.1.x node speaks protocol 1,
+     * and a v0.2.0 hub refuses it. Moving the floor again means editing this test, which is the
+     * point of it.
+     */
+    @Test
+    void theFloorIsTwoAndAProtocolOneNodeIsRefused() throws Exception {
+        assertEquals(2, Message.PROTO, "the wire lost fields in v0.2.0, so PROTO is 2 (§5.4)");
+        assertEquals(2, NodeSession.MIN_PROTO, "a removal is a break in both directions: the hub's floor is 2 as well");
+        Message.Goodbye g = assertInstanceOf(Message.Goodbye.class, hello(1, 0),
+            "a node speaking protocol 1 is every jailscale released before v0.2.0");
+        assertEquals(Message.Goodbye.UPGRADE_REQUIRED, g.reason());
     }
 
     /**

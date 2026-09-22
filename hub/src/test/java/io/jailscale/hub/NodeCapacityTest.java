@@ -167,7 +167,7 @@ class NodeCapacityTest {
     @Test
     void pastTheBoundTheHubTurnsVisitorsAwayAndTheNodeNeverHasTo() throws Exception {
         join();
-        long refusedBefore = Metrics.VISITORS_REFUSED_CAPACITY.sum();
+        long refusedBefore = hub.router().visitorsRefusedCapacity();
 
         SSLContext ctx = Tls.clientContext(CERT, false);
         CountDownLatch sent = new CountDownLatch(CEILING);
@@ -187,11 +187,11 @@ class NodeCapacityTest {
         waitFor(() -> appHits.get() == CEILING);
         waitFor(() -> hub.registry().get(node.machineKey()).visitorsInFlight() == CEILING);
 
-        // Taken here, with the bound already full, so it counts only the visitor below. VISITORS
-        // moves when a visitor is admitted and about to be relayed, which is what tells the hub's
-        // own early check apart from the backstop inside NodeGroup.openVisitor: both refuse and both
-        // count a capacity refusal, and only the early one refuses before this moves.
-        long routedBefore = Metrics.VISITORS.sum();
+        // Taken here, with the bound already full, so it counts only the visitor below. The routed
+        // counter moves when a visitor is admitted and about to be relayed, which is what tells the
+        // hub's own early check apart from the backstop inside NodeGroup.openVisitor: both refuse,
+        // and only the early one refuses before this moves.
+        long routedBefore = hub.router().visitorsRouted();
 
         // One more than the node will hold. It is refused by the hub, and the socket is closed
         // rather than answered, so this side sees the connection go without an HTTP reply.
@@ -201,9 +201,9 @@ class NodeCapacityTest {
         assertTrue(overSent.await(30, TimeUnit.SECONDS));
         over.join(30_000);
 
-        assertEquals(refusedBefore + 1, Metrics.VISITORS_REFUSED_CAPACITY.sum(),
+        assertEquals(refusedBefore + 1, hub.router().visitorsRefusedCapacity(),
             "the hub should have counted one capacity refusal");
-        assertEquals(routedBefore, Metrics.VISITORS.sum(),
+        assertEquals(routedBefore, hub.router().visitorsRouted(),
             "the refusal happened after the visitor was already admitted: the early check in "
                 + "SniRouter did not fire and the backstop in NodeGroup caught it instead");
         assertEquals(CEILING, appHits.get(), "the held visitors should all have reached the app");

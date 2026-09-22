@@ -10,7 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.jailscale.proto.util.Args;
 import java.net.URI;
 import java.nio.file.Path;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -45,9 +44,9 @@ class ServeOptionsTest {
     /**
      * Every option this binary reads with {@code flag()} has to be in {@link Main#FLAGS}, and the
      * shape that proves it is the flag placed last: with no next word, an option the list does not
-     * know is refused as needing a value. {@code --proxy-protocol} was missing and got away with it
-     * under the old parser, which guessed "true" for any option followed by another option or by
-     * nothing -- so `jailhub serve --proxy-protocol` had never actually been parsed as a flag.
+     * know is refused as needing a value. One was missing once and got away with it under the old
+     * parser, which guessed "true" for any option followed by another option or by nothing -- so
+     * the flag had never actually been parsed as one.
      *
      * <p>Kept as a list rather than derived, so adding an option here is the deliberate act that
      * adding one to FLAGS should be.
@@ -55,7 +54,7 @@ class ServeOptionsTest {
     @Test
     void everyBooleanServeOptionIsInTheFlagsList() {
         for (String flag : new String[] {"debug", "admin", "help", "acme-staging", "no-selfcheck",
-            "no-address-check", "takeover", "proxy-protocol"}) {
+            "no-address-check"}) {
             Args a = Args.parse(new String[] {"serve", "--" + flag}, Main.FLAGS);
             assertTrue(a.flag(flag), "--" + flag + " is not in Main.FLAGS");
             assertEquals("serve", a.positional(0), "--" + flag + " swallowed the subcommand");
@@ -88,15 +87,6 @@ class ServeOptionsTest {
         assertTrue(c.selfCheck());
         assertTrue(c.addressCheck());
 
-        assertTrue(c.hasPortRange());
-        assertEquals(HubConfig.DEFAULT_PORT_LO, c.portRangeLo());
-        assertEquals(HubConfig.DEFAULT_PORT_HI, c.portRangeHi());
-        assertTrue(c.hasHttp(), "port 80 is the precondition for user domains");
-        assertEquals("0.0.0.0", c.httpListenHost());
-        assertEquals(80, c.httpListenPort());
-
-        assertFalse(c.proxyProtocol());
-        assertEquals(List.of(), c.trustedProxies());
     }
 
     @Test
@@ -115,21 +105,9 @@ class ServeOptionsTest {
     }
 
     @Test
-    void aStandbyNamesItsPrimaryAndNotItself() {
-        assertFalse(serve().standby(), "no --peer means this hub is the primary");
-        HubConfig c = serve("--peer", "https://hub-b.example.com", "--peer-ca", "/tmp/ca.pem");
-        assertTrue(c.standby());
-        assertEquals("hub-b.example.com", c.peer().getHost());
-        assertEquals(Path.of("/tmp/ca.pem"), c.peerCa());
-        assertNull(serve("--peer", "https://hub-b.example.com").peerCa());
-        assertNull(serve("--peer", "https://hub-b.example.com").peerAddr(), "no --peer-addr means resolve the name");
+    void theAdvertisedAddressIsOptionalAndFoundFromTheGlueOtherwise() {
         assertNull(serve().advertise(), "no --advertise means the address is found from the glue");
         assertEquals("203.0.113.1", serve("--advertise", "203.0.113.1").advertise());
-        assertEquals("10.0.0.2", serve("--peer", "https://hub-b.example.com", "--peer-addr", "10.0.0.2").peerAddr());
-        assertTrue(refused("--peer", "http://hub-b.example.com").contains("https"));
-        // The primary's own name is what a standby is given: it will serve that name once promoted,
-        // and until then the name resolves to the primary. The first real standby was refused here.
-        assertEquals("hub.example.com", serve("--peer", "https://hub.example.com").peer().getHost());
     }
 
     @Test
@@ -173,80 +151,13 @@ class ServeOptionsTest {
         assertTrue(serve("--no-address-check").selfCheck());
     }
 
-    // --- the listeners that can be switched off --------------------------------------------------
+    // --- the listeners ---------------------------------------------------------------------------
 
     @Test
-    void rawPortsAndPortEightyCanBeTurnedOffButNotTheDnsListener() {
-        HubConfig noRaw = serve("--port-range", "none");
-        assertFalse(noRaw.hasPortRange());
-        HubConfig noHttp = serve("--http-listen", "none");
-        assertFalse(noHttp.hasHttp());
-
-        HubConfig range = serve("--port-range", "20000-20100");
-        assertTrue(range.hasPortRange());
-        assertEquals(20000, range.portRangeLo());
-        assertEquals(20100, range.portRangeHi());
-        assertEquals(8080, serve("--http-listen", "127.0.0.1:8080").httpListenPort());
-
-        HubConfig noMetrics = serve("--metrics-listen", "none");
-        assertFalse(noMetrics.hasMetrics());
-
-        // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here.
+    void theDnsListenerCannotBeTurnedOff() {
+        // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here, so a
+        // hub without it cannot get a certificate at all.
         assertEquals("--dns-listen must be host:port", refused("--dns-listen", "none"));
-    }
-
-    /**
-     * The default that is the access control (§6.3). An operator who never types
-     * {@code --metrics-listen} has to end up on loopback, because that is the whole of what keeps
-     * the scrape off the public internet -- nothing on that port asks who is calling. A default of
-     * {@code 0.0.0.0} here would publish every counter the hub has and no test elsewhere would
-     * notice, since every one of them binds an explicit address.
-     */
-    @Test
-    void metricsDefaultToLoopbackAndAreNeverOnTheHubsOwnListener() throws Exception {
-        HubConfig d = serve();
-        assertTrue(d.hasMetrics());
-        assertEquals(9090, d.metricsListenPort());
-        assertTrue(java.net.InetAddress.getByName(d.metricsListenHost()).isLoopbackAddress(),
-            "metrics default to " + d.metricsListenHost() + ", which is not loopback");
-        assertNotEquals(d.listenPort(), d.metricsListenPort(), "metrics share the hub's own listener");
-
-        assertEquals(19090, serve("--metrics-listen", "10.0.0.5:19090").metricsListenPort());
-        assertEquals("10.0.0.5", serve("--metrics-listen", "10.0.0.5:19090").metricsListenHost());
-    }
-
-    @Test
-    void aPortRangeOutsideWhatAnUnprivilegedProcessCanBindIsRefused() {
-        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "80-1000"));
-        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "10000-70000"));
-        assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "20000-10000"));
-        assertEquals("--port-range must be lo-hi or none", refused("--port-range", "20000"));
-    }
-
-    // --- behind a proxy ---------------------------------------------------------------------------
-
-    /**
-     * ARCHITECTURE.md §8.5. A PROXY header is believed, so accepting one from anywhere lets any
-     * visitor claim any source address -- which is what the bans, the rate limiter and every
-     * logged address rest on. Loopback is the exception because nothing off-box can reach it.
-     */
-    @Test
-    void proxyProtocolNeedsEitherLoopbackOrANamedProxy() {
-        assertTrue(refused("--proxy-protocol").contains("anyone could forge visitor addresses"));
-        assertTrue(refused("--proxy-protocol", "--listen", "0.0.0.0:443").contains("--trusted-proxy"));
-
-        HubConfig loopback = serve("--proxy-protocol", "--listen", "127.0.0.1:8443");
-        assertTrue(loopback.proxyProtocol());
-        assertEquals(List.of(), loopback.trustedProxies());
-
-        HubConfig named = serve("--proxy-protocol", "--trusted-proxy", "10.0.0.0/8, 192.168.0.0/16");
-        assertTrue(named.proxyProtocol());
-        assertEquals(List.of("10.0.0.0/8", "192.168.0.0/16"), named.trustedProxies(), "trimmed, and empty entries dropped");
-    }
-
-    @Test
-    void aTrustedProxyThatIsNotACidrIsRefusedHereRatherThanIgnoredLater() {
-        assertTrue(refused("--proxy-protocol", "--trusted-proxy", "10.0.0.0/99").startsWith("bad prefix length"));
     }
 
     // --- the base url and the enums ---------------------------------------------------------------
@@ -267,20 +178,18 @@ class ServeOptionsTest {
     @Test
     void aListenerWithoutAPortIsRefused() {
         assertEquals("--listen must be host:port", refused("--listen", "0.0.0.0"));
-        assertEquals("--http-listen must be host:port or none", refused("--http-listen", "8080"));
-        assertEquals("--metrics-listen must be host:port or none", refused("--metrics-listen", "9090"));
     }
 
     /**
      * An IPv6 address has colons of its own, so `--listen ::443` parses as the host `:` and binds
      * nothing -- it used to reach the operator as `SocketException: Unresolved address`, a sentence
-     * that says nothing about brackets (#63). All four host:port flags parse the same way and all
-     * four had it.
+     * that says nothing about brackets (#63). Both host:port flags parse the same way and both
+     * had it.
      */
     @Test
     void anUnbracketedIpv6ListenerSaysToBracketIt() {
         String want = " needs an IPv6 address in brackets, as in ";
-        for (String flag : new String[] {"--listen", "--http-listen", "--metrics-listen", "--dns-listen"}) {
+        for (String flag : new String[] {"--listen", "--dns-listen"}) {
             String msg = refused(flag, "::443");
             assertTrue(msg.startsWith(flag + want), flag + " said: " + msg);
         }
@@ -299,11 +208,8 @@ class ServeOptionsTest {
      */
     @Test
     void aBracketedIpv6ListenerIsTheForm() {
-        HubConfig c = serve("--listen", "[::]:443", "--http-listen", "[::]:80",
-            "--metrics-listen", "[::1]:9090", "--dns-listen", "[::]:53");
+        HubConfig c = serve("--listen", "[::]:443", "--dns-listen", "[::]:53");
         assertEquals("[::]", c.listenHost());
-        assertEquals("[::]", c.httpListenHost());
-        assertEquals("[::1]", c.metricsListenHost());
         assertEquals("[::]", c.dnsListenHost());
     }
 

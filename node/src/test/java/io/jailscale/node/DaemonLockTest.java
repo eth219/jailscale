@@ -85,7 +85,7 @@ class DaemonLockTest {
     }
 
     private static Process daemon(NodeConfig cfg) throws IOException {
-        List<String> cmd = Service.daemonCommand(cfg, null);
+        List<String> cmd = DaemonCommand.of(cfg, null);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         return pb.start();

@@ -14,7 +14,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
-import java.util.Locale;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -26,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     private static final Log LOG = Log.get("session");
-    static final int MIN_PROTO = 1;
+    static final int MIN_PROTO = 2;
     static final int IDLE_TIMEOUT_MS = 60_000;
     static final int MAX_CONNECTIONS = 4;
     /**
@@ -51,12 +50,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private String mkey;
     private int conn;
     /**
-     * A relay connection (ARCHITECTURE.md §13.4): opened by a node that has its control
-     * connection elsewhere, to serve visitors who reach this host. It registers nothing and asks
-     * for nothing that writes; it opens the links its node already holds, and it signs.
-     */
-    private boolean relay;
-    /**
      * What the node said it will hold (ARCHITECTURE.md §9.3), or 0 from a node that does not say --
      * every build before the field existed, and any build that chose not to. 0 means "no bound the
      * hub knows of" and puts admission back where it was: the hub's own caps and the node's reset.
@@ -65,7 +58,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
     private NodeGroup group;
     private volatile Store.NodeRec node;
     private volatile boolean closed;
-    private volatile boolean draining;
     private volatile byte[] handshakeHash;
     private final Semaphore signSlots = new Semaphore(concurrentSignLimit);
     /** Signing requests answered on the reader thread because the limit above was reached. */
@@ -89,10 +81,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         return conn;
     }
 
-    boolean isRelay() {
-        return relay;
-    }
-
     Store.NodeRec node() {
         return node;
     }
@@ -103,10 +91,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     MuxSession mux() {
         return mux;
-    }
-
-    boolean isDraining() {
-        return draining;
     }
 
     String remoteIp() {
@@ -132,10 +116,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             }
             socket.setSoTimeout(IDLE_TIMEOUT_MS);
             boolean[] rejected = new boolean[1];
-            String[] peerHost = new String[1];
-            String[] peerAddress = new String[1];
-            Message.PeerHello[] demoteTo = new Message.PeerHello[1];
-            String[] peerEndpoint = new String[1];
             NoiseChannel ch = NoiseChannel.respond(in, out, hub.keys().responders(), (p1, hs) -> {
                 Message m;
                 try {
@@ -143,55 +123,15 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 } catch (CodecException e) {
                     throw new NoiseException("bad Hello: " + e.getMessage());
                 }
-                // A caller whose static key is this hub's own holds hub.key: a standby hub, not a
-                // node (ARCHITECTURE.md §13.1). Decided by the key the handshake authenticated,
-                // not by what the message claims to be.
+                // A caller whose static key is this hub's own would be another hub holding a copy
+                // of hub.key. There is no such thing any more (§13): one hub, one key, and a node
+                // authenticates with a machine key of its own.
                 if (hub.keys().isOwn(hs.remoteStatic())) {
-                    if (!(m instanceof Message.PeerHello ph)) {
-                        throw new NoiseException("a peer's first message must be PeerHello, got " + m.type());
-                    }
-                    if (Role.PRIMARY.equals(ph.role()) && !hub.isStandby()) {
-                        // Two primaries meeting (§13.5): the epochs decide, and the tie by address.
-                        rejected[0] = true;
-                        if (hub.roleFile().outrankedBy(ph.epoch(), ph.address(), hub.advertisedAddress())) {
-                            LOG.warn("{} says it is the primary at epoch {}; this hub is at {} and stands down", ph.host(),
-                                ph.epoch(), hub.epoch());
-                            demoteTo[0] = ph;
-                            return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
-                                hub.advertisedAddress(), hub.relayEndpoint(), Role.STANDBY, hub.epoch()));
-                        }
-                        return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
-                            hub.advertisedAddress(), hub.relayEndpoint(), Role.PRIMARY, hub.epoch()));
-                    }
-                    if (hub.isStandby()) {
-                        // Told what this hub is, with its epoch: a primary that dialled it learns
-                        // there is no primary here to stand down before; a standby learns both
-                        // are standbys, which is for a person to sort out (§13.5).
-                        rejected[0] = true;
-                        return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
-                            hub.advertisedAddress(), hub.relayEndpoint(), Role.STANDBY, hub.epoch()));
-                    }
-                    peerHost[0] = ph.host() == null ? remoteIp : ph.host();
-                    peerAddress[0] = ph.address();
-                    peerEndpoint[0] = ph.endpoint();
-                    LOG.info("standby {} from {} (v{}{})", peerHost[0], remoteIp, ph.version(),
-                        ph.address() == null ? "" : ", advertises " + ph.address());
-                    return Codec.encode(new Message.PeerHelloResponse(Message.PROTO, Hub.version(), hub.config().hostname(),
-                        hub.advertisedAddress(), hub.relayEndpoint(), Role.PRIMARY, hub.epoch()));
+                    throw new NoiseException("this key is the hub's own; a node authenticates with its machine key");
                 }
                 mkey = KeyText.format(KeyText.MACHINE, hs.remoteStatic());
                 if (!(m instanceof Message.Hello hello)) {
                     throw new NoiseException("first message must be Hello, got " + m.type());
-                }
-                relay = hello.relay();
-                if (hub.isStandby() && !relay) {
-                    // Told where to go rather than served: a standby holds no registration that a
-                    // node could act on, and the reason is not one the node stops retrying for, so
-                    // it keeps trying until DNS moves or this hub is promoted. A relay connection
-                    // is the exception (§13.4): it wants nothing written, only its links served.
-                    rejected[0] = true;
-                    return Codec.encode(new Message.Goodbye("standby", "this hub is a standby of "
-                        + hub.config().peer().getHost() + " and takes no nodes until it is promoted"));
                 }
                 if (hello.proto() < MIN_PROTO) {
                     rejected[0] = true;
@@ -206,40 +146,25 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 }
                 conn = hello.conn();
                 visitorCeiling = hello.visitors();
-                if (conn < 0 || conn >= MAX_CONNECTIONS || ((conn > 0 || relay) && hub.store().node(mkey) == null)) {
+                if (conn < 0 || conn >= MAX_CONNECTIONS || (conn > 0 && hub.store().node(mkey) == null)) {
                     rejected[0] = true;
                     return Codec.encode(new Message.Goodbye("bad-connection-index"));
                 }
-                LOG.info("node {} conn {}{} from {} (v{}, {})", mkey, conn, relay ? " (relay)" : "", remoteIp, hello.version(), hello.os());
-                if (!relay) {
-                    hub.reachedBy(hello.host(), remoteIp);
-                }
-                return Codec.encode(new Message.HelloResponse(Message.PROTO, MIN_PROTO, Hub.version(), hub.config().dnsSuffix(),
-                    relay ? null : hub.relaysForNodes()));
+                LOG.info("node {} conn {} from {} (v{}, {})", mkey, conn, remoteIp, hello.version(), hello.os());
+                hub.reachedBy(hello.host(), remoteIp);
+                return Codec.encode(new Message.HelloResponse(Message.PROTO, MIN_PROTO, Hub.version(), hub.config().dnsSuffix()));
             });
             if (rejected[0]) {
-                if (demoteTo[0] != null) {
-                    hub.demote(demoteTo[0].epoch(), demoteTo[0].host());
-                }
                 return;
             }
-            if (peerHost[0] != null) {
-                hub.peers().new Session(remoteIp, peerHost[0], peerAddress[0], peerEndpoint[0]).run(ch);
-                return;
-            }
-            Metrics.NODE_SESSIONS.increment();
             handshakeHash = ch.handshakeHash();
-            if (hub.isHandingOff()) {
-                LOG.info("node {} arrived during hand-off; asking it to retry", mkey);
-                return;
-            }
             node = hub.store().node(mkey);
             mux = new MuxSession(ch, true, this, hub.flowBudget());
             group = hub.registry().attach(this);
-            if ((conn == 0 || relay) && node != null && hub.tls().isLoaded()) {
+            if (conn == 0 && node != null && hub.tls().isLoaded()) {
                 send(hub.tls().certUpdate());
             }
-            if (conn == 0 && node != null && !hub.isStandby()) {
+            if (conn == 0 && node != null) {
                 deliverNotices();
             }
             mux.run();
@@ -252,9 +177,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
         } finally {
             if (group != null) {
                 hub.registry().detach(this);
-            }
-            if (conn == 0 && mkey != null) {
-                hub.challenges().clearNode(mkey);
             }
             close();
         }
@@ -298,17 +220,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 return false;
             }
             case Message.SignRequest sr -> signOffThread(sr);
-            // §13.5: a node carrying a standby's question here, and carrying the primary's answer
-            // back. The primary answers on any of the node's connections; the standby accepts the
-            // answer on the relay connection it asked on.
-            case Message.PeerProbe pp -> {
-                if (hub.isStandby()) {
-                    send(new Message.Error(pp.type(), "primary-only"));
-                } else {
-                    send(new Message.PeerProbeAnswer(pp.nonce(), Liveness.mac(hub.livenessSecret(), pp.nonce(), hub.epoch()), hub.epoch()));
-                }
-            }
-            case Message.PeerProbeAnswer pa -> hub.probeAnswered(pa);
             // A newer node sending something this hub has no case for (ARCHITECTURE.md §5.4). The
             // Error is the point: the node learns the message did not happen, rather than assuming
             // silence means success.
@@ -317,34 +228,15 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
                 send(new Message.Error(u.type(), "unknown-type"));
             }
             default -> {
-                if (conn != 0 && !relay) {
+                if (conn != 0) {
                     LOG.warn("node {} conn {}: {} is only valid on the control connection", mkey, conn, m.type());
                     send(new Message.Error(m.type(), "control-connection-only"));
                     return true;
-                }
-                if (relay || hub.isStandby()) {
-                    // What a relay connection, or any connection to a standby, may ask for: its
-                    // links opened (from the replicated store, no write) and closed. Everything
-                    // else changes state, and only the primary's control connection does that.
-                    if (!(m instanceof Message.LinkOpen) && !(m instanceof Message.LinkClose)) {
-                        send(new Message.Error(m.type(), "primary-only"));
-                        return true;
-                    }
                 }
                 return handleControl(m);
             }
         }
         return true;
-    }
-
-    /**
-     * Why a node may not have the hub answer http-01 for this domain, or null. The hub owns port 80
-     * for every name that resolves to it, so relaying a token is lending out domain validation:
-     * it is lent only for a domain this node may claim (the same rule {@code LinkOpen} applies),
-     * and never for the hub's own name (which serves /admin, /join and the first-contact key).
-     */
-    private String challengeRefusal(String domain) {
-        return domain == null ? "bad-domain" : hub.links().domainRefusal(node, domain);
     }
 
     private boolean handleControl(Message m) throws IOException {
@@ -361,26 +253,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             }
             case Message.InviteCreate ic -> send(hub.invites().createForNode(this, ic));
             case Message.LinkOpen lo -> send(hub.links().open(this, lo));
-            case Message.ChallengeSet cs -> {
-                String domain = cs.domain() == null ? null : cs.domain().toLowerCase(Locale.ROOT);
-                String refusal = node == null ? null : challengeRefusal(domain);
-                if (node == null) {
-                    send(new Message.Error(cs.type(), "not-registered"));
-                } else if (!hub.config().hasHttp()) {
-                    send(new Message.Error(cs.type(), "hub-has-no-port-80"));
-                } else if (refusal != null) {
-                    LOG.warn("node {}: refused http-01 relay for {}: {}", mkey, cs.domain(), refusal);
-                    send(new Message.Error(cs.type(), refusal));
-                } else if ((refusal = hub.challenges().set(mkey, domain, cs.token(), cs.keyAuthorization())) != null) {
-                    send(new Message.Error(cs.type(), refusal));
-                } else {
-                    send(new Message.Ack(cs.type()));
-                }
-            }
-            case Message.ChallengeClear cc -> {
-                hub.challenges().clear(mkey, cc.token());
-                send(new Message.Ack(cc.type()));
-            }
             case Message.LinkClose lc -> hub.links().close(group, lc.linkId());
             default -> {
                 LOG.warn("node {}: unexpected {} from node", mkey, m.type());
@@ -488,7 +360,7 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     /** Pushes a certificate change to a registered node. */
     void certChanged() {
-        if (node != null && (conn == 0 || relay)) {
+        if (node != null && conn == 0) {
             try {
                 sendCert();
             } catch (IOException _) {
@@ -504,35 +376,6 @@ final class NodeSession implements AutoCloseable, MuxSession.Listener {
             // closing anyway
         }
         close();
-    }
-
-    /**
-     * Hand-off (ARCHITECTURE.md §13): the node is asked to reconnect elsewhere; this connection stays
-     * open only for the streams already on it and closes once they are gone.
-     */
-    void drain() {
-        draining = true;
-        try {
-            send(new Message.Goodbye(Message.Goodbye.DRAINING));
-        } catch (IOException _) {
-            close();
-            return;
-        }
-        Thread.ofVirtual().name("drain-" + mkey).start(() -> {
-            long deadline = System.currentTimeMillis() + Hub.DRAIN_TIMEOUT_MS;
-            try {
-                while (!closed && System.currentTimeMillis() < deadline) {
-                    MuxSession s = mux;
-                    if (s == null || s.isClosed() || s.streamCount() == 0) {
-                        break;
-                    }
-                    Thread.sleep(200);
-                }
-            } catch (InterruptedException _) {
-                // fall through
-            }
-            close();
-        });
     }
 
     @Override

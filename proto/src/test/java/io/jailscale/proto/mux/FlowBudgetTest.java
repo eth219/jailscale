@@ -91,7 +91,7 @@ class FlowBudgetTest {
 
             // 2 MiB through a stream that is being read, against a budget the stalled streams have
             // already filled: almost every frame arrives over the limit and has to reclaim.
-            MuxStream drained = r.sender.open(JsonObject.builder().put("drain", true).build(), false);
+            MuxStream drained = r.sender.open(JsonObject.builder().put("drain", true).build());
             byte[] chunk = new byte[Frame.MAX_DATA];
             for (int i = 0; i < 2 * 1024 * 1024 / chunk.length; i++) {
                 drained.out().write(chunk);
@@ -126,7 +126,7 @@ class FlowBudgetTest {
             long reclaimedWhileStalling = r.budget.reclaimedStreams();
             Thread.sleep(FlowBudget.STALL_MS + 500);
 
-            MuxStream drained = r.sender.open(JsonObject.builder().put("drain", true).build(), false);
+            MuxStream drained = r.sender.open(JsonObject.builder().put("drain", true).build());
             byte[] chunk = new byte[Frame.MAX_DATA];
             for (int i = 0; i < 2 * 1024 * 1024 / chunk.length; i++) {
                 drained.out().write(chunk);
@@ -152,7 +152,7 @@ class FlowBudgetTest {
         try (Rig r = rig(FlowBudget.of(LIMIT), true)) {
             // No `drain` in the metadata, so the rig holds this one and reads nothing: this test is
             // the only consumer, which is what the one-drainer rule requires.
-            MuxStream sent = r.sender.open(JsonObject.builder().put("sni", "timestamp").build(), false);
+            MuxStream sent = r.sender.open(JsonObject.builder().put("sni", "timestamp").build());
             MuxStream received = null;
             for (int i = 0; i < 100 && received == null; i++) {
                 received = r.held.isEmpty() ? null : r.held.get(0);
@@ -187,7 +187,7 @@ class FlowBudgetTest {
     @Test
     void bytesWaitingOnASlowSinkStayChargedToTheBudget() throws Exception {
         try (Rig r = rig(FlowBudget.of(LIMIT), true)) {
-            MuxStream sent = r.sender.open(JsonObject.builder().put("sni", "slowsink").build(), false);
+            MuxStream sent = r.sender.open(JsonObject.builder().put("sni", "slowsink").build());
             MuxStream received = null;
             for (int i = 0; i < 100 && received == null; i++) {
                 received = r.held.isEmpty() ? null : r.held.get(0);
@@ -263,7 +263,7 @@ class FlowBudgetTest {
         try (Rig r = rig(FlowBudget.of(LIMIT))) {
             // Trickle first and let it fill: 1 KB per 20 ms against a sender with a full window is
             // a queue that sits at the cap while its timestamp stays fresh.
-            MuxStream slow = r.sender.open(JsonObject.builder().put("trickle", true).build(), false);
+            MuxStream slow = r.sender.open(JsonObject.builder().put("trickle", true).build());
             Thread trickleWriter = Thread.ofVirtual().start(() -> {
                 byte[] chunk = new byte[Frame.MAX_DATA];
                 try {
@@ -421,7 +421,7 @@ class FlowBudgetTest {
         void pushStalled(int n, int bytes) throws Exception {
             AtomicLong written = new AtomicLong();
             for (int i = 0; i < n; i++) {
-                MuxStream s = sender.open(JsonObject.builder().put("sni", "x" + i).build(), false);
+                MuxStream s = sender.open(JsonObject.builder().put("sni", "x" + i).build());
                 ex.submit(() -> {
                     byte[] chunk = new byte[Frame.MAX_DATA];
                     try {

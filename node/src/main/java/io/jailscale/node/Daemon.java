@@ -1,14 +1,12 @@
 package io.jailscale.node;
 
 import io.jailscale.crypto.KeyText;
-import io.jailscale.proto.acme.AcmeException;
 import io.jailscale.proto.control.Message;
 import io.jailscale.proto.http.Http;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.mux.MuxSession;
 import io.jailscale.proto.mux.MuxStream;
-import io.jailscale.proto.tls.DomainProof;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.io.IOException;
@@ -34,16 +32,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private final NodeConfig config;
     private final NodeState state;
     private final HubLink link;
-    /**
-     * Relay connections (ARCHITECTURE.md §13.4), by the address the hub named: one to every host
-     * serving this hub's names other than the one the control connection reached. Each reopens
-     * this node's links there, so a visitor who reaches that host is served by this node.
-     */
-    private final java.util.Map<String, HubLink> relays = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int VERIFY_TIMEOUT_MS = 10_000;
 
     private final Visitors visitors;
-    private final DomainCerts domainCerts;
     private volatile boolean closed;
     /** The last release check, for {@code status}; null until the first one has run. */
     private volatile Updates.Result lastUpdate;
@@ -76,9 +67,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * because a clock that steps must not move the interval anything here is written in.
      */
     private long lastSweepNanos = System.nanoTime() - PROBE_PASS_MS * 1_000_000L;
-    /** How close to its end a certificate has to be before anyone is told (ARCHITECTURE.md §15). */
-    static final long CERT_WARN_MS = 14 * 86400_000L;
-    private static final long CERT_WARN_REPEAT_MS = 86400_000L;
     private Ipc.Server ipc;
 
     public Daemon(NodeConfig config) throws IOException {
@@ -87,7 +75,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         // visitors first: its bound goes into every Hello this link sends (ARCHITECTURE.md §9.3).
         this.visitors = new Visitors(state, config.tuning().visitorCeiling(), config.tuning().firstByteMs());
         this.link = new HubLink(state, Version.string(), this, visitors.maxInFlight());
-        this.domainCerts = new DomainCerts(config.configDir());
     }
 
     public void start() throws IOException {
@@ -96,7 +83,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (state.hasHub()) {
             link.start(null);
         }
-        Thread.ofVirtual().name("domain-renew").start(this::renewLoop);
         Thread.ofVirtual().name("update-check").start(this::updateLoop);
         Thread.ofVirtual().name("self-probe").start(this::probeLoop);
     }
@@ -109,16 +95,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             try {
                 reopen(rec, l);
             } catch (IOException | TimeoutException e) {
-                LOG.warn("could not reopen link {}{}: {}", rec.name, l.isRelay() ? " on " + l.relayAddress() : "", e.getMessage());
+                LOG.warn("could not reopen link {}: {}", rec.name, e.getMessage());
             }
         }
-        if (!l.isRelay()) {
-            // Only the control connection decides who owns a name. A relay coming up changes
-            // nothing the probe could see -- it connects through the hub's address either way --
-            // and its ask would spend the once-per-pass sweep on the wrong event, leaving none
-            // for the control connection's own return inside the same pass.
-            askProbeSweep();
-        }
+        askProbeSweep();
     }
 
     /**
@@ -133,9 +113,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      */
     @Override
     public void onDisconnected(HubLink l) {
-        if (l.isRelay()) {
-            return;
-        }
         for (NodeState.LinkRec rec : state.links) {
             rec.linkId = null;
         }
@@ -166,80 +143,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
     }
 
-    /**
-     * The hub named the hosts serving its names (§13.4). One relay connection to each that is not
-     * the host the control connection reached; one that is no longer named is closed. Compared by
-     * address, because the hub names hosts by address and the socket knows the one it reached.
-     */
-    @Override
-    public synchronized void onRelays(HubLink control, List<String> named) {
-        String reached = control.remoteEndpoint();
-        java.util.Set<String> want = new java.util.LinkedHashSet<>();
-        for (String r : named) {
-            if (reached == null || !r.equals(reached)) {
-                want.add(r);
-            }
-        }
-        for (String gone : new ArrayList<>(relays.keySet())) {
-            if (!want.contains(gone)) {
-                HubLink old = relays.remove(gone);
-                old.close();
-                LOG.info("relay {} is no longer named by the hub; connection closed", gone);
-            }
-        }
-        for (String r : want) {
-            if (!relays.containsKey(r) && !closed) {
-                HubLink rl = new HubLink(state, Version.string(), this, visitors.maxInFlight(), r);
-                relays.put(r, rl);
-                rl.start(null);
-                LOG.info("hub names {} as a relay; opening a connection there", r);
-            }
-        }
-    }
-
-    /** Probes in flight (§13.5): the standby's nonce to the relay connection it asked on. Bounded by pruning. */
-    private final java.util.Map<String, HubLink> probes = new java.util.concurrent.ConcurrentHashMap<>();
-
-    /**
-     * §13.5: a standby asks whether the primary is reachable. This node passes the question up
-     * its control connection and the answer back down the relay connection it came on. It cannot
-     * make the answer: the MAC is under a key only the hubs hold. What it can do is stay silent,
-     * and one honest node answering is enough to block a promotion.
-     */
-    @Override
-    public void onProbe(HubLink relay, Message.PeerProbe probe) {
-        String key = java.util.HexFormat.of().formatHex(probe.nonce());
-        if (probes.size() > 64) {
-            probes.clear();
-        }
-        probes.put(key, relay);
-        try {
-            link.send(probe);
-        } catch (IOException e) {
-            probes.remove(key);
-            LOG.debug("probe from {} not forwarded: {}", relay.relayAddress(), e.getMessage());
-        }
-    }
-
-    @Override
-    public void onProbeAnswer(Message.PeerProbeAnswer answer) {
-        HubLink relay = probes.remove(java.util.HexFormat.of().formatHex(answer.nonce()));
-        if (relay != null && relay.isConnected()) {
-            try {
-                relay.send(answer);
-            } catch (IOException e) {
-                LOG.debug("probe answer to {} not delivered: {}", relay.relayAddress(), e.getMessage());
-            }
-        }
-    }
-
-    /** The relay connections and whether each is up, for {@code status}. */
-    private List<Object> relayRows() {
-        return relays.entrySet().stream().<Object>map(e -> JsonObject.builder()
-            .put("address", e.getKey()).put("connected", e.getValue().isConnected())
-            .put("lastError", e.getValue().lastError()).build().asMap()).toList();
-    }
-
     @Override
     public void onCert(Message.CertUpdate cert) {
         visitors.onCert(cert);
@@ -268,9 +171,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             }
         }
         if (rec != null) {
-            if (rec.domain != null) {
-                visitors.removeDomain(rec.domain);
-            }
             state.links.remove(rec);
         }
         state.revoked.add(new NodeState.RevokedRec(r.name(), r.reason(), r.at()));
@@ -289,56 +189,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     }
 
     private Message.LinkOpened reopen(NodeState.LinkRec rec) throws IOException, TimeoutException {
-        Message.LinkOpened lo = reopen(rec, link);
-        // Then on every relay host that is up: best effort, since a relay that is down reopens
-        // everything when it comes back (onConnected), and the primary's answer is the one that
-        // names the link.
-        for (HubLink rl : relays.values()) {
-            if (rl.isConnected()) {
-                try {
-                    reopen(rec, rl);
-                } catch (IOException | TimeoutException e) {
-                    LOG.warn("could not open {} on relay {}: {}", rec.name, rl.relayAddress(), e.getMessage());
-                }
-            }
-        }
-        return lo;
+        return reopen(rec, link);
     }
 
-    /**
-     * Opens one link on one hub connection. On the control connection this is where a name is
-     * assigned and the link's identity comes from; on a relay connection (§13.4) the name is the
-     * one already assigned, and the id that host gives is kept by address, so a close can name it.
-     */
+    /** Opens one link on the hub connection: where a name is assigned and the link gets its id. */
     private synchronized Message.LinkOpened reopen(NodeState.LinkRec rec, HubLink on) throws IOException, TimeoutException {
-        if (on.isRelay() && (rec.name == null || !Message.LinkOpen.HTTPS.equals(rec.kind))) {
-            throw new IOException(rec.name == null ? "not yet named by the primary" : "raw ports are the primary's alone");
-        }
-        DomainCerts.Material material = rec.domain == null ? null : domainMaterial(rec, false);
-        List<String> chain = material == null ? null : material.chainPem();
-        Message r = on.request(handshakeHash -> {
-            byte[] proof = null;
-            if (material != null) {
-                // The chain says which certificate; the proof says we hold its key. Signed over
-                // the handshake hash of the connection the claim goes out on, so it is good for
-                // this claim on this connection only.
-                try {
-                    proof = DomainProof.sign(material.key(), handshakeHash, rec.domain);
-                } catch (GeneralSecurityException e) {
-                    throw new IOException("cannot prove " + rec.domain + " with its certificate key: " + e.getMessage(), e);
-                }
-            }
-            return new Message.LinkOpen(rec.kind, rec.name, rec.domain, rec.hubPort > 0 ? rec.hubPort : null, rec.local(), chain, proof);
-        }, "LinkOpened", REPLY_TIMEOUT_MS);
+        Message r = on.request(new Message.LinkOpen(rec.name, rec.local()), "LinkOpened", REPLY_TIMEOUT_MS);
         if (r instanceof Message.LinkOpened lo && lo.reason() == null) {
-            if (on.isRelay()) {
-                rec.relayLinkIds.put(on.relayAddress(), lo.linkId());
-                LOG.info("link {} -> {} also served from {}", lo.name(), rec.local(), on.relayAddress());
-                return lo;
-            }
-            if (lo.hubPort() != null) {
-                rec.hubPort = lo.hubPort();
-            }
             rec.linkId = lo.linkId();
             rec.name = lo.name();
             rec.url = lo.url();
@@ -359,7 +216,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             case "verify" -> verify(reply);
             case "down" -> {
                 link.close();
-                closeRelays();
                 reply.ok();
             }
             case "invite" -> {
@@ -377,14 +233,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 NodeState.LinkRec rec = state.linkByName(req.string("name"));
                 if (rec == null) {
                     reply.error("no link named " + req.string("name"));
-                    return;
-                }
-                // The same rule `open --gate` applies (§9.3). Without it this arms a gate on a raw
-                // link, saves it, prints a visit link and reports the link as gated, while the raw
-                // path serves every visitor without looking at it: a control that is on in the
-                // status output and absent on the wire is worse than one that was never offered.
-                if (!Message.LinkOpen.HTTPS.equals(rec.kind) && !req.optBool("off", false)) {
-                    reply.error("the gate is for https links; raw tcp/udp links have no HTTP to gate");
                     return;
                 }
                 if (req.optBool("off", false)) {
@@ -412,19 +260,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
                 }
                 if (isOpen(rec)) {
                     link.send(new Message.LinkClose(rec.linkId));
-                }
-                for (HubLink rl : relays.values()) {
-                    String id = rec.relayLinkIds.get(rl.relayAddress());
-                    if (id != null && rl.isConnected()) {
-                        try {
-                            rl.send(new Message.LinkClose(id));
-                        } catch (IOException e) {
-                            LOG.debug("close on relay {}: {}", rl.relayAddress(), e.getMessage());
-                        }
-                    }
-                }
-                if (rec.domain != null) {
-                    visitors.removeDomain(rec.domain);
                 }
                 state.links.remove(rec);
                 state.save();
@@ -475,33 +310,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return rec.linkId != null && link.isConnected();
     }
 
-    /**
-     * Whether this node is serving {@code rec} right now: through the hub it is joined to, or
-     * through any relay host whose connection is up (§13.4).
-     *
-     * <p>{@link #isOpen} alone is the wrong question for the self-probe. A relay serves this node's
-     * names while the primary is away -- "losing the primary then stops nothing a visitor can see"
-     * -- so a name reached over a relay is publicly served and is exactly the kind whose TLS
-     * somebody else might be terminating. Answering `link not open` for it would leave the check
-     * silent over the window §11.4 says names change hands in, which is the window it exists for.
-     */
-    private boolean servedHere(NodeState.LinkRec rec) {
-        if (isOpen(rec)) {
-            return true;
-        }
-        for (java.util.Map.Entry<String, HubLink> e : relays.entrySet()) {
-            if (e.getValue().isConnected() && rec.relayLinkIds.containsKey(e.getKey())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private List<Object> linkRows() {
         return state.links.stream().<Object>map(l -> JsonObject.builder()
-            .put("name", l.name).put("kind", l.kind).put("local", l.local())
+            .put("name", l.name).put("local", l.local())
             .put("url", l.url).put("gate", l.gateHash != null).put("open", isOpen(l))
-            .put("domain", l.domain).put("certExpiresAt", l.certExpiresAt > 0 ? Long.valueOf(l.certExpiresAt) : null)
             .put("probe", l.lastProbe == null ? null : l.lastProbe.json()).build().asMap()).toList();
     }
 
@@ -541,7 +353,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             .put("muxSocketWriteMs", millis(MuxSession.SOCKET_WRITE))
             .put("muxOpenDispatchMs", millis(MuxSession.OPEN_DISPATCH))
             .put("draining", link.drainingCount())
-            .put("relays", relayRows())
             .put("drainingDetail", link.drainingDetail())
             .put("registered", state.registered)
             .put("nodeId", state.nodeId > 0 ? Long.valueOf(state.nodeId) : null)
@@ -556,35 +367,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             b.put("registration", r.status());
         }
         return b;
-    }
-
-    /**
-     * The certificate for a domain link: from disk, or freshly issued when missing, due for
-     * renewal, or {@code force}. Installs it for TLS termination either way.
-     */
-    private DomainCerts.Material domainMaterial(NodeState.LinkRec rec, boolean force) throws IOException {
-        DomainCerts.Material m = domainCerts.load(rec.domain);
-        if (m == null || force || m.dueForRenewal()) {
-            if (!link.isConnected()) {
-                throw new IOException("not connected to the hub; cannot run the ACME challenge");
-            }
-            URI directory = rec.acmeDirectory != null ? URI.create(rec.acmeDirectory) : LETS_ENCRYPT;
-            try {
-                m = domainCerts.issue(rec.domain, directory, rec.acmeEmail, link);
-            } catch (AcmeException | GeneralSecurityException e) {
-                throw new IOException("certificate for " + rec.domain + ": " + e.getMessage(), e);
-            } catch (InterruptedException _) {
-                Thread.currentThread().interrupt();
-                throw new IOException("interrupted");
-            }
-        }
-        try {
-            visitors.installDomain(m);
-        } catch (GeneralSecurityException e) {
-            throw new IOException("cannot use certificate for " + rec.domain + ": " + e.getMessage(), e);
-        }
-        rec.certExpiresAt = m.notAfter();
-        return m;
     }
 
     /**
@@ -612,103 +394,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
     }
 
-    /**
-     * Hourly: renew domain certificates that have a third of their lifetime left
-     * (ARCHITECTURE.md §8.3), and say so when one is running out anyway.
-     *
-     * <p>The warning is not conditional on being connected, which is the whole point: renewal needs
-     * the hub, so the node that cannot renew is exactly the node nobody is going to hear from. §15
-     * called this out as nothing counting down for the operator.
-     *
-     * <p>The first pass runs before the first sleep and only warns. A node that reaches its hub has
-     * its expiry dates already, because {@link #onConnected} reopens every link and that loads the
-     * certificate; a node that cannot connect has nothing, and it is the one the warning is for, so
-     * making it wait an hour to hear that its certificate ran out yesterday is the wrong hour.
-     * Renewal is left to the tick, since at startup there is nothing to renew against yet.
-     */
-    private void renewLoop() {
-        warnAboutStoredCertificates();
-        while (!closed) {
-            try {
-                Thread.sleep(RENEW_CHECK_MS);
-            } catch (InterruptedException _) {
-                return;
-            }
-            for (NodeState.LinkRec rec : state.links) {
-                if (rec.domain == null) {
-                    continue;
-                }
-                DomainCerts.Material m = domainCerts.load(rec.domain);
-                rememberExpiry(rec, m);
-                if (link.isConnected() && (m == null || m.dueForRenewal())) {
-                    try {
-                        LOG.info("renewing certificate for {}", rec.domain);
-                        reopen(rec);
-                    } catch (IOException | TimeoutException e) {
-                        LOG.warn("renewal of {} failed: {}", rec.domain, e.getMessage());
-                    }
-                }
-                warnIfExpiring(rec);
-            }
-        }
-    }
-
-    /**
-     * Reads what is on disk and warns about anything close to its end, without renewing and without
-     * a hub. Called once before {@link #renewLoop} starts sleeping, so that a node which comes up
-     * unable to reach its hub says so at once instead of an hour later.
-     */
-    void warnAboutStoredCertificates() {
-        for (NodeState.LinkRec rec : state.links) {
-            if (rec.domain != null) {
-                rememberExpiry(rec, domainCerts.load(rec.domain));
-                warnIfExpiring(rec);
-            }
-        }
-    }
-
-    /** Remembers when a loaded certificate runs out; a link with none keeps the 0 that means "not known". */
-    private static void rememberExpiry(NodeState.LinkRec rec, DomainCerts.Material m) {
-        if (m != null) {
-            rec.certExpiresAt = m.notAfter();
-        }
-    }
-
-    /** Logs {@link #expiryWarning} at most once a day per name, so a fortnight is not 336 lines. */
-    private void warnIfExpiring(NodeState.LinkRec rec) {
-        long now = System.currentTimeMillis();
-        String w = expiryWarning(rec.domain, rec.certExpiresAt, now);
-        if (w == null) {
-            rec.certWarnedAt = 0;
-            return;
-        }
-        if (now - rec.certWarnedAt < CERT_WARN_REPEAT_MS) {
-            return;
-        }
-        rec.certWarnedAt = now;
-        LOG.warn("{}", w);
-    }
-
-    /**
-     * What to say about a certificate close to its end, or null while there is nothing to say.
-     * Separate from the logging so the wording of the one message an operator may act on can be
-     * checked without a clock or a daemon.
-     */
-    static String expiryWarning(String domain, long expiresAt, long now) {
-        if (expiresAt <= 0) {
-            return null;
-        }
-        long left = expiresAt - now;
-        if (left > CERT_WARN_MS) {
-            return null;
-        }
-        if (left <= 0) {
-            return "the certificate for " + domain + " EXPIRED " + days(-left) + " ago: visitors now see a warning"
-                + " instead of your site. Renewal needs this node connected to its hub.";
-        }
-        return "the certificate for " + domain + " expires in " + days(left) + " and has not renewed."
-            + " Renewal needs this node connected to its hub.";
-    }
 
     private static String days(long millis) {
         long d = millis / 86400_000L;
@@ -731,49 +416,25 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         int port = req.integer("port");
         String host = req.optString("host", "127.0.0.1");
-        String kind = req.optString("kind", Message.LinkOpen.HTTPS);
-        boolean raw = !kind.equals(Message.LinkOpen.HTTPS);
-        String domain = raw ? null : req.optString("domain", null);
-        if (domain != null) {
-            domain = domain.toLowerCase(java.util.Locale.ROOT);
-        }
-        String name = raw || domain != null ? null : req.optString("name", null);
-        if (raw && req.optBool("gate", false)) {
-            reply.error("--gate is for https links; raw tcp/udp links have no HTTP to gate");
-            return;
-        }
+        String name = req.optString("name", null);
         NodeState.LinkRec rec = null;
         for (NodeState.LinkRec l : state.links) {
-            if (l.host.equals(host) && l.port == port && l.kind.equals(kind) && (name == null || name.equals(l.name))
-                && java.util.Objects.equals(domain, l.domain)) {
+            if (l.host.equals(host) && l.port == port && (name == null || name.equals(l.name))) {
                 rec = l;
             }
         }
         // Opening a name deliberately answers the warning about it, so stop repeating it.
-        if (name != null || domain != null) {
-            String wanted = domain != null ? domain : name;
-            state.revoked.removeIf(r -> r.name().equals(wanted) || r.name().equals(wanted + "." + state.dnsSuffix));
+        if (name != null) {
+            state.revoked.removeIf(r -> r.name().equals(name) || r.name().equals(name + "." + state.dnsSuffix));
         }
         boolean fresh = rec == null;
         if (fresh) {
-            rec = new NodeState.LinkRec(kind, host, port, name);
-            rec.domain = domain;
+            rec = new NodeState.LinkRec(host, port, name);
         } else if (name != null) {
             rec.name = name;
         }
         if (req.has("proxyProtocol")) {
             rec.proxyProtocol = req.optBool("proxyProtocol", false);
-        }
-        if (domain != null) {
-            if (req.has("acmeDirectory")) {
-                rec.acmeDirectory = req.string("acmeDirectory");
-            }
-            if (req.has("acmeEmail")) {
-                rec.acmeEmail = req.string("acmeEmail");
-            }
-        }
-        if (raw && req.has("hubPort")) {
-            rec.hubPort = req.integer("hubPort");
         }
         Message.LinkOpened lo;
         try {
@@ -795,8 +456,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         state.save();
         reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local())
-            .put("kind", kind).put("hubPort", lo.hubPort()).put("visitUrl", visitUrl)
-            .put("certExpiresAt", rec.certExpiresAt > 0 ? Long.valueOf(rec.certExpiresAt) : null));
+            .put("visitUrl", visitUrl));
     }
 
     /**
@@ -880,10 +540,10 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      * a compromised hub is the worst thing this feature can do.
      */
     private ProbeResult probe(NodeState.LinkRec rec, SSLContext shared) {
-        if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null) {
+        if (rec.url == null) {
             return null;
         }
-        if (!state.links.contains(rec) || !servedHere(rec)) {
+        if (!state.links.contains(rec) || !isOpen(rec)) {
             // Closed or revoked (§11.4), or not open on this hub session -- the same test `status`
             // makes, plus whether the record is still in the list, which `status` only iterates.
             // The verdict does not go on the record: `status` keeps the last real one beside
@@ -1181,9 +841,9 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
     private static List<NodeState.LinkRec> remaining(List<NodeState.LinkRec> links, Set<NodeState.LinkRec> pass) {
         List<NodeState.LinkRec> due = new ArrayList<>();
         for (NodeState.LinkRec rec : links) {
-            // Raw ports carry no TLS of ours to compare, and an https link the hub has not answered
-            // for yet has no URL to connect to. Neither is a name this can say anything about.
-            if (!Message.LinkOpen.HTTPS.equals(rec.kind) || rec.url == null || rec.name == null) {
+            // A link the hub has not answered for yet has no URL to connect to, so it is not a
+            // name this can say anything about.
+            if (rec.url == null || rec.name == null) {
                 continue;
             }
             if (!pass.contains(rec)) {
@@ -1326,27 +986,13 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
             probeWake.notifyAll();
         }
         link.close();
-        closeRelays();
         if (ipc != null) {
             ipc.close();
         }
     }
 
-    private void closeRelays() {
-        for (HubLink rl : new ArrayList<>(relays.values())) {
-            rl.close();
-        }
-        relays.clear();
-    }
-
     /** Whether the hub this node joined is connected right now (tests; `status` reports it too). */
     public boolean isHubConnected() {
         return link.isConnected();
-    }
-
-    /** The relay connections that are up right now, by address (tests). */
-    public List<String> connectedRelays() {
-        return relays.entrySet().stream().filter(e -> e.getValue().isConnected())
-            .map(java.util.Map.Entry::getKey).toList();
     }
 }

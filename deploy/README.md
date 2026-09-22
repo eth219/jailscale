@@ -5,20 +5,20 @@ Reference files for operators. The reasoning behind them is in
 
 | File | Purpose |
 |---|---|
-| `jailhub.service` | systemd unit for the hub. Deliberately no `ExecReload`: `--takeover` needs the old process to stay alive through the hand-off, which `Type=simple` will not do. Upgrades are `systemctl restart` |
+| `jailscale.service` | systemd user unit for the node daemon. The node's own answer to "keep it running": `jailscale service install` wrote three of these for three platforms and was removed with the rest of the maintenance cut |
+| `jailhub.service` | systemd unit for the hub. Deliberately no `ExecReload`: upgrades are `systemctl restart`, and the nodes' backoff covers the few seconds |
 | `Dockerfile.hub` | Hub container: the native binary on a distroless base, about 35 MB. Packaging only -- build the binary first, `./mvnw -DskipTests -Pnative -pl hub -am package` |
 | `Dockerfile.node` | Node container, same shape, `-pl node -am` |
-| `nginx-stream.conf` | For a server where nginx already owns 443. SNI routing with `ssl_preread`, plus a PROXY header |
-| `haproxy.cfg` | The same with HAProxy, using `send-proxy-v2` |
 
-Registering the node as a service is a command rather than a file:
-`jailscale service install` (launchd on macOS; a systemd unit on Linux,
-`systemctl --user` or a system unit when run as root; a logon task on
-Windows).
+On macOS the equivalent of `jailscale.service` is a launchd agent in
+`~/Library/LaunchAgents` running the same command with `RunAtLoad` and
+`KeepAlive`; on Windows, a logon scheduled task. The command to put in either
+is the one the CLI itself spawns: `jailscale daemon --home <dir> --socket <path>`.
 
-Behind a proxy, the hub must either listen on loopback with `--proxy-protocol`
-or be given `--trusted-proxy <cidr>`. Otherwise anyone could forge a visitor
-address, so the hub refuses to start.
+The hub takes 443 itself: it no longer reads PROXY headers, so it cannot sit
+behind nginx or HAProxy on that port
+([ARCHITECTURE.md §8.5](../docs/ARCHITECTURE.md)). The configs that documented
+that deployment went with the feature.
 
 ## Published images
 
@@ -27,8 +27,8 @@ toolchain and options as the release binaries, so §14's numbers describe them
 too:
 
 ```
-ghcr.io/eth219/jailhub:v0.1.10
-ghcr.io/eth219/jailscale:v0.1.10
+ghcr.io/eth219/jailhub:v0.2.0
+ghcr.io/eth219/jailscale:v0.2.0
 ```
 
 `:vX.Y.Z` pins that release. `:latest` follows releases: it moves when one is
@@ -52,7 +52,7 @@ The container runs the daemon, and the CLI is `exec`ed into it:
 ```sh
 docker network create demo   # the app joins this too, see below
 docker run -d --name jailscale --network demo \
-    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.1.10
+    -v jailscale-state:/var/lib/jailscale ghcr.io/eth219/jailscale:v0.2.0
 docker exec jailscale /jailscale up --hub jailscale.sinabro.io
 docker exec jailscale /jailscale open 3000 --host myapp --name myapp
 ```

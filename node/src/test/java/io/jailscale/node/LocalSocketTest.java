@@ -2,7 +2,6 @@ package io.jailscale.node;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.jailscale.proto.control.Message;
 import io.jailscale.proto.mux.MuxStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -43,7 +42,7 @@ class LocalSocketTest {
     @Test
     void localAppSocketBuffersArePinnedToTheStreamWindow() throws Exception {
         try (ServerSocket app = TestPorts.listen(8)) {
-            NodeState.LinkRec rec = new NodeState.LinkRec(Message.LinkOpen.HTTPS, "127.0.0.1", app.getLocalPort(), "demo");
+            NodeState.LinkRec rec = new NodeState.LinkRec("127.0.0.1", app.getLocalPort(), "demo");
             try (Socket untouched = new Socket()) {
                 untouched.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), app.getLocalPort()));
                 app.accept().close();

@@ -17,6 +17,7 @@ import java.net.Socket;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
@@ -44,6 +45,17 @@ final class SniRouter {
      * a number the relay can keep exactly as it enters and leaves.
      */
     private final AtomicInteger current = new AtomicInteger();
+    /**
+     * Since this hub started: visitors handed to a node, visitors turned away before that, and the
+     * subset of those turned away because the node was already holding what it said it would
+     * (ARCHITECTURE.md §9.3). The last is the one an operator can act on -- it says to give that
+     * node more heap, or to move a name -- where the others say a visitor was malformed, early, or
+     * abusive. Read by {@code jailhub status}; nothing here is per name or per address, so a total
+     * says how much the hub is doing and never who is doing it.
+     */
+    private final LongAdder routed = new LongAdder();
+    private final LongAdder refused = new LongAdder();
+    private final LongAdder refusedCapacity = new LongAdder();
 
     SniRouter(Hub hub) {
         this.hub = hub;
@@ -77,30 +89,27 @@ final class SniRouter {
      * {@link #giveSlot}: the caller gives back what it took rather than an address the key may not
      * have come from.
      *
-     * <p>Both listeners ask here -- 443 above, and the raw tcp ports of §8.4, which accept on their
-     * own sockets and so never reached this at all. They had one rule written twice, and only one
-     * of the two copies had the exemption below: a forwarder on this host that sends no PROXY
-     * header folds every visitor onto one address, so a raw port capped the world at 64 while 443
-     * behind the same forwarder capped nobody.
+     * <p>443 is the only listener that asks now. The raw tcp ports of §8.4 accepted on sockets of
+     * their own and had this rule written a second time, with the exemption below missing from that
+     * copy -- a forwarder on this host folds every visitor onto one address, so a raw port capped
+     * the world at 64 while 443 behind the same forwarder capped nobody. One listener is one copy.
      *
      * <p><b>Counted against the network and not the address</b> ({@link NetKey}): in v4 those are
      * the same thing, and in v6 they are not -- a routed /64 is free and standard, so a per-address
-     * cap of 64 would be "64 per address, times eighteen quintillion". {@code ip} itself is
-     * untouched, since it is what gets logged, banned and handed to the node as the visitor's
-     * address; when nothing attributed the connection the key is taken from the bytes {@code peer}
-     * holds, rather than formatting that address to text and parsing it straight back once per
-     * connection.
+     * cap of 64 would be "64 per address, times eighteen quintillion". The key is taken from the
+     * bytes {@code peer} holds rather than by formatting that address to text and parsing it
+     * straight back once per connection; {@code ip} itself is what gets logged, banned and handed
+     * to the node as the visitor's address.
      *
-     * <p><b>The exemption is for visitors this hub cannot tell apart</b>, not for a peer that
-     * happens to be local. Once a header has attributed the connection the cap applies again --
-     * testing the socket's peer instead meant that every hub behind nginx on localhost, which is
-     * the deployment deploy/nginx-stream.conf documents, had no per-address cap at all and one
-     * client could exhaust MAX_PER_NAME and the node's ceiling.
+     * <p><b>The exemption is for visitors this hub cannot tell apart.</b> A forwarder on this host
+     * arrives as loopback and folds every visitor behind it onto one key, so capping that key at 64
+     * would cap everyone behind the forwarder together. The hub used to be able to tell them apart
+     * -- a PROXY header from a trusted proxy named the real visitor (§8.5) -- and with that gone,
+     * a deployment that puts something in front of 443 has no per-address cap at all; §15 says so.
      */
-    String takeSlot(String ip, InetAddress peer, boolean attributed) {
-        String key = attributed ? NetKey.of(ip) : NetKey.of(peer);
-        boolean unattributedLocal = !attributed && peer.isLoopbackAddress();
-        if (acquire(perIp, key) > MAX_PER_IP && !unattributedLocal) {
+    String takeSlot(String ip, InetAddress peer) {
+        String key = NetKey.of(peer);
+        if (acquire(perIp, key) > MAX_PER_IP && !peer.isLoopbackAddress()) {
             release(perIp, key);
             return null;
         }
@@ -135,28 +144,26 @@ final class SniRouter {
         return current.get();
     }
 
+    long visitorsRouted() {
+        return routed.sum();
+    }
+
+    long visitorsRefused() {
+        return refused.sum();
+    }
+
+    /** The subset of {@link #visitorsRefused} that hit a node's own bound (ARCHITECTURE.md §9.3). */
+    long visitorsRefusedCapacity() {
+        return refusedCapacity.sum();
+    }
+
     /** Serves one accepted raw connection to completion. */
     void serve(Socket socket) {
-        long acceptedAt = System.nanoTime();
         String ip = socket.getInetAddress().getHostAddress();
         int visitorPort = socket.getPort();
-        boolean attributed = false;
-        try {
-            socket.setSoTimeout(HELLO_TIMEOUT_MS);
-            io.jailscale.proto.net.ProxyProtocol.Header ph = hub.readProxyHeader(socket);
-            if (ph != null && ph.known()) {
-                ip = ph.srcIp();
-                visitorPort = ph.srcPort();
-                attributed = true;
-            }
-        } catch (IOException e) {
-            LOG.debug("{}: {}", ip, e.getMessage());
-            Relay.closeQuietly(socket);
-            return;
-        }
-        String ipKey = takeSlot(ip, socket.getInetAddress(), attributed);
+        String ipKey = takeSlot(ip, socket.getInetAddress());
         if (ipKey == null) {
-            Metrics.VISITORS_REFUSED.increment();
+            refused.increment();
             Relay.closeQuietly(socket);
             return;
         }
@@ -166,12 +173,10 @@ final class SniRouter {
             socket.setTcpNoDelay(true);
             socket.setSoTimeout(HELLO_TIMEOUT_MS);
             Sni.Peek peek = Sni.peek(socket.getInputStream());
-            long peekedAt = System.nanoTime();
-            RelayStages.PEEK.record(peekedAt - acceptedAt);
             String sni = peek.serverName();
             if (sni == null) {
                 LOG.debug("{}: no SNI, closing", ip);
-                Metrics.VISITORS_REFUSED.increment();
+                refused.increment();
                 Relay.closeQuietly(socket);
                 return;
             }
@@ -188,35 +193,27 @@ final class SniRouter {
                 return;
             }
             name = hub.links().nameOf(sni);
-            Links.Link link;
-            if (name != null) {
-                link = hub.links().byName(name);
-                if (link == null && hub.store().nameOwner(name) != null) {
-                    link = hub.links().awaitOnline(name, false, HOLD_MS); // node reconnecting (hand-off, restart)
-                }
-                if (link == null) {
-                    Metrics.VISITORS_REFUSED.increment();
-                    fallback(socket, peek.consumed(), name);
-                    return;
-                }
-            } else {
-                // A user domain (ARCHITECTURE.md §8.3): passthrough only, the hub has no certificate to answer with.
-                name = sni.toLowerCase(java.util.Locale.ROOT);
-                link = hub.links().byDomain(name);
-                if (link == null && hub.store().domain(name) != null) {
-                    link = hub.links().awaitOnline(name, true, HOLD_MS);
-                }
-                if (link == null) {
-                    LOG.debug("{}: unknown SNI {}, closing", ip, sni);
-                    Metrics.VISITORS_REFUSED.increment();
-                    Relay.closeQuietly(socket);
-                    return;
-                }
+            if (name == null) {
+                // Not a name under this hub's domain, and there is nothing else it could be: user
+                // domains went with the maintenance cut (§8.3), so an SNI from somewhere else is a
+                // visitor sent here by a record nobody on this hub asked for.
+                LOG.debug("{}: unknown SNI {}, closing", ip, sni);
+                refused.increment();
+                Relay.closeQuietly(socket);
+                return;
             }
-            RelayStages.RESOLVE.record(System.nanoTime() - peekedAt);
+            Links.Link link = hub.links().byName(name);
+            if (link == null && hub.store().nameOwner(name) != null) {
+                link = hub.links().awaitOnline(name, HOLD_MS); // node reconnecting (hand-off, restart)
+            }
+            if (link == null) {
+                refused.increment();
+                fallback(socket, peek.consumed(), name);
+                return;
+            }
             if (acquire(perName, name) > MAX_PER_NAME) {
                 release(perName, name);
-                Metrics.VISITORS_REFUSED.increment();
+                refused.increment();
                 refused(ip, name, "the per-name cap of " + MAX_PER_NAME);
                 Relay.closeQuietly(socket);
                 return;
@@ -225,26 +222,25 @@ final class SniRouter {
             // said it will hold (ARCHITECTURE.md §9.3). Here with the other two rather than left to
             // NodeGroup.openVisitor, so that all three admission decisions are made in one place and
             // a visitor the hub cannot deliver is turned away before a stream is opened for it. The
-            // check in openVisitor stays as the backstop for the race between this and the open, and
-            // for the raw ports, which do not come through here.
+            // check in openVisitor stays as the backstop for the race between this and the open.
             int ceiling = link.group().visitorCeiling();
             if (ceiling > 0 && link.group().visitorsInFlight() >= ceiling) {
                 release(perName, name);
-                Metrics.VISITORS_REFUSED.increment();
-                Metrics.VISITORS_REFUSED_CAPACITY.increment();
+                refused.increment();
+                refusedCapacity.increment();
                 refused(ip, name, "the node's ceiling of " + ceiling);
                 // Closed rather than answered. The hub has the key and could serve a page the way
                 // fallback() does for an offline node, but that is a full TLS handshake per refused
                 // visitor -- about 2.8 ms of hub CPU on the gate's runner -- and a node at its bound
-                // is exactly when the hub has least to spare. The operator sees this in
-                // jailhub_visitors_refused_capacity_total and on the admin page instead.
+                // is exactly when the hub has least to spare. The refusal is logged and counted,
+                // and the admin page says what each node is holding, instead.
                 Relay.closeQuietly(socket);
                 return;
             }
             try {
-                Metrics.VISITORS.increment();
+                routed.increment();
                 current.incrementAndGet();
-                relay(socket, peek, link, ip, visitorPort, acceptedAt);
+                relay(socket, peek, link, ip, visitorPort);
             } finally {
                 current.decrementAndGet();
                 release(perName, name);
@@ -259,23 +255,19 @@ final class SniRouter {
         }
     }
 
-    private void relay(Socket socket, Sni.Peek peek, Links.Link link, String visitorIp, int visitorPort,
-        long acceptedAt) throws IOException {
+    private void relay(Socket socket, Sni.Peek peek, Links.Link link, String visitorIp, int visitorPort)
+        throws IOException {
         NodeGroup group = link.group();
         socket.setSoTimeout(0);
-        long beforeOpen = System.nanoTime();
         MuxStream stream;
         try {
-            stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort,
-                link.domain() != null ? "domain:" + link.domain() : hub.tls().keyId(), false);
+            stream = group.openVisitor(link, peek.serverName(), visitorIp, visitorPort, hub.tls().keyId());
         } catch (IOException e) {
             refused(visitorIp, peek.serverName(), e.getMessage());
             throw e;
         }
-        long openedAt = System.nanoTime();
-        RelayStages.OPEN.record(openedAt - beforeOpen);
         try {
-            Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream), acceptedAt, openedAt);
+            Relay.pump(socket, stream, peek.consumed(), group.clientSide(stream));
         } finally {
             group.visitorDone(stream);
         }

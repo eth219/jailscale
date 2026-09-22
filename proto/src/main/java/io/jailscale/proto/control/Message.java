@@ -15,7 +15,7 @@ public sealed interface Message {
      * not check a request would have to refuse it, so a node speaking an older version is told to
      * upgrade rather than served unchecked.
      */
-    int PROTO = 1;
+    int PROTO = 2;
 
     String type();
 
@@ -42,32 +42,12 @@ public sealed interface Message {
      * old hub answers an unknown type with {@code Error{unknown-type}}, which is a reply saying
      * something went wrong, where ignoring a field it has no use for is silence.
      */
-    record Hello(int proto, String version, String os, int conn, String host, int visitors, boolean relay) implements Message {
-        /** The form every build before {@code relay} sent; the field is omitted on the wire when false. */
-        public Hello(int proto, String version, String os, int conn, String host, int visitors) {
-            this(proto, version, os, conn, host, visitors, false);
-        }
-
+    record Hello(int proto, String version, String os, int conn, String host, int visitors) implements Message {
         @Override public String type() { return "Hello"; }
     }
 
-    /**
-     * {@code relays} (ARCHITECTURE.md §13.4): the hosts serving this hub's names right now, as
-     * {@code address} or {@code address:port}, for the node to open a relay connection to each
-     * one that is not the host this control connection reached. Absent from a hub that has none
-     * to name, which is every build before the field and every single-host hub after it.
-     */
-    record HelloResponse(int proto, int minProto, String version, String dnsSuffix, List<String> relays) implements Message {
-        public HelloResponse(int proto, int minProto, String version, String dnsSuffix) {
-            this(proto, minProto, version, dnsSuffix, null);
-        }
-
+    record HelloResponse(int proto, int minProto, String version, String dnsSuffix) implements Message {
         @Override public String type() { return "HelloResponse"; }
-    }
-
-    /** The relay set moved while the node was connected (§13.4): the whole current list, not a delta. */
-    record RelaysChanged(List<String> relays) implements Message {
-        @Override public String type() { return "RelaysChanged"; }
     }
 
     record Goodbye(String reason, String detail) implements Message {
@@ -161,22 +141,15 @@ public sealed interface Message {
     }
 
     /**
-     * {@code local} is the node-side target ("host:port"); it keys the stable random name.
-     * {@code chainPem}: for user domains, the node's own certificate chain for the name (§8.3).
-     * {@code domainProof}: a signature with that certificate's private key over
-     * {@code "jailscale domain claim v1" || handshakeHash || domain}, bound to the Noise handshake
-     * of the connection carrying it so it cannot be replayed onto another one. A chain on its own
-     * proves nothing, being public in every TLS handshake and in CT logs.
+     * A node asking the hub to serve {@code name} for it (ARCHITECTURE.md §8.2). {@code name} is
+     * null to be given one; {@code local} is where the node forwards it, for the hub's records
+     * only -- nothing on the hub connects to it.
      */
-    record LinkOpen(String kind, String name, String domain, Integer port, String local, List<String> chainPem,
-        byte[] domainProof) implements Message {
-        public static final String HTTPS = "https";
-        public static final String TCP = "tcp";
-        public static final String UDP = "udp";
+    record LinkOpen(String name, String local) implements Message {
         @Override public String type() { return "LinkOpen"; }
     }
 
-    record LinkOpened(String linkId, String name, String url, Integer hubPort, String reason) implements Message {
+    record LinkOpened(String linkId, String name, String url, String reason) implements Message {
         @Override public String type() { return "LinkOpened"; }
     }
 
@@ -192,7 +165,7 @@ public sealed interface Message {
     record LinkRevoked(String linkId, String name, String reason, long at) implements Message {
         /** Another node opened the same name; the newest opener won (§8.2). */
         public static final String REASSIGNED = "reassigned";
-        /** An operator released the name, domain or port on the hub. */
+        /** An operator released the name on the hub. */
         public static final String RELEASED = "released";
         @Override public String type() { return "LinkRevoked"; }
     }
@@ -215,141 +188,10 @@ public sealed interface Message {
     }
 
     /**
-     * {@code domain} is the identifier the token belongs to. The hub answers the challenge only for
-     * that Host, and only for a domain this node may claim: without it the relay validates any name
-     * that resolves to the hub, for any node.
-     */
-    record ChallengeSet(String domain, String token, String keyAuthorization) implements Message {
-        @Override public String type() { return "ChallengeSet"; }
-    }
-
-    record ChallengeClear(String token) implements Message {
-        @Override public String type() { return "ChallengeClear"; }
-    }
-
-    /** Positive reply to a request that has no result of its own (ChallengeSet/Clear). */
-    record Ack(String inReplyTo) implements Message {
-        @Override public String type() { return "Ack"; }
-    }
-
-    // --- hub to hub (ARCHITECTURE.md §13.1) --------------------------------------------------
-
-    /**
-     * First Noise payload from a standby hub. What makes it a peer rather than a node is not this
-     * message but the static key the handshake authenticated: it is the hub's own, which only a
-     * host given a copy of {@code hub.key} can complete the handshake with. A node's
-     * MachineKey can never be that key, so the two kinds of caller cannot be confused.
-     */
-    record PeerHello(int proto, String version, String host, String address, String endpoint, String role, long epoch)
-        implements Message {
-        public PeerHello(int proto, String version, String host, String address) {
-            this(proto, version, host, address, null, null, 0);
-        }
-
-        public PeerHello(int proto, String version, String host, String address, String endpoint) {
-            this(proto, version, host, address, endpoint, null, 0);
-        }
-
-        @Override public String type() { return "PeerHello"; }
-    }
-
-    /**
-     * {@code address} is the public address the sender advertises for itself in DNS (§13.3), or
-     * null when it does not know one yet. Each side learns the other's this way rather than from
-     * the socket, which behind address translation says nothing a resolver could use.
-     * {@code endpoint} is what a node dials to reach the sender as a relay (§13.4),
-     * {@code address[:port]}; absent when it is the address on 443, which is every real deployment.
-     * {@code role} and {@code epoch} (§13.5) say what the sender believes it is and how many
-     * promotions it has seen; two primaries meeting decide by them which one stands down.
-     */
-    record PeerHelloResponse(int proto, String version, String host, String address, String endpoint, String role, long epoch)
-        implements Message {
-        public PeerHelloResponse(int proto, String version, String host, String address) {
-            this(proto, version, host, address, null, null, 0);
-        }
-
-        public PeerHelloResponse(int proto, String version, String host, String address, String endpoint) {
-            this(proto, version, host, address, endpoint, null, 0);
-        }
-
-        @Override public String type() { return "PeerHelloResponse"; }
-    }
-
-    /**
-     * §13.5: a standby asking a node whether the primary can be reached, and the node passing the
-     * question up its control connection. The nonce is the standby's; the node carries it.
-     */
-    record PeerProbe(byte[] nonce) implements Message {
-        @Override public String type() { return "PeerProbe"; }
-    }
-
-    /**
-     * The primary's answer, carried back by the node: a MAC over the nonce and its epoch under a
-     * key derived from {@code hub.key}, which both hubs hold and no node does. A node cannot make
-     * one, so "the primary is reachable" is proof, not testimony.
-     */
-    record PeerProbeAnswer(byte[] nonce, byte[] mac, long epoch) implements Message {
-        @Override public String type() { return "PeerProbeAnswer"; }
-    }
-
-    /**
-     * The dns-01 challenge values the primary is publishing right now (§13.3). With the whole
-     * subdomain delegated to both hubs, the CA may ask either for {@code _acme-challenge}, so the
-     * standby has to answer with the same values. An empty list clears them.
-     */
-    record PeerChallenge(List<String> txt) implements Message {
-        @Override public String type() { return "PeerChallenge"; }
-    }
-
-    /**
-     * The primary's whole state as the same replayable event list its snapshot file holds. Sent
-     * once after the handshake, and again only if the primary has to start the tail over; every
-     * event after it arrives as a {@link PeerEvent}.
-     */
-    record PeerSnapshot(String json) implements Message {
-        @Override public String type() { return "PeerSnapshot"; }
-    }
-
-    /** One event line from the primary's log, in the order it was appended. */
-    record PeerEvent(String json) implements Message {
-        @Override public String type() { return "PeerEvent"; }
-    }
-
-    /**
-     * The wildcard chain and its private key. {@link CertUpdate} gives nodes the public half; a
-     * standby is the one party that has to be able to sign after a promotion, so it gets both.
-     */
-    record PeerCert(List<String> chainPem, String keyPem, String keyId) implements Message {
-        @Override public String type() { return "PeerCert"; }
-    }
-
-    /**
-     * The hub's Noise static private key, and the next one during a rotation (§5.2). A standby
-     * arrives holding the current key already -- that is how it authenticated -- but a rotation
-     * begun on the primary would otherwise leave it with a key nodes are about to stop pinning.
-     */
-    record PeerHubKey(String current, String next) implements Message {
-        @Override public String type() { return "PeerHubKey"; }
-    }
-
-    /**
-     * The nodes attached to the sender right now, by MachineKey (§13.4). Each hub answers a name
-     * with the hosts its node is on, and this is how it knows about the other host's. The whole
-     * set every time; it is small and a delta would need an order.
-     */
-    record PeerNodes(List<String> mkeys) implements Message {
-        @Override public String type() { return "PeerNodes"; }
-    }
-
-    /**
-     * A message type this build does not know (ARCHITECTURE.md §5.4). Decoding one is deliberately
-     * not an error: the peer is authenticated, so this is a newer jailscale sending something this
-     * one has no case for, and tearing the control channel down over it would make every added
-     * message type a flag day. The receiver logs it and answers {@code Error{unknown-type}}; the
-     * sender is the side that must gate anything load-bearing on the peer's {@code proto} number,
-     * because an ignored message looks exactly like a delivered one from here.
-     *
-     * <p>It is never encoded: a build that does not understand a type cannot forward it either.
+     * A message type this build does not know (ARCHITECTURE.md §5.4). The hub-to-hub messages that
+     * used to sit here -- PeerHello, PeerSnapshot, PeerEvent and the rest of the two-hub channel --
+     * were removed with the standby (§13), so a hub old enough to send one is decoded as this and
+     * ignored, and its names are not reused.
      */
     record Unknown(String type) implements Message {}
 }

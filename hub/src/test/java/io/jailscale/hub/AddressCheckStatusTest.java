@@ -2,7 +2,6 @@ package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -105,15 +104,11 @@ class AddressCheckStatusTest {
             assertTrue(check.bool("fault"));
             assertEquals("another hub answers there", check.string("problem"));
 
-            // A monitor alerts on the fault gauge and not on the verdict, so that inconclusive --
-            // the ordinary answer from behind a translated address -- never pages anybody.
-            String metrics = Metrics.prometheus(hub);
-            assertTrue(metrics.contains("jailhub_address_check_fault 1"), metrics);
-            assertTrue(metrics.contains("jailhub_address_check{verdict=\"elsewhere\"} 0"), metrics);
-
+            // A monitor reads the fault flag and not the verdict, so that inconclusive -- the
+            // ordinary answer from behind a translated address -- never pages anybody.
             hub.addressProbe = () -> result(Reachability.INCONCLUSIVE, "could not reach it from this host.");
             hub.checkAddress();
-            assertTrue(Metrics.prometheus(hub).contains("jailhub_address_check_fault 0"),
+            assertFalse(admin(hub, "status").object("addressCheck").bool("fault"),
                 "inconclusive is not a fault");
         }
     }
@@ -131,54 +126,6 @@ class AddressCheckStatusTest {
             assertTrue(status.optBool("ok", false), status.toString());
             assertFalse(status.has("addressCheck"), status.toString());
             assertNull(hub.addressStatus());
-            assertFalse(Metrics.prometheus(hub).contains("jailhub_address_check"));
-        }
-    }
-
-    @Test
-    void standingDownDropsTheVerdictAndTheRefusalNamesNoPeerItDoesNotHave() throws Exception {
-        // A hub that stood down by epoch (§13.5) rather than by --peer: the records are the new
-        // primary's now, so the verdict it reached as a primary stops being about anything, and
-        // nothing may revive it -- a standby that kept checking would find the other hub's key at
-        // the shared address and file that as a fault every hour.
-        try (Hub hub = hub(true)) {
-            hub.addressProbe = () -> result(Reachability.PROVEN, null);
-            hub.checkAddress();
-            assertNotNull(hub.addressStatus());
-
-            hub.demote(9, "other.hub.test");
-            assertTrue(hub.isStandby());
-            assertNull(hub.addressStatus(), "a standby carries no verdict about the primary's records");
-            hub.reachedBy("hub.test", "203.0.113.5");
-            assertNull(hub.addressStatus(), "and an arrival does not bring one back");
-            assertFalse(Metrics.prometheus(hub).contains("jailhub_address_check"));
-
-            // The refusal says what is wrong, rather than dereferencing a peer this hub never had.
-            assertNull(hub.config().peer());
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> admin(hub, "address-check"));
-            assertEquals("this hub is a standby; the records to check are the primary's", e.getMessage());
-        }
-    }
-
-    @Test
-    void aRunOvertakenByStandingDownIsKeptNowhere() throws Exception {
-        // The loop tests standby before the run, and the run is slow enough to be overtaken -- an
-        // unanswered resolver costs five seconds and the dial another. Demotion inside the probe
-        // is that interleaving exactly: what comes back was computed as a primary, about records
-        // that are the new primary's now, and recording it would leave a fault standing on a
-        // standby that no later pass ever clears.
-        try (Hub hub = hub(true)) {
-            hub.addressProbe = () -> {
-                try {
-                    hub.demote(9, "other.hub.test");
-                } catch (java.io.IOException e) {
-                    throw new IllegalStateException(e);
-                }
-                return result(Reachability.ELSEWHERE, "another hub answers there");
-            };
-            assertEquals(Reachability.ELSEWHERE, hub.checkAddress().verdict(), "the caller still gets its answer");
-            assertNull(hub.addressStatus(), "but a standby keeps no verdict");
-            assertFalse(Metrics.prometheus(hub).contains("jailhub_address_check"));
         }
     }
 

@@ -23,14 +23,10 @@ public final class Main {
         jailscale up --hub HOST [--code XXXX-XXXX] [--user NAME]
                      [--hub-key hkey:... [--tls-insecure]] [--ca-file PEM] [--port 443] [--hub-addr IP] [--connections 1..4]
         jailscale open PORT [--name NAME] [--host 127.0.0.1] [--gate] [--proxy-protocol]
-        jailscale open PORT --tcp | --udp [--port HUBPORT]     raw port, no TLS (ARCHITECTURE.md §8.4)
-        jailscale open PORT --domain app.example.com [--acme-email E] [--acme-staging | --acme-directory URL]
-                                                              your own domain, CNAME'd to the hub (ARCHITECTURE.md §8.3)
         jailscale gate NAME [--ttl 24h | --off]              each run issues a fresh visit link
         jailscale ls | close NAME
         jailscale status | down | leave | netcheck | daemon
         jailscale verify                                     check that this node, not the hub, terminates the TLS for its names
-        jailscale service install | uninstall | status       keep the daemon running across logins (launchd/systemd/schtasks)
         jailscale invite [--user NAME] [--uses N] [--ttl 24h] [--self]
         jailscale update                                     say whether a newer release is out
         jailscale update --download [--dir DIR]               fetch that release and check its signature; installing it stays yours
@@ -44,8 +40,8 @@ public final class Main {
      * documented on {@code gate}, declared here, read nowhere, because {@code gate NAME} issues a
      * fresh link every run with or without it.
      */
-    static final String[] FLAGS = {"debug", "self", "tls-insecure", "help", "gate", "off", "tcp", "udp",
-        "acme-staging", "proxy-protocol", "download"};
+    static final String[] FLAGS = {"debug", "self", "tls-insecure", "help", "gate", "off",
+        "proxy-protocol", "download"};
 
     private Main() {}
 
@@ -83,7 +79,6 @@ public final class Main {
                 // makes them the same, and a clean build is what CI and every release do.
                 case "version" -> System.out.println("jailscale " + Version.string() + " (protocol " + Message.PROTO + ")");
                 case "update" -> update(a);
-                case "service" -> Service.run(a.positional(1) == null ? "status" : a.positional(1), cfg);
                 case "daemon" -> runDaemon(cfg);
                 case "up" -> up(cfg, a);
                 case "status" -> print(call(cfg, JsonObject.builder().put("cmd", "status").build(), false));
@@ -243,38 +238,13 @@ public final class Main {
         if (port == null) {
             throw new IllegalArgumentException("open needs a local port");
         }
-        if (a.flag("tcp") && a.flag("udp")) {
-            throw new IllegalArgumentException("--tcp and --udp are exclusive");
-        }
-        String kind = a.flag("tcp") ? "tcp" : a.flag("udp") ? "udp" : "https";
         JsonObject.Builder b = JsonObject.builder().put("cmd", "open").put("port", Integer.parseInt(port))
-            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("kind", kind).put("gate", a.flag("gate"));
-        if (a.has("port")) {
-            b.put("hubPort", a.integer("port", 0));
-        }
+            .put("host", a.get("host", "127.0.0.1")).put("name", a.get("name")).put("gate", a.flag("gate"));
         if (a.has("proxy-protocol")) {
             b.put("proxyProtocol", a.flag("proxy-protocol"));
         }
-        if (a.has("domain")) {
-            b.put("domain", a.get("domain"));
-            if (a.has("acme-directory")) {
-                b.put("acmeDirectory", a.get("acme-directory"));
-            } else if (a.flag("acme-staging")) {
-                b.put("acmeDirectory", "https://acme-staging-v02.api.letsencrypt.org/directory");
-            }
-            if (a.has("acme-email")) {
-                b.put("acmeEmail", a.get("acme-email"));
-            }
-            System.out.println(a.get("domain") + ": checking the certificate… (the first ACME issuance takes tens of seconds)");
-        }
         JsonObject r = call(cfg, b.build(), false);
         String url = r.string("url");
-        if (!kind.equals("https")) {
-            System.out.println(url + "  ->  " + r.string("local"));
-            System.out.println("(hub port " + r.integer("hubPort") + ". the hub can see any plaintext protocol the app does not encrypt itself; "
-                + "with SSH, WireGuard or a DB with TLS on, the hub sees only ciphertext)");
-            return;
-        }
         String visit = r.optString("visitUrl", null);
         System.out.println(url + "  ->  " + r.string("local") + (visit != null ? "        (gate on)" : ""));
         if (visit != null) {
@@ -292,28 +262,9 @@ public final class Main {
         for (Object o : links) {
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
-            String warn = m.get("certExpiresAt") instanceof Long exp
-                ? certNote(exp, System.currentTimeMillis())
-                : "";
-            System.out.printf("%-8s %-40s -> %-22s %s%s%n", m.get("name"), m.get("url"), m.get("local"),
-                Boolean.TRUE.equals(m.get("open")) ? "open" : "offline", warn);
+            System.out.printf("%-8s %-40s -> %-22s %s%n", m.get("name"), m.get("url"), m.get("local"),
+                Boolean.TRUE.equals(m.get("open")) ? "open" : "offline");
         }
-    }
-
-    /**
-     * What {@code ls} adds after a link whose certificate is running out, and "" while there is
-     * nothing to say. The threshold is the daemon's ({@link Daemon#CERT_WARN_MS}) so the table and
-     * the log do not tell two stories, and an expired certificate is named as expired: "expires"
-     * next to a date in the past reads as a formatting bug rather than as a site already down.
-     */
-    static String certNote(long expiresAt, long now) {
-        if (expiresAt <= 0) {
-            return ""; // no certificate on this link, or none loaded yet
-        }
-        if (expiresAt <= now) {
-            return "  (cert EXPIRED " + new java.util.Date(expiresAt) + ")";
-        }
-        return expiresAt - now < Daemon.CERT_WARN_MS ? "  (cert expires " + new java.util.Date(expiresAt) + ")" : "";
     }
 
     private static void invite(NodeConfig cfg, Args a) throws Exception {
@@ -401,15 +352,15 @@ public final class Main {
 
     /**
      * Starts {@code <this binary> daemon} detached, logging to the config directory. The command
-     * comes from {@link Service#daemonCommand}, which is also what {@code service install} writes
-     * into a unit: they used to be built separately here and had drifted apart.
+     * comes from {@link DaemonCommand}, which is also what an operator's unit runs: the two used to
+     * be built separately and had drifted apart.
      */
     private static void spawnDaemon(NodeConfig cfg) throws IOException, InterruptedException {
         Files.createDirectories(cfg.configDir());
         if (ProcessHandle.current().info().command().isEmpty()) {
             throw new IOException("cannot determine own executable to start the daemon");
         }
-        List<String> cmd = Service.daemonCommand(cfg);
+        List<String> cmd = DaemonCommand.of(cfg);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(cfg.daemonLog().toFile()));

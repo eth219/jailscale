@@ -214,13 +214,13 @@ final class HttpFront {
 
     /**
      * Whether what asked for this path is a machine rather than somebody with a browser: the JSON
-     * under {@code /v1}, the metrics path a scraper may still be pointed at, and the file a crawler
-     * fetches. Those are answered in text, because a frame is bytes each of them has to skip. It is
+     * under {@code /v1}, and the file a crawler fetches. Those are answered in text, because a
+     * frame is bytes each of them has to skip. It is
      * a list here and not a property of the route because the method guard runs above the dispatch;
      * a path added to {@link #route} is a path this has to be told about.
      */
     private static boolean machinePath(String path) {
-        return path.startsWith("/v1/") || path.equals("/metrics") || path.equals("/robots.txt");
+        return path.startsWith("/v1/") || path.equals("/robots.txt");
     }
 
     /**
@@ -282,14 +282,6 @@ final class HttpFront {
         if (path.equals("/v1/status")) {
             return HttpResponse.json(200, status().toString()).header("Cache-Control", "no-store");
         }
-        if (path.equals("/metrics")) {
-            // Moved off the public name rather than deleted (§6.3). Saying where it went would be
-            // saying an address that is deliberately not this one, so it says which flag instead.
-            // In text, and not through the frame: what polls this path is a scraper still pointed
-            // at where metrics used to be, and four kilobytes of HTML per poll to say "not here" is
-            // exactly the machine answer this branch's own rule says not to frame.
-            return HttpResponse.text(404, "metrics are not served on this name; see --metrics-listen");
-        }
         if (path.equals("/robots.txt")) {
             return HttpResponse.text(200, ROBOTS);
         }
@@ -323,10 +315,9 @@ final class HttpFront {
      * build answered, what it will talk to, how long it has been up, and when the certificate runs
      * out -- the last being the one that takes every name down at once and the one worth alerting
      * on. That is the whole list. It used to carry the counters and the hub's state as well, which
-     * made the public name's health check a second copy of {@code /metrics}; the counters live on
-     * the metrics listener now and the per-node detail on the {@code jailhub} socket CLI, which
-     * since #253 is the one admin surface (ARCHITECTURE.md §6.3). Fields may be added; a monitor
-     * that reads the ones it knows keeps working (§5.4).
+     * made the public name's health check an export of everything the hub knew; the per-node detail
+     * is on the {@code jailhub} socket CLI, which is the one admin surface (ARCHITECTURE.md §6.3).
+     * Fields may be added; a monitor that reads the ones it knows keeps working (§5.4).
      */
     private JsonObject status() {
         JsonObject.Builder b = JsonObject.builder()
@@ -342,122 +333,14 @@ final class HttpFront {
             .put("proto", Message.PROTO)
             .put("minProto", NodeSession.MIN_PROTO)
             .put("uptimeSeconds", Resources.uptimeMillis() / 1000)
-            .put("certificateNotAfter", hub.tls().isLoaded() ? hub.tls().leaf().getNotAfter().getTime() / 1000 : null)
-            .put("role", hub.role())
-            .put("availability", availability());
-        PeerClient pc = hub.peerClient();
-        if (hub.isStandby() && pc != null) {
-            // Only a standby has a primary to name. A primary that names a peer (§13.5) has a
-            // client too, but it dials for a comparison of epochs, not to follow.
-            b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());
-        }
-        b.put("epoch", hub.epoch());
+            .put("certificateNotAfter", hub.tls().isLoaded() ? hub.tls().leaf().getNotAfter().getTime() / 1000 : null);
         return b.build();
-    }
-
-    /**
-     * §13.2: the fraction of each window this process was running, by its own record, and what it
-     * saw of each peer while it was. Two quantities, kept apart. {@code since} says how far back
-     * the record goes, because a window that reaches further than that is reported over less.
-     */
-    private JsonObject availability() {
-        long now = System.currentTimeMillis();
-        Availability a = hub.availability();
-        JsonObject.Builder process = JsonObject.builder().put("since", a.since() / 1000);
-        for (Availability.Window w : Availability.WINDOWS) {
-            Double f = a.processFraction(w.millis(), now);
-            if (f != null) {
-                process.put(w.label(), Math.round(f * 10_000) / 10_000.0 + "");
-            }
-        }
-        // The table behind the page's columns: minutes down per day (30, oldest first) and per
-        // hour (24); -1 where the record has nothing for that bucket.
-        process.put("downMinutesPerDay", boxed(downMinutes(a::processDownBetween, now, 86_400_000L, 30)));
-        process.put("downMinutesPerHour", boxed(downMinutes(a::processDownBetween, now, 3_600_000L, 24)));
-        JsonObject.Builder peers = JsonObject.builder();
-        for (String name : a.peerNames()) {
-            JsonObject.Builder p = JsonObject.builder();
-            for (Availability.Window w : Availability.WINDOWS) {
-                Double f = a.peerFraction(name, w.millis(), now);
-                if (f != null) {
-                    p.put(w.label(), Math.round(f * 10_000) / 10_000.0 + "");
-                }
-            }
-            peers.put(name, p.build());
-        }
-        return JsonObject.builder().put("process", process.build()).put("peers", peers.build()).build();
-    }
-
-    /** Minutes down per bucket, oldest first; -1 where the record has nothing. */
-    private static long[] downMinutes(java.util.function.BiFunction<Long, Long, Long> down, long now, long bucketMs, int buckets) {
-        long[] out = new long[buckets];
-        long end = now;
-        for (int i = buckets - 1; i >= 0; i--) {
-            long ms = down.apply(end - bucketMs, end);
-            out[i] = ms < 0 ? -1 : (ms + 30_000) / 60_000;
-            end -= bucketMs;
-        }
-        return out;
-    }
-
-    private static List<Object> boxed(long[] v) {
-        List<Object> l = new ArrayList<>(v.length);
-        for (long x : v) {
-            l.add(x);
-        }
-        return l;
     }
 
     /** The status colours (good, warning, critical), validated for colour-vision separation as a set. */
     private static final String GOOD = "#0ca30c";
     private static final String WARNING = "#fab219";
     private static final String CRITICAL = "#d03b3b";
-
-    /**
-     * One inline SVG in the shape a status page uses: a bar per bucket, coloured by what the
-     * bucket was -- green with nothing down, amber with less than {@code severeAt} minutes down,
-     * red with that or more -- and, so that colour is never the only channel, shorter the worse
-     * it was. A bucket from before the record began draws a faint stub and says so. Every bar
-     * carries its number in a title, which is the tooltip, and the JSON status carries the same
-     * numbers, which is the table.
-     */
-    private static String strip(long[] minutes, long now, long bucketMs, long severeAt, String what) {
-        int slot = 10;
-        int w = 8;
-        int h = 26;
-        StringBuilder s = new StringBuilder();
-        s.append("<svg class=\"avail\" width=\"").append(minutes.length * slot).append("\" height=\"").append(h)
-            .append("\" viewBox=\"0 0 ").append(minutes.length * slot).append(' ').append(h)
-            .append("\" role=\"img\" aria-label=\"").append(escape(what)).append("\">");
-        for (int i = 0; i < minutes.length; i++) {
-            int x = i * slot + 1;
-            long end = now - (minutes.length - 1 - i) * bucketMs;
-            String when = bucketLabel(end, bucketMs);
-            s.append("<g><title>").append(when).append(": ");
-            String fill;
-            int bar;
-            if (minutes[i] < 0) {
-                s.append("no record</title><rect x=\"").append(x).append("\" y=\"").append(h - 3).append("\" width=\"").append(w)
-                    .append("\" height=\"3\" rx=\"1.5\" fill=\"currentColor\" fill-opacity=\".2\"/></g>");
-                continue;
-            } else if (minutes[i] == 0) {
-                s.append("up throughout");
-                fill = GOOD;
-                bar = h;
-            } else if (minutes[i] < severeAt) {
-                s.append(minutes[i]).append(" min down");
-                fill = WARNING;
-                bar = h * 2 / 3;
-            } else {
-                s.append(minutes[i]).append(" min down");
-                fill = CRITICAL;
-                bar = h / 3;
-            }
-            s.append("</title><rect x=\"").append(x).append("\" y=\"").append(h - bar).append("\" width=\"").append(w)
-                .append("\" height=\"").append(bar).append("\" rx=\"1.5\" fill=\"").append(fill).append("\"/></g>");
-        }
-        return s.append("</svg>").toString();
-    }
 
     /**
      * What a graded row is: one of the three states the strip's colours already name. A row with no
@@ -477,7 +360,7 @@ final class HttpFront {
             this.word = word;
         }
 
-        /** The dot, and the word beside it, because colour is never the only channel (§13.2). */
+        /** The dot, and the word beside it, because colour is never the only channel (§6.3). */
         String mark() {
             return this == OK ? "" : "<span class=\"sw\" style=\"background:" + colour + "\"></span><b>" + word + "</b>: ";
         }
@@ -561,42 +444,6 @@ final class HttpFront {
     }
 
     /**
-     * Redundancy as a grade. A primary that was never given a peer is a single hub **by choice**
-     * and is not missing anything, so it is not graded at all -- a status line that says "Degraded"
-     * about every one-host deployment is one an operator learns to ignore, which costs more than
-     * the row it was meant to explain. Being given a peer and not having it is the fault.
-     */
-    private Problem roleProblem(Peer peer) {
-        if (peer.following()) {
-            return peer.synced() ? new Problem(Health.OK, "")
-                : new Problem(Health.WARNING, peer.connected() ? "not in sync with the primary yet"
-                    // A hub that stood down to another primary (§13.5) without having been given
-                    // a --peer of its own has no peer client at all, so it is not merely out of
-                    // touch with a primary, it has none to be out of touch with.
-                    : peer.primary() == null ? "standing by with no primary to follow"
-                    : "not connected to the primary");
-        }
-        // Connected, and not more: the primary has no acknowledgement to grade, and a standby that
-        // stops reading is dropped by Peers at MAX_QUEUED and becomes the absence this does grade.
-        // That cap is reached by events being appended, though, so on a hub where nothing is
-        // happening there is no bound on the wait at all. Between the two it reads as connected,
-        // which is the limit of what this side knows.
-        return hub.config().peer() != null && peer.standbys().isEmpty()
-            ? new Problem(Health.WARNING, "no standby is connected")
-            : new Problem(Health.OK, "");
-    }
-
-    /**
-     * One reading of the hub-to-hub state, taken once per page. {@code following} is this hub being
-     * a standby: then the other fields describe the primary it follows, and {@code standbys} is
-     * empty -- {@code primary} is null when it has no peer client, which is a hub that stood down
-     * (§13.5) and is following nothing. Otherwise it holds the sessions standbys have open to this
-     * one. {@code synced} implies {@code connected}, which is why the two are sampled in that order.
-     */
-    private record Peer(boolean following, boolean connected, boolean synced, String primary,
-                        String lastError, List<Peers.Session> standbys) {}
-
-    /**
      * Whether a stored URL is a page this hub will link to. Schemes are case-insensitive, so
      * {@code HTTPS://} is a URL and refusing it would be an error whose difference from what the
      * operator typed is invisible.
@@ -628,76 +475,6 @@ final class HttpFront {
     }
 
     /**
-     * What a bucket is called, with the hour on it even for a day-wide one. Buckets are measured
-     * back from the moment the page was built, not from midnight, so a day bucket runs from
-     * 08:05 to 08:05 and naming it by date alone puts an outage on the wrong date for anyone
-     * reading a printed list -- tolerable in a tooltip, not in a table of dates. Used by the
-     * picture and by the list under it, so the two cannot disagree about which bucket a number
-     * belongs to.
-     */
-    private static String bucketLabel(long end, long bucketMs) {
-        return escape(java.time.Instant.ofEpochMilli(end - bucketMs).toString()
-            .substring(0, 16).replace('T', ' ')) + (bucketMs >= 86_400_000L ? " +24h" : "");
-    }
-
-    /**
-     * The same numbers as the strip, in text, for every reader the tooltip has nothing for: there is
-     * no hover on a phone, nothing in the strip can be reached by keyboard, and {@code role="img"}
-     * with a label is a reason for an assistive reader not to descend into the bars at all. The
-     * sentence under the strip says "each bar says its minutes", and until now that was true of one
-     * kind of reader.
-     *
-     * <p>Only the buckets that were not green, which is what anybody is looking for and which keeps
-     * this bounded at 30 or 24 rows while usually being empty. A bucket from before the record
-     * began is not listed: it is not a bucket this hub was down for, it is one it cannot speak
-     * about, and thirty rows of "no record" on a new hub would bury the two rows that matter.
-     */
-    private static String notGreen(long[] minutes, long now, long bucketMs, String unit, String of) {
-        StringBuilder rows = new StringBuilder();
-        int n = 0;
-        for (int i = 0; i < minutes.length; i++) {
-            if (minutes[i] <= 0) {
-                continue;
-            }
-            n++;
-            rows.append("<tr><td>").append(bucketLabel(now - (minutes.length - 1 - i) * bucketMs, bucketMs))
-                .append("</td><td>").append(minutes[i]).append(" min down</td></tr>");
-        }
-        if (n == 0) {
-            return "";
-        }
-        // "not green" would put the state in the colour alone, on the line that is collapsed --
-        // which is the one channel §13.2 says never to rely on, and the reason this list exists.
-        return "<details><summary>" + n + " " + unit + (n == 1 ? "" : "s") + " with " + escape(of)
-            + ", of the last " + minutes.length + "</summary><table>" + rows + "</table></details>";
-    }
-
-    /** The line under a strip: how far back it reaches, the figure for that window, and where it ends. */
-    private static String ends(String from, Double fraction, String to) {
-        return "<small class=\"ends\"><span>" + from + "</span><span>" + Availability.percent(fraction) + " uptime</span><span>" + to + "</span></small>";
-    }
-
-    private static final String LEGEND = "<small class=\"legend\"><span class=\"sw\" style=\"background:" + GOOD + "\"></span>up "
-        + "<span class=\"sw\" style=\"background:" + WARNING + "\"></span>down under an hour (a quarter, per hour) "
-        + "<span class=\"sw\" style=\"background:" + CRITICAL + "\"></span>down longer. Shorter bars are worse; each bar says its minutes.</small>";
-
-    /** "100% 24h · 99.98% 7d · 99.9% 30d", or what the record's age allows. */
-    private static String availabilityText(java.util.function.Function<Long, Double> fraction) {
-        StringBuilder t = new StringBuilder();
-        for (Availability.Window w : Availability.WINDOWS) {
-            Double f = fraction.apply(w.millis());
-            if (f == null) {
-                continue;
-            }
-            if (t.length() > 0) {
-                t.append(" · ");
-            }
-            t.append(Availability.percent(f)).append(' ').append(w.label());
-        }
-        return t.length() == 0 ? "no record yet" : t.toString();
-    }
-
-    /**
      * The hub's own page: what it is, how to join it, and how it is doing. Counts and resource
      * use are public; they describe the service, not the people on it. Per-node detail and the
      * controls over it are not here at all: since #253 they are the {@code jailhub} socket CLI's,
@@ -706,10 +483,6 @@ final class HttpFront {
     private String home() {
         StringBuilder b = new StringBuilder();
         String host = escape(hub.config().hostname());
-        // Sampled once for the whole page, for the reason the status section below already gives:
-        // the role is live state, and a hub promoted between two readings of it renders a page that
-        // contradicts itself -- here, "it is the standby" above a table that says primary.
-        boolean standby = hub.isStandby();
         b.append("""
             <p><code>%s</code> is a jailscale hub. It publishes a port on your \
             machine over HTTPS without opening an inbound port: the hub relays the bytes and your \
@@ -753,15 +526,7 @@ final class HttpFront {
             <a href="%s/blob/main/docs/release-verification.md">How to check it</a> is one command \
             from a clone, or four by hand. The first copy is the one nothing of ours can vouch for \
             yet; every copy after it is checked against a key this one pinned.</p>""".formatted(REPO));
-        if (standby) {
-            // A standby answers Goodbye{standby} to every control connection (§13.4), so the join
-            // below is not printed here at all rather than printed beside a warning: a page that
-            // invites a join it will refuse is worse than one that says nothing, and while the
-            // primary is down the apex this would tell them to type resolves to nothing.
-            b.append("""
-                <p><b>Not on this host, though:</b> it is the standby. It serves links that are already \
-                open and takes no joins; the primary is where joining happens.</p>""");
-        } else {
+        {
             // Say what this hub actually accepts rather than assuming a default.
             boolean open = "open".equals(hub.store().setting(Store.SETTING_REGISTRATION, "invite"));
             if (open) {
@@ -781,8 +546,7 @@ final class HttpFront {
             b.append("""
                 <p>That serves <code>127.0.0.1:3000</code> at <code>https://&lt;name&gt;.%s</code>, with a \
                 certificate your own machine terminates. <code>--name myapp</code> asks for a particular \
-                name, <code>--tcp</code> forwards a raw port instead, and <code>--domain app.example.com</code> \
-                uses a domain of yours, whose key never leaves your machine.</p>""".formatted(host));
+                name.</p>""".formatted(host));
         }
 
         // A public hub is asking people to route their traffic through a stranger's machine. What it
@@ -793,17 +557,15 @@ final class HttpFront {
             session key belongs to the machine at the other end. It does hold the wildcard private key for \
             <code>*.%s</code> and signs one handshake digest per visitor, so a dishonest hub could point a \
             name at a machine of its own instead. That is what <code>jailscale verify</code> checks from \
-            your side, and what the daemon re-checks on its own every half hour. A domain you bring \
-            yourself never involves this hub's key at all.</p>""".formatted(host));
+            your side, and what the daemon re-checks on its own every half hour.</p>""".formatted(host));
 
         // Who runs this hub, and what it keeps. Drawn only when the operator has said so: a hub
         // somebody runs for themselves has nobody to name and no terms to point at, and a section
         // that appeared on every hub to say "not configured" would be a worse page for the case
         // that needs it least (#99).
-        // Stripped where it is read and not only where it is written (AdminIpc): a value arrives
-        // here from the replication stream as well, so a primary running a build without that rule
-        // would otherwise have this page draw the section around a blank name -- and, worse, drop
-        // the closing warning below on the strength of it.
+        // Stripped where it is read and not only where it is written (AdminIpc): a value written
+        // by an older build, or by hand into the store, would otherwise have this page draw the
+        // section around a blank name -- and, worse, drop the closing warning below on it.
         String operator = hub.store().setting(Store.SETTING_OPERATOR, "").strip();
         // And checked again here, not only where they are set: these two go into an href, and the
         // store is written by replication as well as by an admin on this host.
@@ -832,13 +594,13 @@ final class HttpFront {
             // about the traffic while it is moving. These are what stays afterwards, and the last
             // line is the important one: the process can speak for the process and no further.
             // Not an inventory. Three attempts at one were each found short -- the pending
-            // record's address, then the hostname and system, then the invites, domains,
+            // record's address, then the hostname and system, then the invites,
             // raw-port targets and notices -- and a list that has to be complete to be
             // honest is a list that goes stale the next time anything is added to the store. So:
             // the shape of it, the part a visitor is actually asking about, and where it stops.
             b.append("""
-                <p>What it keeps is what an operator administers: the nodes and who owns them, the names, \
-                domains and ports they hold, the invitations that let them in, and what each machine said \
+                <p>What it keeps is what an operator administers: the nodes and who owns them, the names \
+                they hold, the invitations that let them in, and what each machine said \
                 about itself when it joined -- its hostname, its system, and the address it knocked from. \
                 That stays until the operator removes it. Beside it, thirty days of uptime record and the \
                 addresses they have barred.</p>\
@@ -855,37 +617,14 @@ final class HttpFront {
         // The rows that have a threshold, graded before any of them is written, because the verdict
         // goes above the table and is the worst of them. Everything else on this page is a fact with
         // no good or bad about it -- a version, a key, a memory figure -- and stays ungraded.
-        PeerClient pc = hub.peerClient();
-        // Sampled once, at the top of this method, and used by every part of the page that depends
-        // on the role. The grade and the Role row are two readings of the same live state, and
-        // taken separately a standby that connects or drops between them puts a verdict on the page
-        // that contradicts the row directly under it. The role is read on its own and not through
-        // `pc != null`: a hub that stood down without a --peer of its own is a standby with no peer
-        // client, and reading it as a primary would have this page call it healthy.
-        Peer peerState;
-        if (standby) {
-            // isSynced() is already "connected and synced", so it is sampled first and connected is
-            // widened to match; the other order can leave synced true beside connected false, which
-            // the row would print as "in sync" for a hub that is not.
-            boolean synced = pc != null && pc.isSynced();
-            peerState = new Peer(true, synced || (pc != null && pc.isConnected()), synced,
-                pc == null ? null : pc.primaryHost(), pc == null ? null : pc.lastError(), List.of());
-        } else {
-            peerState = new Peer(false, false, false, null, null, hub.peers().all());
-        }
         Cert certState = certState();
         Problem cert = certificateProblem(certState);
-        Problem role = roleProblem(peerState);
         // A hub nobody has joined yet is not a hub in trouble; one whose nodes have all gone is.
-        // Only a primary grades it, for the same reason it cannot grade a standby as in sync: a
-        // standby takes no control connections, so what it counts online is the relay connections
-        // nodes have opened to it (§13.4), and a node that has not opened one yet is not a node
-        // that is down.
-        Problem nodes = !peerState.following() && registered > 0 && online == 0
+        Problem nodes = registered > 0 && online == 0
             ? new Problem(Health.WARNING, registered == 1 ? "the one registered node is offline"
                 : "none of the " + registered + " registered nodes are online")
             : new Problem(Health.OK, "");
-        b.append("<h2>Status</h2>").append(verdict(List.of(cert, role, nodes))).append("<table>");
+        b.append("<h2>Status</h2>").append(verdict(List.of(cert, nodes))).append("<table>");
         // Said plainly when it is not a release, because the string alone does not say so to
         // anyone who does not read Maven: a hub built from main reports the pom's version, which
         // only a tag build replaces (`versions:set` in release.yml), so every source, `edge` and
@@ -908,57 +647,6 @@ final class HttpFront {
             row(b, "Next hub key", "<code>" + escape(nextKey) + "</code>");
         }
         row(b, "Uptime", Resources.humanDuration(Resources.uptimeMillis()));
-        // Two availability figures and never one (§13.2): the process's own record counts a hub
-        // whose port is firewalled as up, and what a peer saw is reachability but only exists
-        // once there is a peer. Each is labelled with what it measures.
-        long now = System.currentTimeMillis();
-        Availability avail = hub.availability();
-        String sinceNote = now - avail.since() < Availability.WINDOWS.get(Availability.WINDOWS.size() - 1).millis()
-            ? " (record since " + escape(java.time.Instant.ofEpochMilli(avail.since()).toString().substring(0, 10)) + ")" : "";
-        long day = 86_400_000L;
-        long hour = 3_600_000L;
-        // The arrays are built once and used twice over: the picture, and the list of what is in
-        // it that a tooltip cannot tell anybody.
-        long[] byDay = downMinutes(avail::processDownBetween, now, day, 30);
-        long[] byHour = downMinutes(avail::processDownBetween, now, hour, 24);
-        row(b, "Availability", "by this process's own record" + sinceNote
-            + strip(byDay, now, day, 60, "Uptime per day, last 30 days")
-            + ends("30 days ago", avail.processFraction(30 * day, now), "Today")
-            + notGreen(byDay, now, day, "day", "downtime")
-            + strip(byHour, now, hour, 15, "Uptime per hour, last 24 hours")
-            + ends("24 hours ago", avail.processFraction(day, now), "Now")
-            + notGreen(byHour, now, hour, "hour", "downtime") + LEGEND);
-        for (String peer : avail.peerNames()) {
-            long[] peerByDay = downMinutes((f, t) -> avail.peerDownBetween(peer, f, t), now, day, 30);
-            row(b, "Seen from here", "<code>" + escape(peer) + "</code>"
-                + strip(peerByDay, now, day, 60, "The channel to " + peer + " per day, last 30 days")
-                + ends("30 days ago", avail.peerFraction(peer, 30 * day, now), "Today")
-                + notGreen(peerByDay, now, day, "day", "the channel down"));
-        }
-        if (peerState.following()) {
-            row(b, "Role", role.level().mark()
-                + (peerState.primary() == null ? "standby, following no primary"
-                    : "standby of <code>" + escape(peerState.primary()) + "</code>") + ", "
-                + (peerState.synced() ? "in sync" : peerState.connected() ? "connected, not yet in sync" : "not connected"
-                    + (peerState.lastError() == null ? "" : " (" + escape(peerState.lastError()) + ")"))
-                + ", epoch " + hub.epoch());
-        } else {
-            StringBuilder r = new StringBuilder("primary");
-            if (peerState.standbys().isEmpty()) {
-                r.append(", no standby connected");
-            } else {
-                r.append(", standby");
-                for (Peers.Session ps : peerState.standbys()) {
-                    r.append(" <code>").append(escape(ps.name())).append("</code>");
-                }
-                // Not "in sync", which this side cannot say: a standby acknowledges nothing, so all
-                // the primary knows is that the channel is open and what it has written to it. The
-                // standby is the side that knows, and its own page is where it says so.
-                r.append(" connected");
-            }
-            r.append(", epoch ").append(hub.epoch());
-            row(b, "Role", role.level().mark() + r);
-        }
         row(b, "Nodes", nodes.level().mark() + online + " online of " + registered + " registered");
         row(b, "Certificate", cert.level().mark() + certificateRow(certState));
         // Heap is a small part of what a native image occupies, so where RSS is unavailable say
@@ -1087,12 +775,8 @@ final class HttpFront {
             + "font-weight:600;margin:2.75rem 0 .5rem}"
             + "p{margin:.75rem 0}a{color:var(--link)}"
             + "p.verdict{font-weight:600;margin:.25rem 0 1rem}"
-            + "details{margin:.5rem 0;font-size:.85rem}summary{cursor:pointer;color:var(--dim)}"
-            + "details table{margin:.25rem 0 .5rem}details td:first-child{width:9rem}"
             + "pre{background:var(--wash);padding:.9rem 1rem;overflow-x:auto;border-radius:.5rem;line-height:1.5}"
             + "table{border-collapse:collapse;width:100%;margin:.25rem 0}"
-            + "svg.avail{display:block;margin:.5rem 0 0;max-width:100%}td small{margin:.2rem 0 0}"
-            + "small.ends{display:flex;justify-content:space-between;max-width:300px}"
             + ".sw{display:inline-block;width:.7em;height:.7em;border-radius:2px;margin:0 .3em 0 .1em;vertical-align:-.05em}"
             + "td{padding:.5rem 0;text-align:left;border-top:1px solid var(--rule);vertical-align:baseline}"
             + "tr:first-child td{border-top:0}"

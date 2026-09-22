@@ -4,15 +4,15 @@
 #
 #   ./mvnw -B -ntp -DskipTests -Pnative -pl hub -am package   # -> hub/target/jailhub
 #   docker build -f deploy/Dockerfile.hub -t jailhub .
-#   docker run -d --name jailhub -p 443:443 -p 80:80 -p 53:53/udp -p 53:53/tcp -p 10000-10999:10000-10999 \
+#   docker run -d --name jailhub -p 443:443 -p 53:53/udp -p 53:53/tcp \
 #       -v jailhub-state:/var/lib/jailhub jailhub serve --base-url https://hub.example.com --acme-email ops@example.com
 #
 # The state volume holds hub.key, tls/ and the event log: back it up, it is the whole hub.
 #
 # It used to build the binary here, FROM ghcr.io/graalvm/native-image-community:25, and that tag is
 # GraalVM for JDK 25.0.2 -- the one range §3.2 forbids, because 25.0.0-25.0.2 lose timed
-# virtual-thread wake-ups once a delayed task is cancelled (JDK-8370887), which is exactly what
-# `serve --takeover` does to the old process's keepalive sleeps. That registry publishes nothing
+# virtual-thread wake-ups once a delayed task is cancelled (JDK-8370887), which is what the
+# hand-off's cancelled keepalive sleeps used to hit before it was removed. That registry publishes nothing
 # newer for JDK 25 (25.0.3, 25.0.4, 25.3 are all absent), so the toolchain left the image instead:
 # the `images` workflow builds with graalvm-community 25.3 exactly as `release` does. Same toolchain
 # and options, so §14's numbers describe this binary too -- not byte-identical to the release asset,
@@ -43,10 +43,10 @@ COPY --from=libs --chown=65532:65532 /state /var/lib/jailhub
 COPY ${BIN} /jailhub
 ENV JAILHUB_STATE=/var/lib/jailhub
 VOLUME /var/lib/jailhub
-# Not 9090: /metrics defaults to the container's own loopback (ARCHITECTURE.md 6.3), which is what a
-# sidecar in the same network namespace scrapes. Reaching it from another container needs
-# --metrics-listen 0.0.0.0:9090 and a network policy in front of it, which is a deliberate act.
-EXPOSE 443 80 53/udp 53/tcp 10000-10999
+# Two ports, which is the whole list since the maintenance cut (ARCHITECTURE.md 8.3, 8.4): port 80
+# went with user domains and the 10000-10999 range with the raw ports. There is no metrics port --
+# what an operator watches is on the admin socket inside the container (6.3).
+EXPOSE 443 53/udp 53/tcp
 USER nonroot
 ENTRYPOINT ["/jailhub"]
 CMD ["serve", "--help"]

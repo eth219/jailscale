@@ -8,7 +8,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * How much bigger than a query an answer can be (ARCHITECTURE.md §11.5, §13.3).
+ * How much bigger than a query an answer can be (ARCHITECTURE.md §11.5).
  *
  * <p>The design said the answers here were too small to amplify with. That was true and it was an
  * assertion: nothing measured it, and nothing would have noticed a record type or a longer value

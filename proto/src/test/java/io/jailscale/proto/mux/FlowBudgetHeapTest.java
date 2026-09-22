@@ -237,7 +237,7 @@ class FlowBudgetHeapTest {
         List<MuxStream> open(int n) throws Exception {
             List<MuxStream> streams = new ArrayList<>();
             for (int i = 0; i < n; i++) {
-                streams.add(sender.open(JsonObject.builder().put("sni", "x" + i).build(), false));
+                streams.add(sender.open(JsonObject.builder().put("sni", "x" + i).build()));
             }
             // Opened, accepted and empty before anything is measured: an OPEN still in flight would
             // land its stream between the two heap readings and show up as queued bytes.

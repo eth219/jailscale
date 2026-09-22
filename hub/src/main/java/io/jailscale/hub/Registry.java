@@ -16,15 +16,8 @@ final class Registry {
     }
 
     NodeGroup attach(NodeSession s) {
-        boolean[] created = new boolean[1];
-        NodeGroup g = byKey.computeIfAbsent(s.machineKey(), k -> {
-            created[0] = true;
-            return new NodeGroup(hub, k);
-        });
+        NodeGroup g = byKey.computeIfAbsent(s.machineKey(), k -> new NodeGroup(hub, k));
         g.attach(s);
-        if (created[0]) {
-            hub.nodesChanged();
-        }
         return g;
     }
 
@@ -35,12 +28,11 @@ final class Registry {
             if (g.isEmpty()) {
                 byKey.remove(s.machineKey(), g);
                 hub.links().groupEnded(g);
-                hub.nodesChanged();
             }
         }
     }
 
-    /** The MachineKeys attached right now, for the peer (§13.4). */
+    /** The MachineKeys attached right now. */
     List<String> machineKeys() {
         return new ArrayList<>(byKey.keySet());
     }
@@ -82,17 +74,4 @@ final class Registry {
         }
     }
 
-    void drainAll() {
-        for (NodeGroup g : all()) {
-            g.drain();
-        }
-    }
-
-    int liveSessions() {
-        int n = 0;
-        for (NodeGroup g : all()) {
-            n += g.connections();
-        }
-        return n;
-    }
 }

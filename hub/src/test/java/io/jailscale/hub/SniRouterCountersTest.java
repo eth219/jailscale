@@ -1,18 +1,12 @@
 package io.jailscale.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
-import java.io.IOException;
-import java.net.Socket;
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.util.List;
-import org.junit.jupiter.api.AfterEach;
+import java.net.InetAddress;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import io.jailscale.proto.net.TestPorts;
 
 /**
  * The per-address connection counter of ARCHITECTURE.md §8.1. It is keyed by visitor address and
@@ -20,57 +14,24 @@ import io.jailscale.proto.net.TestPorts;
  * connections is memory an attacker grows for the price of a TCP connection. §12 says memory is
  * bounded by the connection limits; for this map that is only true if entries are dropped at zero.
  *
- * <p>The hub reads PROXY headers here so that one loopback test can present many distinct visitor
- * addresses, which is also how the address is obtained in the deployment §8.5 describes.
+ * <p>Against {@code takeSlot}/{@code giveSlot} directly rather than through real connections. It
+ * used to drive the hub over loopback with a PROXY header per connection, which is how one test
+ * host could present four hundred distinct visitor addresses; the hub no longer reads those
+ * headers (§8.5 went with the maintenance cut), and a loopback socket can only ever present one
+ * address. Calling the pair is the same code path from one frame up -- {@code serve} takes a slot,
+ * and gives back exactly what it took -- and it can still fail in the direction that matters: an
+ * entry that survives its last release leaves {@code trackedAddresses} above zero.
+ *
+ * <p>The router is built with no hub because none of this reaches one: the maps and their locks
+ * are the whole of what is under test.
  */
-@Timeout(90)
+@Timeout(30)
 class SniRouterCountersTest {
 
-    private static final Path CERT = Path.of("src/test/resources/tls/hub-test.crt").toAbsolutePath();
-    private static final Path KEY = Path.of("src/test/resources/tls/hub-test.key").toAbsolutePath();
-    /** Not a TLS handshake record, so the ClientHello peek refuses it at once and the socket closes. */
-    private static final byte[] NOT_TLS = "GET / HTTP/1.1\r\n\r\n".getBytes(StandardCharsets.US_ASCII);
+    private final SniRouter router = new SniRouter(null);
 
-    private Path root;
-    private Hub hub;
-    private int port;
-
-    @AfterEach
-    void stop() throws Exception {
-        if (hub != null) {
-            hub.close();
-        }
-    }
-
-    private void startHub() throws Exception {
-        root = TestDirs.newRoot("jsc");
-        java.net.ServerSocket portSocket = TestPorts.listen(1024);
-        port = portSocket.getLocalPort();
-        hub = new Hub(HubConfig.withCert(URI.create("https://hub.test:" + port), root.resolve("hub"), "127.0.0.1", port,
-            CERT, KEY, true, HubConfig.POLICY_MEMBERS, true, "hub.test")
-            .withProxyProtocol(true, List.of()).withPortRange(0, 0));
-        hub.listenOn(portSocket);
-        hub.start();
-    }
-
-    /** One connection announcing {@code srcIp}, closed as soon as the hub is done with it. */
-    private void visit(String srcIp) {
-        try (Socket s = new Socket("127.0.0.1", port)) {
-            s.getOutputStream().write(("PROXY TCP4 " + srcIp + " 127.0.0.1 51234 443\r\n").getBytes(StandardCharsets.US_ASCII));
-            s.getOutputStream().write(NOT_TLS);
-            s.getOutputStream().flush();
-            s.getInputStream().read(); // returns when the hub closes its side
-        } catch (IOException ignored) {
-            // the hub closing on us is the expected end of every connection here
-        }
-    }
-
-    /** The hub closes the socket a moment before its own finally runs, so settle before asserting. */
-    private void awaitNoAddresses() throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (hub.router().trackedAddresses() != 0 && System.currentTimeMillis() < deadline) {
-            Thread.sleep(20);
-        }
+    private String take(String ip) throws Exception {
+        return router.takeSlot(ip, InetAddress.getByName(ip));
     }
 
     /**
@@ -81,27 +42,22 @@ class SniRouterCountersTest {
      */
     @Test
     void addressesAreForgottenOnceTheirConnectionsAreOver() throws Exception {
-        startHub();
         for (int i = 0; i < 400; i++) {
-            visit("203.0." + (i / 256) + "." + (i % 256));
+            router.giveSlot(take("203.0." + (i / 256) + "." + (i % 256)));
         }
-        awaitNoAddresses();
-        assertEquals(0, hub.router().trackedAddresses(),
+        assertEquals(0, router.trackedAddresses(),
             "every connection is over, so no visitor address should still be counted");
     }
 
     /** While connections are open the counter must still count, or the §8.1 limit is not enforced. */
     @Test
     void addressesAreCountedWhileTheirConnectionsAreOpen() throws Exception {
-        startHub();
-        // Held open: the hub is waiting up to HELLO_TIMEOUT_MS for a ClientHello that never comes.
-        try (Socket a = new Socket("127.0.0.1", port); Socket b = new Socket("127.0.0.1", port)) {
-            announce(a, "192.0.2.7");
-            announce(b, "192.0.2.8");
-            assertTrue(awaitAddresses(2), "two distinct addresses are connected right now");
-        }
-        awaitNoAddresses();
-        assertEquals(0, hub.router().trackedAddresses());
+        String a = take("192.0.2.7");
+        String b = take("192.0.2.8");
+        assertEquals(2, router.trackedAddresses(), "two distinct addresses are connected right now");
+        router.giveSlot(a);
+        router.giveSlot(b);
+        assertEquals(0, router.trackedAddresses());
     }
 
     /**
@@ -111,20 +67,13 @@ class SniRouterCountersTest {
      */
     @Test
     void oneAddressWithTwoConnectionsIsOneEntryUntilBothAreOver() throws Exception {
-        startHub();
-        try (Socket a = new Socket("127.0.0.1", port)) {
-            announce(a, "192.0.2.9");
-            assertTrue(awaitAddresses(1));
-            try (Socket b = new Socket("127.0.0.1", port)) {
-                announce(b, "192.0.2.9");
-                Thread.sleep(200);
-                assertEquals(1, hub.router().trackedAddresses(), "one address, however many connections");
-            }
-            Thread.sleep(200);
-            assertEquals(1, hub.router().trackedAddresses(), "the first connection is still open");
-        }
-        awaitNoAddresses();
-        assertEquals(0, hub.router().trackedAddresses());
+        String first = take("192.0.2.9");
+        String second = take("192.0.2.9");
+        assertEquals(1, router.trackedAddresses(), "one address, however many connections");
+        router.giveSlot(second);
+        assertEquals(1, router.trackedAddresses(), "the first connection is still open");
+        router.giveSlot(first);
+        assertEquals(0, router.trackedAddresses());
     }
 
     /**
@@ -134,57 +83,68 @@ class SniRouterCountersTest {
      */
     @Test
     void repeatedUseOfOneAddressLeavesItCountingFromZero() throws Exception {
-        startHub();
         for (int i = 0; i < 200; i++) {
-            visit("192.0.2.1");
+            router.giveSlot(take("192.0.2.1"));
         }
-        awaitNoAddresses();
-        assertEquals(0, hub.router().trackedAddresses());
-        try (Socket s = new Socket("127.0.0.1", port)) {
-            announce(s, "192.0.2.1");
-            assertTrue(awaitAddresses(1), "after the churn the address is counted again from zero");
-        }
-        awaitNoAddresses();
-        assertEquals(0, hub.router().trackedAddresses());
+        assertEquals(0, router.trackedAddresses());
+        String again = take("192.0.2.1");
+        assertEquals(1, router.trackedAddresses(), "after the churn the address is counted again from zero");
+        router.giveSlot(again);
+        assertEquals(0, router.trackedAddresses());
     }
 
     /**
-     * A whole IPv6 /64 is one entry, which is what makes {@link SniRouter#MAX_PER_IP} a limit at all
-     * once the listener is bound to {@code ::} -- one flag and an AAAA record away for any operator,
-     * and the hub serves both stacks there today. Every ordinary VPS is handed a routed /64, so a
-     * cap counted per address would read "64 connections, times eighteen quintillion".
+     * And the cap itself, which the socket-driven version could never reach: the 65th connection
+     * from one network is refused and, having been refused, leaves nothing behind -- a refusal that
+     * kept its increment would lock that network out for the life of the process.
      */
     @Test
-    void oneIpv6NetworkIsOneEntryHoweverManyAddressesItUses() throws Exception {
-        startHub();
-        try (Socket a = new Socket("127.0.0.1", port); Socket b = new Socket("127.0.0.1", port);
-            Socket c = new Socket("127.0.0.1", port)) {
-            announce6(a, "2001:db8:1:2::1");
-            announce6(b, "2001:db8:1:2:ffff:ffff:ffff:ffff");
-            assertTrue(awaitAddresses(1), "two addresses in one /64 are one counted network");
-            // And a different /64 is somebody else, so the bound is still per party.
-            announce6(c, "2001:db8:1:3::1");
-            assertTrue(awaitAddresses(2), "a different /64 is counted apart");
+    void theSixtyFifthConnectionFromOneNetworkIsRefusedAndTakesNoSlot() throws Exception {
+        String[] held = new String[SniRouter.MAX_PER_IP];
+        for (int i = 0; i < held.length; i++) {
+            held[i] = take("198.51.100.4");
+            assertNotNull(held[i], "connection " + (i + 1) + " is inside the cap of " + SniRouter.MAX_PER_IP);
         }
-        awaitNoAddresses();
-        assertEquals(0, hub.router().trackedAddresses());
-    }
-
-    private void announce(Socket s, String srcIp) throws IOException {
-        s.getOutputStream().write(("PROXY TCP4 " + srcIp + " 127.0.0.1 51234 443\r\n").getBytes(StandardCharsets.US_ASCII));
-        s.getOutputStream().flush();
-    }
-
-    private void announce6(Socket s, String srcIp) throws IOException {
-        s.getOutputStream().write(("PROXY TCP6 " + srcIp + " ::1 51234 443\r\n").getBytes(StandardCharsets.US_ASCII));
-        s.getOutputStream().flush();
-    }
-
-    private boolean awaitAddresses(int n) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 5_000;
-        while (hub.router().trackedAddresses() < n && System.currentTimeMillis() < deadline) {
-            Thread.sleep(20);
+        assertNull(take("198.51.100.4"), "one past the cap is refused");
+        for (String key : held) {
+            router.giveSlot(key);
         }
-        return hub.router().trackedAddresses() == n;
+        assertEquals(0, router.trackedAddresses(), "the refused connection left no entry of its own");
+    }
+
+    /**
+     * A v6 visitor is counted against its /64 and not its address, or the cap is "64 per address,
+     * times eighteen quintillion" for anyone with a routed prefix -- which is everyone who has v6.
+     */
+    @Test
+    void ipv6IsCountedPerNetworkAndNotPerAddress() throws Exception {
+        String one = take("2001:db8:0:1::1");
+        String two = take("2001:db8:0:1::2");
+        assertEquals(1, router.trackedAddresses(), "two addresses in one /64 are one entry");
+        String elsewhere = take("2001:db8:0:2::1");
+        assertEquals(2, router.trackedAddresses(), "a different /64 is a different entry");
+        router.giveSlot(one);
+        router.giveSlot(two);
+        router.giveSlot(elsewhere);
+        assertEquals(0, router.trackedAddresses());
+    }
+
+    /**
+     * A forwarder on this host arrives as loopback and folds everyone behind it onto one key, so
+     * that key is exempt from the cap: capping it would cap every visitor behind the forwarder
+     * together. It is still counted, which is what lets the entry be dropped at zero.
+     */
+    @Test
+    void loopbackIsExemptFromTheCapAndStillCounted() throws Exception {
+        String[] held = new String[SniRouter.MAX_PER_IP + 8];
+        for (int i = 0; i < held.length; i++) {
+            held[i] = take("127.0.0.1");
+            assertNotNull(held[i], "a local forwarder is not capped");
+        }
+        assertEquals(1, router.trackedAddresses());
+        for (String key : held) {
+            router.giveSlot(key);
+        }
+        assertEquals(0, router.trackedAddresses());
     }
 }

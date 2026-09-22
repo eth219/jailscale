@@ -20,13 +20,19 @@ also the one that can read least.
 Two binaries, no runtime dependencies, nothing to install underneath them. Full
 design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+**This project is in maintenance.** v0.2.0 cut it back to the tunnel above: a
+second hub, raw TCP and UDP ports, domains you bring yourself, the Prometheus
+endpoint, `service install` and the PROXY protocol were all removed, and with
+them about 10,300 lines, 9,200 net. What is left is fixed and kept working; it is not
+being extended. The wire moved with the cut, so **a hub and its nodes upgrade
+to v0.2.0 together** ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).
+
 ## Scope
 
-One server you own runs `jailhub`, or two that stand in for each other. Every
-machine that publishes something runs `jailscale`. It does what ngrok,
-Cloudflare Tunnel and frp do — the first two hosted, frp on a server you run —
-with no third party in the path. Tailscale is larger: a mesh between your own
-machines, of which Funnel is this one job.
+One server you own runs `jailhub`. Every machine that publishes something runs
+`jailscale`. It does what ngrok, Cloudflare Tunnel and frp do — the first two
+hosted, frp on a server you run — with no third party in the path. Tailscale is
+larger: a mesh between your own machines, of which Funnel is this one job.
 
 1. **Lightweight.** 25 MiB per binary, 25 MB idle, milliseconds for a CLI round
    trip ([Resource usage](#resource-usage)). That needs GraalVM Native Image,
@@ -38,12 +44,12 @@ machines, of which Funnel is this one job.
    arrives on its own, because the hub is the authoritative DNS server for its
    own `_acme-challenge` name. No DNS provider API token anywhere.
 3. **Portability.** No root, no TUN device, no kernel module, no inbound port.
-   One outbound TCP connection is all the node needs; a published UDP port
-   rides it too. Four native platforms plus a pure-JVM fallback JAR.
+   One outbound TCP connection is all the node needs. Four native platforms
+   plus a pure-JVM fallback JAR.
 4. **Least privilege at the edge.** The hub reads the TLS SNI and nothing else,
    so it never parses visitor HTTP and never holds plaintext. Its wildcard key
    signs one handshake digest per visitor, and only for a stream the hub itself
-   delivered to that node; domains you bring yourself never involve that key.
+   delivered to that node.
    The node checks the hub's honesty from its own side ([Trust](#trust)), and
    the control channel is Noise IK inside TLS, so a compromised certificate
    authority still does not get you the control plane.
@@ -51,9 +57,10 @@ machines, of which Funnel is this one job.
 Out of scope: a peer mesh VPN, wire compatibility with Tailscale or ngrok or
 frp, reading the visitor's HTTP — neither end parses it, so no routing on paths
 or headers, no rewriting, no per-request log — HTTP/2 and HTTP/3 on the visitor
-side, more than one node behind a name, active-active hubs, latency-sensitive
-raw UDP such as game netcode, notification channels of any kind, mobile clients,
-and an external identity provider ([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)).
+side, more than one node behind a name, active-active hubs, raw TCP and UDP
+ports for clients that cannot speak TLS, notification channels of any kind,
+mobile clients, and an external identity provider
+([ARCHITECTURE.md §10](docs/ARCHITECTURE.md)).
 There is no hosted service either: you run the hub, and there is nothing to sign
 up for.
 
@@ -70,13 +77,13 @@ own. Neither has a runtime dependency and neither needs root to run.
 
 ### A binary
 
-v0.1.10 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
+v0.2.0 carries four targets for both programs: `linux-amd64`, `linux-arm64`,
 `darwin-arm64` and `windows-amd64.exe`. There is no `darwin-amd64`, because
 GraalVM CE 25.3 does not build one ([ARCHITECTURE.md
 §3.2](docs/ARCHITECTURE.md)); Intel Macs get [the JAR](#anything-else-with-a-jvm-25).
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.1.10
+base=https://github.com/eth219/jailscale/releases/download/v0.2.0
 target=darwin-arm64   # pick yours
 
 curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
@@ -100,8 +107,8 @@ code-signed is in [docs/release-verification.md](docs/release-verification.md).
 ### A container image
 
 ```
-docker pull ghcr.io/eth219/jailhub:v0.1.10
-docker pull ghcr.io/eth219/jailscale:v0.1.10
+docker pull ghcr.io/eth219/jailhub:v0.2.0
+docker pull ghcr.io/eth219/jailscale:v0.2.0
 ```
 
 linux/amd64 and linux/arm64, distroless, non-root, built by the same workflow
@@ -147,22 +154,22 @@ Other things a node can do:
 
 ```sh
 jailscale open 3000 --gate                    # visitors need a one-time link
-jailscale open 22 --tcp                       # a raw TCP port, no TLS
-jailscale open 5353 --udp                     # a raw UDP port for request-reply traffic (DNS, here), carried over TCP
-jailscale open 3000 --domain app.example.com  # your own domain, key never leaves the node
 jailscale verify                              # check that this node, not the hub, terminated the TLS
 jailscale update                              # say whether a newer release is out; never installs it
 jailscale ls | close NAME | status | down
-jailscale service install                     # keep the daemon running across logins
 ```
+
+To keep the daemon running across logins, run `jailscale daemon` from a unit of
+your own: [deploy/jailscale.service](deploy/jailscale.service) is a systemd user
+unit to copy, and the same command goes in a launchd agent or a Windows logon
+task.
 
 ### Running your own hub
 
 You need a host with a public address, a domain, and two ports: 443, and 53
 because the hub answers DNS for its own `_acme-challenge` name, which is how it
-issues its own wildcard certificate with no DNS provider API token. Port 80 is a
-third only for domains a node brings itself, which are proven by an http-01
-challenge the hub relays; without it that one feature is off.
+issues its own wildcard certificate with no DNS provider API token. That is the
+whole list — there is no third port.
 
 ```
 jailscale.example.com.                  A   203.0.113.10
@@ -185,26 +192,23 @@ hub is the authoritative server, it does not answer `AAAA` yet, and there is
 nowhere else to put the record ([#63](https://github.com/eth219/jailscale/issues/63)).
 
 The first run prints an invite. Whoever joins with it becomes the administrator.
-[deploy/](deploy/) has a systemd unit, container files, and the proxy
-configurations for putting the hub behind nginx or HAProxy.
+[deploy/](deploy/) has the systemd units for both halves and the container
+files. The hub takes 443 itself: putting it behind nginx or HAProxy needed the
+PROXY protocol, and that went with the maintenance cut.
 
-A second host can stand by for the first. Copy the first host's `hub.key` into
-the second's state directory and run the same command there with
-`--peer https://jailscale.example.com`. It follows the first — certificate,
-keys, every change to the state — and if the subdomain is delegated to both
-hosts instead of the three records above, nodes connect to both, a visitor who
-reaches either is served, and the standby promotes itself once its nodes
-confirm the first is gone. The records, what promotion needs, and the
-availability figure each hub's page shows are in
-[ARCHITECTURE.md §13](docs/ARCHITECTURE.md).
+One hub is the whole design. A standby that followed the first, served beside
+it and promoted itself was built and removed in the maintenance cut: what is
+left is the state directory as the backup unit, and a restart as the upgrade
+([ARCHITECTURE.md §13](docs/ARCHITECTURE.md) says what it was and what it
+cost).
 
 ## Resource usage
 
 Measured with the native binaries by `./measure.sh`, which CI runs as a budget
 on every push to main, with the toolchain and options the release workflow uses.
-The figures are v0.1.2's and the releases since have grown: v0.1.10 ships
-`jailscale` 0.75 MiB larger on linux-amd64 and 0.80 larger on arm64 macOS, and
-idle RSS has moved with it, every one still inside its budget.
+The figures are v0.1.2's and the releases since have moved: v0.1.10 shipped
+`jailscale` 0.75 MiB larger on linux-amd64 and 0.80 larger on arm64 macOS, every
+one still inside its budget, and v0.2.0 takes code away rather than adding it.
 [ARCHITECTURE.md §14](docs/ARCHITECTURE.md) has that drift, what it is made of,
 and what a release publishes that lets you check the binary rows yourself.
 
@@ -241,7 +245,7 @@ What each side needs:
 
 | | Hub | Node |
 |---|---|---|
-| Inbound ports | 443 and 53, plus 80 for user domains | none |
+| Inbound ports | 443 and 53 | none |
 | Public address | yes | no |
 | Root | no (`CAP_NET_BIND_SERVICE`) | no |
 | TUN device | no | no |
@@ -267,18 +271,14 @@ What a compromised hub can and cannot do is written out in
 
 - No production track record. The hub above is the only instance with any
   uptime behind it, and it serves one person's names.
-- Two hubs is the most built, and streams in flight on a host that dies are
-  cut. Raw TCP and UDP ports live on the primary alone. Replacing the binary
-  without dropping nodes works with `serve --takeover`, but not under a systemd
-  unit, where an upgrade is a restart. A third, store-less hub and systemd
-  socket activation are both decided work, not accepted limits
-  ([§1.2](docs/ARCHITECTURE.md)).
-- Redundancy stops at the hub. A name still has exactly one node behind it, so
-  when that node's host is asleep the name is down whatever the hub count is,
-  and the availability figure on the hub's page stays green, because it is a
-  figure about the hub. The second hub pays only where the hub is the less
-  available of the two, and next to a node on a laptop it is not
-  ([ARCHITECTURE.md §13.2](docs/ARCHITECTURE.md)).
+- There is one hub, and a hub that dies takes its names down until somebody
+  starts it again. Upgrading is a restart, which is what it already was under a
+  systemd unit. Socket activation would narrow that window; it was decided
+  work until maintenance closed it
+  ([#71](https://github.com/eth219/jailscale/issues/71)).
+- Redundancy would stop at the hub anyway. A name has exactly one node behind
+  it, so when that node's host is asleep the name is down whatever the hub
+  count is.
 - Upgrading stops one step short of automatic: `update --download` verifies,
   you run the `install` it prints. Which release is *current* is GitHub's word
   and nothing signs it; what is *in* that release is the maintainer's signature,
@@ -289,15 +289,14 @@ What a compromised hub can and cannot do is written out in
 - A hub and its nodes can be upgraded separately, and have been, each way that
   has been tried; a newer node against an older hub and rolling back have not
   ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).
-- `service install` is verified on macOS, and on `linux-arm64`, where both
-  the `systemctl --user` unit and the root one were run across a reboot
-  ([#81](https://github.com/eth219/jailscale/issues/81) has the run).
-  `linux-amd64` is not measured, and Windows is untested: nothing in CI
-  installs a service, on any platform. That run also found a defect rather
-  than a limit — stopping the unit is recorded as a failure, so after an
-  uninstall it is still listed by `systemctl --failed`, or `systemctl
-  --user --failed` for the user unit, until it is reset by hand
-  ([#235](https://github.com/eth219/jailscale/issues/235)).
+- Nothing installs a service for you. `jailscale service install` wrote a
+  launchd agent, a systemd unit and a Windows logon task, and was verified on
+  one of the three, so it went with the rest of the maintenance cut; the unit
+  in [deploy/](deploy/jailscale.service) is what replaced it. A clean SIGTERM
+  exits 143, so a unit that does not name that as success is listed by
+  `systemctl --failed` after every stop
+  ([#235](https://github.com/eth219/jailscale/issues/235)) — the one in
+  `deploy/` names it.
 - Idle memory is 25 MB against the 20 MB originally aimed at. Almost all of the
   gap is the binary's own code becoming resident, clean and evictable
   ([docs/jsse-idle-cost](docs/jsse-idle-cost)).

@@ -45,7 +45,6 @@ final class NodeState {
 
     /** A link this node keeps open (ARCHITECTURE.md §9.1). {@code linkId}/{@code url} are per hub session. */
     static final class LinkRec {
-        final String kind;
         final String host;
         final int port;
         volatile String name;   // assigned by the hub; requested on reopen so it stays stable
@@ -53,19 +52,10 @@ final class NodeState {
         volatile String url;
         volatile String gateHash;      // visitor gate (ARCHITECTURE.md §9.3): SHA-256 of the visit token, or null
         volatile long gateExpiresAt;   // ms epoch; 0 = never
-        volatile int hubPort;          // raw tcp/udp: the hub port assigned last time (requested again on reopen)
-        volatile String domain;        // user domain (ARCHITECTURE.md §8.3), or null
-        volatile String acmeDirectory; // ACME directory used for the domain, or null for Let's Encrypt
-        volatile String acmeEmail;
-        volatile long certExpiresAt;   // not persisted: from the loaded certificate
         volatile ProbeResult lastProbe; // not persisted: the last self-probe of this name (§11.3)
-        volatile long certWarnedAt;    // not persisted: when the expiry warning was last logged
         volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (ARCHITECTURE.md §9.3)
-        /** Not persisted: the link id each relay host gave this link (§13.4), by relay address. */
-        final java.util.Map<String, String> relayLinkIds = new java.util.concurrent.ConcurrentHashMap<>();
 
-        LinkRec(String kind, String host, int port, String name) {
-            this.kind = kind;
+        LinkRec(String host, int port, String name) {
             this.host = host;
             this.port = port;
             this.name = name;
@@ -89,9 +79,7 @@ final class NodeState {
             return null;
         }
         for (LinkRec l : links) {
-            // The id the primary gave, or the one a relay host gave the same link (§13.4): a
-            // visitor stream carries whichever host delivered it.
-            if (linkId.equals(l.linkId) || l.relayLinkIds.containsValue(linkId)) {
+            if (linkId.equals(l.linkId)) {
                 return l;
             }
         }
@@ -137,21 +125,18 @@ final class NodeState {
                 for (Object l : o.array("links")) {
                     @SuppressWarnings("unchecked")
                     JsonObject lo = Json.parseObject(Json.write((java.util.Map<String, Object>) l));
-                    LinkRec rec = new LinkRec(lo.optString("kind", "https"), lo.string("host"), lo.integer("port"), lo.optString("name", null));
+                    // A raw tcp or udp link saved by an older build is dropped rather than loaded
+                    // (§8.4): this node cannot serve it and the hub will not open it, so keeping
+                    // the record would only produce a link that fails at every reopen.
+                    String kind = lo.optString("kind", "https");
+                    if (!"https".equals(kind)) {
+                        LOG.warn("dropping the saved {} link to {}:{}: raw ports were removed",
+                            kind, lo.string("host"), lo.integer("port"));
+                        continue;
+                    }
+                    LinkRec rec = new LinkRec(lo.string("host"), lo.integer("port"), lo.optString("name", null));
                     rec.gateHash = lo.optString("gateHash", null);
                     rec.gateExpiresAt = lo.has("gateExpiresAt") ? lo.lng("gateExpiresAt") : 0;
-                    if (rec.gateHash != null && !"https".equals(rec.kind)) {
-                        // An older build let `gate` arm a raw link, which has no HTTP to check a
-                        // token in. Dropping it here keeps `ls` and the wire telling one story.
-                        LOG.warn("link {} is a raw {} link and cannot be gated; the gate an older build saved on it is dropped",
-                            rec.name, rec.kind);
-                        rec.gateHash = null;
-                        rec.gateExpiresAt = 0;
-                    }
-                    rec.hubPort = lo.optInt("hubPort", 0);
-                    rec.domain = lo.optString("domain", null);
-                    rec.acmeDirectory = lo.optString("acmeDirectory", null);
-                    rec.acmeEmail = lo.optString("acmeEmail", null);
                     rec.proxyProtocol = lo.optBool("proxyProtocol", false);
                     s.links.add(rec);
                 }
@@ -179,10 +164,8 @@ final class NodeState {
         }
         java.util.List<Object> ls = new java.util.ArrayList<>();
         for (LinkRec l : links) {
-            ls.add(JsonObject.builder().put("kind", l.kind).put("host", l.host).put("port", l.port).put("name", l.name)
+            ls.add(JsonObject.builder().put("host", l.host).put("port", l.port).put("name", l.name)
                 .put("gateHash", l.gateHash).put("gateExpiresAt", l.gateExpiresAt > 0 ? Long.valueOf(l.gateExpiresAt) : null)
-                .put("hubPort", l.hubPort > 0 ? Integer.valueOf(l.hubPort) : null)
-                .put("domain", l.domain).put("acmeDirectory", l.acmeDirectory).put("acmeEmail", l.acmeEmail)
                 .put("proxyProtocol", l.proxyProtocol).build().asMap());
         }
         java.util.List<Object> rs = new java.util.ArrayList<>();

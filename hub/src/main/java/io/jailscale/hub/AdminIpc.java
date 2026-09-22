@@ -15,8 +15,7 @@ final class AdminIpc implements Ipc.Handler {
     static final Map<String, List<String>> SETTING_VALUES = Map.of(
         Store.SETTING_INVITE_POLICY, List.of(HubConfig.POLICY_MEMBERS, HubConfig.POLICY_ADMINS),
         Store.SETTING_REGISTRATION, List.of("invite", "open"),
-        Store.SETTING_KNOCK, List.of("on", "off"),
-        Store.SETTING_AUTO_PROMOTE, List.of("on", "off"));
+        Store.SETTING_KNOCK, List.of("on", "off"));
 
     /**
      * The settings whose value is text rather than one of a fixed few (#99), and what each will
@@ -54,8 +53,8 @@ final class AdminIpc implements Ipc.Handler {
             case "address-check" -> {
                 // Asked for, so it runs now rather than at the next hourly pass (§7.2): the reason
                 // to type this is having just edited a record. Refused on the terms the loop waits
-                // on -- off, a standby, a delegated hub still finding its own address -- and no
-                // others: whether the certificate came from ACME is the loop's business and not this
+                // on -- off, or a delegated hub still finding its own address -- and no others:
+                // whether the certificate came from ACME is the loop's business and not this
                 // command's, because an operator who asks has said which deployment this is.
                 String blocker = hub.addressCheckBlocker();
                 if (blocker != null) {
@@ -63,19 +62,6 @@ final class AdminIpc implements Ipc.Handler {
                 }
                 reply.done(JsonObject.builder().put("ok", true).put("addressCheck", hub.checkAddress().json()));
             }
-            case "availability-reset" -> {
-                // The record restarts now: an operator who has finished a day of deliberate restarts
-                // does not want them counted against the service from here on (§13.2).
-                hub.availability().reset(System.currentTimeMillis());
-                reply.done(JsonObject.builder().put("ok", true).put("since", System.currentTimeMillis() / 1000));
-            }
-            case "promote" -> {
-                hub.promote();
-                reply.done(JsonObject.builder().put("ok", true).put("role", hub.role())
-                    .put("next", "point " + hub.config().hostname() + " at this host; restart the old primary with --peer https://"
-                        + hub.config().hostname()));
-            }
-
             case "node-list" -> {
                 List<Object> rows = store.nodes().stream().<Object>map(n -> {
                     NodeGroup g = hub.registry().get(n.mkey());
@@ -88,10 +74,6 @@ final class AdminIpc implements Ipc.Handler {
                     .put("mkey", p.mkey()).put("hostname", p.hostname()).put("os", p.os())
                     .put("ip", p.ip()).put("user", p.user()).put("at", p.at()).build().asMap()).toList();
                 reply.done(JsonObject.builder().put("ok", true).put("nodes", rows).put("pending", pend));
-            }
-            case "handoff" -> {
-                hub.handoff();
-                reply.ok();
             }
             case "node-approve" -> {
                 String mkey = resolveMkey(req.string("mkey"));
@@ -131,18 +113,7 @@ final class AdminIpc implements Ipc.Handler {
             }
             case "name-release" -> {
                 store.releaseName(req.string("name"));
-                hub.links().releasedByOperator(req.string("name"), false); // §11.4
-                reply.ok();
-            }
-            case "domain-list" -> {
-                List<Object> rows = store.domains().stream().<Object>map(d -> JsonObject.builder()
-                    .put("domain", d.domain()).put("user", d.user()).put("mkey", d.mkey())
-                    .put("open", hub.links().byDomain(d.domain()) != null).build().asMap()).toList();
-                reply.done(JsonObject.builder().put("ok", true).put("domains", rows));
-            }
-            case "domain-release" -> {
-                store.releaseDomain(req.string("domain"));
-                hub.links().releasedByOperator(req.string("domain"), true);
+                hub.links().releasedByOperator(req.string("name")); // §11.4
                 reply.ok();
             }
             case "ban-list" -> {
@@ -268,17 +239,35 @@ final class AdminIpc implements Ipc.Handler {
             .put("nodes", store.nodes().size())
             .put("links", hub.links().count())
             .put("certKeyId", hub.tls().isLoaded() ? hub.tls().keyId() : null)
+            // The one expiry left to watch (§15). The public page has carried it since it existed
+            // and the socket did not, so an operator watching from a terminal had to load the page
+            // or read the log. Unix seconds, as `/v1/status` reports it, and absent while no
+            // certificate is installed rather than 0 -- which would read as 1970.
+            .put("certificateNotAfter", hub.tls().isLoaded()
+                ? Long.valueOf(hub.tls().leaf().getNotAfter().getTime() / 1000) : null)
             .put("online", hub.registry().size())
+            .put("visitors", JsonObject.builder()
+                .put("now", hub.router().visitorsInFlight())
+                .put("routed", hub.router().visitorsRouted())
+                .put("refused", hub.router().visitorsRefused())
+                .put("refusedCapacity", hub.router().visitorsRefusedCapacity())
+                .build())
+            // The receive budget (ARCHITECTURE.md §5.3). Peak against limit is what says whether the
+            // bound is the thing holding the queues down, and reclaimed says how many visitor
+            // streams it cost -- the pair measure.sh gates the SLOW axis on (§14), and the one
+            // number here that an operator watches rather than reads once.
+            .put("receiveBudget", JsonObject.builder()
+                .put("limit", hub.flowBudget().limitBytes())
+                .put("queued", hub.flowBudget().usedBytes())
+                .put("peak", hub.flowBudget().peakBytes())
+                .put("reclaimed", hub.flowBudget().reclaimedStreams())
+                .build())
             .put("pending", store.pending().size())
             .put("invites", store.invites().size())
             .put("admins", new ArrayList<>(store.admins()))
             .put("registration", store.setting(Store.SETTING_REGISTRATION, "invite"))
             .put("invitePolicy", store.setting(Store.SETTING_INVITE_POLICY, "members"))
-            .put("knock", store.setting(Store.SETTING_KNOCK, "on"))
-            .put("role", hub.role())
-            .put("epoch", hub.epoch())
-            .put("autoPromote", hub.autoPromote() ? "on" : "off")
-            .put("standbys", standbys());
+            .put("knock", store.setting(Store.SETTING_KNOCK, "on"));
         // §7.2: the verdict that stands, so the operator who missed the line at boot has somewhere
         // to look it up. Absent, rather than "unknown", where the check is off or has not run yet:
         // a field that says nothing is worse than a field that is not there.
@@ -286,20 +275,7 @@ final class AdminIpc implements Ipc.Handler {
         if (address != null) {
             b.put("addressCheck", address.json());
         }
-        PeerClient pc = hub.peerClient();
-        if (hub.isStandby() && pc != null) {
-            b.put("primary", pc.primaryHost()).put("inSync", pc.isSynced());
-        }
         return b;
-    }
-
-    private List<Object> standbys() {
-        List<Object> rows = new ArrayList<>();
-        for (Peers.Session s : hub.peers().all()) {
-            rows.add(JsonObject.builder().put("host", s.name()).put("ip", s.remoteIp()).put("connectedAt", s.connectedAt())
-                .put("eventsSent", s.eventsSent()).build().asMap());
-        }
-        return rows;
     }
 
     /** Accepts a full mkey: text, a unique prefix of one, or a node id. */
@@ -340,7 +316,6 @@ final class AdminIpc implements Ipc.Handler {
             case "ban-remove" -> b.put("cidr", need(a.positional(2), "<ip|cidr>"));
             case "name-reassign" -> b.put("name", need(a.positional(2), "<name>")).put("user", a.require("user"));
             case "name-release" -> b.put("name", need(a.positional(2), "<name>"));
-            case "domain-release" -> b.put("domain", need(a.positional(2), "<domain>"));
             case "invite-create" -> b.put("user", a.get("user")).put("uses", a.integer("uses", 0))
                 .put("ttl", a.has("ttl") ? a.seconds("ttl", 0) : null).put("admin", a.flag("admin"));
             case "invite-revoke" -> b.put("id", need(a.positional(2), "<id>"));

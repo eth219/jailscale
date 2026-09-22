@@ -36,11 +36,11 @@
 #
 #   Instruments that answer a narrower question than they look like they do. Adding one timer per
 #   rebuild, each to a stage guessed at in advance, had every stage come back fast -- which produced
-#   "the time is between stages, so it is scheduling". It was not: the first scrape of the stage
-#   metrics (§6.3) showed unaccounted at zero and all of it in one stage. Eight rebuilds, and the
-#   answer needed every stage measured at once instead of one at a time. Twice over, a value already
-#   being collected was not read: jailhub_visitor_open_seconds_max said 0 for three more builds, and
-#   a timer was requested for a span that already had one.
+#   "the time is between stages, so it is scheduling". It was not: measuring every stage at once
+#   showed unaccounted at zero and all of it in one stage. Eight rebuilds, and the answer needed
+#   every stage measured at once instead of one at a time. Twice over, a value already being
+#   collected was not read. (Those stage timers were the hub's metrics endpoint, and went with it;
+#   what is left here is the gate, not the breakdown.)
 #
 #   Reading a mechanism one layer too shallow. "Control frames queue behind data, so put them in
 #   front" -- correct as far as it goes, and the measured problem was that there is no room in front,
@@ -90,11 +90,6 @@ PORT=${PORT:-18443}
 # run's app and both sampled RSS off a topology neither of them set up. Found by two sessions
 # measuring at the same time.
 APP_PORT=${APP_PORT:-$((PORT + 138))}
-# The metrics listener moves with PORT for the same reason the app port does. It is not optional:
-# jailhub defaults it to 127.0.0.1:9090, so two runs at once would fight over that one port and the
-# loser would silently scrape the winner's counters (ARCHITECTURE.md §6.3).
-METRICS_PORT=${METRICS_PORT:-$((PORT + 139))}
-METRICS_URL=http://127.0.0.1:$METRICS_PORT/metrics
 CHECK=0; [ "${1:-}" = "--check" ] && CHECK=1
 
 # Budget (ARCHITECTURE.md §14). Change only with a reason, in the same commit as the design table.
@@ -277,7 +272,7 @@ net_denied() {
 # runtime options the native image reads before main, deliberately unquoted so several split.
 # shellcheck disable=SC2086
 "$HUB" ${HUB_OPTS:-} serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
-  --state "$W/hub" --port-range none --http-listen none --metrics-listen "127.0.0.1:$METRICS_PORT" > "$W/hub.log" 2>&1 &
+  --state "$W/hub" > "$W/hub.log" 2>&1 &
 HUBPID=$!
 sleep 1.5
 INV=$(grep -o "https://hub.test:$PORT/join/[A-Za-z0-9_-]*" "$W/hub.log" | head -1)
@@ -477,11 +472,22 @@ if [ -n "${SLOW:-}" ]; then
   # queue's high-water mark is exact and reproduced at exactly the budget across every run of this
   # phase. Over the budget means the bound leaked; zero reclaims with the peak AT the budget means
   # something other than the bound flattened it, which is the falsification FlowBudget asks for.
-  set -- $(curl -s "$METRICS_URL" 2>/dev/null \
-      | awk '/^jailhub_streams_reclaimed_total /{r=$2} /^jailhub_receive_queued_peak_bytes /{p=$2} \
-             /^jailhub_receive_budget_bytes /{b=$2} /^jailhub_nodes_online /{n=$2} \
-             END{print r+0, p+0, b+0, n+0}')
+  # Over the admin socket, which is where these numbers live now that the hub has no metrics
+  # listener: `jailhub status` prints the JSON object the socket answered with, one line.
+  set -- $("$HUB" status --state "$W/hub" 2>/dev/null \
+      | tr ',{}' '\n\n\n' \
+      | awk -F: '/"reclaimed"/{r=$2} /"peak"/{p=$2} /"limit"/{b=$2} /"online"/{n=$2} \
+             END{gsub(/[^0-9]/,"",r); gsub(/[^0-9]/,"",p); gsub(/[^0-9]/,"",b); gsub(/[^0-9]/,"",n); \
+                 print r+0, p+0, b+0, n+0}')
   rec=${1:-0}; qpeak=${2:-0}; qbud=${3:-0}; nodes=${4:-1}
+  # A gate that cannot read its number has to say so. The scrape this replaced defaulted to 0 and
+  # fell through the `-gt 0` test below, which is a gate that passes when the measurement is missing
+  # -- the failure mode this harness's header is a list of. A limit of 0 is not a reading.
+  if [ "$qbud" -eq 0 ]; then
+    echo "  !! could not read receiveBudget from \`$HUB status --state $W/hub\`; the SLOW gate has no number"
+    "$HUB" status --state "$W/hub" 2>&1 | head -3 | sed 's/^/     /'
+    fail=1
+  fi
   # The budget is charged before the queue takes the payload, so each session reader can be holding
   # one 16 KB frame that is counted and not yet queued: the invariant is the budget plus a frame per
   # reader, not the budget exactly. Asserting it exactly failed by 16,367 bytes -- one frame less
@@ -494,26 +500,8 @@ if [ -n "${SLOW:-}" ]; then
   # budget -- noise even at a hundred nodes, which is why this is a gate concern and not a
   # correctness one.
   qslack=$((nodes * 4 * 16 * 1024))
-  # The stage breakdown (ARCHITECTURE.md 6.3). first_byte running ahead of the sum of the others is
-  # time in no stage at all, which is the finding that took eight rebuilds to reach by hand.
-  curl -s "$METRICS_URL" 2>/dev/null \
-    | awk '/^jailhub_visitor_admissions_total /{n=$2}
-           /^jailhub_visitor_[a-z_]+_seconds_total /{split($1,a,"_"); k=$1; sub("jailhub_visitor_","",k); sub("_seconds_total","",k); sum[k]=$2}
-           /^jailhub_visitor_[a-z_]+_seconds_max /{k=$1; sub("jailhub_visitor_","",k); sub("_seconds_max","",k); mx[k]=$2}
-           END{if (n>0) {
-                 parts=sum["peek"]+sum["resolve"]+sum["open"]+sum["reply"];
-                 printf "  admissions %d, mean/worst ms:", n;
-                 split("peek resolve open reply first_byte", o, " ");
-                 for (i=1;i<=5;i++) printf " %s=%.0f/%.0f", o[i], sum[o[i]]/n*1000, mx[o[i]]*1000;
-                 printf " unaccounted=%.0f\n", (sum["first_byte"]-parts)/n*1000 }}'
-  curl -s "$METRICS_URL" 2>/dev/null \
-    | awk '/^jailhub_mux_[a-z_]+_total /{k=$1; sub("jailhub_mux_","",k); sub("_total","",k); if (k !~ /seconds/) n[k]=$2}
-           /^jailhub_mux_[a-z_]+_seconds_total /{k=$1; sub("jailhub_mux_","",k); sub("_seconds_total","",k); s[k]=$2}
-           /^jailhub_mux_[a-z_]+_seconds_max /{k=$1; sub("jailhub_mux_","",k); sub("_seconds_max","",k); m[k]=$2}
-           END{printf "  mux mean/worst ms:";
-               split("queue_wait socket_write open_dispatch read_dispatch", o, " ");
-               for (i=1;i<=4;i++) if (n[o[i]]>0) printf " %s=%.1f/%.0f", o[i], s[o[i]]/n[o[i]]*1000, m[o[i]]*1000;
-               printf "\n"}'
+  # The stage and mux breakdowns that used to print here came off the hub's metrics endpoint and
+  # went with it. The node still keeps its own mux timings, in `jailscale status`.
   printf '  receive queue peak %.1f MB of %.1f MB (+%d KB slack, %s nodes), %s streams reclaimed\n' \
     "$(echo "$qpeak / 1048576" | bc -l)" "$(echo "$qbud / 1048576" | bc -l)" "$((qslack / 1024))" "$nodes" "$rec"
   if [ "$qbud" -gt 0 ] && [ "$qpeak" -gt $((qbud + qslack)) ]; then
