@@ -1050,21 +1050,22 @@ hub sees only the app's ciphertext; plaintext protocols are visible to the hub. 
 without the visitor's client cooperating, and it is the same for ngrok and frp, so `open --tcp/--udp`
 says so in its output. A client that can speak TLS should use the 443 path.
 
-### 8.5 Behind a TCP proxy, and PROXY protocol
+### 8.5 Not behind a TCP proxy
 
-An operator whose server already runs nginx or HAProxy on 443 can put the hub behind it, provided the
-proxy **forwards TCP bytes without opening TLS**; reference configs are in `deploy/nginx-stream.conf`
-and `deploy/haproxy.cfg`, including an `ssl_preread` example that routes only the hub's names to it.
-The hub then runs as `--listen 127.0.0.1:8443 --proxy-protocol` and reads a PROXY v1 or v2 header at
-the start of each connection to learn the visitor address. Because the header is only trustworthy
-from a trusted proxy, `--proxy-protocol` is accepted only when `--listen` is on loopback or
-`--trusted-proxy <cidr>` is given, and connections from untrusted peers are refused outright;
-otherwise anyone could forge a visitor address. The parser takes v1 text and v2 binary (IPv4, IPv6,
-LOCAL), and v1 addresses must be **literals**, because allowing hostnames would put a DNS lookup on
-the accept path where an attacker could stall the hub (fuzzing found that one). A hub with
-`--proxy-protocol` on rejects header-less connections, so the node's control connection must also
-come through the proxy, and the address derived from the header is what the rate limits, the knock
-queue and the session logs use, so nodes behind one proxy are not collapsed into one address.
+The hub takes 443 itself. A deployment where nginx or HAProxy already owns that port, forwarding
+TCP bytes without opening TLS and naming the visitor in a PROXY v1 or v2 header, was supported and
+was removed: `--proxy-protocol`, `--trusted-proxy`, the header parser and the reference configs in
+`deploy/`. What it cost was a parser on the accept path, reachable before anything has been
+authenticated -- fuzzing had already found one thing in it, a hostname in a v1 line that would have
+put a DNS lookup there -- and an address-attribution path that every rate limit, ban and log entry
+then depended on.
+
+What is given up with it: a hub on a machine whose 443 is taken, and telling visitors apart behind
+a forwarder on the hub's own host. The second one shows in §8.1's per-network cap, which exempts
+loopback precisely because everything behind such a forwarder arrives folded onto one address --
+so a hub with something in front of it has no per-address cap at all (§15). The node's own
+`--proxy-protocol`, which prepends a v1 line so the **local app** learns the visitor's address
+(§9.3), is a different feature and is still here.
 
 ---
 

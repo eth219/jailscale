@@ -189,8 +189,9 @@ hub is the authoritative server, it does not answer `AAAA` yet, and there is
 nowhere else to put the record ([#63](https://github.com/eth219/jailscale/issues/63)).
 
 The first run prints an invite. Whoever joins with it becomes the administrator.
-[deploy/](deploy/) has a systemd unit, container files, and the proxy
-configurations for putting the hub behind nginx or HAProxy.
+[deploy/](deploy/) has the systemd units for both halves and the container
+files. The hub takes 443 itself: putting it behind nginx or HAProxy needed the
+PROXY protocol, and that went with the maintenance cut.
 
 A second host can stand by for the first. Copy the first host's `hub.key` into
 the second's state directory and run the same command there with

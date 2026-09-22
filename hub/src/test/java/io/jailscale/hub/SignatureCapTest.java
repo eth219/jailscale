@@ -211,8 +211,8 @@ class SignatureCapTest {
      * repetitions under the same load to <b>0 failures and no resets at all</b>.
      *
      * <p>Every other local app in these tests already read before answering — {@code LinkEndToEndTest}
-     * and {@code ProxyProtocolEndToEndTest} parse the request head, {@code RawPortTest} echoes — which
-     * is why this was the only test that flaked.
+     * parses the request head, {@code RawPortTest} echoes — which is why this was the only test
+     * that flaked.
      */
     @Test
     void anOrdinaryVisitorSpendsOneSignature() throws Exception {

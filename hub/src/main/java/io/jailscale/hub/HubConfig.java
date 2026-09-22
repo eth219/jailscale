@@ -1,6 +1,5 @@
 package io.jailscale.hub;
 
-import io.jailscale.proto.net.Cidr;
 import io.jailscale.proto.util.Args;
 import java.net.InetAddress;
 import java.net.URI;
@@ -32,8 +31,6 @@ public record HubConfig(
     String httpListenHost,
     int httpListenPort,
     Path userDomainCa,
-    boolean proxyProtocol,
-    List<String> trustedProxies,
     URI peer,       // the primary this hub follows as a standby, or null when it is the primary (§13.1)
     Path peerCa,    // tests and private CAs: trust this PEM when dialling the primary
     String peerAddr,    // dial this address instead of resolving the primary's name (tests, split horizon)
@@ -44,7 +41,7 @@ public record HubConfig(
      * Not null. The scheduled task that reads these has no top-level catch and
      * {@code ScheduledExecutorService} cancels a repeating task on the first uncaught throw with
      * nothing logged, so a null here is a hub that starts, serves, and silently never promotes.
-     * The canonical constructor is public and takes 27 positional arguments, four of them trailing
+     * The canonical constructor is public and takes 25 positional arguments, four of them trailing
      * nulls, which is exactly the shape that gets one more by accident.
      */
     public HubConfig {
@@ -96,13 +93,6 @@ public record HubConfig(
         }
     }
 
-    /** ARCHITECTURE.md §8.5: behind nginx stream / HAProxy sending PROXY headers. */
-    public HubConfig withProxyProtocol(boolean on, List<String> trusted) {
-        return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
-            dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, userDomainCa, on, trusted, peer, peerCa, peerAddr, advertise, tuning);
-    }
-
     /** True when port 80 is served, the precondition for user domains (ARCHITECTURE.md §8.3). */
     public boolean hasHttp() {
         return httpListenHost != null && httpListenPort >= 0;
@@ -111,35 +101,35 @@ public record HubConfig(
     public HubConfig withHttp(String host, int port) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, host, port, userDomainCa,
-            proxyProtocol, trustedProxies, peer, peerCa, peerAddr, advertise, tuning);
+            peer, peerCa, peerAddr, advertise, tuning);
     }
 
     /** Tests and private CAs: trust this PEM instead of the platform roots when verifying user-domain certificates. */
     public HubConfig withUserDomainCa(Path caPem) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, caPem, proxyProtocol, trustedProxies, peer, peerCa, peerAddr, advertise, tuning);
+            httpListenPort, caPem, peer, peerCa, peerAddr, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §13.1: follow {@code primary} as a standby, trusting {@code ca} for its TLS (null: platform roots). */
     public HubConfig withPeer(URI primary, Path ca, String addr) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, userDomainCa, proxyProtocol, trustedProxies, primary, ca, addr, advertise, tuning);
+            httpListenPort, userDomainCa, primary, ca, addr, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §7.2: whether the address check runs at all. Off in the test constructor below. */
     public HubConfig withAddressCheck(boolean on) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, on, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, userDomainCa, proxyProtocol, trustedProxies, peer, peerCa, peerAddr, advertise, tuning);
+            httpListenPort, userDomainCa, peer, peerCa, peerAddr, advertise, tuning);
     }
 
     /** ARCHITECTURE.md §13.3: answer this address for the hub's own name instead of finding it from the glue. */
     public HubConfig withAdvertise(String address) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, userDomainCa, proxyProtocol, trustedProxies, peer, peerCa, peerAddr, address, tuning);
+            httpListenPort, userDomainCa, peer, peerCa, peerAddr, address, tuning);
     }
 
     /** True when this hub follows a primary rather than being one (ARCHITECTURE.md §13.1). */
@@ -158,7 +148,7 @@ public record HubConfig(
     public HubConfig withPortRange(int lo, int hi) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, lo, hi, httpListenHost, httpListenPort, userDomainCa,
-            proxyProtocol, trustedProxies, peer, peerCa, peerAddr, advertise, tuning);
+            peer, peerCa, peerAddr, advertise, tuning);
     }
 
     public static final String POLICY_MEMBERS = "members";
@@ -175,7 +165,7 @@ public record HubConfig(
     public static HubConfig withCert(URI baseUrl, Path stateDir, String listenHost, int listenPort, Path cert, Path key,
         boolean registrationOpen, String invitePolicy, boolean knock, String dnsSuffix) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, cert, key, registrationOpen, invitePolicy, knock,
-            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, false, List.of(), null, null, null, null,
+            dnsSuffix, null, null, "127.0.0.1", 0, false, false, 0, 0, null, -1, null, null, null, null, null,
             Tuning.defaults());
     }
 
@@ -183,7 +173,7 @@ public record HubConfig(
     public HubConfig withTuning(Tuning t) {
         return new HubConfig(baseUrl, stateDir, listenHost, listenPort, tlsCert, tlsKey, registrationOpen, invitePolicy, knock,
             dnsSuffix, acmeDirectory, acmeEmail, dnsListenHost, dnsListenPort, selfCheck, addressCheck, portRangeLo, portRangeHi, httpListenHost,
-            httpListenPort, userDomainCa, proxyProtocol, trustedProxies, peer, peerCa, peerAddr, advertise, t);
+            httpListenPort, userDomainCa, peer, peerCa, peerAddr, advertise, t);
     }
 
     public String hostname() {
@@ -277,30 +267,6 @@ public record HubConfig(
             httpHost = hostOf("--http-listen", httpListen, hc);
             httpPort = Integer.parseInt(httpListen.substring(hc + 1));
         }
-        // Loopback by default and not on 443 at all: the hub's own name is the public internet,
-        // so where this listens is the whole of the access control (§6.3). `none` turns it off.
-        boolean proxyProtocol = a.flag("proxy-protocol");
-        List<String> trusted = new ArrayList<>();
-        if (a.has("trusted-proxy")) {
-            for (String c : a.get("trusted-proxy").split(",")) {
-                if (!c.isBlank()) {
-                    Cidr.parse(c.trim());
-                    trusted.add(c.trim());
-                }
-            }
-        }
-        if (proxyProtocol && trusted.isEmpty()) {
-            boolean loopback;
-            try {
-                loopback = InetAddress.getByName(listenHost).isLoopbackAddress();
-            } catch (java.net.UnknownHostException _) {
-                loopback = false;
-            }
-            if (!loopback) {
-                throw new IllegalArgumentException("--proxy-protocol needs --listen on loopback or --trusted-proxy <cidr>[,<cidr>]; "
-                    + "otherwise anyone could forge visitor addresses");
-            }
-        }
         String dnsListen = a.get("dns-listen", "0.0.0.0:53");
         int dc = dnsListen.lastIndexOf(':');
         if (dc < 0) {
@@ -338,8 +304,6 @@ public record HubConfig(
             httpHost,
             httpPort,
             null,
-            proxyProtocol,
-            List.copyOf(trusted),
             peer,
             a.has("peer-ca") ? Path.of(a.get("peer-ca")) : null,
             a.get("peer-addr"),

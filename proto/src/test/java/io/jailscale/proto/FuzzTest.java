@@ -11,7 +11,6 @@ import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonException;
 import io.jailscale.proto.mux.Frame;
 import io.jailscale.proto.mux.MuxException;
-import io.jailscale.proto.net.ProxyProtocol;
 import io.jailscale.proto.tls.Sni;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -191,14 +190,6 @@ class FuzzTest {
         } catch (CodecException e) {
             fail(e);
         }
-    }
-
-    @Test
-    void proxyProtocolHeaders() {
-        byte[] v2 = new byte[16 + 12];
-        System.arraycopy(new byte[] {0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A, 0x21, 0x11, 0, 12}, 0, v2, 0, 16);
-        fuzz("proxy", List.of(ascii("PROXY TCP4 203.0.113.5 10.0.0.1 51234 443\r\n"), ascii("PROXY TCP6 2001:db8::1 ::1 1 2\r\n"), v2),
-            in -> unchecked(b -> ProxyProtocol.read(new ByteArrayInputStream(b)), in), IOException.class);
     }
 
     /** TLS 1.2-style ClientHello record carrying only an SNI extension (enough for the peek). */

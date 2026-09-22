@@ -91,28 +91,26 @@ final class SniRouter {
      *
      * <p>Both listeners ask here -- 443 above, and the raw tcp ports of §8.4, which accept on their
      * own sockets and so never reached this at all. They had one rule written twice, and only one
-     * of the two copies had the exemption below: a forwarder on this host that sends no PROXY
-     * header folds every visitor onto one address, so a raw port capped the world at 64 while 443
-     * behind the same forwarder capped nobody.
+     * of the two copies had the exemption below: a forwarder on this host folds every visitor onto
+     * one address, so a raw port capped the world at 64 while 443 behind the same forwarder capped
+     * nobody.
      *
      * <p><b>Counted against the network and not the address</b> ({@link NetKey}): in v4 those are
      * the same thing, and in v6 they are not -- a routed /64 is free and standard, so a per-address
-     * cap of 64 would be "64 per address, times eighteen quintillion". {@code ip} itself is
-     * untouched, since it is what gets logged, banned and handed to the node as the visitor's
-     * address; when nothing attributed the connection the key is taken from the bytes {@code peer}
-     * holds, rather than formatting that address to text and parsing it straight back once per
-     * connection.
+     * cap of 64 would be "64 per address, times eighteen quintillion". The key is taken from the
+     * bytes {@code peer} holds rather than by formatting that address to text and parsing it
+     * straight back once per connection; {@code ip} itself is what gets logged, banned and handed
+     * to the node as the visitor's address.
      *
-     * <p><b>The exemption is for visitors this hub cannot tell apart</b>, not for a peer that
-     * happens to be local. Once a header has attributed the connection the cap applies again --
-     * testing the socket's peer instead meant that every hub behind nginx on localhost, which is
-     * the deployment deploy/nginx-stream.conf documents, had no per-address cap at all and one
-     * client could exhaust MAX_PER_NAME and the node's ceiling.
+     * <p><b>The exemption is for visitors this hub cannot tell apart.</b> A forwarder on this host
+     * arrives as loopback and folds every visitor behind it onto one key, so capping that key at 64
+     * would cap everyone behind the forwarder together. The hub used to be able to tell them apart
+     * -- a PROXY header from a trusted proxy named the real visitor (§8.5) -- and with that gone,
+     * a deployment that puts something in front of 443 has no per-address cap at all; §15 says so.
      */
-    String takeSlot(String ip, InetAddress peer, boolean attributed) {
-        String key = attributed ? NetKey.of(ip) : NetKey.of(peer);
-        boolean unattributedLocal = !attributed && peer.isLoopbackAddress();
-        if (acquire(perIp, key) > MAX_PER_IP && !unattributedLocal) {
+    String takeSlot(String ip, InetAddress peer) {
+        String key = NetKey.of(peer);
+        if (acquire(perIp, key) > MAX_PER_IP && !peer.isLoopbackAddress()) {
             release(perIp, key);
             return null;
         }
@@ -164,21 +162,7 @@ final class SniRouter {
     void serve(Socket socket) {
         String ip = socket.getInetAddress().getHostAddress();
         int visitorPort = socket.getPort();
-        boolean attributed = false;
-        try {
-            socket.setSoTimeout(HELLO_TIMEOUT_MS);
-            io.jailscale.proto.net.ProxyProtocol.Header ph = hub.readProxyHeader(socket);
-            if (ph != null && ph.known()) {
-                ip = ph.srcIp();
-                visitorPort = ph.srcPort();
-                attributed = true;
-            }
-        } catch (IOException e) {
-            LOG.debug("{}: {}", ip, e.getMessage());
-            Relay.closeQuietly(socket);
-            return;
-        }
-        String ipKey = takeSlot(ip, socket.getInetAddress(), attributed);
+        String ipKey = takeSlot(ip, socket.getInetAddress());
         if (ipKey == null) {
             refused.increment();
             Relay.closeQuietly(socket);

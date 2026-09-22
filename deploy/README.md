@@ -9,17 +9,16 @@ Reference files for operators. The reasoning behind them is in
 | `jailhub.service` | systemd unit for the hub. Deliberately no `ExecReload`: `--takeover` needs the old process to stay alive through the hand-off, which `Type=simple` will not do. Upgrades are `systemctl restart` |
 | `Dockerfile.hub` | Hub container: the native binary on a distroless base, about 35 MB. Packaging only -- build the binary first, `./mvnw -DskipTests -Pnative -pl hub -am package` |
 | `Dockerfile.node` | Node container, same shape, `-pl node -am` |
-| `nginx-stream.conf` | For a server where nginx already owns 443. SNI routing with `ssl_preread`, plus a PROXY header |
-| `haproxy.cfg` | The same with HAProxy, using `send-proxy-v2` |
 
 On macOS the equivalent of `jailscale.service` is a launchd agent in
 `~/Library/LaunchAgents` running the same command with `RunAtLoad` and
 `KeepAlive`; on Windows, a logon scheduled task. The command to put in either
 is the one the CLI itself spawns: `jailscale daemon --home <dir> --socket <path>`.
 
-Behind a proxy, the hub must either listen on loopback with `--proxy-protocol`
-or be given `--trusted-proxy <cidr>`. Otherwise anyone could forge a visitor
-address, so the hub refuses to start.
+The hub takes 443 itself: it no longer reads PROXY headers, so it cannot sit
+behind nginx or HAProxy on that port
+([ARCHITECTURE.md §8.5](../docs/ARCHITECTURE.md)). The configs that documented
+that deployment went with the feature.
 
 ## Published images
 

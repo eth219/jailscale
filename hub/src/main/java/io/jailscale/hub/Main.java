@@ -27,7 +27,6 @@ public final class Main {
                       or your own files: --tls-cert FILE --tls-key FILE
                       [--port-range 10000-10999 | none]  ports for raw tcp/udp links (ARCHITECTURE.md §8.4)
                       [--http-listen 0.0.0.0:80 | none]  acme-challenge relay for user domains (ARCHITECTURE.md §8.3)
-                      [--proxy-protocol [--trusted-proxy CIDR,...]]  behind nginx stream / HAProxy (ARCHITECTURE.md §8.5)
                       [--takeover]  replace a running jailhub without dropping nodes (ARCHITECTURE.md §13)
                       [--peer https://primary.example.com [--peer-ca FILE] [--peer-addr IP]]  run as that hub's standby (ARCHITECTURE.md §13.1)
                       [--advertise IP]  answer this address for the hub's name; default: found from the ns1/ns2 glue (ARCHITECTURE.md §13.3)
@@ -55,11 +54,12 @@ public final class Main {
      * Options that take no value. Every option this binary reads with {@code flag()} has to be
      * here: {@link Args#parse} reads the next word as the value of anything else, so
      * `--no-address-check serve` would lose the subcommand and leave the check on, and an option
-     * with no next word at all is refused as needing a value. {@code --proxy-protocol} was missing
-     * and survived on the old parser's guess.
+     * with no next word at all is refused as needing a value. One of these was missing once and
+     * survived on the old parser's guess, which is why the list is written down rather than
+     * inferred.
      */
     static final String[] FLAGS = {"debug", "admin", "help", "acme-staging", "no-selfcheck", "no-address-check",
-        "takeover", "proxy-protocol"};
+        "takeover"};
 
     public static void main(String[] argv) {
         Args a;

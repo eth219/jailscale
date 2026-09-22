@@ -45,9 +45,9 @@ class ServeOptionsTest {
     /**
      * Every option this binary reads with {@code flag()} has to be in {@link Main#FLAGS}, and the
      * shape that proves it is the flag placed last: with no next word, an option the list does not
-     * know is refused as needing a value. {@code --proxy-protocol} was missing and got away with it
-     * under the old parser, which guessed "true" for any option followed by another option or by
-     * nothing -- so `jailhub serve --proxy-protocol` had never actually been parsed as a flag.
+     * know is refused as needing a value. One was missing once and got away with it under the old
+     * parser, which guessed "true" for any option followed by another option or by nothing -- so
+     * the flag had never actually been parsed as one.
      *
      * <p>Kept as a list rather than derived, so adding an option here is the deliberate act that
      * adding one to FLAGS should be.
@@ -55,7 +55,7 @@ class ServeOptionsTest {
     @Test
     void everyBooleanServeOptionIsInTheFlagsList() {
         for (String flag : new String[] {"debug", "admin", "help", "acme-staging", "no-selfcheck",
-            "no-address-check", "takeover", "proxy-protocol"}) {
+            "no-address-check", "takeover"}) {
             Args a = Args.parse(new String[] {"serve", "--" + flag}, Main.FLAGS);
             assertTrue(a.flag(flag), "--" + flag + " is not in Main.FLAGS");
             assertEquals("serve", a.positional(0), "--" + flag + " swallowed the subcommand");
@@ -94,9 +94,6 @@ class ServeOptionsTest {
         assertTrue(c.hasHttp(), "port 80 is the precondition for user domains");
         assertEquals("0.0.0.0", c.httpListenHost());
         assertEquals(80, c.httpListenPort());
-
-        assertFalse(c.proxyProtocol());
-        assertEquals(List.of(), c.trustedProxies());
     }
 
     @Test
@@ -198,32 +195,6 @@ class ServeOptionsTest {
         assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "10000-70000"));
         assertEquals("--port-range must be within 1024-65535 and lo <= hi", refused("--port-range", "20000-10000"));
         assertEquals("--port-range must be lo-hi or none", refused("--port-range", "20000"));
-    }
-
-    // --- behind a proxy ---------------------------------------------------------------------------
-
-    /**
-     * ARCHITECTURE.md §8.5. A PROXY header is believed, so accepting one from anywhere lets any
-     * visitor claim any source address -- which is what the bans, the rate limiter and every
-     * logged address rest on. Loopback is the exception because nothing off-box can reach it.
-     */
-    @Test
-    void proxyProtocolNeedsEitherLoopbackOrANamedProxy() {
-        assertTrue(refused("--proxy-protocol").contains("anyone could forge visitor addresses"));
-        assertTrue(refused("--proxy-protocol", "--listen", "0.0.0.0:443").contains("--trusted-proxy"));
-
-        HubConfig loopback = serve("--proxy-protocol", "--listen", "127.0.0.1:8443");
-        assertTrue(loopback.proxyProtocol());
-        assertEquals(List.of(), loopback.trustedProxies());
-
-        HubConfig named = serve("--proxy-protocol", "--trusted-proxy", "10.0.0.0/8, 192.168.0.0/16");
-        assertTrue(named.proxyProtocol());
-        assertEquals(List.of("10.0.0.0/8", "192.168.0.0/16"), named.trustedProxies(), "trimmed, and empty entries dropped");
-    }
-
-    @Test
-    void aTrustedProxyThatIsNotACidrIsRefusedHereRatherThanIgnoredLater() {
-        assertTrue(refused("--proxy-protocol", "--trusted-proxy", "10.0.0.0/99").startsWith("bad prefix length"));
     }
 
     // --- the base url and the enums ---------------------------------------------------------------
