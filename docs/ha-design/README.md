@@ -59,7 +59,7 @@ into `proto` for that. It is the one concrete code cost that can be named in adv
 The standby holds the store, so it can serve *and* be promoted; that is what makes two hosts worth
 the complexity a third would not add proportionally. §15 records what two does not buy: streams in
 flight on a host that dies are cut with its sockets, raw TCP and UDP ports live on the primary
-alone, and a promotion with no node attached to the standby waits for a person (§13.5).
+alone, and a promotion with no node attached to the standby waited for a person.
 
 Active-active is a separate and larger thing — it needs inter-hub forwarding, since the hub a
 visitor lands on and the hub a node is attached to could differ — and merging writes made on the
@@ -69,7 +69,7 @@ stores do not share, so the loser's writes are discarded and named.
 ## What none of it fixes
 
 A name has one node behind it. When that node's host is down the name is down whatever the hub count
-is, so redundancy at the hub pays only where the hub is the less available of the two. §13.2 says so
+is, so redundancy at the hub pays only where the hub is the less available of the two. The availability figure said so
 where the availability figure is defined, precisely so that the number is not read as a statement
 about someone's link.
 

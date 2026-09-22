@@ -89,11 +89,10 @@ final class SniRouter {
      * {@link #giveSlot}: the caller gives back what it took rather than an address the key may not
      * have come from.
      *
-     * <p>Both listeners ask here -- 443 above, and the raw tcp ports of §8.4, which accept on their
-     * own sockets and so never reached this at all. They had one rule written twice, and only one
-     * of the two copies had the exemption below: a forwarder on this host folds every visitor onto
-     * one address, so a raw port capped the world at 64 while 443 behind the same forwarder capped
-     * nobody.
+     * <p>443 is the only listener that asks now. The raw tcp ports of §8.4 accepted on sockets of
+     * their own and had this rule written a second time, with the exemption below missing from that
+     * copy -- a forwarder on this host folds every visitor onto one address, so a raw port capped
+     * the world at 64 while 443 behind the same forwarder capped nobody. One listener is one copy.
      *
      * <p><b>Counted against the network and not the address</b> ({@link NetKey}): in v4 those are
      * the same thing, and in v6 they are not -- a routed /64 is free and standard, so a per-address
@@ -223,8 +222,7 @@ final class SniRouter {
             // said it will hold (ARCHITECTURE.md §9.3). Here with the other two rather than left to
             // NodeGroup.openVisitor, so that all three admission decisions are made in one place and
             // a visitor the hub cannot deliver is turned away before a stream is opened for it. The
-            // check in openVisitor stays as the backstop for the race between this and the open, and
-            // for the raw ports, which do not come through here.
+            // check in openVisitor stays as the backstop for the race between this and the open.
             int ceiling = link.group().visitorCeiling();
             if (ceiling > 0 && link.group().visitorsInFlight() >= ceiling) {
                 release(perName, name);

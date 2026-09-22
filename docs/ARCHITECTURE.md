@@ -66,12 +66,14 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 
 ### 1.2 Decided, and not built
 
-**Empty, as of the maintenance cut.** This table held three rows -- the hub answering AAAA itself
+**Empty, as of the maintenance cut.** This table held four rows. tls-alpn-01
+([#70](https://github.com/eth219/jailscale/issues/70)) went with the feature that needed it, user
+domains (§8.3). The other three were decisions to build something: the hub answering AAAA itself
 ([#63](https://github.com/eth219/jailscale/issues/63)), systemd socket activation
 ([#71](https://github.com/eth219/jailscale/issues/71)) and a gauge for the soonest certificate
-expiry among absent nodes ([#75](https://github.com/eth219/jailscale/issues/75)) -- each a decision
-to build something. Maintenance does not take those: all three are closed as not planned, and what
-each of them was about is a limit in §15 rather than work waiting. The table stays because the
+expiry among absent nodes ([#75](https://github.com/eth219/jailscale/issues/75)). Maintenance does
+not take those: all three are closed as not planned, and what each of them was about is a limit in
+§15 rather than work waiting. The table stays because the
 distinction it draws is still the one that matters, and because a row could be added here again by
 the same route as before: an issue, a decision recorded on it, and this section edited in the same
 change.
@@ -94,7 +96,6 @@ given up for.
 | Installing the node as a service | three unit templates for three platforms, verified on one; `deploy/` has a unit to copy (§9.4) |
 | The hub behind nginx or HAProxy | reading a PROXY header means a parser before anything is authenticated, and an attribution path every rate limit rested on (§8.5) |
 | A second hub of any kind | a standby was built and removed (§13): about 4,500 lines for redundancy no deployment here ran, and one hub is the shape this is maintained in |
-| Raw TCP and UDP ports, and so anything that cannot speak TLS | a port instead of a name is a second kind of link with its own allocator, bounds and datagram carrier, and the plaintext of an app that does not encrypt itself would be inside the hub (§8.4) |
 | Probing a name from another node's vantage point | the hub chooses which nodes exist, so it would choose the prober; the control would be probabilistic, and this project says what it cannot do instead (§11.3) |
 | Any notification channel — email, webhooks | an address per node is personal data the hub does not hold, and a webhook is one more thing that fails quietly; the status page and `jailhub status` are where an expiry shows |
 | Installing an upgrade by default | replacing a running binary is the operator's act; a process that can overwrite its own executable is one whose compromise is permanent |
@@ -2046,8 +2047,8 @@ section says what it was and what it cost.
 a second process that asked the first to hand off -- listener closed, state snapshotted, lock
 released, `Goodbye{draining}` to every node, streams in flight allowed to finish -- so that
 replacing the binary cost a few hundred milliseconds of refused visitors instead of a restart. It
-went with the standby, for a reason §1.2 had already recorded against it: it does not apply under a
-systemd unit, which is how a hub is actually run, because the unit owns the process and starting a
+went with the standby, for a reason §1.1's Upgrading row had already recorded against it: it does
+not apply under a systemd unit, which is how a hub is actually run, because the unit owns the process and starting a
 second one beside it is not something the unit does. What is left is `systemctl restart`, and the
 nodes' backoff is what covers it.
 

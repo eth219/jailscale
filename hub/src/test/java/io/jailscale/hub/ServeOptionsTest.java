@@ -10,7 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.jailscale.proto.util.Args;
 import java.net.URI;
 import java.nio.file.Path;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -159,10 +158,6 @@ class ServeOptionsTest {
         // --dns-listen has no "none": the hub answers dns-01 for its own wildcard from here, so a
         // hub without it cannot get a certificate at all.
         assertEquals("--dns-listen must be host:port", refused("--dns-listen", "none"));
-    }
-
-    @Test
-    void aPortRangeOutsideWhatAnUnprivilegedProcessCanBindIsRefused() {
     }
 
     // --- the base url and the enums ---------------------------------------------------------------

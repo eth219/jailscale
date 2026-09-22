@@ -134,6 +134,24 @@ class ProtoSkewTest {
     }
 
     /**
+     * The flag day itself, in literals (§5.4). Every other assertion in this class is written
+     * against {@code MIN_PROTO}, which is what a floor test should do -- and which means every one
+     * of them passes at any floor, including the one the maintenance cut was supposed to leave
+     * behind. This session's own branch reverted the hub's bump to 1 by accident and the whole
+     * suite stayed green, so the numbers are pinned here by hand: **a v0.1.x node speaks protocol
+     * 1, and a v0.2.0 hub refuses it.** Moving the floor again means editing this test, which is
+     * the point of it.
+     */
+    @Test
+    void theFloorIsTwoAndAProtocolOneNodeIsRefused() throws Exception {
+        assertEquals(2, Message.PROTO, "the wire lost fields in v0.2.0, so PROTO is 2 (§5.4)");
+        assertEquals(2, NodeSession.MIN_PROTO, "a removal is a break in both directions: the hub's floor is 2 as well");
+        Message.Goodbye g = assertInstanceOf(Message.Goodbye.class, hello(1, 0),
+            "a node speaking protocol 1 is every jailscale released before v0.2.0");
+        assertEquals(Message.Goodbye.UPGRADE_REQUIRED, g.reason());
+    }
+
+    /**
      * The same callback refuses a connection index it cannot use, and the two rules that can do it
      * are asserted one at a time. An index at {@link NodeSession#MAX_CONNECTIONS} is deliberately
      * not the case used: for a machine key the hub has never seen, both the range rule and the

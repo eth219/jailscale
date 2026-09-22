@@ -16,8 +16,9 @@ Since v0.2.0 (#274). That is a scope rule, not a mood:
   one is genuinely wanted again, that is a decision issue for the maintainer, not work to start.
 - **Deleting is the cheapest change available here**, and it is still a change: it needs the same
   issue, the same tests-can-fail rule and the same commit message saying why it was worth doing.
-- The three §1.2 rows are what is left of "decided, and not built". They stay decided; nothing says
-  they are next.
+- **§1.2 is empty.** The rows that said "decided, and not built" were closed with everything else a
+  maintenance mode does not take (#63, #71, #75), and each is a limit in §15 now. A new row there
+  needs the maintainer's decision on an issue, as it always did.
 
 ## Before you start on an issue
 

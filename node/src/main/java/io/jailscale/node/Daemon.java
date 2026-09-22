@@ -68,7 +68,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
      */
     private long lastSweepNanos = System.nanoTime() - PROBE_PASS_MS * 1_000_000L;
     /** How close to its end a certificate has to be before anyone is told (ARCHITECTURE.md §15). */
-    static final long CERT_WARN_MS = 14 * 86400_000L;
     private static final long CERT_WARN_REPEAT_MS = 86400_000L;
     private Ipc.Server ipc;
 
@@ -313,19 +312,6 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         return rec.linkId != null && link.isConnected();
     }
 
-    /**
-     * Whether this node is serving {@code rec} right now: through the hub it is joined to, or
-     * through any relay host whose connection is up (§13.4).
-     *
-     * <p>{@link #isOpen} alone is the wrong question for the self-probe. A relay serves this node's
-     * names while the primary is away -- "losing the primary then stops nothing a visitor can see"
-     * -- so a name reached over a relay is publicly served and is exactly the kind whose TLS
-     * somebody else might be terminating. Answering `link not open` for it would leave the check
-     * silent over the window §11.4 says names change hands in, which is the window it exists for.
-     */
-    private boolean servedHere(NodeState.LinkRec rec) {
-        return isOpen(rec);
-    }
 
     private List<Object> linkRows() {
         return state.links.stream().<Object>map(l -> JsonObject.builder()
@@ -473,8 +459,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         }
         state.save();
         reply.done(JsonObject.builder().put("ok", true).put("name", lo.name()).put("url", lo.url()).put("local", rec.local())
-            .put("visitUrl", visitUrl)
-            .put("certExpiresAt", rec.certExpiresAt > 0 ? Long.valueOf(rec.certExpiresAt) : null));
+            .put("visitUrl", visitUrl));
     }
 
     /**
@@ -561,7 +546,7 @@ public final class Daemon implements AutoCloseable, Ipc.Handler, HubLink.Events 
         if (rec.url == null) {
             return null;
         }
-        if (!state.links.contains(rec) || !servedHere(rec)) {
+        if (!state.links.contains(rec) || !isOpen(rec)) {
             // Closed or revoked (§11.4), or not open on this hub session -- the same test `status`
             // makes, plus whether the record is still in the list, which `status` only iterates.
             // The verdict does not go on the record: `status` keeps the last real one beside

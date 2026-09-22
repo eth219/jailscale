@@ -480,6 +480,14 @@ if [ -n "${SLOW:-}" ]; then
              END{gsub(/[^0-9]/,"",r); gsub(/[^0-9]/,"",p); gsub(/[^0-9]/,"",b); gsub(/[^0-9]/,"",n); \
                  print r+0, p+0, b+0, n+0}')
   rec=${1:-0}; qpeak=${2:-0}; qbud=${3:-0}; nodes=${4:-1}
+  # A gate that cannot read its number has to say so. The scrape this replaced defaulted to 0 and
+  # fell through the `-gt 0` test below, which is a gate that passes when the measurement is missing
+  # -- the failure mode this harness's header is a list of. A limit of 0 is not a reading.
+  if [ "$qbud" -eq 0 ]; then
+    echo "  !! could not read receiveBudget from \`$HUB status --state $W/hub\`; the SLOW gate has no number"
+    "$HUB" status --state "$W/hub" 2>&1 | head -3 | sed 's/^/     /'
+    fail=1
+  fi
   # The budget is charged before the queue takes the payload, so each session reader can be holding
   # one 16 KB frame that is counted and not yet queued: the invariant is the budget plus a frame per
   # reader, not the budget exactly. Asserting it exactly failed by 16,367 bytes -- one frame less

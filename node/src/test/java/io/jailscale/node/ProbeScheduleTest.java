@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.jailscale.proto.control.Message;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;

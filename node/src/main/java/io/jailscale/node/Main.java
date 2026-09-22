@@ -262,28 +262,9 @@ public final class Main {
         for (Object o : links) {
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
-            String warn = m.get("certExpiresAt") instanceof Long exp
-                ? certNote(exp, System.currentTimeMillis())
-                : "";
-            System.out.printf("%-8s %-40s -> %-22s %s%s%n", m.get("name"), m.get("url"), m.get("local"),
-                Boolean.TRUE.equals(m.get("open")) ? "open" : "offline", warn);
+            System.out.printf("%-8s %-40s -> %-22s %s%n", m.get("name"), m.get("url"), m.get("local"),
+                Boolean.TRUE.equals(m.get("open")) ? "open" : "offline");
         }
-    }
-
-    /**
-     * What {@code ls} adds after a link whose certificate is running out, and "" while there is
-     * nothing to say. The threshold is the daemon's ({@link Daemon#CERT_WARN_MS}) so the table and
-     * the log do not tell two stories, and an expired certificate is named as expired: "expires"
-     * next to a date in the past reads as a formatting bug rather than as a site already down.
-     */
-    static String certNote(long expiresAt, long now) {
-        if (expiresAt <= 0) {
-            return ""; // no certificate on this link, or none loaded yet
-        }
-        if (expiresAt <= now) {
-            return "  (cert EXPIRED " + new java.util.Date(expiresAt) + ")";
-        }
-        return expiresAt - now < Daemon.CERT_WARN_MS ? "  (cert expires " + new java.util.Date(expiresAt) + ")" : "";
     }
 
     private static void invite(NodeConfig cfg, Args a) throws Exception {

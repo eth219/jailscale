@@ -14,8 +14,6 @@ import io.jailscale.proto.http.Http;
 import io.jailscale.proto.http.HttpResponse;
 import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
-import java.nio.file.Files;
-import io.jailscale.proto.json.Json;
 import io.jailscale.proto.tls.Tls;
 import io.jailscale.proto.util.Log;
 import java.net.URI;

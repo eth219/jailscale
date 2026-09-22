@@ -14,7 +14,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
-import java.util.Locale;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -26,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class NodeSession implements AutoCloseable, MuxSession.Listener {
 
     private static final Log LOG = Log.get("session");
-    static final int MIN_PROTO = 1;
+    static final int MIN_PROTO = 2;
     static final int IDLE_TIMEOUT_MS = 60_000;
     static final int MAX_CONNECTIONS = 4;
     /**

@@ -40,8 +40,9 @@ public final class NetKey {
         // Only what could be a v6 literal is handed to getByName, because getByName is not the
         // literal parser its name suggests: it short-circuits on a string starting with a hex digit
         // or a colon and sends everything else to the resolver. A colon-bearing name like "zz::1"
-        // measured 264 ms of blocking DNS on the path this sits on -- the same hazard
-        // ProxyProtocol.literal carries a guard and a "found by fuzzing" comment for. Anything that
+        // measured 264 ms of blocking DNS on the path this sits on -- the same hazard the PROXY
+        // header parser carried a guard and a "found by fuzzing" comment for, until §8.5 took that
+        // parser out of the hub. Anything that
         // cannot be a literal is its own key, which is what an unparsable input should be anyway.
         char first = ip.charAt(0);
         if (first != ':' && Character.digit(first, 16) < 0) {

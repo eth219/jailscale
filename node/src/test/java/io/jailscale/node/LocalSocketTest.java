@@ -2,7 +2,6 @@ package io.jailscale.node;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.jailscale.proto.control.Message;
 import io.jailscale.proto.mux.MuxStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;

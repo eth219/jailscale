@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.jailscale.proto.ipc.Ipc;
 import io.jailscale.proto.json.JsonObject;
 import io.jailscale.proto.util.Args;
 import java.net.URI;

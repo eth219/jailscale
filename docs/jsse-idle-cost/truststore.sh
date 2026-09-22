@@ -34,7 +34,7 @@ R=$(cd "$(dirname "$0")/../.." && pwd)
 HUB=$R/hub/target/jailhub
 CERT=$R/hub/src/test/resources/tls/hub-test.crt
 KEY=$R/hub/src/test/resources/tls/hub-test.key
-PORT=${PORT:-19943}; METRICS_PORT=$((PORT + 139)); RUNS=${RUNS:-5}; SETTLE=${SETTLE:-8}
+PORT=${PORT:-19943}; RUNS=${RUNS:-5}; SETTLE=${SETTLE:-8}
 # The daemon's first update check fires 60 to 300 s after start (Daemon.updateLoop) and goes to
 # api.github.com over the default trust manager -- which is the very thing being priced here, built
 # by something other than the hub connection. A long settle would put it inside the measurement.
@@ -84,7 +84,7 @@ NODE=$W/jailscale
 echo "scratch binary built"
 
 start_hub() { "$HUB" serve --base-url "https://hub.test:$PORT" --listen "127.0.0.1:$PORT" --tls-cert "$CERT" --tls-key "$KEY" \
-  --state "$W/hub" --port-range none --http-listen none --metrics-listen "127.0.0.1:$METRICS_PORT" >> "$W/hub.log" 2>&1 & HUBPID=$!; }
+  --state "$W/hub" >> "$W/hub.log" 2>&1 & HUBPID=$!; }
 
 # Every state asserts it connected before it is sampled. An earlier version of this let the wait
 # give up quietly, and a daemon that never connected read 4 MB light -- a plausible number for a

@@ -52,11 +52,8 @@ final class NodeState {
         volatile String url;
         volatile String gateHash;      // visitor gate (ARCHITECTURE.md §9.3): SHA-256 of the visit token, or null
         volatile long gateExpiresAt;   // ms epoch; 0 = never
-        volatile long certExpiresAt;   // not persisted: from the loaded certificate
         volatile ProbeResult lastProbe; // not persisted: the last self-probe of this name (§11.3)
         volatile boolean proxyProtocol; // prepend a PROXY v1 line for the local app (ARCHITECTURE.md §9.3)
-        /** Not persisted: the link id each relay host gave this link (§13.4), by relay address. */
-        final java.util.Map<String, String> relayLinkIds = new java.util.concurrent.ConcurrentHashMap<>();
 
         LinkRec(String host, int port, String name) {
             this.host = host;
@@ -82,9 +79,7 @@ final class NodeState {
             return null;
         }
         for (LinkRec l : links) {
-            // The id the primary gave, or the one a relay host gave the same link (§13.4): a
-            // visitor stream carries whichever host delivered it.
-            if (linkId.equals(l.linkId) || l.relayLinkIds.containsValue(linkId)) {
+            if (linkId.equals(l.linkId)) {
                 return l;
             }
         }

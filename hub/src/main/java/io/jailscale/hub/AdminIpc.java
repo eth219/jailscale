@@ -261,8 +261,7 @@ final class AdminIpc implements Ipc.Handler {
             .put("admins", new ArrayList<>(store.admins()))
             .put("registration", store.setting(Store.SETTING_REGISTRATION, "invite"))
             .put("invitePolicy", store.setting(Store.SETTING_INVITE_POLICY, "members"))
-            .put("knock", store.setting(Store.SETTING_KNOCK, "on"))
-            .put("knockQueue", store.pending().size());
+            .put("knock", store.setting(Store.SETTING_KNOCK, "on"));
         // §7.2: the verdict that stands, so the operator who missed the line at boot has somewhere
         // to look it up. Absent, rather than "unknown", where the check is off or has not run yet:
         // a field that says nothing is worse than a field that is not there.

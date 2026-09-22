@@ -4,7 +4,6 @@ import io.jailscale.proto.json.Json;
 import io.jailscale.proto.json.JsonException;
 import io.jailscale.proto.json.JsonObject;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 /** Hand-written JSON codec for {@link Message}; no reflection (ARCHITECTURE.md §3.1). */
 public final class Codec {

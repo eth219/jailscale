@@ -17,7 +17,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.net.InetAddress;
 import java.net.ServerSocket;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -65,11 +64,6 @@ public final class Hub implements AutoCloseable {
     private AcmeManager acme;
     /** The public address this hub answers for itself (§7.1); null until known. */
     private volatile String advertised;
-    /**
-     * What nodes dial to reach this host as a relay (§13.4), when it is not the advertised
-     * address on 443. Tests, where two hubs share a loopback address and differ by port.
-     */
-    volatile String relayEndpointOverride;
     /** See {@link #listenOn}. */
     private ServerSocket preBound;
     /** The name servers the parent delegates to, label to address; empty until looked up or when not delegated. */
@@ -250,19 +244,6 @@ public final class Hub implements AutoCloseable {
         }
         preBound = socket;
     }
-
-    /** What a node dials to reach this host as a relay: the advertised address, with the port when it is not 443. */
-    String relayEndpoint() {
-        if (relayEndpointOverride != null) {
-            return relayEndpointOverride;
-        }
-        if (advertised == null) {
-            return null;
-        }
-        int p = listener == null ? config.listenPort() : port();
-        return p == 443 ? advertised : advertised + ":" + p;
-    }
-
 
     /** The public address this hub answers for itself, or null while unknown. */
     String advertisedAddress() {

@@ -1,9 +1,7 @@
 package io.jailscale.hub;
 
 import io.jailscale.proto.util.Args;
-import java.net.InetAddress;
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.List;
 import java.nio.file.Files;
 import java.nio.file.Path;

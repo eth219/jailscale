@@ -18,8 +18,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Consumer;
 
 /**
  * Hub state (ARCHITECTURE.md §6.2): in-memory maps, an append-only JSON Lines event log with fsync,
@@ -61,7 +59,6 @@ final class Store implements AutoCloseable {
     private FileOutputStream log;
     private int eventsSinceSnapshot;
     /** Who is told about every event as it is appended: the sessions replicating this store (§13.1). */
-    private final List<Consumer<JsonObject>> listeners = new CopyOnWriteArrayList<>();
 
     private long nextNodeId = 1;
     private final Map<String, NodeRec> nodesByKey = new LinkedHashMap<>();
@@ -428,9 +425,8 @@ final class Store implements AutoCloseable {
     }
 
     private void append(JsonObject ev) throws IOException {
-        // Stamped as it goes to disk and not before, so the event the listeners forward to a
-        // standby (§13.1) is the same bytes it has always been: a sequence number is this store's
-        // position in this store's log, and the standby stamps its own when it appends it there.
+        // Stamped as it goes to disk and not before: a sequence number is this store's position in
+        // this store's log, which is what lets a snapshot say how far into the log it reaches.
         Map<String, Object> stamped = new LinkedHashMap<>(ev.asMap());
         stamped.put("s", ++lastSeq);
         byte[] line = Json.writeUtf8(stamped);
@@ -439,217 +435,9 @@ final class Store implements AutoCloseable {
         log.flush();
         log.getFD().sync();
         apply(ev);
-        for (Consumer<JsonObject> l : listeners) {
-            l.accept(ev);
-        }
         if (++eventsSinceSnapshot >= SNAPSHOT_EVERY) {
             snapshot();
         }
-    }
-
-    // --- replication (ARCHITECTURE.md §13.1) ---------------------------------------------------
-
-    /**
-     * Starts telling {@code listener} about every event from here on and returns the state as it
-     * stands at that moment, as snapshot JSON. The two happen under one lock so that nothing is
-     * appended between the snapshot being taken and the listener being registered: a standby that
-     * replays the snapshot and then the events sees exactly what this store saw.
-     */
-    synchronized String subscribe(Consumer<JsonObject> listener) {
-        listeners.add(listener);
-        return snapshotJson();
-    }
-
-    synchronized void unsubscribe(Consumer<JsonObject> listener) {
-        listeners.remove(listener);
-    }
-
-    /** An event replicated from the primary: written to this log and applied, as if appended here. */
-    synchronized void applyReplicated(JsonObject ev) throws IOException {
-        append(ev);
-    }
-
-    /**
-     * What this store held that the primary's state does not, and is about to lose
-     * (ARCHITECTURE.md §13.5). Counts for everything, names for the things a person holds.
-     */
-    record Superseded(List<String> nodes, List<String> names, int credentials, Path kept) {
-        // `kept`: where the copy of what went is, or null when there is no copy -- nothing was lost,
-        // or the write failed. Nothing may send an operator to a path that was not written.
-
-        boolean any() {
-            return !nodes.isEmpty() || !names.isEmpty() || credentials > 0;
-        }
-
-        /** How many of each are named before the line gives up and quotes a count instead. */
-        private static final int SHOWN = 20;
-
-        /**
-         * Only what there is, and never more than {@link #SHOWN} of it: this is written on the one
-         * path taken while a hub is recovering from a partition, and a host whose state has fully
-         * diverged would otherwise put every name it holds into a single line -- thousands of them,
-         * built inside the store's monitor. What is cut is not lost; {@link #kept} names the file
-         * that has all of it.
-         */
-        @Override
-        public String toString() {
-            StringBuilder b = new StringBuilder();
-            append(b, "nodes", nodes);
-            append(b, "names", names);
-            if (credentials > 0) {
-                b.append(b.length() == 0 ? "" : ", ").append(credentials).append(" unused invites");
-            }
-            return b.length() == 0 ? "nothing" : b.toString();
-        }
-
-        private static void append(StringBuilder b, String what, List<?> items) {
-            if (items.isEmpty()) {
-                return;
-            }
-            b.append(b.length() == 0 ? "" : ", ").append(what).append(' ')
-                .append(items.size() <= SHOWN ? items.toString()
-                    : items.subList(0, SHOWN) + " and " + (items.size() - SHOWN) + " more");
-        }
-    }
-
-    /**
-     * Throws away everything held and replaces it with {@code snapshotJson} from the primary,
-     * persisting it as this store's own snapshot and truncating the log. The version check is the
-     * one {@link #load} makes: a standby running an older binary than its primary must stop rather
-     * than replay state it cannot read.
-     *
-     * <p><b>Whatever this host held and the primary does not is gone, and that is the whole of the
-     * reconciliation (§13.5).</b> There is no merge here and there cannot be a cheap one: the two
-     * stores share no lineage a write can be placed in, so nothing can say whether a name this host
-     * holds is one the other has never seen or one it deliberately released. The primary's state
-     * wins entire, which is what a lease with an epoch buys and the whole of what it buys.
-     *
-     * <p>What that costs is normally nothing -- a standby's state came from this same primary -- and
-     * it is not nothing after a partition in which this host was itself a primary: a node that joined
-     * here, or a name claimed here, exists nowhere afterwards, and the node finds out by being an
-     * unknown machine key the next time it connects. So it is <b>reported and kept</b> rather than
-     * silently dropped: the returned record names what went, and the state as it stood is written to
-     * {@code state.superseded.snapshot} beside the live one, from which an operator can read the
-     * records back. That file is overwritten by the next one, so it is a recovery for the event that
-     * has just been logged and not an archive.
-     */
-    synchronized Superseded replaceWith(String snapshotJson) throws IOException {
-        JsonObject s = Json.parseObject(snapshotJson);
-        checkVersion(s, "the primary's state");
-        Superseded lost = supersededBy(s);
-        nodesByKey.clear();
-        invites.clear();
-        admins.clear();
-        pending.clear();
-        names.clear();
-        settings.clear();
-        notices.clear();
-        bans.clear();
-        nextHubKey = null;
-        hubKeyActivatesAt = 0;
-        nextNodeId = 1;
-        loadSnapshot(s);
-        snapshot();
-        return lost;
-    }
-
-    /**
-     * What the incoming state does not have, worked out before anything is cleared. The copy is
-     * written first, so a hub that dies during the replacement has still kept what it was about to
-     * drop; when nothing would be dropped, nothing is written and no file is left to mislead.
-     */
-    private Superseded supersededBy(JsonObject incoming) {
-        Store theirs = new Store();
-        theirs.loadSnapshot(incoming);
-        // By record and not by key. A key comparison only sees what vanished, so a name released
-        // here and re-claimed by somebody else, or a node
-        // re-approved under another user all came out as "nothing lost" -- the record changed
-        // owner, and the owner is the whole of what these hold.
-        // By owner, not by whole record and not by key alone. A key comparison sees only what
-        // vanished, so a name released here and re-claimed by somebody else -- or a port reassigned,
-        // a node re-approved under another user -- read as "nothing lost", and
-        // the owner is the whole of what these records hold. Whole-record equality is the other
-        // error: NodeRec carries an id counted per store and every one of these carries a local
-        // timestamp, so two stores that agree completely would differ in all of them.
-        List<String> lostNodes = new ArrayList<>();
-        for (NodeRec n : nodesByKey.values()) {
-            NodeRec t = theirs.nodesByKey.get(n.mkey());
-            if (t == null || !t.user().equals(n.user())) {
-                lostNodes.add(n.user() + "/" + n.hostname());
-            }
-        }
-        List<String> lostNames = new ArrayList<>();
-        for (NameRec r : names.values()) {
-            NameRec t = theirs.names.get(r.name());
-            if (t == null || !t.user().equals(r.user())) {
-                lostNames.add(r.name());
-            }
-        }
-        int credentials = 0;
-        for (String id : invites.keySet()) {
-            credentials += theirs.invites.containsKey(id) ? 0 : 1;
-        }
-        // And the collections replaceWith clears that nothing compared: an admin added and a CIDR
-        // banned on the losing side of a partition are rights granted and rights taken away, which
-        // is the last thing that should go without a word.
-        List<String> lostAdmins = new ArrayList<>(admins);
-        lostAdmins.removeAll(theirs.admins);
-        for (String a : lostAdmins) {
-            lostNodes.add("admin " + a);
-        }
-        for (BanRec b : bans.values()) {
-            if (!theirs.bans.containsKey(b.cidr())) {
-                lostNames.add("ban " + b.cidr());
-            }
-        }
-        for (Map.Entry<String, String> e : settings.entrySet()) {
-            if (!e.getValue().equals(theirs.settings.get(e.getKey()))) {
-                lostNames.add("setting " + e.getKey());
-            }
-        }
-        if (nextHubKey != null && !nextHubKey.equals(theirs.nextHubKey())) {
-            lostNames.add("hub-key rotation");
-        }
-        Path keptAt = dir.resolve("state.superseded.snapshot");
-        Superseded lost = new Superseded(lostNodes, lostNames, credentials, null);
-        if (!lost.any()) {
-            // Nothing to keep, so nothing may be left lying at that path: a copy from an earlier
-            // hand-off beside a fresh state.snapshot reads as "what this host just lost".
-            try {
-                Files.deleteIfExists(keptAt);
-            } catch (IOException e) {
-                LOG.debug("could not remove a stale {}: {}", keptAt, e.toString());
-            }
-            return lost;
-        }
-        try {
-            // Through a temporary and renamed, as snapshot() does and for the same reason: written
-            // in place, a kill part-way leaves a truncated file where the previous incident's good
-            // copy used to be, so the crash this exists to survive is the crash that destroys it.
-            Path tmp = dir.resolve("state.superseded.tmp");
-            Files.writeString(tmp, snapshotJson(), StandardCharsets.UTF_8);
-            try (FileOutputStream fo = new FileOutputStream(tmp.toFile(), true)) {
-                fo.getFD().sync();
-            }
-            Files.move(tmp, keptAt, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            syncDir();
-        } catch (IOException e) {
-            // Best effort, for the reason syncDir() gives: this file exists to be read by a person,
-            // and a state directory that is full or read-only must not be able to stop a standby
-            // following its primary. `kept` is null from here, because a path that was not written
-            // is worse than no path: a copy from an earlier hand-off may be sitting at it, and
-            // whoever the line below sends there would read another incident's losses as this one's.
-            LOG.warn("could not keep the superseded state at {}: {}", keptAt, e.toString());
-            return lost;
-        }
-        return new Superseded(lostNodes, lostNames, credentials, keptAt);
-    }
-
-    /** An empty store with no directory behind it: somewhere to replay another's snapshot and compare. */
-    private Store() {
-        this.dir = null;
-        this.logPath = null;
-        this.snapshotPath = null;
     }
 
     private void checkVersion(JsonObject s, String what) throws IOException {

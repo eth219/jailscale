@@ -94,10 +94,13 @@ in two poll handles:
 |---|---|
 | The mux socket to the hub or the node | `mux-reader` (`MuxSession.start`, and `run` waits on one) |
 | A visitor socket at the hub | `relay-in` (`Relay.pump`) |
-| A local target socket at the node | `visitor-in`, `raw-in` (`Visitors`) |
-| A local UDP target at the node | `raw-udp-back` (`Visitors`) |
-| A raw UDP port at the hub | the `raw-udp-<port>` receive loop (`RawPorts`) |
-| Two test harnesses that do the same thing | `RawPortTest`, `ProxyProtocolEndToEndTest` |
+| A local target socket at the node | `visitor-in` (`Visitors`) |
+
+Four more rows stood here when this was written — `raw-in` and `raw-udp-back` on the node, the
+`raw-udp-<port>` loop in `RawPorts`, and the `RawPortTest` and `ProxyProtocolEndToEndTest`
+harnesses. Raw ports and the hub's PROXY protocol were removed in the maintenance cut
+([#274](https://github.com/eth219/jailscale/issues/274)), so those sockets no longer exist; the
+rule they were listed under is unchanged for the ones that do.
 
 The cost is one platform thread per concurrently-used socket, on Windows only. Linux and macOS get
 `Thread.ofVirtual()` exactly as before, and nothing about the protocol or the wire changes.

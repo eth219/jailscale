@@ -23,7 +23,7 @@ design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 **This project is in maintenance.** v0.2.0 cut it back to the tunnel above: a
 second hub, raw TCP and UDP ports, domains you bring yourself, the Prometheus
 endpoint, `service install` and the PROXY protocol were all removed, and with
-them about 12,000 lines. What is left is fixed and kept working; it is not
+them about 10,300 lines, 9,200 net. What is left is fixed and kept working; it is not
 being extended. The wire moved with the cut, so **a hub and its nodes upgrade
 to v0.2.0 together** ([ARCHITECTURE.md §5.4](docs/ARCHITECTURE.md)).
 
