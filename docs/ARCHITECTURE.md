@@ -1455,7 +1455,9 @@ it asks.
 **Provenance is a different claim, and it is published too.** The release workflow attests every
 file in `SHA256SUMS.txt` with `actions/attest-build-provenance`, so `gh attestation verify
 jailscale-linux-amd64 --repo gosuda/jailscale` answers which workflow of which repository built it
-from which commit. That is Sigstore keyless signing -- the modern default for a CLI release -- and
+from which commit (releases up to v0.2.1 were built as `eth219/jailscale`, and their attestations
+stayed with that account: `--owner eth219`, as
+[release-verification.md](release-verification.md#build-provenance) says). That is Sigstore keyless signing -- the modern default for a CLI release -- and
 it is deliberately *not* what `--download` checks, for the reason that makes it cheap: the identity
 it binds is the workflow's, so an account that has been taken over can push a tag, run the workflow
 and obtain a perfectly valid attestation for a binary of its choosing. It answers "what built
