@@ -34,7 +34,7 @@
 
     <!-- Every version here was checked against Maven Central by hand (ARCHITECTURE.md §3.2). -->
     <junit.version>6.1.3</junit.version>
-    <native-maven-plugin.version>1.1.12</native-maven-plugin.version>
+    <native-maven-plugin.version>1.1.14</native-maven-plugin.version>
     <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
     <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
