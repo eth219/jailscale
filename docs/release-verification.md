@@ -48,7 +48,7 @@ It checks a release the way the node does, against the key list that tag's own
 ## By hand
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.2.0
+base=https://github.com/gosuda/jailscale/releases/download/v0.2.0
 curl -fsSL -O "$base/RELEASE.txt" -O "$base/RELEASE.txt.sig" -O "$base/SHA256SUMS.txt"
 openssl pkeyutl -verify -pubin -inkey release-key.pem -rawin \
   -in RELEASE.txt -sigfile RELEASE.txt.sig    # the tag in it must be the one you downloaded
@@ -75,8 +75,12 @@ Separately, every released file carries a build attestation, which says which
 workflow built it rather than who approved it:
 
 ```sh
-gh attestation verify jailscale-darwin-arm64 --repo eth219/jailscale
+gh attestation verify jailscale-darwin-arm64 --repo gosuda/jailscale
 ```
+
+Releases up to v0.2.1 were built while the repository was `eth219/jailscale`, and their
+attestations stayed with that account when it moved: check those with `--owner eth219`, since
+`--repo` under either name answers 404.
 
 This is Sigstore keyless signing. It is deliberately not what `--download`
 checks: the identity it binds is the workflow's, so an account that has been

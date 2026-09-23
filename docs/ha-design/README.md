@@ -73,4 +73,4 @@ is, so redundancy at the hub pays only where the hub is the less available of th
 where the availability figure is defined, precisely so that the number is not read as a statement
 about someone's link.
 
-[#72]: https://github.com/eth219/jailscale/issues/72
+[#72]: https://github.com/gosuda/jailscale/issues/72

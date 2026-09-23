@@ -213,7 +213,7 @@ first row of the table.
 **Which mappings, measured.** `code` above is the binary's own executable mappings, and it is
 10,388 KB at `A` against arm64's 7,420: **2.9 MB of the 12.6, and no more.** The rest of `A`'s
 file-backed memory was named by nobody until `breakdown` sorted it (#227,
-[run 35309183734](https://github.com/eth219/jailscale/actions/runs/35309183734), on ubuntu-24.04,
+[run 35309183734](https://github.com/gosuda/jailscale/actions/runs/35309183734), on ubuntu-24.04,
 the last sample of one run; the table above it is a mean of three, from an earlier run of the same
 job, which is why it says 29.9 MB for `A` where this says 30.0):
 
@@ -258,7 +258,7 @@ reserves and does not map — so that one cell is not a quantity of anything and
 **And `J` lines up with the gate, which is the check that says this measured the right thing.** §14
 publishes 34.4 MB for a node of exactly `J`'s shape and this reads **35.1**, which looks like 2% of
 disagreement and is not. The `budget` job on `main` at the same commit
-([35247984078](https://github.com/eth219/jailscale/actions/runs/35247984078)) reads **35.2 MB with
+([35247984078](https://github.com/gosuda/jailscale/actions/runs/35247984078)) reads **35.2 MB with
 2.1 MB anonymous**, against `J`'s 35.1 with 2.1. The two harnesses are not the same sequence —
 `measure.sh` settles for `IDLE=10` against this script's 8, and the daemon it samples has also
 issued an invite, served a second node's join and answered a `netcheck` — and they land 0.1 MB

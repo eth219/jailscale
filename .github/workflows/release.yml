@@ -143,7 +143,7 @@ jobs:
           cat dist/BUILDINFO.txt
       # Provenance for every file in SHA256SUMS.txt, which is the whole release: signed by Sigstore
       # against this workflow's own identity, so `gh attestation verify jailscale-linux-amd64 --repo
-      # eth219/jailscale` says which workflow of which repository built it, from which commit.
+      # gosuda/jailscale` says which workflow of which repository built it, from which commit.
       #
       # This is not the signature `update --download` checks, and it is not a second opinion on it
       # (§9.4). It answers "what built this", where the release key answers "who approved this" --

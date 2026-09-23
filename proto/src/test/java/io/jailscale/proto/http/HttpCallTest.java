@@ -116,7 +116,7 @@ class HttpCallTest {
 
     @Test
     void aRedirectMayChangeHostButNotLeaveTls() throws Exception {
-        URI from = URI.create("https://github.com/eth219/jailscale/releases/download/v0.2.0/jailscale-linux-amd64");
+        URI from = URI.create("https://github.com/gosuda/jailscale/releases/download/v0.2.0/jailscale-linux-amd64");
         // The hop this exists for: another host, still TLS.
         assertEquals("https://objects.githubusercontent.com/x?token=1",
             HttpCall.redirect(from, "https://objects.githubusercontent.com/x?token=1").toString());

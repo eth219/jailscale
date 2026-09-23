@@ -236,7 +236,7 @@ fi
 
 command -v gh >/dev/null 2>&1 || { echo "this needs the gh CLI." >&2; exit 1; }
 # The sibling scripts' convention: the repository comes from this checkout, so a fork reports on
-# itself rather than silently on eth219/jailscale.
+# itself rather than silently on gosuda/jailscale.
 repo=$(cd "$root" && gh repo view --json nameWithOwner --jq .nameWithOwner) \
     || { echo "cannot tell which GitHub repository $root is; is the origin remote set?" >&2; exit 1; }
 

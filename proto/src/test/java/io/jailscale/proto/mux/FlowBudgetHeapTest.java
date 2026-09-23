@@ -55,7 +55,7 @@ import org.junit.jupiter.api.Timeout;
  *       the payload and not the {@code byte[]} that carries it, so the ratio measured here at
  *       {@link Frame#MAX_DATA} is 1.00 (1.03 in the smaller rig that measured the rest), at
  *       64-byte frames 1.40, at 8-byte frames 3.86 and at one-byte frames 30.3. That is
- *       <a href="https://github.com/eth219/jailscale/issues/154">#154</a>, and these tests assert
+ *       <a href="https://github.com/gosuda/jailscale/issues/154">#154</a>, and these tests assert
  *       the full-frame case on purpose: asserting the others would freeze the ratio that issue
  *       exists to change.
  *   <li><b>Anything that is not a receive queue.</b> A node's residency on this axis is mostly

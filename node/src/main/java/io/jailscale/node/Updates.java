@@ -57,7 +57,7 @@ import java.util.Objects;
 final class Updates {
 
     /** The published releases of this project. */
-    static final String RELEASES = "https://github.com/eth219/jailscale/releases/";
+    static final String RELEASES = "https://github.com/gosuda/jailscale/releases/";
     /** Redirects to the newest full release's own page; drafts and pre-releases never show here. */
     static final String PAGE = RELEASES + "latest";
     /** Where that redirect lands: the tag is what follows this. */

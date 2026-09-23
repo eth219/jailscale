@@ -133,7 +133,7 @@ class HomePageTest {
     @Test
     void thePageSaysWhereTheBinaryIsAndWhatToDoWithIt() throws Exception {
         String html = http("GET", "/", null, null).bodyText();
-        assertTrue(html.contains("github.com/eth219/jailscale/releases/latest"), html);
+        assertTrue(html.contains("github.com/gosuda/jailscale/releases/latest"), html);
         assertTrue(html.contains("jailscale open 3000"), html);
         assertTrue(html.contains("https://&lt;name&gt;.hub.test"), html);
     }
