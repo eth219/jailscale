@@ -37,7 +37,7 @@ final class HttpFront {
     static final int HANDSHAKE_BURST = 30;
     static final double HANDSHAKE_PER_SECOND = 1.0;
     /** Where the page sends someone who does not have the binary yet. */
-    private static final String REPO = "https://github.com/eth219/jailscale";
+    private static final String REPO = "https://github.com/gosuda/jailscale";
     /**
      * The floor in words, read from the constant the handshake enforces so the page cannot drift
      * from it (ARCHITECTURE.md §5.4). Written once because the page says it twice -- in the

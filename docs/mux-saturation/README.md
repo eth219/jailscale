@@ -87,7 +87,7 @@ where the build never compiles them and a superseded number cannot be mistaken f
 ## The question this tool posed, and the answer
 
 `FlowBudget` counts the payload bytes that enter a receive queue, and until
-[#69](https://github.com/eth219/jailscale/issues/69) nothing verified that the count matched what
+[#69](https://github.com/gosuda/jailscale/issues/69) nothing verified that the count matched what
 the process actually retains: when it says 24 MB, whether the live set moved by 24 or by 40.
 `measure.sh` reports RSS, which varies by 2x on this axis and includes everything that is not heap;
 the unit tests checked the counter against itself. `usedHeap()` here was the one approach in the
@@ -107,7 +107,7 @@ figure this file got wrong was residency, and this does not revisit it.
 It is right in the units it is measured in, and those units are the payload. The chunk that carries
 the payload is not counted, so the ratio is 1.40 at 64-byte frames, 3.86 at 8-byte frames and
 **30.3 at one-byte frames**, which is
-[#154](https://github.com/eth219/jailscale/issues/154) and not something this file predicted either.
+[#154](https://github.com/gosuda/jailscale/issues/154) and not something this file predicted either.
 
 Worth knowing before reading any of it as a process total: the node's residency on this axis is
 mostly not receive queues at all. A visitor sends one `GET` line, so the node's queues hold tens of

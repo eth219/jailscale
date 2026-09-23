@@ -99,7 +99,7 @@ in two poll handles:
 Four more rows stood here when this was written — `raw-in` and `raw-udp-back` on the node, the
 `raw-udp-<port>` loop in `RawPorts`, and the `RawPortTest` and `ProxyProtocolEndToEndTest`
 harnesses. Raw ports and the hub's PROXY protocol were removed in the maintenance cut
-([#274](https://github.com/eth219/jailscale/issues/274)), so those sockets no longer exist; the
+([#274](https://github.com/gosuda/jailscale/issues/274)), so those sockets no longer exist; the
 rule they were listed under is unchanged for the ones that do.
 
 The cost is one platform thread per concurrently-used socket, on Windows only. Linux and macOS get

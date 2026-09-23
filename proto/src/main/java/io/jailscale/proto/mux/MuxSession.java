@@ -224,7 +224,7 @@ public final class MuxSession implements AutoCloseable {
      * side of a loopback socket is quick. The hub opened a visitor stream, then recorded it, and a
      * node that asked the hub to sign for it in between was told {@code not-your-stream}: 238
      * times in 155 ms on one run of the load test, which is
-     * <a href="https://github.com/eth219/jailscale/issues/201">#201</a>.
+     * <a href="https://github.com/gosuda/jailscale/issues/201">#201</a>.
      *
      * <p>If it throws, the stream is taken back out and the OPEN frame is never written, so the
      * peer never hears of a stream whose registration failed.

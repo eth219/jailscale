@@ -23,7 +23,7 @@
 
 [Unit]
 Description=jailhub — jailscale hub (SNI router, control channel, ACME)
-Documentation=https://github.com/eth219/jailscale
+Documentation=https://github.com/gosuda/jailscale
 After=network-online.target
 Wants=network-online.target
 

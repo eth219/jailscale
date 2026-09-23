@@ -83,7 +83,7 @@ GraalVM CE 25.3 does not build one ([ARCHITECTURE.md
 §3.2](docs/ARCHITECTURE.md)); Intel Macs get [the JAR](#anything-else-with-a-jvm-25).
 
 ```sh
-base=https://github.com/eth219/jailscale/releases/download/v0.2.0
+base=https://github.com/gosuda/jailscale/releases/download/v0.2.0
 target=darwin-arm64   # pick yours
 
 curl -fsSL -O "$base/jailscale-$target" -O "$base/SHA256SUMS.txt"
@@ -110,6 +110,9 @@ code-signed is in [docs/release-verification.md](docs/release-verification.md).
 docker pull ghcr.io/eth219/jailhub:v0.2.0
 docker pull ghcr.io/eth219/jailscale:v0.2.0
 ```
+
+Releases up to v0.2.1 were published under `ghcr.io/eth219`, where the project lived until it moved
+to gosuda; the ones after it are under `ghcr.io/gosuda`.
 
 linux/amd64 and linux/arm64, distroless, non-root, built by the same workflow
 as the binaries. `:latest` follows signed releases and `:edge` follows main.
@@ -189,7 +192,7 @@ themselves has one caller's allowance and not a billion.
 
 The one setup this does not cover is the delegated subdomain below: there the
 hub is the authoritative server, it does not answer `AAAA` yet, and there is
-nowhere else to put the record ([#63](https://github.com/eth219/jailscale/issues/63)).
+nowhere else to put the record ([#63](https://github.com/gosuda/jailscale/issues/63)).
 
 The first run prints an invite. Whoever joins with it becomes the administrator.
 [deploy/](deploy/) has the systemd units for both halves and the container
@@ -275,7 +278,7 @@ What a compromised hub can and cannot do is written out in
   starts it again. Upgrading is a restart, which is what it already was under a
   systemd unit. Socket activation would narrow that window; it was decided
   work until maintenance closed it
-  ([#71](https://github.com/eth219/jailscale/issues/71)).
+  ([#71](https://github.com/gosuda/jailscale/issues/71)).
 - Redundancy would stop at the hub anyway. A name has exactly one node behind
   it, so when that node's host is asleep the name is down whatever the hub
   count is.
@@ -295,7 +298,7 @@ What a compromised hub can and cannot do is written out in
   in [deploy/](deploy/jailscale.service) is what replaced it. A clean SIGTERM
   exits 143, so a unit that does not name that as success is listed by
   `systemctl --failed` after every stop
-  ([#235](https://github.com/eth219/jailscale/issues/235)) — the one in
+  ([#235](https://github.com/gosuda/jailscale/issues/235)) — the one in
   `deploy/` names it.
 - Idle memory is 25 MB against the 20 MB originally aimed at. Almost all of the
   gap is the binary's own code becoming resident, clean and evictable

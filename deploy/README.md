@@ -31,6 +31,10 @@ ghcr.io/eth219/jailhub:v0.2.0
 ghcr.io/eth219/jailscale:v0.2.0
 ```
 
+Up to v0.2.1 the images are under `ghcr.io/eth219`, the repository's owner until it moved to
+gosuda; later releases and `:edge` are under `ghcr.io/gosuda`, because the workflow pushes to the
+repository's owner.
+
 `:vX.Y.Z` pins that release. `:latest` follows releases: it moves when one is
 published and its signature has been checked, not when a tag is pushed. `:edge`
 follows main. The images tagged `:v0.1.0` are not worth pulling: they were

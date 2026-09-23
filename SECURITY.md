@@ -1,7 +1,7 @@
 # Reporting a security problem
 
 **Do not open a public issue with the details.** Use the **Report a vulnerability** button under
-[Security](https://github.com/eth219/jailscale/security/advisories/new). It opens a private advisory
+[Security](https://github.com/gosuda/jailscale/security/advisories/new). It opens a private advisory
 that only you and the maintainer can read, and it needs no account beyond the GitHub one you already
 have.
 

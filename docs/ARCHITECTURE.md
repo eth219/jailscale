@@ -43,7 +43,7 @@ one pass on 2026-09-16, because until then the answer was spread across a one-li
 here, seventeen entries in §15 and eight open issues, and those three did not agree on which
 things were accepted limits and which were unfinished work.
 
-**The maintenance cut of 2026-09-22 moved six rows from §1.1 to §1.3** ([#274](https://github.com/eth219/jailscale/issues/274)): the second hub,
+**The maintenance cut of 2026-09-22 moved six rows from §1.1 to §1.3** ([#274](https://github.com/gosuda/jailscale/issues/274)): the second hub,
 raw TCP and UDP ports, user domains, the metrics endpoint, `service install` and the PROXY
 protocol. They are not limits waiting to be lifted and not decided work; §1.3 says what each was
 given up for, and the section behind each one says what it was.
@@ -67,11 +67,11 @@ supported rather than a complaint about it; §15 has the detail and the measurem
 ### 1.2 Decided, and not built
 
 **Empty, as of the maintenance cut.** This table held four rows. tls-alpn-01
-([#70](https://github.com/eth219/jailscale/issues/70)) went with the feature that needed it, user
+([#70](https://github.com/gosuda/jailscale/issues/70)) went with the feature that needed it, user
 domains (§8.3). The other three were decisions to build something: the hub answering AAAA itself
-([#63](https://github.com/eth219/jailscale/issues/63)), systemd socket activation
-([#71](https://github.com/eth219/jailscale/issues/71)) and a gauge for the soonest certificate
-expiry among absent nodes ([#75](https://github.com/eth219/jailscale/issues/75)). Maintenance does
+([#63](https://github.com/gosuda/jailscale/issues/63)), systemd socket activation
+([#71](https://github.com/gosuda/jailscale/issues/71)) and a gauge for the soonest certificate
+expiry among absent nodes ([#75](https://github.com/gosuda/jailscale/issues/75)). Maintenance does
 not take those: all three are closed as not planned, and what each of them was about is a limit in
 §15 rather than work waiting. The table stays because the
 distinction it draws is still the one that matters, and because a row could be added here again by
@@ -393,7 +393,7 @@ stream monopolise the channel. A stream with the `DGRAM` flag treats one DATA fr
   darwin-arm64: it is an accounting check, and what a native image holds for the same queues is a
   different measurement that has not been taken. It charges the payload and not the `byte[]` that
   carries it, so the same method reads 1.40 at 64-byte frames and 30.3 at one-byte ones, which is
-  [#154](https://github.com/eth219/jailscale/issues/154) and open.
+  [#154](https://github.com/gosuda/jailscale/issues/154) and open.
 - **One writer a session, and control does not queue behind data.** `NoiseChannel.write` holds one
   lock across the encryption and the socket write, because the nonce must advance in wire order. With
   every producer calling it directly, one blocked write stalled every frame on that session: a
@@ -1414,7 +1414,7 @@ records. What bounds it is that a node is never moved below what it runs and tha
 verifies everything about the release it was pointed at, so this withholds an upgrade rather than
 forcing a downgrade — and the same party could equally delete the newer release. A signed pointer
 that closed the gap was built and then removed on 2026-09-18
-([#254](https://github.com/eth219/jailscale/issues/254)): it cost a pre-release re-issued every
+([#254](https://github.com/gosuda/jailscale/issues/254)): it cost a pre-release re-issued every
 ninety days by a person with the signing key, a nightly job whose purpose was to notice when that
 had been forgotten, a floor file on every node, and about 2,800 lines, against a bound on a party
 who already had an equivalent move. That is a maintenance schedule for a project with one operator,
@@ -1454,7 +1454,7 @@ it asks.
 
 **Provenance is a different claim, and it is published too.** The release workflow attests every
 file in `SHA256SUMS.txt` with `actions/attest-build-provenance`, so `gh attestation verify
-jailscale-linux-amd64 --repo eth219/jailscale` answers which workflow of which repository built it
+jailscale-linux-amd64 --repo gosuda/jailscale` answers which workflow of which repository built it
 from which commit. That is Sigstore keyless signing -- the modern default for a CLI release -- and
 it is deliberately *not* what `--download` checks, for the reason that makes it cheap: the identity
 it binds is the workflow's, so an account that has been taken over can push a tag, run the workflow
@@ -2126,7 +2126,7 @@ the whole of that check.
 The rest of the table is the gate's output, and it has not been re-recorded since v0.1.2. The
 `budget` job prints it on every push to `main`, nightly, and on a pull request that asks with the
 `ci:full` label, so what `main` reads is always to hand — at 899fbc7
-([run 35256792463](https://github.com/eth219/jailscale/actions/runs/35256792463)):
+([run 35256792463](https://github.com/gosuda/jailscale/actions/runs/35256792463)):
 
 | `linux-amd64` | the table, v0.1.2 | `main` 899fbc7 |
 |---|---|---|
@@ -2138,7 +2138,7 @@ The rest of the table is the gate's output, and it has not been re-recorded sinc
 | CLI cold start | 2.6 ms | 3.6, median of 10 |
 
 **And what the cut did to those rows, measured the same way** — the `budget` job on PR #275, at
-87aa35d ([run 35735098638](https://github.com/eth219/jailscale/actions/runs/35735098638)), beside
+87aa35d ([run 35735098638](https://github.com/gosuda/jailscale/actions/runs/35735098638)), beside
 the `main` column above:
 
 | `linux-amd64` | `main` 899fbc7 | the cut |
@@ -2644,14 +2644,14 @@ neither has not been through that pass.
   has next to every issuance failure and on its status page, graded there (§6.3). The node has
   nothing of its own to renew any more: the per-name certificates it held were for domains a user
   brought (§8.3), and the daily warning, `ls`'s mark on the link and the gauge that was decided work
-  ([#75](https://github.com/eth219/jailscale/issues/75)) all went with that feature. What is left to
+  ([#75](https://github.com/gosuda/jailscale/issues/75)) all went with that feature. What is left to
   watch is one certificate on one host, which is the hub's own page and `jailhub status`.
 - **A hub that dies takes its names down until it is started again** (§13). There is no second hub:
   the standby, its promotion and the relay connections that let it serve were removed, and what is
   left is the backup unit -- the state directory -- and a restart. Upgrading is a restart too, which
   is what it already was under a systemd unit. Socket activation would narrow that window and was
   decided work until maintenance closed it
-  ([#71](https://github.com/eth219/jailscale/issues/71)).
+  ([#71](https://github.com/gosuda/jailscale/issues/71)).
 - **IPv6 works for visitors and not for the hub's own DNS.** A hub bound to `::` (`--listen
   [::]:443`) serves v6 visitors today — routed by SNI, relayed to the node, counted and limited per
   /64 (§11.5) like any other caller — and an operator running the three-record setup publishes the
@@ -2661,7 +2661,7 @@ neither has not been through that pass.
   the operator cannot make up the difference — in the delegated mode of §13 the hub *is* the
   authoritative server for the subdomain, so there is nowhere else to put an AAAA record. So: v6
   ingress on the operator's own records, and no v6 under delegation. Answering AAAA was decided work
-  until maintenance closed it ([#63](https://github.com/eth219/jailscale/issues/63)), so this is a
+  until maintenance closed it ([#63](https://github.com/gosuda/jailscale/issues/63)), so this is a
   limit now and not a plan.
 - **Windows spends a platform thread on every socket two threads use at once** (§3.2). Its poller
   loses events when one socket is parked for read and for write together (JDK-8334574), so one side

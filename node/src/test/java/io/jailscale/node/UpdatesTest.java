@@ -93,12 +93,12 @@ class UpdatesTest {
         // The hub is trusted to route bytes, not to say what this node should run (§11.2). If this
         // ever becomes configurable, a compromised hub can point every node at a binary it picked --
         // and the page that says which release is current is the first thing it would move.
-        assertEquals("https://github.com/eth219/jailscale/releases/latest", Updates.PAGE);
-        assertEquals("https://github.com/eth219/jailscale/releases/tag/", Updates.TAG_PAGE);
+        assertEquals("https://github.com/gosuda/jailscale/releases/latest", Updates.PAGE);
+        assertEquals("https://github.com/gosuda/jailscale/releases/tag/", Updates.TAG_PAGE);
         assertEquals("https", URI.create(Updates.PAGE).getScheme());
         // And the same for where a download comes from and the key it must be signed with: the pair
         // production uses is built from two constants, so there is no configuration that moves it.
-        assertEquals("https://github.com/eth219/jailscale/releases/download/", Updates.DOWNLOADS);
+        assertEquals("https://github.com/gosuda/jailscale/releases/download/", Updates.DOWNLOADS);
         assertEquals(Updates.DOWNLOADS, Updates.Source.compiledIn().base());
         assertEquals(ReleaseKey.PUBLIC_KEYS, Updates.Source.compiledIn().keys());
     }
@@ -144,7 +144,7 @@ class UpdatesTest {
         assertEquals("jailscale 0.3.0-SNAPSHOT is not behind the latest release GitHub lists, 0.2.0.", ahead.line());
         // A relative Location resolves against the page that was asked, which is a way GitHub
         // could legitimately spell the same answer.
-        assertEquals("v0.2.0", check("0.1.0", redirect("/eth219/jailscale/releases/tag/v0.2.0")).tag());
+        assertEquals("v0.2.0", check("0.1.0", redirect("/gosuda/jailscale/releases/tag/v0.2.0")).tag());
     }
 
     @Test
@@ -204,18 +204,21 @@ class UpdatesTest {
         // under this repository is not an answer -- not a login page, not the releases list, not a
         // release on another host, and not a tag with a path step in it.
         for (String elsewhere : List.of(
-                "https://github.com/login?return_to=%2Feth219%2Fjailscale%2Freleases%2Flatest",
-                "https://github.com/eth219/jailscale/releases",
-                "https://github.com/eth219/jailscale/releases/",
-                "https://github.com/eth219/jailscale/releases/tag/",
-                "https://github.com/eth219/jailscale/releases/download/v0.2.0/jailscale.jar",
-                "https://github.com/eth219/other/releases/tag/v0.2.0",
-                "https://example.com/eth219/jailscale/releases/tag/v0.2.0",
-                "http://github.com/eth219/jailscale/releases/tag/v0.2.0",
-                "https://github.com/eth219/jailscale/releases/tag/v0.2.0/../../../evil",
-                "https://github.com/eth219/jailscale/releases/tag/../download/v9",
-                "https://github.com/eth219/jailscale/releases/tag/v0.2.0?x=1",
-                "https://github.com/eth219/jailscale/releases/tag/" + "v".repeat(65),
+                "https://github.com/login?return_to=%2Fgosuda%2Fjailscale%2Freleases%2Flatest",
+                "https://github.com/gosuda/jailscale/releases",
+                "https://github.com/gosuda/jailscale/releases/",
+                "https://github.com/gosuda/jailscale/releases/tag/",
+                "https://github.com/gosuda/jailscale/releases/download/v0.2.0/jailscale.jar",
+                "https://github.com/gosuda/other/releases/tag/v0.2.0",
+                // Where the project lived until v0.2.1: GitHub redirects that name to this one, and
+                // a node built before the move is still asking it.
+                "https://github.com/eth219/jailscale/releases/tag/v0.2.0",
+                "https://example.com/gosuda/jailscale/releases/tag/v0.2.0",
+                "http://github.com/gosuda/jailscale/releases/tag/v0.2.0",
+                "https://github.com/gosuda/jailscale/releases/tag/v0.2.0/../../../evil",
+                "https://github.com/gosuda/jailscale/releases/tag/../download/v9",
+                "https://github.com/gosuda/jailscale/releases/tag/v0.2.0?x=1",
+                "https://github.com/gosuda/jailscale/releases/tag/" + "v".repeat(65),
                 "::not a url::")) {
             Updates.Result r = check("0.1.0", redirect(elsewhere));
             assertEquals(Updates.Outcome.UNKNOWN, r.outcome(), elsewhere + " -> " + r.line());
@@ -257,10 +260,10 @@ class UpdatesTest {
             t.setDaemon(true);
             t.start();
             URI page = URI.create("http://" + ss.getInetAddress().getHostAddress() + ":" + ss.getLocalPort()
-                + "/eth219/jailscale/releases/latest");
+                + "/gosuda/jailscale/releases/latest");
             Updates.Result r = check("0.1.0", Updates.Latest.at(page));
             t.join(5_000);
-            assertEquals("HEAD /eth219/jailscale/releases/latest", asked.get());
+            assertEquals("HEAD /gosuda/jailscale/releases/latest", asked.get());
             assertEquals(Updates.Outcome.NEWER, r.outcome(), r.line());
             assertEquals("v9.9.9", r.tag());
         }
@@ -338,7 +341,7 @@ class UpdatesTest {
 
     @Test
     void aTagFromTheNetworkDoesNotGetToSteerTheUrl() throws Exception {
-        assertEquals("https://github.com/eth219/jailscale/releases/download/v0.2.0/SHA256SUMS.txt",
+        assertEquals("https://github.com/gosuda/jailscale/releases/download/v0.2.0/SHA256SUMS.txt",
             Updates.assetUrl(Updates.DOWNLOADS, "v0.2.0", Updates.SUMS).toString());
         // The tag is whatever GitHub's redirect said, and it is pasted into a URL. A relative step
         // or a second host in there would leave the releases path while looking like a version.
